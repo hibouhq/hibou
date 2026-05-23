@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Hibou">
+  <rect width="64" height="64" rx="12" fill="#030712" />
+  <path d="M18 46V18h8v10h12V18h8v28h-8V36H26v10h-8Z" fill="#f9fafb" />
+</svg>

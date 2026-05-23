@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "hibou serve",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/main.go",
+      "args": ["serve"],
+      "env": {
+        "HIBOU_DB_HOST": "localhost",
+        "HIBOU_DB_PORT": "5432",
+        "HIBOU_DB_USER": "hibou",
+        "HIBOU_DB_PASSWORD": "hibou",
+        "HIBOU_DB_NAME": "hibou"
+      }
+    },
+    {
+      "name": "hibou version",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/main.go",
+      "args": ["version"]
+    },
+    {
+      "name": "hibou (custom args)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/main.go",
+      "args": ["${input:cobraCommand}"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "cobraCommand",
+      "type": "promptString",
+      "description": "Cobra subcommand and flags (e.g. 'upload sbom --file bom.json')"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+# Go
+/hibou
+/dist/
+
+# Frontend
+site/node_modules/
+site/dist/
+
+# IDE
+.idea/
+*.swp
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage/
+*.coverprofile
