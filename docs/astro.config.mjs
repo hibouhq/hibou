@@ -38,6 +38,7 @@ export default defineConfig({
                         { label: "Forge Providers", slug: "admin/forge-providers" },
                         { label: "Authentication", slug: "admin/authentication" },
                         { label: "Docker Deployment", slug: "admin/docker" },
+                        { label: "Kubernetes Deployment", slug: "admin/kubernetes" },
                     ],
                 },
                 {

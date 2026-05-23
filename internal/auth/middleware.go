@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -39,28 +40,59 @@ func SessionAuth(mgr *Manager, queries *store.Queries) func(http.Handler) http.H
 			ctx := r.Context()
 
 			if mgr != nil {
-				if user, err := mgr.GetSessionUser(r, queries); err == nil && user != nil {
+				if user, err := mgr.AuthenticateRequest(r, queries); err == nil && user != nil {
 					ctx = WithUser(ctx, user)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-			}
-
-			authorization := r.Header.Get("Authorization")
-			if strings.HasPrefix(authorization, "Bearer ") && queries != nil {
-				key := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
-				if key != "" {
-					apiKey, err := queries.GetAPIKeyByHash(r.Context(), store.HashAPIKey(key))
-					if err == nil && apiKey != nil && apiKey.User != nil {
-						if apiKey.ExpiresAt == nil || apiKey.ExpiresAt.After(time.Now()) {
-							_ = queries.UpdateAPIKeyLastUsed(r.Context(), apiKey.ID)
-							ctx = WithUser(ctx, apiKey.User)
-						}
-					}
-				}
+			} else if user, err := authenticateBearerToken(r, queries); err == nil && user != nil {
+				ctx = WithUser(ctx, user)
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func (m *Manager) AuthenticateRequest(r *http.Request, queries *store.Queries) (*store.User, error) {
+	if m != nil {
+		if user, err := m.GetSessionUser(r, queries); err == nil && user != nil {
+			return user, nil
+		}
+	}
+
+	return authenticateBearerToken(r, queries)
+}
+
+func authenticateBearerToken(r *http.Request, queries *store.Queries) (*store.User, error) {
+	if queries == nil {
+		return nil, fmt.Errorf("queries not configured")
+	}
+
+	authorization := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authorization, "Bearer ") {
+		return nil, nil
+	}
+
+	key := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+	if key == "" {
+		return nil, fmt.Errorf("missing bearer token")
+	}
+
+	apiKey, err := queries.GetAPIKeyByHash(r.Context(), store.HashAPIKey(key))
+	if err != nil {
+		return nil, err
+	}
+	if apiKey == nil || apiKey.User == nil {
+		return nil, fmt.Errorf("invalid API key")
+	}
+	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
+		return nil, fmt.Errorf("API key expired")
+	}
+
+	if err := queries.UpdateAPIKeyLastUsed(r.Context(), apiKey.ID); err != nil {
+		return nil, err
+	}
+
+	return apiKey.User, nil
 }

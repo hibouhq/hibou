@@ -1,6 +1,7 @@
 # Go
 /hibou
 /dist/
+tmp/
 
 # Node
 node_modules/

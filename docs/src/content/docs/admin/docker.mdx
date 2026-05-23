@@ -11,7 +11,7 @@ Hibou provides a `docker-compose.yml` for development and small-scale deployment
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
-| `postgres` | `postgres:16` | 5432 | Primary database |
+| `postgres` | `postgres:18` | 5432 | Primary database |
 | `forgejo` | `codeberg.org/forgejo/forgejo:9` | 3000 | Git forge (dev) |
 | `trivy` | `aquasec/trivy:latest` | 4954 | Vulnerability scanner |
 
@@ -45,7 +45,7 @@ docker compose down
 All services share the `hibou` Docker network. The Hibou server (run via `make dev`) connects to services at their container names:
 
 - Database: `localhost:5432` (mapped from container)
-- Forgejo: `localhost:3000`
+- Forgejo: `localhost:3030`
 - Trivy: `localhost:4954`
 
 ## Production Deployment

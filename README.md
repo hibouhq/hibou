@@ -18,7 +18,7 @@ Open-source DevSecOps security platform. The goal is to unify dependency risk, c
 |-------|-----------|
 | Backend | Go, Chi v5, zerolog, sqlc, golang-migrate |
 | Frontend | Vue 3, TypeScript, Pinia, Vue Router, Tailwind CSS |
-| Database | PostgreSQL 16 |
+| Database | PostgreSQL 18 |
 | Scanner | Trivy (server mode) |
 | Deployment | Helm chart, Docker, single binary |
 
@@ -44,7 +44,7 @@ Open-source DevSecOps security platform. The goal is to unify dependency risk, c
 
 ### Manual setup
 
-**Prerequisites:** Go 1.24+, Node.js 22+, PostgreSQL 16, golangci-lint, sqlc
+**Prerequisites:** Go 1.24+, Node.js 22+, PostgreSQL 18, golangci-lint, sqlc
 
 1. Clone the repository
 2. Install dependencies:

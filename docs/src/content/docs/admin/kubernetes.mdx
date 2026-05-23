@@ -1,0 +1,174 @@
+---
+title: Kubernetes Deployment
+description: Deploy Hibou on Kubernetes with Helm
+---
+
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+A Helm chart is provided in `chart/hibou/` for Kubernetes deployments.
+
+## Prerequisites
+
+- Kubernetes 1.27+
+- Helm 3.12+
+- A PostgreSQL 18+ instance (bundled or external)
+
+## Quick Start
+
+<Steps>
+
+1. **Create the namespace**
+
+   ```bash
+   kubectl create namespace hibou
+   ```
+
+2. **Create the database secret**
+
+   The database connection string is stored in a Kubernetes Secret — credentials never appear in Helm values.
+
+   <Tabs>
+     <TabItem label="Bundled PostgreSQL">
+       When using the chart's built-in PostgreSQL, pass the password at install time:
+
+       ```bash
+       helm install hibou ./chart/hibou -n hibou \
+         --set postgresql.auth.password=changeme
+       ```
+
+       The chart generates a Secret with the full connection URL automatically.
+     </TabItem>
+     <TabItem label="External Database">
+       Create the secret manually, then reference it:
+
+       ```bash
+       kubectl create secret generic hibou-db-url -n hibou \
+         --from-literal=url="postgres://hibou:secret@db.example.com:5432/hibou?sslmode=require"
+       ```
+
+       ```bash
+       helm install hibou ./chart/hibou -n hibou \
+         --set postgresql.enabled=false \
+         --set postgresql.auth.existingSecret=hibou-db-url
+       ```
+     </TabItem>
+   </Tabs>
+
+3. **Verify the deployment**
+
+   ```bash
+   kubectl -n hibou rollout status deployment hibou
+   kubectl -n hibou get pods
+   ```
+
+</Steps>
+
+## Configuration
+
+All Hibou settings are passed via the ConfigMap and Secret. No credentials are stored in `values.yaml`.
+
+### `values.yaml` Reference
+
+```yaml
+hibou:
+  image:
+    repository: ghcr.io/hibouhq/lehibou
+    tag: latest
+  replicas: 1
+  logging:
+    level: info       # debug, info, warn, error
+    format: json      # console, json
+  database:
+    url: ""           # Override to skip secret entirely (not recommended)
+  trivy:
+    url: ""           # Auto-discovered when trivy.enabled=true
+  advisory:
+    cache:
+      ttl: "6h"       # How long advisory query results are cached
+    osv:
+      url: "https://api.osv.dev"
+
+postgresql:
+  enabled: true       # Set false for external database
+  auth:
+    existingSecret: "" # Name of a Secret with key: url
+    username: hibou
+    password: ""       # Required via --set when existingSecret is empty
+    database: hibou
+
+trivy:
+  enabled: true
+
+ingress:
+  enabled: false
+  hostname: ""         # Required when ingress is enabled
+  className: ""
+  annotations: {}
+  tls:
+    enabled: false
+    existingSecret: ""
+```
+
+### Database Secret
+
+The Secret must contain a single key:
+
+| Key | Description |
+|-----|-------------|
+| `url` | Full PostgreSQL connection string (`postgres://user:pass@host:5432/db?sslmode=...`) |
+
+When using `existingSecret`, the chart reads the secret name from `postgresql.auth.existingSecret` and mounts the `url` key as `HIBOU_DATABASE_URL`.
+
+### Ingress
+
+Enable ingress for external access:
+
+```bash
+helm install hibou ./chart/hibou -n hibou \
+  --set postgresql.auth.password=changeme \
+  --set ingress.enabled=true \
+  --set ingress.hostname=hibou.example.com \
+  --set ingress.className=nginx
+```
+
+For TLS with cert-manager:
+
+```bash
+helm install hibou ./chart/hibou -n hibou \
+  --set postgresql.auth.password=changeme \
+  --set ingress.enabled=true \
+  --set ingress.hostname=hibou.example.com \
+  --set ingress.className=nginx \
+  --set ingress.tls.enabled=true \
+  --set 'ingress.annotations.cert-manager\.io/cluster-issuer=letsencrypt-prod'
+```
+
+For TLS with an existing secret:
+
+```bash
+  --set ingress.tls.enabled=true \
+  --set ingress.tls.existingSecret=my-tls-secret
+```
+
+## Upgrading
+
+```bash
+helm upgrade hibou ./chart/hibou -n hibou \
+  --set postgresql.auth.password=changeme
+```
+
+Hibou runs database migrations automatically on startup.
+
+## Uninstalling
+
+```bash
+helm uninstall hibou -n hibou
+```
+
+:::caution
+This does not delete PersistentVolumeClaims. To fully remove data:
+
+```bash
+kubectl -n hibou delete pvc -l app.kubernetes.io/name=hibou
+```
+:::

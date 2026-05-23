@@ -19,24 +19,43 @@ import (
 	"github.com/hibouhq/lehibou/internal/api"
 	_ "github.com/hibouhq/lehibou/internal/apidoc"
 	"github.com/hibouhq/lehibou/internal/auth"
+	"github.com/hibouhq/lehibou/internal/compliance"
 	"github.com/hibouhq/lehibou/internal/config"
+	"github.com/hibouhq/lehibou/internal/delta"
+	"github.com/hibouhq/lehibou/internal/events"
 	"github.com/hibouhq/lehibou/internal/forge"
+	"github.com/hibouhq/lehibou/internal/notify"
+	"github.com/hibouhq/lehibou/internal/objstore"
 	"github.com/hibouhq/lehibou/internal/rbac"
+	"github.com/hibouhq/lehibou/internal/repoconfig"
+	"github.com/hibouhq/lehibou/internal/retention"
 	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/version"
+	"github.com/hibouhq/lehibou/internal/ws"
 )
 
 type Server struct {
-	cfg       config.Config
-	db        *sql.DB
-	enforcer  *rbac.Enforcer
-	authMgr   *auth.Manager
-	forges    map[string]forge.Provider
-	log       zerolog.Logger
-	queries   *store.Queries
-	startedAt time.Time
-	router    chi.Router
-	http      *http.Server
+	cfg              config.Config
+	db               *sql.DB
+	enforcer         *rbac.Enforcer
+	authMgr          *auth.Manager
+	forges           map[string]forge.Provider
+	log              zerolog.Logger
+	queries          *store.Queries
+	bus              *events.Bus
+	objStore         objstore.Store
+	wsHub            *ws.Hub
+	notifySvc        *notify.Service
+	deltaSvc         *delta.Service
+	repoConfigLoader *repoconfig.Loader
+	onboardingSvc    *repoconfig.OnboardingService
+	complianceSvc    *compliance.Service
+	retentionWorker  *retention.Worker
+	dispatcher       *notify.Dispatcher
+	annotator        *forge.Annotator
+	startedAt        time.Time
+	router           chi.Router
+	http             *http.Server
 }
 
 type healthResponse struct {
@@ -54,6 +73,8 @@ type metricsResponse struct {
 	GoVersion     string  `json:"go_version"`
 }
 
+const retentionInterval = 24 * time.Hour
+
 func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) *Server {
 	r := chi.NewRouter()
 
@@ -70,6 +91,7 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 		forges:    forges,
 		log:       log,
 		queries:   store.NewQueries(db),
+		bus:       events.New(log),
 		startedAt: time.Now(),
 		router:    r,
 		http: &http.Server{
@@ -78,6 +100,33 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 			IdleTimeout:       120 * time.Second,
 		},
 	}
+
+	s.wsHub = ws.NewHub(log)
+	artifactStore, err := objstore.NewFilesystemStore(cfg.ArtifactPath)
+	if err != nil {
+		log.Error().Err(err).Str("path", cfg.ArtifactPath).Msg("failed to initialize artifact store")
+	} else {
+		s.objStore = artifactStore
+	}
+	s.notifySvc = notify.NewService(s.queries, s.wsHub, s.bus, log)
+	s.deltaSvc = delta.NewService(delta.NewStoreAdapter(s.queries), log)
+	s.repoConfigLoader = repoconfig.NewLoader(s.forges, log)
+	s.onboardingSvc = repoconfig.NewOnboardingService(s.forges, log)
+	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
+	if s.objStore != nil {
+		s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, log, retention.DefaultPolicy())
+	}
+	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, log,
+		&notify.SlackSender{},
+		&notify.TeamsSender{},
+		&notify.DiscordSender{},
+		&notify.WebhookSender{},
+		&notify.EmailSender{},
+	)
+	s.annotator = forge.NewAnnotator(forges, s.deltaSvc, s.bus, forge.NewAnnotatorStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, log)
+	s.notifySvc.Subscribe()
+	s.dispatcher.Subscribe()
+	s.annotator.Subscribe()
 
 	s.routes(siteFS)
 	return s
@@ -88,6 +137,8 @@ func (s *Server) routes(siteFS fs.FS) {
 		r.Get("/health", s.handleHealth)
 		r.Get("/ready", s.handleReady)
 		r.Get("/metrics", s.handleMetrics)
+		r.Get("/schemas/hibou-config.schema.json", s.handleGetConfigSchema)
+		r.Get("/ws", s.wsHub.HTTPHandler(s.authMgr, s.queries))
 		r.Get("/docs/*", httpSwagger.Handler(
 			httpSwagger.URL("/api/v1/docs/doc.json"),
 		))
@@ -101,6 +152,10 @@ func (s *Server) routes(siteFS fs.FS) {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
 			r.Get("/users/me", s.handleGetMe)
+			r.Get("/notifications", s.notifySvc.HandleListNotifications)
+			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)
+			r.Post("/notifications/{id}/read", s.notifySvc.HandleMarkRead)
+			r.Post("/notifications/read-all", s.notifySvc.HandleMarkAllRead)
 			r.Route("/users/me/api-keys", func(r chi.Router) {
 				r.Post("/", s.handleCreateAPIKey)
 				r.Get("/", s.handleListAPIKeys)
@@ -113,6 +168,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/", s.handleGetOrg)
 					r.Put("/", s.handleUpdateOrg)
 					r.Delete("/", s.handleDeleteOrg)
+					r.Get("/compliance/export", s.handleComplianceExport)
 					r.Route("/teams", func(r chi.Router) {
 						r.Post("/", s.handleCreateTeam)
 						r.Get("/", s.handleListTeams)
@@ -125,6 +181,11 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Route("/repos", func(r chi.Router) {
 						r.Get("/", s.handleListRepos)
 						r.Get("/{repoSlug}", s.handleGetRepo)
+						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
+						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
+						r.Route("/{repoSlug}/delta", func(r chi.Router) {
+							r.Get("/", s.handleGetDelta)
+						})
 					})
 				})
 			})
@@ -144,6 +205,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.cfg.ListenAddr())
 	if err != nil {
 		return err
+	}
+
+	if s.retentionWorker != nil {
+		go s.runRetentionLoop(ctx)
 	}
 
 	s.log.Info().
@@ -167,6 +232,26 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return s.http.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		return err
+	}
+}
+
+func (s *Server) runRetentionLoop(ctx context.Context) {
+	if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		s.log.Error().Err(err).Msg("retention pass failed")
+	}
+
+	ticker := time.NewTicker(retentionInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				s.log.Error().Err(err).Msg("retention pass failed")
+			}
+		}
 	}
 }
 

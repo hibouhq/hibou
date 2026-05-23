@@ -9,6 +9,9 @@ SELECT * FROM findings WHERE id = $1;
 -- name: ListFindingsBySnapshot :many
 SELECT * FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC LIMIT $2 OFFSET $3;
 
+-- name: ListAllFindingsBySnapshot :many
+SELECT * FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC;
+
 -- name: CountFindingsBySnapshot :one
 SELECT COUNT(*)::bigint FROM findings WHERE snapshot_id = $1;
 

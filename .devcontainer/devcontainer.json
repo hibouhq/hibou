@@ -7,7 +7,16 @@
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
-  "forwardPorts": [8080, 3000, 5432],
+  "forwardPorts": [8080, 3000, 3030, 4321, 4322, 4954, 5432],
+  "portsAttributes": {
+    "3000": { "label": "Vite Dev Server (Frontend)", "onAutoForward": "notify" },
+    "3030": { "label": "Forgejo", "onAutoForward": "silent" },
+    "4321": { "label": "Astro Docs", "onAutoForward": "silent" },
+    "4322": { "label": "Astro Docs (HMR)", "onAutoForward": "silent" },
+    "4954": { "label": "Trivy Server", "onAutoForward": "silent" },
+    "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
+    "8080": { "label": "Hibou API Server", "onAutoForward": "notify" }
+  },
   "customizations": {
     "vscode": {
       "extensions": [

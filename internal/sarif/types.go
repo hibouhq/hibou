@@ -1,0 +1,82 @@
+package sarif
+
+type Document struct {
+	Version string `json:"version"`
+	Schema  string `json:"$schema"`
+	Runs    []Run  `json:"runs"`
+}
+
+type Run struct {
+	Tool    Tool     `json:"tool"`
+	Results []Result `json:"results"`
+}
+
+type Tool struct {
+	Driver ToolComponent `json:"driver"`
+}
+
+type ToolComponent struct {
+	Name    string                `json:"name"`
+	Version string                `json:"version"`
+	Rules   []ReportingDescriptor `json:"rules"`
+}
+
+type ReportingDescriptor struct {
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	ShortDescription *Message                `json:"shortDescription,omitempty"`
+	HelpURI          string                  `json:"helpUri"`
+	Properties       ReportingDescriptorInfo `json:"properties"`
+}
+
+type ReportingDescriptorInfo struct {
+	Tags []string `json:"tags"`
+}
+
+type Result struct {
+	RuleID              string            `json:"ruleId"`
+	RuleIndex           *int              `json:"ruleIndex,omitempty"`
+	Level               string            `json:"level"`
+	Message             Message           `json:"message"`
+	Locations           []Location        `json:"locations"`
+	Fingerprints        map[string]string `json:"fingerprints"`
+	PartialFingerprints map[string]string `json:"partialFingerprints"`
+	CodeFlows           []map[string]any  `json:"codeFlows"`
+}
+
+type Location struct {
+	PhysicalLocation PhysicalLocation `json:"physicalLocation"`
+}
+
+type PhysicalLocation struct {
+	ArtifactLocation ArtifactLocation `json:"artifactLocation"`
+	Region           Region           `json:"region"`
+}
+
+type ArtifactLocation struct {
+	URI string `json:"uri"`
+}
+
+type Region struct {
+	StartLine   int32 `json:"startLine"`
+	EndLine     int32 `json:"endLine"`
+	StartColumn int32 `json:"startColumn"`
+	EndColumn   int32 `json:"endColumn"`
+}
+
+type Message struct {
+	Text string `json:"text"`
+}
+
+type Finding struct {
+	Tool         string         `json:"tool"`
+	RuleID       string         `json:"rule_id"`
+	Severity     string         `json:"severity"`
+	FilePath     string         `json:"file_path"`
+	StartLine    int32          `json:"start_line"`
+	EndLine      int32          `json:"end_line"`
+	Message      string         `json:"message"`
+	Fingerprint  string         `json:"fingerprint"`
+	LocationHash string         `json:"location_hash"`
+	Metadata     map[string]any `json:"metadata"`
+}

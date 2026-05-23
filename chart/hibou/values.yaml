@@ -11,22 +11,37 @@ hibou:
     limits:
       cpu: 500m
       memory: 512Mi
-  env:
-    HIBOU_LOG_LEVEL: info
-    HIBOU_LOG_FORMAT: json
-  databaseURL: ""
-  trivyURL: ""
+  logging:
+    level: info
+    format: json
+  database:
+    url: ""
+  trivy:
+    url: ""
+  advisory:
+    cache:
+      ttl: "6h"
+    osv:
+      url: "https://api.osv.dev"
+  # -- Override the base URL. Auto-derived from ingress.hostname when ingress is enabled.
+  baseURL: ""
 
 postgresql:
   enabled: true
   image:
     repository: postgres
-    tag: "16"
+    tag: "18"
     pullPolicy: IfNotPresent
   auth:
-    # WARNING: Override these values in production. These defaults are for local development only.
+    # Provide an existing Secret containing key: url (full postgres:// connection string).
+    # Create it with:
+    #   kubectl create secret generic hibou-db-url -n hibou \
+    #     --from-literal=url="postgres://user:pass@host:5432/db?sslmode=require"
+    # When set, auth.username/password/database are ignored.
+    existingSecret: ""
     username: hibou
-    password: hibou
+    # Set via --set in dev. In production, use existingSecret instead.
+    password: ""
     database: hibou
   persistence:
     enabled: true
@@ -55,10 +70,19 @@ trivy:
 
 ingress:
   enabled: false
+  # -- The hostname for the Hibou ingress. Also sets HIBOU_BASE_URL.
+  hostname: ""
+  # -- Ingress class name (e.g., "nginx", "traefik").
   className: ""
-  hosts:
-    - host: hibou.local
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
+  # -- Additional annotations (e.g., cert-manager.io/cluster-issuer).
+  annotations: {}
+  # -- Path configuration.
+  path: /
+  pathType: Prefix
+  tls:
+    # -- Enable TLS. When true and no existingSecret is set,
+    # relies on annotations (e.g., cert-manager) to provision the certificate.
+    enabled: false
+    # -- Name of an existing TLS Secret. If empty and tls.enabled=true,
+    # a secret name is auto-generated as "<fullname>-tls".
+    existingSecret: ""

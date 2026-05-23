@@ -29,20 +29,11 @@ spec:
               protocol: TCP
           env:
             - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "hibou.postgresqlSecretName" . }}
-                  key: username
+              value: {{ .Values.postgresql.auth.username | quote }}
             - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "hibou.postgresqlSecretName" . }}
-                  key: password
+              value: {{ .Values.postgresql.auth.password | quote }}
             - name: POSTGRES_DB
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "hibou.postgresqlSecretName" . }}
-                  key: database
+              value: {{ .Values.postgresql.auth.database | quote }}
           livenessProbe:
             exec:
               command:

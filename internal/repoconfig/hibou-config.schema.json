@@ -1,0 +1,77 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://hibou.dev/schemas/v1/hibou-config.schema.json",
+    "title": "Hibou Repository Config",
+    "description": "Repository-scoped Hibou configuration for branch-aware weakness quality gates.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "version"
+    ],
+    "properties": {
+        "version": {
+            "type": "integer",
+            "const": 1,
+            "description": "Schema version for the Hibou repository configuration file."
+        },
+        "quality_gates": {
+            "type": "array",
+            "description": "Optional branch-aware weakness quality gate rules. The most specific matching branch pattern wins.",
+            "items": {
+                "$ref": "#/$defs/qualityGate"
+            }
+        }
+    },
+    "$defs": {
+        "qualityGate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "branches"
+            ],
+            "properties": {
+                "branches": {
+                    "type": "array",
+                    "description": "One or more exact branch names or glob patterns such as release/*.",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "An exact branch name or a path.Match-compatible glob pattern."
+                    }
+                },
+                "weaknesses": {
+                    "$ref": "#/$defs/weaknessThresholds",
+                    "description": "Optional weakness gate thresholds for matching branches. If omitted, Hibou falls back to platform-managed weakness gates."
+                }
+            },
+            "description": "A branch-aware quality gate entry."
+        },
+        "weaknessThresholds": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether weakness gating is enabled for matching branches. Defaults to true. Set to false to disable weakness gating and override platform-managed weakness gates."
+                },
+                "max_critical": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum number of new critical-severity findings allowed. Omit for no limit."
+                },
+                "max_high": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum number of new high-severity findings allowed. Omit for no limit."
+                },
+                "max_medium": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum number of new medium-severity findings allowed. Omit for no limit."
+                }
+            },
+            "description": "Thresholds for weakness findings on matching branches."
+        }
+    }
+}

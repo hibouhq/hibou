@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -128,6 +129,70 @@ func (g *GitHub) GetBranch(ctx context.Context, owner, repo, branch string) (*Br
 
 	result := payload.toBranch()
 	return &result, nil
+}
+
+func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
+	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	request, err := g.newRequest(ctx, http.MethodGet, requestPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload githubContentFile
+	status, err := g.doWithStatus(request, &payload)
+	if status == http.StatusNotFound {
+		return nil, ErrFileNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	decoded, err := decodeBase64Content(payload.Content)
+	if err != nil {
+		return nil, fmt.Errorf("decode github file content: %w", err)
+	}
+	return decoded, nil
+}
+
+func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {
+	sha, err := g.lookupContentSHA(ctx, owner, repo, filePath, branch)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]string{
+		"message": message,
+		"content": base64.StdEncoding.EncodeToString(content),
+		"branch":  branch,
+	}
+	if sha != "" {
+		payload["sha"] = sha
+	}
+
+	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath))
+	return g.doJSON(ctx, http.MethodPut, requestPath, payload, nil)
+}
+
+func (g *GitHub) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error {
+	requestPath := fmt.Sprintf("/repos/%s/%s/git/refs", url.PathEscape(owner), url.PathEscape(repo))
+	return g.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
+		"ref": "refs/heads/" + branch,
+		"sha": fromSHA,
+	}, nil)
+}
+
+func (g *GitHub) CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error) {
+	requestPath := fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
+	var payload githubPullRequestResource
+	if err := g.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
+		"title": opts.Title,
+		"body":  opts.Body,
+		"head":  opts.Head,
+		"base":  opts.Base,
+	}, &payload); err != nil {
+		return nil, err
+	}
+	return &PullRequest{Number: payload.Number, Title: payload.Title, HTMLURL: payload.HTMLURL}, nil
 }
 
 func (g *GitHub) CreateCommitStatus(ctx context.Context, owner, repo, sha string, status CommitStatus) error {
@@ -288,9 +353,14 @@ func (g *GitHub) doJSON(ctx context.Context, method, path string, body any, out 
 }
 
 func (g *GitHub) do(request *http.Request, out any) error {
+	_, err := g.doWithStatus(request, out)
+	return err
+}
+
+func (g *GitHub) doWithStatus(request *http.Request, out any) (int, error) {
 	response, err := g.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("perform github request: %w", err)
+		return 0, fmt.Errorf("perform github request: %w", err)
 	}
 	defer response.Body.Close()
 
@@ -300,19 +370,50 @@ func (g *GitHub) do(request *http.Request, out any) error {
 		if message == "" {
 			message = response.Status
 		}
-		return fmt.Errorf("github api %s: %s", request.URL.Path, message)
+		return response.StatusCode, fmt.Errorf("github api %s: %s", request.URL.Path, message)
 	}
 
 	if out == nil {
 		_, _ = io.Copy(io.Discard, response.Body)
-		return nil
+		return response.StatusCode, nil
 	}
 
 	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode github response: %w", err)
+		return response.StatusCode, fmt.Errorf("decode github response: %w", err)
 	}
 
-	return nil
+	return response.StatusCode, nil
+}
+
+func (g *GitHub) lookupContentSHA(ctx context.Context, owner, repo, filePath, ref string) (string, error) {
+	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	request, err := g.newRequest(ctx, http.MethodGet, requestPath, nil)
+	if err != nil {
+		return "", err
+	}
+
+	var payload githubContentFile
+	status, err := g.doWithStatus(request, &payload)
+	if status == http.StatusNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return payload.SHA, nil
+}
+
+func escapeContentPath(filePath string) string {
+	parts := strings.Split(strings.Trim(filePath, "/"), "/")
+	for index, part := range parts {
+		parts[index] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+func decodeBase64Content(content string) ([]byte, error) {
+	cleaned := strings.ReplaceAll(content, "\n", "")
+	return base64.StdEncoding.DecodeString(cleaned)
 }
 
 type githubRepository struct {
@@ -325,6 +426,18 @@ type githubRepository struct {
 	Owner         struct {
 		Login string `json:"login"`
 	} `json:"owner"`
+}
+
+type githubContentFile struct {
+	SHA      string `json:"sha"`
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
+}
+
+type githubPullRequestResource struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
 }
 
 func (r githubRepository) toRepository(providerID string) Repository {

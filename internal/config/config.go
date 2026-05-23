@@ -3,21 +3,27 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
 
 type Config struct {
-	Host          string `env:"HIBOU_HOST"            envDefault:"0.0.0.0"`
-	Port          int    `env:"HIBOU_PORT"            envDefault:"8080"`
-	DatabaseURL   string `env:"HIBOU_DATABASE_URL"    envDefault:"postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable"`
-	LogLevel      string `env:"HIBOU_LOG_LEVEL"       envDefault:"info"`
-	LogFormat     string `env:"HIBOU_LOG_FORMAT"      envDefault:"console"`
-	TriviURL      string `env:"HIBOU_TRIVY_URL"       envDefault:"http://localhost:4954"`
-	SessionSecret string `env:"HIBOU_SESSION_SECRET"  envDefault:"change-me-in-production"`
+	Host          string        `env:"HIBOU_HOST"            envDefault:"0.0.0.0"`
+	Port          int           `env:"HIBOU_PORT"            envDefault:"8080"`
+	BaseURL       string        `env:"HIBOU_BASE_URL"`
+	DatabaseURL   string        `env:"HIBOU_DATABASE_URL"    envDefault:"postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable"`
+	LogLevel      string        `env:"HIBOU_LOG_LEVEL"       envDefault:"info"`
+	LogFormat     string        `env:"HIBOU_LOG_FORMAT"      envDefault:"console"`
+	TriviURL      string        `env:"HIBOU_TRIVY_URL"       envDefault:"http://localhost:4954"`
+	OSVURL        string        `env:"HIBOU_OSV_URL"         envDefault:"https://api.osv.dev"`
+	CacheTTL      time.Duration `env:"HIBOU_CACHE_TTL"       envDefault:"6h"`
+	ArtifactPath  string        `env:"HIBOU_ARTIFACT_PATH"   envDefault:"/data/artifacts"`
+	SessionSecret string        `env:"HIBOU_SESSION_SECRET"  envDefault:"change-me-in-production"`
 
 	Forges []ForgeConfig
 }
@@ -45,6 +51,32 @@ func (c Config) ListenAddr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
+// CookieDomain returns the domain for session cookies.
+// Derived from HIBOU_BASE_URL hostname. Empty in dev (host-only cookie).
+func (c Config) CookieDomain() string {
+	if c.BaseURL == "" {
+		return ""
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// CookieSecure returns whether cookies require HTTPS.
+// True when HIBOU_BASE_URL uses https scheme.
+func (c Config) CookieSecure() bool {
+	if c.BaseURL == "" {
+		return false
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https"
+}
+
 func Load() (Config, error) {
 	var cfg Config
 	if err := env.Parse(&cfg); err != nil {
@@ -60,7 +92,7 @@ func Load() (Config, error) {
 //
 //	HIBOU_FORGE_0_TYPE=forgejo
 //	HIBOU_FORGE_0_ID=my-forgejo
-//	HIBOU_FORGE_0_URL=http://localhost:3000
+//	HIBOU_FORGE_0_URL=http://localhost:3030
 //	HIBOU_FORGE_0_CLIENT_ID=abc
 //	HIBOU_FORGE_0_CLIENT_SECRET=def
 //	HIBOU_FORGE_0_WEBHOOK_SECRET=ghi

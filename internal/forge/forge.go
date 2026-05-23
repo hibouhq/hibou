@@ -25,6 +25,18 @@ type Provider interface {
 	// GetBranch fetches a single branch by name.
 	GetBranch(ctx context.Context, owner, repo, branch string) (*Branch, error)
 
+	// GetFileContent fetches a file's raw content from a ref.
+	GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error)
+
+	// CreateOrUpdateFile writes a file on a branch.
+	CreateOrUpdateFile(ctx context.Context, owner, repo, path, branch, message string, content []byte) error
+
+	// CreateBranch creates a branch from a base ref or SHA.
+	CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error
+
+	// CreatePullRequest opens a pull request.
+	CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error)
+
 	// CreateCommitStatus sets a commit status (for PR feedback).
 	CreateCommitStatus(ctx context.Context, owner, repo, sha string, status CommitStatus) error
 
@@ -63,6 +75,19 @@ type CommitStatus struct {
 	Context     string
 	TargetURL   string
 	Description string
+}
+
+type CreatePROptions struct {
+	Title string
+	Body  string
+	Head  string
+	Base  string
+}
+
+type PullRequest struct {
+	Number  int
+	Title   string
+	HTMLURL string
 }
 
 type ListReposOptions struct {
@@ -108,3 +133,4 @@ func (PullRequestEvent) EventType() string {
 }
 
 var ErrNotImplemented = errors.New("forge: provider not implemented")
+var ErrFileNotFound = errors.New("forge: file not found")

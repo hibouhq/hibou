@@ -81,8 +81,8 @@ var serveCmd = &cobra.Command{
 
 		authMgr := auth.New(auth.Config{
 			SessionSecret: cfg.SessionSecret,
-			CookieDomain:  cfg.Host,
-			CookieSecure:  cfg.Host != "0.0.0.0" && cfg.Host != "localhost",
+			CookieDomain:  cfg.CookieDomain(),
+			CookieSecure:  cfg.CookieSecure(),
 			Providers:     forges,
 		}, store.NewQueries(db))
 

@@ -1,37 +1,35 @@
 {{- if .Values.ingress.enabled }}
+{{- $fullName := include "hibou.fullname" . -}}
+{{- $hostname := required "ingress.hostname is required when ingress.enabled=true" .Values.ingress.hostname -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "hibou.fullname" . }}
+  name: {{ $fullName }}
   labels:
     {{- include "hibou.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if .Values.ingress.className }}
-  ingressClassName: {{ .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
   {{- end }}
   rules:
-    {{- range .Values.ingress.hosts }}
-    - host: {{ .host | quote }}
+    - host: {{ $hostname | quote }}
       http:
         paths:
-          {{- range .paths }}
-          - path: {{ .path }}
-            pathType: {{ .pathType }}
+          - path: {{ .Values.ingress.path | default "/" }}
+            pathType: {{ .Values.ingress.pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "hibou.fullname" $ }}
+                name: {{ $fullName }}
                 port:
                   number: 8080
-          {{- end }}
-    {{- end }}
-  {{- if .Values.ingress.tls }}
+  {{- if .Values.ingress.tls.enabled }}
   tls:
-    {{- range .Values.ingress.tls }}
     - hosts:
-        {{- range .hosts }}
-        - {{ . | quote }}
-        {{- end }}
-      secretName: {{ .secretName }}
-    {{- end }}
+        - {{ $hostname | quote }}
+      secretName: {{ .Values.ingress.tls.existingSecret | default (printf "%s-tls" $fullName) }}
   {{- end }}
 {{- end }}

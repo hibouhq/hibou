@@ -50,6 +50,22 @@ func (g *GitLab) GetBranch(context.Context, string, string, string) (*Branch, er
 	return nil, ErrNotImplemented
 }
 
+func (g *GitLab) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
+	return nil, ErrNotImplemented
+}
+
+func (g *GitLab) CreateOrUpdateFile(context.Context, string, string, string, string, string, []byte) error {
+	return ErrNotImplemented
+}
+
+func (g *GitLab) CreateBranch(context.Context, string, string, string, string) error {
+	return ErrNotImplemented
+}
+
+func (g *GitLab) CreatePullRequest(context.Context, string, string, CreatePROptions) (*PullRequest, error) {
+	return nil, ErrNotImplemented
+}
+
 func (g *GitLab) CreateCommitStatus(context.Context, string, string, string, CommitStatus) error {
 	return ErrNotImplemented
 }

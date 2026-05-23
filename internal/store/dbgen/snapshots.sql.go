@@ -8,9 +8,19 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const archiveSnapshot = `-- name: ArchiveSnapshot :exec
+UPDATE snapshots SET status = 'archived' WHERE id = $1
+`
+
+func (q *Queries) ArchiveSnapshot(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, archiveSnapshot, id)
+	return err
+}
 
 const countSnapshotsByRef = `-- name: CountSnapshotsByRef :one
 SELECT COUNT(*)::bigint FROM snapshots WHERE ref_id = $1
@@ -26,7 +36,7 @@ func (q *Queries) CountSnapshotsByRef(ctx context.Context, refID uuid.UUID) (int
 const createSnapshot = `-- name: CreateSnapshot :one
 INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at
+RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key
 `
 
 type CreateSnapshotParams struct {
@@ -54,12 +64,13 @@ func (q *Queries) CreateSnapshot(ctx context.Context, arg CreateSnapshotParams) 
 		&i.Status,
 		&i.RawArtifactUrl,
 		&i.CreatedAt,
+		&i.ArtifactKey,
 	)
 	return i, err
 }
 
 const getLatestSnapshotByRef = `-- name: GetLatestSnapshotByRef :one
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (Snapshot, error) {
@@ -73,12 +84,46 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 		&i.Status,
 		&i.RawArtifactUrl,
 		&i.CreatedAt,
+		&i.ArtifactKey,
+	)
+	return i, err
+}
+
+const getSnapshotAtDate = `-- name: GetSnapshotAtDate :one
+SELECT s.id, s.ref_id, s.commit_sha, s.label, s.status, s.raw_artifact_url, s.created_at, s.artifact_key FROM snapshots s
+JOIN refs r ON r.id = s.ref_id
+WHERE r.repo_id = $1
+	AND r.name = $2
+	AND s.created_at <= $3
+	AND s.status != 'purged'
+ORDER BY s.created_at DESC
+LIMIT 1
+`
+
+type GetSnapshotAtDateParams struct {
+	RepoID    uuid.UUID `json:"repo_id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (q *Queries) GetSnapshotAtDate(ctx context.Context, arg GetSnapshotAtDateParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotAtDate, arg.RepoID, arg.Name, arg.CreatedAt)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Label,
+		&i.Status,
+		&i.RawArtifactUrl,
+		&i.CreatedAt,
+		&i.ArtifactKey,
 	)
 	return i, err
 }
 
 const getSnapshotByID = `-- name: GetSnapshotByID :one
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at FROM snapshots WHERE id = $1
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots WHERE id = $1
 `
 
 func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, error) {
@@ -92,12 +137,140 @@ func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, 
 		&i.Status,
 		&i.RawArtifactUrl,
 		&i.CreatedAt,
+		&i.ArtifactKey,
 	)
 	return i, err
 }
 
+const listArchivedSnapshotsForPurge = `-- name: ListArchivedSnapshotsForPurge :many
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots
+WHERE created_at < $1
+	AND status = 'archived'
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListArchivedSnapshotsForPurgeParams struct {
+	CreatedAt time.Time `json:"created_at"`
+	Limit     int32     `json:"limit"`
+}
+
+func (q *Queries) ListArchivedSnapshotsForPurge(ctx context.Context, arg ListArchivedSnapshotsForPurgeParams) ([]Snapshot, error) {
+	rows, err := q.db.QueryContext(ctx, listArchivedSnapshotsForPurge, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Snapshot{}
+	for rows.Next() {
+		var i Snapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.RefID,
+			&i.CommitSha,
+			&i.Label,
+			&i.Status,
+			&i.RawArtifactUrl,
+			&i.CreatedAt,
+			&i.ArtifactKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listComponentsBySnapshot = `-- name: ListComponentsBySnapshot :many
+SELECT c.id, c.purl, c.name, c.version, c.ecosystem, c.licenses, c.created_at FROM components c
+JOIN snapshot_components sc ON sc.component_id = c.id
+WHERE sc.snapshot_id = $1
+`
+
+func (q *Queries) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]Component, error) {
+	rows, err := q.db.QueryContext(ctx, listComponentsBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Component{}
+	for rows.Next() {
+		var i Component
+		if err := rows.Scan(
+			&i.ID,
+			&i.Purl,
+			&i.Name,
+			&i.Version,
+			&i.Ecosystem,
+			&i.Licenses,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredSnapshots = `-- name: ListExpiredSnapshots :many
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots
+WHERE created_at < $1
+	AND status IN ('complete', 'active')
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListExpiredSnapshotsParams struct {
+	CreatedAt time.Time `json:"created_at"`
+	Limit     int32     `json:"limit"`
+}
+
+func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnapshotsParams) ([]Snapshot, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredSnapshots, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Snapshot{}
+	for rows.Next() {
+		var i Snapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.RefID,
+			&i.CommitSha,
+			&i.Label,
+			&i.Status,
+			&i.RawArtifactUrl,
+			&i.CreatedAt,
+			&i.ArtifactKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSnapshotsByRef = `-- name: ListSnapshotsByRef :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListSnapshotsByRefParams struct {
@@ -123,6 +296,7 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 			&i.Status,
 			&i.RawArtifactUrl,
 			&i.CreatedAt,
+			&i.ArtifactKey,
 		); err != nil {
 			return nil, err
 		}
@@ -137,8 +311,42 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 	return items, nil
 }
 
+const purgeSnapshot = `-- name: PurgeSnapshot :exec
+UPDATE snapshots SET status = 'purged' WHERE id = $1
+`
+
+func (q *Queries) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, purgeSnapshot, id)
+	return err
+}
+
+const setSnapshotArtifactKey = `-- name: SetSnapshotArtifactKey :one
+UPDATE snapshots SET artifact_key = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key
+`
+
+type SetSnapshotArtifactKeyParams struct {
+	ID          uuid.UUID `json:"id"`
+	ArtifactKey string    `json:"artifact_key"`
+}
+
+func (q *Queries) SetSnapshotArtifactKey(ctx context.Context, arg SetSnapshotArtifactKeyParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, setSnapshotArtifactKey, arg.ID, arg.ArtifactKey)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Label,
+		&i.Status,
+		&i.RawArtifactUrl,
+		&i.CreatedAt,
+		&i.ArtifactKey,
+	)
+	return i, err
+}
+
 const updateSnapshotStatus = `-- name: UpdateSnapshotStatus :one
-UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at
+UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key
 `
 
 type UpdateSnapshotStatusParams struct {
@@ -157,6 +365,7 @@ func (q *Queries) UpdateSnapshotStatus(ctx context.Context, arg UpdateSnapshotSt
 		&i.Status,
 		&i.RawArtifactUrl,
 		&i.CreatedAt,
+		&i.ArtifactKey,
 	)
 	return i, err
 }

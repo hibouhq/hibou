@@ -33,7 +33,7 @@
 	- Add health probe and service definitions matching the application's `/api/v1/health` endpoint.
 	- Acceptance criteria hint: `helm install` produces a working stack with hibou, PostgreSQL, and Trivy without external chart dependencies.
 
-- [ ] Scaffold the Astro documentation site
+- [x] Scaffold the Astro documentation site
 	- Add a `docs/` directory with an Astro project (Starlight theme) for user guides, admin runbooks, deployment guides, and integration recipes.
 	- Add a Makefile target for building and previewing the docs site locally.
 	- Acceptance criteria hint: `make docs` builds a navigable documentation site from markdown content.
@@ -98,49 +98,183 @@
 
 ## Phase 2 - Analysis Engine
 
-- [ ] Integrate SBOM vulnerability scanning with Trivy server
-	- Support Trivy server connectivity as an internal service deployed directly via the project Helm chart.
-	- Define the scan trigger model for new snapshots, rescans, and database refresh events.
-	- Persist scan provenance, DB version metadata, and retry behavior.
-	- Acceptance criteria hint: an uploaded SBOM produces persisted vulnerability results linked to the originating snapshot.
+- [x] Build the canonical advisory data model and alias resolution
+	- Design a global advisory table storing one record per real vulnerability, with transitive alias merging across CVE, GHSA, OSV, PYSEC, RUSTSEC, GO-, and other identifier namespaces.
+	- Store affected ranges per advisory per package (ecosystem + name + version range + fixed version), sourced from multiple providers independently.
+	- Avoid the DependencyTrack duplication problem (DT#4122, DT#4528): if NVD, OSV, and Trivy all report the same issue under different IDs, the platform stores one advisory with multiple aliases and sources.
+	- Be aware that aggregator databases like OSV already include GHSA, PYSEC, RUSTSEC, GO- advisories — query providers in priority order to avoid redundant lookups: OSV first (broadest aggregation), NVD for CVSS enrichment and CVEs not in OSV, then specialized providers.
+	- Acceptance criteria hint: a single CVE reported by three providers results in one advisory record with three source entries and a merged alias set.
 
-- [ ] Add multi-source vulnerability enrichment
-	- Query OSV.dev and NVD in addition to Trivy so vulnerability coverage is not limited to one database.
-	- Implement caching keyed by component identity and vulnerability database version to avoid repeated expensive lookups.
-	- Add operator controls for NVD API keys, cache retention, and refresh strategy.
-	- Acceptance criteria hint: the same snapshot can be enriched from multiple sources without redundant recomputation.
+- [x] Implement the advisory provider framework
+	- Define an `AdvisoryProvider` interface that all vulnerability data sources implement equally. No provider is a first-class citizen — Trivy, OSV, NVD, Sonatype, and future providers are all pluggable adapters.
+	- Require batch query support where the provider API allows it (OSV: 1000/request, Sonatype OSS Index: 128/request, NVD: bulk download/mirror mode).
+	- Each provider must declare its supported ecosystems, rate limits, and batch capabilities.
+	- Each provider must have dedicated integration tests using recorded HTTP fixtures (go-vcr or similar), plus unit tests for response parsing, alias extraction, and error handling.
+	- Initial providers: OSV.dev (REST batch), NVD (REST + optional mirror), GitHub Advisory Database (GraphQL batch), Trivy (Twirp client as scanner, DB as advisory source), Sonatype OSS Index (REST batch).
+	- Acceptance criteria hint: adding a new provider requires only implementing the interface and registering it — no changes to the scan pipeline.
 
-- [ ] Implement the deduplication and normalization engine
-	- Merge vulnerabilities reported by Trivy, OSV, NVD, and future SCA sources into unified records.
-	- Normalize severity across CVSS variants and tool-native scoring into `critical`, `high`, `medium`, `low`, and `info`.
-	- Aggregate fix versions, aliases, affected ranges, and reporting source metadata onto each merged vulnerability.
-	- Acceptance criteria hint: the dependency view shows one coherent record per real issue rather than duplicated rows per scanner.
+- [x] Implement the global advisory cache and query efficiency layer
+	- Cache advisory query results at the package level (`{ecosystem}:{package_name}:{provider}`), not per-repo or per-org. If 50 repos all depend on `lodash`, the platform queries OSV once.
+	- Use TTL-based cache expiry: configurable per provider (e.g., 6h for OSV, 24h for NVD), with background refresh for expired entries.
+	- Track cache hit rate and last-fetched timestamps per provider for operator visibility.
+	- When processing an SBOM: extract unique `(ecosystem, name, version)` tuples, deduplicate globally across the entire instance, batch-query only cache misses, then compute matches.
+	- Acceptance criteria hint: reprocessing the same SBOM within the cache TTL produces zero external API calls.
 
-- [ ] Parse and store SARIF findings at scale
-	- Implement SARIF 2.1.0 ingestion, rule extraction, location hashing, codeflow capture where useful, and tool metadata storage.
-	- Support findings from any SARIF producer, including commercial and open-source analysis tools such as Semgrep and CodeQL.
-	- Add enrichment hooks for rule catalogs, CWE metadata, and severity mapping.
-	- Acceptance criteria hint: code-level findings from different SAST tools can be queried in one normalized model.
+- [x] Build the ecosystem-aware version comparison library
+	- Implement ecosystem-specific version parsers and comparators in a standalone, heavily tested package (`internal/versioncmp/`). Each ecosystem has different versioning rules and false positives from naive string comparison are unacceptable.
+	- Supported ecosystems: Go (semver with module paths, `golang.org/x/mod/semver`), npm (semver ranges), Maven (Maven version ordering), PyPI (PEP 440), Cargo (semver), NuGet (4-part semver), RubyGems (Gem::Version).
+	- OS package manager versioning — these are the primary source of false positives in other tools: RPM/RHEL/Fedora/SUSE (`epoch:version-release`, `rpmvercmp` algorithm, arch stripping), Debian/Ubuntu (`epoch:upstream-revision`, `dpkg --compare-versions`), Alpine APK (Alpine-specific version ordering with pre/post suffixes and `~` sort behavior).
+	- Version strings from SBOMs often include architecture suffixes (e.g., `1.2.3-1.el9.x86_64`) that must be stripped before comparison. Failure to split arch from version is a known cause of false positives.
+	- Implement range matching: given a vulnerability's affected range (`>=1.0.0, <1.2.3`) and an installed version (`1.1.5`), determine whether the package is affected.
+	- Require **hundreds of test cases** per ecosystem, including edge cases: pre-release versions, build metadata, epoch-prefixed versions, RPM release suffixes, distro backport versions (e.g., Debian `1.2.3-1+deb12u1` patching CVEs fixed upstream in `1.2.4`), and known false-positive scenarios from other tools.
+	- Acceptance criteria hint: version comparison tests cover documented edge cases from each ecosystem's specification and produce zero false positives on a curated test suite.
 
-- [ ] Add generic findings ingestion for non-SARIF tools
-	- Design a simple POST API for arbitrary findings with tool name, severity, file location, description, and metadata.
+- [x] Implement the scan orchestrator and vulnerability matcher
+	- Build a provider-agnostic scan orchestrator that accepts an SBOM (CycloneDX or SPDX), extracts components, queries advisory providers via the cache layer, and computes vulnerability matches using the version comparison library.
+	- The scanner runs as an async job triggered by SBOM upload, webhook push events, or manual rescan.
+	- Persist scan provenance: which providers were queried, cache hit/miss counts, provider response times, DB version metadata, and retry behavior.
+	- Compute `vuln_match` records linking each snapshot component to matching advisories via version range evaluation. Track `is_affected`, `suppressed`, `first_seen_at`, `last_seen_at`.
+	- Expose per-provider last-scan timestamps so users can see when each advisory database was last queried. Surface this in the UI per repository and globally.
+	- Allow users to manually trigger a rescan against one, several, or all providers — bypassing the cache TTL for that invocation. A manual rescan from one repo refreshes the global advisory cache for all queried packages, benefiting every repo that shares those dependencies.
+	- All user-initiated actions (manual rescan, suppression, gate override, notification rule change) must be recorded in an immutable audit log with actor, timestamp, action, target, and context. This audit log tracks platform operations — distinct from the compliance retention of vulnerability state history.
+	- Acceptance criteria hint: an uploaded SBOM produces persisted vulnerability matches linked to the originating snapshot, with full provenance of which providers contributed. Users can see freshness per provider and force a refresh. Every manual action is traceable.
+
+- [x] Implement severity normalization and deduplication
+	- Normalize severity across CVSS v2, v3.0, v3.1, v4.0, and tool-native scoring into five canonical levels: `critical`, `high`, `medium`, `low`, `info`.
+	- When multiple providers report different CVSS scores for the same advisory, apply a deterministic merge strategy: prefer NVD CVSS when available, then the highest-scoring provider, with full source attribution.
+	- Aggregate fix versions, affected ranges, and CWE metadata from all providers onto the canonical advisory.
+	- Acceptance criteria hint: the dependency view shows one coherent record per real issue with the best available severity data, regardless of how many providers reported it.
+
+- [x] Add malware detection support
+	- Extend the advisory model with `is_malware: bool` and `malware_type` classification (typosquat, dependency confusion, backdoor, cryptominer, data exfiltration).
+	- Ingest malware signals from OSV (`MALWARE` type advisories), OpenSSF Package Analysis, and ecosystem-specific sources (npm audit `ismalware` flag).
+	- Surface malware findings prominently in the UI — malware is always critical severity and should be visually distinct from vulnerability findings.
+	- Acceptance criteria hint: a known malicious package in an SBOM is flagged as malware with source attribution.
+
+- [x] Parse and store SARIF findings at scale
+	- Implement SARIF 2.1.0 ingestion, rule extraction, location hashing for deduplication, codeflow capture where useful, and tool metadata storage.
+	- Support findings from any SARIF producer, including Semgrep, CodeQL, ESLint, and commercial SAST tools.
+	- Compute stable fingerprints for deduplication: `sha256(repo + tool + rule_id + file_path + start_line)`.
+	- Add enrichment hooks for CWE metadata and severity mapping from rule catalogs.
+	- Acceptance criteria hint: code-level findings from different SAST tools can be queried in one normalized model without duplicates.
+
+- [x] Add generic findings ingestion for non-SARIF tools
+	- Design a simple POST API for arbitrary findings with tool name, severity, file location, description, and metadata map.
 	- Allow custom AI detectors and niche tools to participate without forcing SARIF conversion.
-	- Preserve enough structure for deduplication, filtering, and PR diffing.
+	- Preserve enough structure (fingerprint, rule ID, file path) for deduplication, filtering, and PR diffing.
 	- Acceptance criteria hint: external tools without native SARIF support can still appear in repository analysis views.
 
-- [ ] Deliver PR analysis and delta computation
-	- Compare PR snapshots against the target branch latest snapshot for vulnerabilities and findings.
-	- Compute new, resolved, and unchanged items with stable deduplication keys.
-	- Add configurable quality gate rules for blocking conditions such as new critical vulnerabilities or high-severity code findings.
-	- Acceptance criteria hint: a PR upload yields an actionable delta summary rather than a raw full snapshot dump.
+- [x] Build the event bus and subscriber architecture
+	- Implement an in-process typed pub/sub event bus (`internal/events/`). Event types: `scan.requested`, `scan.completed`, `scan.failed`, `vuln.discovered`, `finding.created`, `gate.passed`, `gate.failed`, `notification.new`.
+	- All business logic lives in service packages. Services publish events after completing work. Event subscribers (notification dispatcher, forge annotator, WebSocket hub) are thin consumers — no business logic duplication.
+	- Keep event contracts versioned and typed so internal subscribers can evolve without breaking the scan or notification pipeline.
+	- Acceptance criteria hint: scan and finding workflows publish typed events once, and multiple subscribers can react without duplicating domain logic.
 
-- [ ] Implement GitHub PR annotations and checks
-	- Post summary results as Check Runs and optionally inline review comments for code findings with stable locations.
-	- Add controls to avoid noisy annotation spam and to update existing PR statuses idempotently.
-	- Capture delivery failures and retry paths for provider API outages.
-	- Acceptance criteria hint: the platform can decorate PRs using a standard delta-and-gate workflow without duplicating comments on re-runs.
+- [x] Add WebSocket delivery for real-time updates
+	- Add a WebSocket endpoint (`GET /api/v1/ws`) using `github.com/coder/websocket` (successor to `nhooyr.io/websocket`) for real-time frontend updates. Auth on upgrade via session cookie or Bearer token. Per-user channels with topic subscription.
+	- WS messages carry the payload when small (notification, scan status, severity counts), reference-only when large (send count + signal to refetch).
+	- Every piece of data is always available via REST. WebSocket is additive — the frontend works without it (graceful degradation).
+	- Acceptance criteria hint: a scan completion triggers a WS push to connected users and optionally dispatches to external integrations, with zero code duplication between REST and WS paths.
+
+- [x] Implement in-app notification system
+	- Persist notifications per user in the database with type, title, body, link, severity, read/unread status, and created timestamp.
+	- REST endpoints: list notifications (paginated, filterable), mark as read (single + bulk), get unread count.
+	- The notification dispatcher subscribes to the event bus and creates in-app notifications based on configurable rules per org.
+	- Frontend: Pinia notification store, bell icon in header with unread badge, dropdown panel, toast on new events via WebSocket.
+	- Acceptance criteria hint: users see a live-updating notification badge and can review, filter, and dismiss notifications.
+
+- [x] Build the notification dispatcher and integration framework
+	- Define a `notify.Sender` interface: `Send(ctx, event) error`. Each external integration implements it.
+	- Notification rules are stored per org in the database: "when {event_type} on {scope} → send to {integration}". Scopes: org-wide, team, repo, ref pattern. Filters: severity, tool source.
+	- Initial integrations: Slack (incoming webhook), Microsoft Teams (Adaptive Card webhook), Discord (webhook with embeds), generic outgoing webhook (POST JSON with HMAC-SHA256 signature), email (SMTP).
+	- Each integration includes: delivery logging, retry with exponential backoff, failure surfacing, rate limiting, and suppression rules for noisy repos.
+	- Acceptance criteria hint: orgs can route alerts to multiple channels with configurable rules and auditable delivery state.
+
+- [x] Deliver PR analysis and delta computation
+	- Compare PR snapshots against the target branch latest snapshot for both vulnerability matches and code findings.
+	- Compute new, resolved, and unchanged items using stable deduplication keys (advisory canonical ID for vulns, fingerprint for findings).
+	- Implement configurable quality gate rules: max new critical vulns (default: 0), max new high vulns (default: 0), max new SAST findings by severity. Rules are stored per org/repo in the database.
+	- **Branch-aware quality gates**: quality gate rules can target specific branch patterns (e.g., `main`, `release/*`, `*`). A restrictive gate on `main` does not block PRs targeting `develop` or older release branches. Gates are evaluated by matching the PR's target branch against the gate's branch pattern, most specific match wins. If no branch-specific gate matches, fall back to the repo default, then the org default.
+	- Acceptance criteria hint: a PR upload yields an actionable delta summary rather than a raw full snapshot dump. A PR targeting `release/1.x` uses different gate thresholds than one targeting `main`.
+
+- [x] Implement forge PR annotations and checks
+	- Annotations are **delta-only**: only issues **newly introduced by the PR** (compared against the target branch's latest snapshot) are annotated. Existing issues in the target branch are never surfaced as PR annotations — they belong to the branch view, not the PR review.
+	- Post **line-level annotations** on PR diffs for forges that support it (GitHub review comments on changed lines, Forgejo/Gitea line comments, GitLab MR discussions). Only annotate lines that are part of the PR diff. Each annotation links to the specific finding or vulnerability match.
+	- Post a single **summary comment** on the PR that is **updated in place** on each CI build (not a new comment every time). The comment includes: quality gate result (pass/fail), counts of new/resolved issues by severity, delta table, and a link to the full report in Hibou. On subsequent pushes to the same PR, the existing comment is edited — never duplicated.
+	- Use the existing `forge.Provider` interface — works identically for GitHub, Forgejo, and GitLab. Add `CreatePRReviewComment`, `UpsertPRComment` (create-or-update by marker), and `ListPRComments` methods.
+	- Add controls to avoid annotation spam: collapse findings by rule, limit inline annotations per PR (default: 30), skip annotations on unchanged files.
+	- Capture delivery failures and retry paths for forge API outages.
+	- Acceptance criteria hint: a PR shows inline annotations only for newly introduced issues, one always-current summary comment, and no duplicate comments across re-runs.
+
+- [x] Design the data retention and compliance strategy
+	- Implement configurable snapshot retention per org: active (hot, queryable), archived (cold, compressed, queryable with latency), and purged.
+	- Default retention: keep all snapshots for the latest 90 days in hot storage, archive older snapshots for up to 7 years (configurable), never auto-purge unless the operator explicitly requests it.
+	- For compliance (SOC 2, ISO 27001, FedRAMP, PCI DSS): audit-grade retention requires preserving the full history of vulnerability state at any point in time. Store immutable snapshot records with advisory state as-of-scan timestamps.
+	- Raw SBOM and SARIF artifacts go to object storage (S3/MinIO/filesystem) with references in PostgreSQL — do not bloat the primary database with multi-MB JSON payloads.
+	- Advisory history: retain advisory modification history (when a CVE was published, when severity changed, when a fix was released) for compliance audit trails.
+	- Maintain an immutable audit log for all user and system actions: scans triggered, suppressions applied/removed, gate overrides, configuration changes, data exports. The audit log serves operational accountability ("who did what"), while compliance retention serves regulatory evidence ("what was the state at date X"). These are complementary but distinct.
+	- Provide a compliance export API: "give me the full vulnerability state of repo X as of date Y" — this requires point-in-time advisory snapshots.
+	- Acceptance criteria hint: an auditor can request the vulnerability posture of any repository at any historical date and receive a complete, verifiable report.
+
+- [x] Implement config-as-code for quality gates
+	- Define a `.hibou.yaml` configuration file that lives in the repository's default branch. The file is **focused exclusively on weakness (code finding) quality gates** — branch-aware thresholds for new SAST/code findings that determine whether a PR passes or fails.
+	- **Separation of concerns**:
+	  - **`.hibou.yaml`** (dev team, in code): weakness/finding thresholds per branch pattern. The dev team is the authority on code quality risk tolerance.
+	  - **Platform UI/API** (security team, RBAC-gated): vulnerability (CVE) gating based on severity, EPSS exploitability scores, and CISA KEV status. Advisory provider selection, suppressions, notification routing, path exclusions — all platform-only. The security team is the authority on dependency risk.
+	  - **Gate overrides**: when a PR is blocked (by either weakness or vulnerability gates), an `admin` or `release_manager` can approve a gate override via the platform. The override is recorded in the immutable audit log with actor, reason, and affected CVEs/findings. This is the escape hatch — never in code.
+	- Publish a **JSON Schema** (`hibou-config.schema.json`) for the config file, hosted at a well-known URL and referenced via `$schema` in the YAML. This provides IDE autocompletion and validation in VS Code (via YAML extension), JetBrains, and other editors that support JSON Schema for YAML files.
+	- Example `.hibou.yaml` structure:
+	  ```yaml
+	  # yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json
+	  version: 1
+	  quality_gates:
+	    - branches: ["main", "release/*"]
+	      weaknesses:
+	        max_critical: 0
+	        max_high: 0
+	    - branches: ["develop", "feature/*"]
+	      weaknesses:
+	        max_critical: 0
+	        max_high: 2
+			max_medium: 15
+	  ```
+	- On repo onboarding (first detection via webhook or manual enrollment), Hibou opens an **onboarding PR** (like Renovate) that adds a default `.hibou.yaml` to the repo. The PR description explains what Hibou does, how the config works, and links to docs. The PR uses a bot account or the forge app identity.
+	- Config is read from the default branch on every scan. Changes to `.hibou.yaml` are tracked in the audit log. Invalid config is reported as a scan warning, not a hard failure — the platform falls back to org-level defaults.
+	- When `.hibou.yaml` defines weakness gates for a branch pattern, those **override** the platform DB weakness gates for matching branches. If no file-based gate matches a target branch, the platform falls back to DB-defined repo gates, then org-wide gates. Vulnerability gates from the platform DB are **always evaluated independently** — `.hibou.yaml` cannot weaken or disable them.
+	- Acceptance criteria hint: merging the onboarding PR activates repo-level weakness gates. IDE users get full autocompletion on `.hibou.yaml`. Different branches can have different thresholds. Developers cannot bypass vulnerability gates or security controls via this file.
+
+- [x] Migrate from `nhooyr.io/websocket` to `github.com/coder/websocket`
+	- Replace the deprecated `nhooyr.io/websocket` dependency with its maintained successor `github.com/coder/websocket` (same API, drop-in replacement).
+	- Update all import paths in `internal/ws/` and tests.
+	- Acceptance criteria hint: `go.mod` references `github.com/coder/websocket`, no `nhooyr.io` imports remain.
 
 ## Phase 3 - Dashboard and Visualization
+
+### Design Language
+
+The UI draws inspiration from a combination of **GitHub** and **SonarCloud**:
+
+- **GitHub** for overall structure: top navbar (brand, search, notifications bell, user avatar/photo with menu), org/repo navigation, horizontal tab navigation within repos, clean typography, and the general content layout.
+- **SonarCloud** for the branch/PR inspection model: a dropdown selector that lets you switch between branches and pull requests to inspect their analysis results. However, improve upon SonarCloud's approach by adding PR lifecycle awareness (see below).
+- **Coder** for the audit log UX and settings pages: filterable table with expandable rows.
+
+The result should feel like a GitHub-native security tool — users familiar with GitHub's navigation will feel immediately at home.
+
+- [ ] Redesign the global layout and navigation
+	- **Top navbar** (GitHub-style): Hibou logo/brand on the left, global search in the center, notification bell + user avatar (with photo from forge OAuth) on the right. Org selector as a dropdown next to the brand (like GitHub's org/repo switcher).
+	- **Left sidebar** (narrow icon rail): icons for Dashboard, Repositories, Teams, Audit Logs, Settings. Hovering or clicking expands the label. Collapsible — 48–56px when collapsed, ~200px when expanded.
+	- **User links**: clicking the avatar shows a dropdown with profile, API keys, preferences, and logout — matching GitHub's user menu pattern.
+	- Remove the legacy `Uploads` sidebar entry entirely — upload status is surfaced contextually on repository pages and ingestion is an API-only concern. Replace it with `Audit Logs`.
+	- Ensure the layout is responsive: on small screens the rail collapses to icons-only, on very small screens it becomes a hamburger top-nav.
+	- Acceptance criteria hint: the shell looks and feels like GitHub meets a modern DevOps tool — not a 2018 admin panel.
+
+- [ ] Build the Audit Logs view (Coder-style)
+	- Replace the current `Uploads` view with a full audit log page at `/orgs/:slug/audit`.
+	- Display a filterable, paginated table of audit events with columns: timestamp, actor (user or system), action, resource type, resource name, IP address, and status.
+	- Add filter controls above the table: multi-select dropdowns for action type (e.g., `scan.triggered`, `suppression.created`, `gate.overridden`, `config.changed`, `upload.completed`, `member.added`), resource type (repository, organization, team, API key, notification rule), actor, and date range picker.
+	- Each row is expandable or links to a detail panel showing the full event payload (JSON diff for config changes, before/after for suppressions, etc.).
+	- Support URL-shareable filter state via query parameters.
+	- Acceptance criteria hint: an admin can answer "who changed what, when" with the same UX quality as the Coder audit log.
 
 - [ ] Build the organization overview dashboard
 	- Show health summaries, severity distribution, trending indicators, and top-risk repositories across the tenant.
@@ -148,11 +282,26 @@
 	- Expose drilldowns that connect aggregate widgets to detailed views.
 	- Acceptance criteria hint: platform operators can identify hotspots without leaving the overview page.
 
-- [ ] Implement repository detail views and tab model
-	- Add a repository landing page with tabs for `Weaknesses`, `Dependencies`, `Runtime`, and `Secrets`.
-	- Keep `Runtime` and `Secrets` as visible placeholders if the full capability is not yet delivered.
-	- Preserve consistent cross-tab filtering and ref selection behavior.
-	- Acceptance criteria hint: users can move between code findings and dependency risk without losing context.
+- [ ] Implement repository detail views with horizontal tab navigation
+	- Add a repository landing page with a header showing repo name, provider badge, and a **branch/PR selector** (SonarCloud-inspired, improved).
+	- Below the header, render **horizontal tabs**: `Weaknesses` | `Dependencies` | `Malware` | `Runtime` | `Secrets`. Tabs use `RouterLink` with active indicator underline (GitHub-style). No vertical stacked cards.
+	- `Runtime` and `Secrets` tabs show a tasteful "coming soon" empty state (icon + short description) — not a grey card.
+	- The `Malware` tab surfaces known malicious packages detected during SBOM analysis, visually distinct from standard vulnerability findings.
+	- Tab selection and branch/PR selection are both reflected in the URL (`/orgs/:slug/repos/:repo/weaknesses?ref=main`) so views are shareable and bookmarkable.
+	- Preserve consistent cross-tab filtering: severity, tool source, and status filters persist when switching tabs.
+	- Acceptance criteria hint: users can switch between analysis domains with one click and share deep links to specific views.
+
+- [ ] Implement the branch/PR selector with lifecycle awareness
+	- Inspired by SonarCloud's branch/PR picker but improved with real-time lifecycle state:
+	- The selector dropdown is divided into sections: **Branches** (sorted: default branch first, then alphabetical) and **Pull Requests** (sorted: most recently updated first).
+	- Each branch shows: name, quality gate status badge (pass/fail/pending), last scan date.
+	- Each PR shows: PR number, title (truncated), source → target indicator, quality gate status.
+	- **PR lifecycle awareness** (unlike SonarCloud): Hibou detects PR state from the forge (open, merged, closed) via webhooks. Merged/closed PRs are:
+	  1. Immediately marked visually: ~~strikethrough title~~, dimmed/greyed-out row, merged badge (purple) or closed badge (red).
+	  2. After a configurable grace period (default: 7 days), removed from the selector entirely. Data is retained in the DB for historical queries but no longer clutters the picker.
+	- The selector has a search/filter input (like SonarCloud) for finding specific branches or PRs by name/number.
+	- Support tabs within the dropdown: `All` | `Branches` | `Pull Requests` (like SonarCloud).
+	- Acceptance criteria hint: the selector never shows stale merged PRs indefinitely. Users always see current, actionable branches and PRs. Merged PRs are visually struck through immediately and auto-pruned from the UI after a grace period.
 
 - [ ] Deliver the weaknesses experience
 	- Build a findings table grouped and filterable by tool, rule, severity, file path, and status.
@@ -213,10 +362,10 @@
 	- Acceptance criteria hint: an MCP-compatible assistant can query live platform data without bespoke integration code.
 
 - [ ] Deliver the notifications subsystem
-	- Implement event-driven dispatch for webhooks, Slack, Microsoft Teams, and email.
-	- Add templating, retries, delivery logs, failure surfacing, and per-tenant configuration.
+	- Extend the Phase 2 notification dispatcher with advanced features: template customization per integration, delivery analytics dashboard, webhook replay for debugging, and bulk notification management.
+	- Add per-integration health monitoring: last successful delivery, failure rate, circuit breaker state.
 	- Support rate control and suppression rules for noisy repositories or transient scan churn.
-	- Acceptance criteria hint: orgs can route actionable alerts to their preferred channels with auditable delivery state.
+	- Acceptance criteria hint: orgs can route actionable alerts to their preferred channels with auditable delivery state and operational visibility.
 
 - [ ] Add an alert rules engine
 	- Support configurable triggers such as new critical vulnerability, quality gate failure, release branch regression, and stale scan data.
@@ -261,7 +410,9 @@
 	- Acceptance criteria hint: teams can correlate security posture with code health signals in one product.
 
 - [ ] Deliver secret scanning tracking
-	- Integrate with GitHub secret scanning and third-party tools such as truffleHog or gitleaks.
+	- Integrate with GitHub secret scanning and third-party tools such as truffleHog or gitleaks or betterleaks. (should be tool agnostic)
+	- WHen new repo detected, a full scan must be done on the repo, once we should have some kind of hook on github api to intercept push and analyse pushed changes.
+	- ideally we should stop the push, and if possible get a message to the user that git pushed it. (to avoid exposition) take example on gitgardian and github secrets detection feature. update this current task then with the plan. Maybe create an adr file too.
 	- Normalize secret finding metadata and connect it to repository, ref, and remediation workflows.
 	- Acceptance criteria hint: leaked secret visibility is available in the same platform workflow as SBOM and SARIF analysis.
 

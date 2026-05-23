@@ -22,17 +22,46 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: up
-up: ## Start Docker Compose services (postgres, forgejo, trivy)
+up: ## Start Docker Compose services (postgres only by default)
+	docker compose up -d postgres
+	@echo "Waiting for PostgreSQL..."
+	@until docker compose exec -T postgres pg_isready -U hibou -d hibou >/dev/null 2>&1; do sleep 1; done
+	@echo "PostgreSQL is ready."
+
+.PHONY: up-all
+up-all: ## Start all Docker Compose services (postgres, forgejo, trivy)
 	docker compose up -d
-	@echo "Services started. Run 'make setup' to configure Forgejo OAuth."
+	@echo "All services started."
 
 .PHONY: down
 down: ## Stop Docker Compose services
 	docker compose down
 
 .PHONY: setup
-setup: up ## Bootstrap dev environment (Forgejo admin + OAuth app)
+setup: up ## Quick dev setup: start postgres + seed sample data
+	@echo "==> Running migrations and seeding data..."
+	go run . seed
+	@echo ""
+	@echo "==> Setup complete! Run 'make dev' to start the app."
+	@echo "    Then open http://localhost:3000 and click 'Dev Login'."
+
+.PHONY: setup-full
+setup-full: up-all ## Full setup with Forgejo OAuth (for OAuth testing)
 	@./scripts/setup-dev.sh
+
+.PHONY: start
+start: setup ## One command: setup + start the app
+	@$(MAKE) dev
+
+.PHONY: seed
+seed: ## Re-seed the database with sample data
+	go run . seed
+
+.PHONY: reset
+reset: ## Reset database and re-seed
+	docker compose exec -T postgres psql -U hibou -d hibou -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+	go run . seed
+	@echo "Database reset and reseeded."
 
 .PHONY: lint
 lint: ## Run linters and check generated code
@@ -69,7 +98,7 @@ build-all: build-frontend ## Cross-compile for all target platforms
 .PHONY: dev
 dev: ## Run backend + Vite dev server concurrently
 	@trap 'kill 0' EXIT; \
-		go run github.com/air-verse/air@latest & \
+		go run . serve & \
 		cd $(FRONTEND) && npx vite --host 0.0.0.0 & \
 		wait
 
@@ -77,8 +106,9 @@ dev: ## Run backend + Vite dev server concurrently
 db-migrate: ## Database migrations run automatically on hibou serve startup
 	@echo "Migrations run automatically on 'hibou serve'. Set HIBOU_DATABASE_URL as needed and start the server."
 
+
 .PHONY: generate
-generate: ## Run code generation
+generate: ## Run code generation (sqlc, swagger)
 	sqlc generate
 	swag init --parseDependency --parseInternal -g main.go -o internal/apidoc
 

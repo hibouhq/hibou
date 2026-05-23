@@ -15,6 +15,8 @@ Hibou is configured entirely via environment variables with the `HIBOU_` prefix.
 | `HIBOU_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `HIBOU_LOG_FORMAT` | `console` | Log format: `console` or `json` |
 | `HIBOU_TRIVY_URL` | `http://localhost:4954` | Trivy server URL |
+| `HIBOU_OSV_URL` | `https://api.osv.dev` | OSV advisory API base URL |
+| `HIBOU_CACHE_TTL` | `6h` | Advisory cache TTL (e.g., `6h`, `24h`, `30m`) |
 | `HIBOU_SESSION_SECRET` | `change-me-in-production` | Secret for session cookie encryption |
 
 ## Forge Configuration
@@ -46,7 +48,7 @@ HIBOU_SESSION_SECRET=my-secret-key
 # Forge 0: Local Forgejo
 HIBOU_FORGE_0_TYPE=forgejo
 HIBOU_FORGE_0_ID=forgejo-local
-HIBOU_FORGE_0_URL=http://localhost:3000
+HIBOU_FORGE_0_URL=http://localhost:3030
 HIBOU_FORGE_0_CLIENT_ID=abc123
 HIBOU_FORGE_0_CLIENT_SECRET=secret456
 HIBOU_FORGE_0_WEBHOOK_SECRET=whsec_xyz

@@ -14,6 +14,50 @@ import (
 	"github.com/google/uuid"
 )
 
+type CvssVersion string
+
+const (
+	CvssVersionV2  CvssVersion = "v2"
+	CvssVersionV30 CvssVersion = "v3.0"
+	CvssVersionV31 CvssVersion = "v3.1"
+	CvssVersionV40 CvssVersion = "v4.0"
+)
+
+func (e *CvssVersion) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = CvssVersion(s)
+	case string:
+		*e = CvssVersion(s)
+	default:
+		return fmt.Errorf("unsupported scan type for CvssVersion: %T", src)
+	}
+	return nil
+}
+
+type NullCvssVersion struct {
+	CvssVersion CvssVersion `json:"cvss_version"`
+	Valid       bool        `json:"valid"` // Valid is true if CvssVersion is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullCvssVersion) Scan(value interface{}) error {
+	if value == nil {
+		ns.CvssVersion, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.CvssVersion.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullCvssVersion) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.CvssVersion), nil
+}
+
 type DeploymentStatus string
 
 const (
@@ -55,6 +99,97 @@ func (ns NullDeploymentStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.DeploymentStatus), nil
+}
+
+type IntegrationType string
+
+const (
+	IntegrationTypeSlack   IntegrationType = "slack"
+	IntegrationTypeTeams   IntegrationType = "teams"
+	IntegrationTypeDiscord IntegrationType = "discord"
+	IntegrationTypeWebhook IntegrationType = "webhook"
+	IntegrationTypeEmail   IntegrationType = "email"
+)
+
+func (e *IntegrationType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = IntegrationType(s)
+	case string:
+		*e = IntegrationType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for IntegrationType: %T", src)
+	}
+	return nil
+}
+
+type NullIntegrationType struct {
+	IntegrationType IntegrationType `json:"integration_type"`
+	Valid           bool            `json:"valid"` // Valid is true if IntegrationType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullIntegrationType) Scan(value interface{}) error {
+	if value == nil {
+		ns.IntegrationType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.IntegrationType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullIntegrationType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.IntegrationType), nil
+}
+
+type MalwareType string
+
+const (
+	MalwareTypeTyposquat           MalwareType = "typosquat"
+	MalwareTypeDependencyConfusion MalwareType = "dependency_confusion"
+	MalwareTypeBackdoor            MalwareType = "backdoor"
+	MalwareTypeCryptominer         MalwareType = "cryptominer"
+	MalwareTypeDataExfiltration    MalwareType = "data_exfiltration"
+	MalwareTypeOther               MalwareType = "other"
+)
+
+func (e *MalwareType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MalwareType(s)
+	case string:
+		*e = MalwareType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MalwareType: %T", src)
+	}
+	return nil
+}
+
+type NullMalwareType struct {
+	MalwareType MalwareType `json:"malware_type"`
+	Valid       bool        `json:"valid"` // Valid is true if MalwareType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMalwareType) Scan(value interface{}) error {
+	if value == nil {
+		ns.MalwareType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MalwareType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMalwareType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MalwareType), nil
 }
 
 type MemberRole string
@@ -146,6 +281,49 @@ func (ns NullNotificationDestinationType) Value() (driver.Value, error) {
 	return string(ns.NotificationDestinationType), nil
 }
 
+type NotificationStatus string
+
+const (
+	NotificationStatusUnread    NotificationStatus = "unread"
+	NotificationStatusRead      NotificationStatus = "read"
+	NotificationStatusDismissed NotificationStatus = "dismissed"
+)
+
+func (e *NotificationStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = NotificationStatus(s)
+	case string:
+		*e = NotificationStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for NotificationStatus: %T", src)
+	}
+	return nil
+}
+
+type NullNotificationStatus struct {
+	NotificationStatus NotificationStatus `json:"notification_status"`
+	Valid              bool               `json:"valid"` // Valid is true if NotificationStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullNotificationStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.NotificationStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.NotificationStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullNotificationStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.NotificationStatus), nil
+}
+
 type RefType string
 
 const (
@@ -187,6 +365,51 @@ func (ns NullRefType) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.RefType), nil
+}
+
+type ScanStatus string
+
+const (
+	ScanStatusPending   ScanStatus = "pending"
+	ScanStatusRunning   ScanStatus = "running"
+	ScanStatusComplete  ScanStatus = "complete"
+	ScanStatusFailed    ScanStatus = "failed"
+	ScanStatusCancelled ScanStatus = "cancelled"
+)
+
+func (e *ScanStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ScanStatus(s)
+	case string:
+		*e = ScanStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ScanStatus: %T", src)
+	}
+	return nil
+}
+
+type NullScanStatus struct {
+	ScanStatus ScanStatus `json:"scan_status"`
+	Valid      bool       `json:"valid"` // Valid is true if ScanStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullScanStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ScanStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ScanStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullScanStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ScanStatus), nil
 }
 
 type SeverityLevel string
@@ -241,6 +464,9 @@ const (
 	SnapshotStatusProcessing SnapshotStatus = "processing"
 	SnapshotStatusComplete   SnapshotStatus = "complete"
 	SnapshotStatusFailed     SnapshotStatus = "failed"
+	SnapshotStatusActive     SnapshotStatus = "active"
+	SnapshotStatusArchived   SnapshotStatus = "archived"
+	SnapshotStatusPurged     SnapshotStatus = "purged"
 )
 
 func (e *SnapshotStatus) Scan(src interface{}) error {
@@ -278,6 +504,68 @@ func (ns NullSnapshotStatus) Value() (driver.Value, error) {
 	return string(ns.SnapshotStatus), nil
 }
 
+type Advisory struct {
+	ID          uuid.UUID       `json:"id"`
+	CanonicalID string          `json:"canonical_id"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Severity    SeverityLevel   `json:"severity"`
+	CvssScore   sql.NullString  `json:"cvss_score"`
+	CvssVersion NullCvssVersion `json:"cvss_version"`
+	CvssVector  string          `json:"cvss_vector"`
+	CweIds      []string        `json:"cwe_ids"`
+	IsMalware   bool            `json:"is_malware"`
+	MalwareType NullMalwareType `json:"malware_type"`
+	PublishedAt sql.NullTime    `json:"published_at"`
+	WithdrawnAt sql.NullTime    `json:"withdrawn_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+type AdvisoryAlias struct {
+	ID         uuid.UUID `json:"id"`
+	AdvisoryID uuid.UUID `json:"advisory_id"`
+	Alias      string    `json:"alias"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type AdvisoryCache struct {
+	ID            uuid.UUID       `json:"id"`
+	Ecosystem     string          `json:"ecosystem"`
+	PackageName   string          `json:"package_name"`
+	Provider      string          `json:"provider"`
+	ResponseData  json.RawMessage `json:"response_data"`
+	AdvisoryCount int32           `json:"advisory_count"`
+	FetchedAt     time.Time       `json:"fetched_at"`
+	ExpiresAt     time.Time       `json:"expires_at"`
+}
+
+type AdvisorySource struct {
+	ID          uuid.UUID         `json:"id"`
+	AdvisoryID  uuid.UUID         `json:"advisory_id"`
+	Provider    string            `json:"provider"`
+	ProviderID  string            `json:"provider_id"`
+	Severity    NullSeverityLevel `json:"severity"`
+	CvssScore   sql.NullString    `json:"cvss_score"`
+	CvssVersion NullCvssVersion   `json:"cvss_version"`
+	CvssVector  string            `json:"cvss_vector"`
+	RawData     json.RawMessage   `json:"raw_data"`
+	FetchedAt   time.Time         `json:"fetched_at"`
+	CreatedAt   time.Time         `json:"created_at"`
+}
+
+type AffectedRange struct {
+	ID           uuid.UUID `json:"id"`
+	AdvisoryID   uuid.UUID `json:"advisory_id"`
+	Ecosystem    string    `json:"ecosystem"`
+	PackageName  string    `json:"package_name"`
+	Introduced   string    `json:"introduced"`
+	Fixed        string    `json:"fixed"`
+	LastAffected string    `json:"last_affected"`
+	Source       string    `json:"source"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type ApiKey struct {
 	ID         uuid.UUID       `json:"id"`
 	UserID     uuid.UUID       `json:"user_id"`
@@ -287,6 +575,26 @@ type ApiKey struct {
 	ExpiresAt  sql.NullTime    `json:"expires_at"`
 	LastUsedAt sql.NullTime    `json:"last_used_at"`
 	CreatedAt  time.Time       `json:"created_at"`
+}
+
+// Immutable operational audit trail. Records all user, CI, and system actions for accountability. Rows must never be updated or deleted.
+type AuditLog struct {
+	ID      uuid.UUID     `json:"id"`
+	ActorID uuid.NullUUID `json:"actor_id"`
+	// user, api_key, system, webhook
+	ActorType    string `json:"actor_type"`
+	ActorDisplay string `json:"actor_display"`
+	// e.g. scan.trigger, vuln.suppress, vuln.unsuppress, release.create, release.update, release.delete, client.create, gate.override, integration.create, setting.update
+	Action string `json:"action"`
+	// e.g. scan, advisory, vuln_match, release, client, repository, quality_gate, integration, notification_rule
+	ResourceType string        `json:"resource_type"`
+	ResourceID   string        `json:"resource_id"`
+	OrgID        uuid.NullUUID `json:"org_id"`
+	// Action-specific metadata: old/new values for updates, provider list for scans, reason for suppressions
+	Context   json.RawMessage `json:"context"`
+	IpAddress string          `json:"ip_address"`
+	UserAgent string          `json:"user_agent"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 type CasbinRule struct {
@@ -324,14 +632,6 @@ type Component struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-type ComponentVulnerability struct {
-	ComponentID     uuid.UUID      `json:"component_id"`
-	VulnerabilityID uuid.UUID      `json:"vulnerability_id"`
-	FixVersion      sql.NullString `json:"fix_version"`
-	Source          sql.NullString `json:"source"`
-	CreatedAt       time.Time      `json:"created_at"`
-}
-
 type Deployment struct {
 	ID               uuid.UUID        `json:"id"`
 	ClientID         uuid.UUID        `json:"client_id"`
@@ -362,6 +662,32 @@ type Finding struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+type Integration struct {
+	ID              uuid.UUID       `json:"id"`
+	OrgID           uuid.UUID       `json:"org_id"`
+	Name            string          `json:"name"`
+	IntegrationType string          `json:"integration_type"`
+	Config          json.RawMessage `json:"config"`
+	Enabled         bool            `json:"enabled"`
+	LastSuccessAt   sql.NullTime    `json:"last_success_at"`
+	LastFailureAt   sql.NullTime    `json:"last_failure_at"`
+	FailureCount    int32           `json:"failure_count"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+}
+
+type Notification struct {
+	ID        uuid.UUID         `json:"id"`
+	UserID    uuid.UUID         `json:"user_id"`
+	Type      string            `json:"type"`
+	Title     string            `json:"title"`
+	Body      string            `json:"body"`
+	Link      string            `json:"link"`
+	Severity  NullSeverityLevel `json:"severity"`
+	Status    string            `json:"status"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
 type NotificationRule struct {
 	ID                uuid.UUID                   `json:"id"`
 	OrgID             uuid.UUID                   `json:"org_id"`
@@ -390,6 +716,22 @@ type Organization struct {
 	Settings    json.RawMessage `json:"settings"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+type QualityGate struct {
+	ID                uuid.UUID     `json:"id"`
+	OrgID             uuid.UUID     `json:"org_id"`
+	RepoID            uuid.NullUUID `json:"repo_id"`
+	Name              string        `json:"name"`
+	Description       string        `json:"description"`
+	MaxCritical       int32         `json:"max_critical"`
+	MaxHigh           int32         `json:"max_high"`
+	MaxMedium         sql.NullInt32 `json:"max_medium"`
+	MaxNewFindings    sql.NullInt32 `json:"max_new_findings"`
+	FindingSeverities []string      `json:"finding_severities"`
+	Enabled           bool          `json:"enabled"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 type Ref struct {
@@ -433,6 +775,33 @@ type Repository struct {
 	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
+type Scan struct {
+	ID                 uuid.UUID    `json:"id"`
+	SnapshotID         uuid.UUID    `json:"snapshot_id"`
+	Status             string       `json:"status"`
+	ProvidersRequested []string     `json:"providers_requested"`
+	TriggeredBy        string       `json:"triggered_by"`
+	ErrorMessage       string       `json:"error_message"`
+	StartedAt          sql.NullTime `json:"started_at"`
+	CompletedAt        sql.NullTime `json:"completed_at"`
+	CreatedAt          time.Time    `json:"created_at"`
+}
+
+type ScanProvider struct {
+	ID              uuid.UUID     `json:"id"`
+	ScanID          uuid.UUID     `json:"scan_id"`
+	Provider        string        `json:"provider"`
+	Status          string        `json:"status"`
+	CacheHits       int32         `json:"cache_hits"`
+	CacheMisses     int32         `json:"cache_misses"`
+	AdvisoriesFound int32         `json:"advisories_found"`
+	ResponseTimeMs  sql.NullInt32 `json:"response_time_ms"`
+	DbVersion       string        `json:"db_version"`
+	ErrorMessage    string        `json:"error_message"`
+	StartedAt       sql.NullTime  `json:"started_at"`
+	CompletedAt     sql.NullTime  `json:"completed_at"`
+}
+
 type Snapshot struct {
 	ID             uuid.UUID      `json:"id"`
 	RefID          uuid.UUID      `json:"ref_id"`
@@ -441,6 +810,7 @@ type Snapshot struct {
 	Status         SnapshotStatus `json:"status"`
 	RawArtifactUrl sql.NullString `json:"raw_artifact_url"`
 	CreatedAt      time.Time      `json:"created_at"`
+	ArtifactKey    string         `json:"artifact_key"`
 }
 
 type SnapshotComponent struct {
@@ -475,17 +845,15 @@ type User struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
-type Vulnerability struct {
-	ID             uuid.UUID       `json:"id"`
-	CveID          sql.NullString  `json:"cve_id"`
-	Aliases        []string        `json:"aliases"`
-	Severity       SeverityLevel   `json:"severity"`
-	CvssScore      sql.NullString  `json:"cvss_score"`
-	CvssVectors    json.RawMessage `json:"cvss_vectors"`
-	Description    string          `json:"description"`
-	FixVersions    json.RawMessage `json:"fix_versions"`
-	AffectedRanges json.RawMessage `json:"affected_ranges"`
-	Sources        json.RawMessage `json:"sources"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+type VulnMatch struct {
+	ID               uuid.UUID     `json:"id"`
+	SnapshotID       uuid.UUID     `json:"snapshot_id"`
+	ComponentID      uuid.UUID     `json:"component_id"`
+	AdvisoryID       uuid.UUID     `json:"advisory_id"`
+	AffectedRangeID  uuid.NullUUID `json:"affected_range_id"`
+	IsAffected       bool          `json:"is_affected"`
+	Suppressed       bool          `json:"suppressed"`
+	SuppressedReason string        `json:"suppressed_reason"`
+	FirstSeenAt      time.Time     `json:"first_seen_at"`
+	LastSeenAt       time.Time     `json:"last_seen_at"`
 }

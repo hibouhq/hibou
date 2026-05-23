@@ -17,6 +17,9 @@ const (
 	SnapshotStatusProcessing = dbgen.SnapshotStatusProcessing
 	SnapshotStatusComplete   = dbgen.SnapshotStatusComplete
 	SnapshotStatusFailed     = dbgen.SnapshotStatusFailed
+	SnapshotStatusActive     = dbgen.SnapshotStatusActive
+	SnapshotStatusArchived   = dbgen.SnapshotStatusArchived
+	SnapshotStatusPurged     = dbgen.SnapshotStatusPurged
 )
 
 type Snapshot struct {
@@ -26,6 +29,7 @@ type Snapshot struct {
 	Label          *string        `json:"label,omitempty"`
 	Status         SnapshotStatus `json:"status"`
 	RawArtifactURL *string        `json:"raw_artifact_url,omitempty"`
+	ArtifactKey    string         `json:"artifact_key"`
 	CreatedAt      time.Time      `json:"created_at"`
 }
 
@@ -46,6 +50,22 @@ func (q *Queries) CreateSnapshot(ctx context.Context, refID uuid.UUID, commitSHA
 
 func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (*Snapshot, error) {
 	row, err := q.db.GetSnapshotByID(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) GetSnapshotAtDate(ctx context.Context, repoID uuid.UUID, refName string, asOf time.Time) (*Snapshot, error) {
+	row, err := q.db.GetSnapshotAtDate(ctx, dbgen.GetSnapshotAtDateParams{
+		RepoID:    repoID,
+		Name:      refName,
+		CreatedAt: asOf,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -106,6 +126,63 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 	return snapshotFromRow(row), nil
 }
 
+func (q *Queries) ListExpiredSnapshots(ctx context.Context, before time.Time, limit int32) ([]Snapshot, error) {
+	rows, err := q.db.ListExpiredSnapshots(ctx, dbgen.ListExpiredSnapshotsParams{
+		CreatedAt: before,
+		Limit:     limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	snapshots := make([]Snapshot, len(rows))
+	for i, row := range rows {
+		snapshots[i] = *snapshotFromRow(row)
+	}
+
+	return snapshots, nil
+}
+
+func (q *Queries) ListArchivedSnapshotsForPurge(ctx context.Context, before time.Time, limit int32) ([]Snapshot, error) {
+	rows, err := q.db.ListArchivedSnapshotsForPurge(ctx, dbgen.ListArchivedSnapshotsForPurgeParams{
+		CreatedAt: before,
+		Limit:     limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	snapshots := make([]Snapshot, len(rows))
+	for i, row := range rows {
+		snapshots[i] = *snapshotFromRow(row)
+	}
+
+	return snapshots, nil
+}
+
+func (q *Queries) ArchiveSnapshot(ctx context.Context, id uuid.UUID) error {
+	return q.db.ArchiveSnapshot(ctx, id)
+}
+
+func (q *Queries) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
+	return q.db.PurgeSnapshot(ctx, id)
+}
+
+func (q *Queries) SetSnapshotArtifactKey(ctx context.Context, id uuid.UUID, artifactKey string) (*Snapshot, error) {
+	row, err := q.db.SetSnapshotArtifactKey(ctx, dbgen.SetSnapshotArtifactKeyParams{
+		ID:          id,
+		ArtifactKey: artifactKey,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
 func snapshotFromRow(row dbgen.Snapshot) *Snapshot {
 	return &Snapshot{
 		ID:             row.ID,
@@ -114,6 +191,7 @@ func snapshotFromRow(row dbgen.Snapshot) *Snapshot {
 		Label:          stringPtrFromNull(row.Label),
 		Status:         row.Status,
 		RawArtifactURL: stringPtrFromNull(row.RawArtifactUrl),
+		ArtifactKey:    row.ArtifactKey,
 		CreatedAt:      row.CreatedAt,
 	}
 }

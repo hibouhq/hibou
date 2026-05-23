@@ -32,7 +32,7 @@ The recommended way to develop is using the VS Code devcontainer. It includes al
 
 ### Forgejo local instance
 
-The Docker Compose stack includes a Forgejo instance at http://localhost:3000.
+The Docker Compose stack includes a Forgejo instance at http://localhost:3030.
 Admin credentials (created by `make setup`):
 - Username: `hibou-admin`
 - Password: `hibou-admin`
@@ -47,7 +47,7 @@ hibou supports multiple forge providers via indexed environment variables:
 # First forge: local Forgejo
 HIBOU_FORGE_0_TYPE=forgejo
 HIBOU_FORGE_0_ID=forgejo
-HIBOU_FORGE_0_URL=http://localhost:3000
+HIBOU_FORGE_0_URL=http://localhost:3030
 HIBOU_FORGE_0_CLIENT_ID=...
 HIBOU_FORGE_0_CLIENT_SECRET=...
 

@@ -173,6 +173,36 @@ func (q *Queries) GetRepositoryBySlug(ctx context.Context, arg GetRepositoryBySl
 	return i, err
 }
 
+const getRepositoryBySlugAndOrg = `-- name: GetRepositoryBySlugAndOrg :one
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+FROM repositories
+WHERE slug = $1 AND org_id = $2
+`
+
+type GetRepositoryBySlugAndOrgParams struct {
+	Slug  string    `json:"slug"`
+	OrgID uuid.UUID `json:"org_id"`
+}
+
+func (q *Queries) GetRepositoryBySlugAndOrg(ctx context.Context, arg GetRepositoryBySlugAndOrgParams) (Repository, error) {
+	row := q.db.QueryRowContext(ctx, getRepositoryBySlugAndOrg, arg.Slug, arg.OrgID)
+	var i Repository
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.TeamID,
+		&i.Name,
+		&i.Slug,
+		&i.Provider,
+		&i.ProviderID,
+		&i.DefaultBranch,
+		&i.SyncState,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listRepositoriesByOrg = `-- name: ListRepositoriesByOrg :many
 SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
 FROM repositories

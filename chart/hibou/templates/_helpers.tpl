@@ -33,7 +33,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "hibou.postgresqlSecretName" -}}
+{{- if .Values.postgresql.auth.existingSecret -}}
+{{- .Values.postgresql.auth.existingSecret -}}
+{{- else -}}
 {{- printf "%s-postgresql" (include "hibou.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "hibou.trivyServiceName" -}}
@@ -41,21 +45,31 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "hibou.databaseURL" -}}
-{{- if .Values.hibou.databaseURL -}}
-{{- .Values.hibou.databaseURL -}}
-{{- else if .Values.postgresql.enabled -}}
-{{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable" .Values.postgresql.auth.username .Values.postgresql.auth.password (include "hibou.postgresqlServiceName" .) .Values.postgresql.auth.database -}}
+{{- if .Values.hibou.database.url -}}
+{{- .Values.hibou.database.url -}}
 {{- else -}}
-{{- required "hibou.databaseURL must be set when postgresql.enabled=false" .Values.hibou.databaseURL -}}
+{{/* Database URL is read from the secret at runtime, not baked into templates */}}
 {{- end -}}
 {{- end -}}
 
 {{- define "hibou.trivyURL" -}}
-{{- if .Values.hibou.trivyURL -}}
-{{- .Values.hibou.trivyURL -}}
+{{- if .Values.hibou.trivy.url -}}
+{{- .Values.hibou.trivy.url -}}
 {{- else if .Values.trivy.enabled -}}
 {{- printf "http://%s:4954" (include "hibou.trivyServiceName" .) -}}
 {{- else -}}
-{{- required "hibou.trivyURL must be set when trivy.enabled=false" .Values.hibou.trivyURL -}}
+{{- required "hibou.trivy.url must be set when trivy.enabled=false" .Values.hibou.trivy.url -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.baseURL" -}}
+{{- if .Values.hibou.baseURL -}}
+{{- .Values.hibou.baseURL -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.hostname -}}
+{{- if .Values.ingress.tls.enabled -}}
+{{- printf "https://%s" .Values.ingress.hostname -}}
+{{- else -}}
+{{- printf "http://%s" .Values.ingress.hostname -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

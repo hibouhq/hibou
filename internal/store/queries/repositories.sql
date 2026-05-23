@@ -13,6 +13,11 @@ SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, s
 FROM repositories
 WHERE org_id = $1 AND slug = $2;
 
+-- name: GetRepositoryBySlugAndOrg :one
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+FROM repositories
+WHERE slug = $1 AND org_id = $2;
+
 -- name: GetRepositoryByProviderID :one
 SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
 FROM repositories

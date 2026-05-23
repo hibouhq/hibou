@@ -32,7 +32,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "hibou.postgresqlSecretName" . }}
-                  key: database-url
+                  key: url
           livenessProbe:
             httpGet:
               path: /api/v1/health

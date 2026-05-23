@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -28,7 +29,7 @@ type Forgejo struct {
 
 func NewForgejo(apiURL, clientID, clientSecret, webhookSecret string) *Forgejo {
 	if apiURL == "" {
-		apiURL = "http://localhost:3000"
+		apiURL = "http://localhost:3030"
 	}
 
 	return &Forgejo{
@@ -110,6 +111,72 @@ func (f *Forgejo) GetBranch(ctx context.Context, owner, repo, branch string) (*B
 
 	result := payload.toBranch()
 	return &result, nil
+}
+
+func (f *Forgejo) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	request, err := f.newRequest(ctx, http.MethodGet, requestPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload forgejoContentFile
+	status, err := f.doWithStatus(request, &payload)
+	if status == http.StatusNotFound {
+		return nil, ErrFileNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	decoded, err := decodeBase64Content(payload.Content)
+	if err != nil {
+		return nil, fmt.Errorf("decode forgejo file content: %w", err)
+	}
+	return decoded, nil
+}
+
+func (f *Forgejo) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {
+	sha, err := f.lookupContentSHA(ctx, owner, repo, filePath, branch)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]string{
+		"branch":  branch,
+		"content": base64.StdEncoding.EncodeToString(content),
+		"message": message,
+	}
+	method := http.MethodPost
+	if sha != "" {
+		method = http.MethodPut
+		payload["sha"] = sha
+	}
+
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath))
+	return f.doJSON(ctx, method, requestPath, payload, nil)
+}
+
+func (f *Forgejo) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error {
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/branches", url.PathEscape(owner), url.PathEscape(repo))
+	return f.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
+		"new_branch_name": branch,
+		"old_branch_name": fromSHA,
+	}, nil)
+}
+
+func (f *Forgejo) CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error) {
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
+	var payload forgejoPullRequestResource
+	if err := f.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
+		"title": opts.Title,
+		"body":  opts.Body,
+		"head":  opts.Head,
+		"base":  opts.Base,
+	}, &payload); err != nil {
+		return nil, err
+	}
+	return &PullRequest{Number: payload.Number, Title: payload.Title, HTMLURL: payload.HTMLURL}, nil
 }
 
 func (f *Forgejo) CreateCommitStatus(ctx context.Context, owner, repo, sha string, status CommitStatus) error {
@@ -267,9 +334,14 @@ func (f *Forgejo) doJSON(ctx context.Context, method, path string, body any, out
 }
 
 func (f *Forgejo) do(request *http.Request, out any) error {
+	_, err := f.doWithStatus(request, out)
+	return err
+}
+
+func (f *Forgejo) doWithStatus(request *http.Request, out any) (int, error) {
 	response, err := f.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("perform forgejo request: %w", err)
+		return 0, fmt.Errorf("perform forgejo request: %w", err)
 	}
 	defer response.Body.Close()
 
@@ -279,19 +351,37 @@ func (f *Forgejo) do(request *http.Request, out any) error {
 		if message == "" {
 			message = response.Status
 		}
-		return fmt.Errorf("forgejo api %s: %s", request.URL.Path, message)
+		return response.StatusCode, fmt.Errorf("forgejo api %s: %s", request.URL.Path, message)
 	}
 
 	if out == nil {
 		_, _ = io.Copy(io.Discard, response.Body)
-		return nil
+		return response.StatusCode, nil
 	}
 
 	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode forgejo response: %w", err)
+		return response.StatusCode, fmt.Errorf("decode forgejo response: %w", err)
 	}
 
-	return nil
+	return response.StatusCode, nil
+}
+
+func (f *Forgejo) lookupContentSHA(ctx context.Context, owner, repo, filePath, ref string) (string, error) {
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	request, err := f.newRequest(ctx, http.MethodGet, requestPath, nil)
+	if err != nil {
+		return "", err
+	}
+
+	var payload forgejoContentFile
+	status, err := f.doWithStatus(request, &payload)
+	if status == http.StatusNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return payload.SHA, nil
 }
 
 // Forgejo/Gitea API types
@@ -307,6 +397,18 @@ type forgejoRepository struct {
 	Owner         struct {
 		Login string `json:"login"`
 	} `json:"owner"`
+}
+
+type forgejoContentFile struct {
+	SHA      string `json:"sha"`
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
+}
+
+type forgejoPullRequestResource struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
 }
 
 func (r forgejoRepository) toRepository() Repository {

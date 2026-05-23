@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -19,12 +20,24 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ListenAddr() != "0.0.0.0:8080" {
 		t.Errorf("expected listen addr 0.0.0.0:8080, got %s", cfg.ListenAddr())
 	}
+	if cfg.OSVURL != "https://api.osv.dev" {
+		t.Errorf("expected default OSV URL, got %s", cfg.OSVURL)
+	}
+	if cfg.CacheTTL != 6*time.Hour {
+		t.Errorf("expected default cache ttl 6h, got %s", cfg.CacheTTL)
+	}
+	if cfg.ArtifactPath != "/data/artifacts" {
+		t.Errorf("expected default artifact path /data/artifacts, got %s", cfg.ArtifactPath)
+	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("HIBOU_PORT", "9090")
 	t.Setenv("HIBOU_HOST", "127.0.0.1")
 	t.Setenv("HIBOU_LOG_LEVEL", "debug")
+	t.Setenv("HIBOU_OSV_URL", "http://osv.internal")
+	t.Setenv("HIBOU_CACHE_TTL", "30m")
+	t.Setenv("HIBOU_ARTIFACT_PATH", "/tmp/hibou-artifacts")
 
 	cfg, err := Load()
 	if err != nil {
@@ -39,6 +52,15 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected log level debug, got %s", cfg.LogLevel)
 	}
+	if cfg.OSVURL != "http://osv.internal" {
+		t.Errorf("expected OSV URL override, got %s", cfg.OSVURL)
+	}
+	if cfg.CacheTTL != 30*time.Minute {
+		t.Errorf("expected cache ttl override, got %s", cfg.CacheTTL)
+	}
+	if cfg.ArtifactPath != "/tmp/hibou-artifacts" {
+		t.Errorf("expected artifact path override, got %s", cfg.ArtifactPath)
+	}
 
 	// Clean up is handled by t.Setenv automatically
 	_ = os.Getenv("HIBOU_PORT") // suppress unused import
@@ -47,7 +69,7 @@ func TestLoadFromEnv(t *testing.T) {
 func TestLoadForgeConfigs(t *testing.T) {
 	t.Setenv("HIBOU_FORGE_0_TYPE", "forgejo")
 	t.Setenv("HIBOU_FORGE_0_ID", "dev-forgejo")
-	t.Setenv("HIBOU_FORGE_0_URL", "http://localhost:3000")
+	t.Setenv("HIBOU_FORGE_0_URL", "http://localhost:3030")
 	t.Setenv("HIBOU_FORGE_0_CLIENT_ID", "client-0")
 	t.Setenv("HIBOU_FORGE_0_CLIENT_SECRET", "secret-0")
 	t.Setenv("HIBOU_FORGE_0_WEBHOOK_SECRET", "hook-0")
@@ -71,8 +93,8 @@ func TestLoadForgeConfigs(t *testing.T) {
 	if f0.ID != "dev-forgejo" {
 		t.Errorf("forge 0: expected id dev-forgejo, got %s", f0.ID)
 	}
-	if f0.URL != "http://localhost:3000" {
-		t.Errorf("forge 0: expected url http://localhost:3000, got %s", f0.URL)
+	if f0.URL != "http://localhost:3030" {
+		t.Errorf("forge 0: expected url http://localhost:3030, got %s", f0.URL)
 	}
 	if f0.ClientID != "client-0" {
 		t.Errorf("forge 0: expected client_id client-0, got %s", f0.ClientID)

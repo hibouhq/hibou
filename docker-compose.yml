@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     ports:
       - '5432:5432'
     environment:
@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: hibou
       POSTGRES_DB: hibou
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
       interval: 10s
@@ -18,11 +18,11 @@ services:
   forgejo:
     image: codeberg.org/forgejo/forgejo:9
     ports:
-      - '3000:3000'
+      - '3030:3000'
       - '2222:22'
     environment:
       FORGEJO__database__DB_TYPE: sqlite3
-      FORGEJO__server__ROOT_URL: http://localhost:3000
+      FORGEJO__server__ROOT_URL: http://localhost:3030
       FORGEJO__server__DOMAIN: localhost
       FORGEJO__server__HTTP_PORT: '3000'
       FORGEJO__service__DISABLE_REGISTRATION: 'false'

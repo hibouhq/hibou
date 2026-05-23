@@ -122,6 +122,48 @@ func (q *Queries) GetFindingByID(ctx context.Context, id uuid.UUID) (Finding, er
 	return i, err
 }
 
+const listAllFindingsBySnapshot = `-- name: ListAllFindingsBySnapshot :many
+SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC
+`
+
+func (q *Queries) ListAllFindingsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]Finding, error) {
+	rows, err := q.db.QueryContext(ctx, listAllFindingsBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Finding{}
+	for rows.Next() {
+		var i Finding
+		if err := rows.Scan(
+			&i.ID,
+			&i.SnapshotID,
+			&i.Tool,
+			&i.RuleID,
+			&i.Severity,
+			&i.Status,
+			&i.FilePath,
+			&i.StartLine,
+			&i.EndLine,
+			&i.LocationHash,
+			&i.Message,
+			&i.Fingerprint,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFindingsBySnapshot = `-- name: ListFindingsBySnapshot :many
 SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC LIMIT $2 OFFSET $3
 `
