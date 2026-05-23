@@ -15,8 +15,8 @@
         "Vue.volar",
         "bradlc.vscode-tailwindcss",
         "dbaeumer.vscode-eslint",
-        "usernamehw.errorlens",
-        "rangav.vscode-thunder-client"
+        "eamodio.gitlens",
+        "ms-ossdata.vscode-pgsql",
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",

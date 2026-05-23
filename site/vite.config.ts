@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../dist/site',
+    outDir: '../internal/ui/dist',
     emptyOutDir: true,
   },
   server: {

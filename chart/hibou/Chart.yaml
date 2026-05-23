@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hibou
+description: Helm chart for deploying the hibou platform and its direct dependencies
+type: application
+version: 0.1.0
+appVersion: 0.1.0

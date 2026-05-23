@@ -31,6 +31,7 @@ test: ## Run Go and frontend tests
 
 build-frontend: ## Build the Vue SPA
 	cd $(FRONTEND) && npm run build
+	# Output: internal/ui/dist/
 
 build: build-frontend ## Build the hibou binary for the current platform
 	mkdir -p $(DIST)
@@ -52,8 +53,8 @@ dev: ## Run backend + Vite dev server concurrently
 		cd $(FRONTEND) && npx vite --host 0.0.0.0 & \
 		wait
 
-db-migrate: ## Run database migrations (placeholder)
-	@echo "TODO: wire database migrations"
+db-migrate: ## Database migrations run automatically on hibou serve startup
+	@echo "Migrations run automatically on 'hibou serve'. Set HIBOU_DATABASE_URL as needed and start the server."
 
 generate: ## Run code generation (placeholder)
 	@echo "TODO: wire sqlc and other generators"

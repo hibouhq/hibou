@@ -9,6 +9,7 @@ COPY site/package.json site/package-lock.json* ./
 RUN npm ci
 COPY site/ ./
 RUN npm run build
+# Output goes to /app/internal/ui/dist
 
 # --- Go build ---
 FROM golang:1.23-bookworm AS go-build
@@ -24,7 +25,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
-COPY --from=ui-build /app/dist/site ./dist/site
+COPY --from=ui-build /app/internal/ui/dist ./internal/ui/dist
 
 RUN <<EOF
 	CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \

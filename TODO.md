@@ -9,25 +9,36 @@
 
 ## Phase 0 - Project Bootstrap
 
-- [ ] Establish repository scaffolding and baseline architecture
+- [x] Establish repository scaffolding and baseline architecture
 	- Create a Go monorepo layout for API, workers, internal packages, Cobra CLI, and embedded web assets. The binary serves as both server (`serve`) and client CLI, with shell completion support (`completion bash/zsh/fish/powershell`).
 	- Initialize the Vue 3 SPA with Vite, TypeScript, Pinia, Vue Router, and a shared design token layer.
 	- Define package boundaries so the backend can embed the built SPA into a single distributable binary.
 	- Acceptance criteria hint: a fresh clone builds both backend and frontend locally and produces one runnable binary.
 
-- [ ] Build the developer workflow and local toolchain
+- [x] Build the developer workflow and local toolchain
 	- Add `Makefile` or `Taskfile` targets for lint, test, build, dev, code generation, and release packaging.
 	- Add a devcontainer and Docker Compose stack for PostgreSQL, optional Trivy server, and local app development.
 	- Standardize environment variable handling, example `.env` files, and secret injection conventions.
 	- Acceptance criteria hint: a contributor can boot the full stack with one documented command path.
 
-- [ ] Create the CI/CD baseline
+- [x] Create the CI/CD baseline
 	- Add GitHub Actions for Go lint/test, frontend lint/test, typecheck, binary build, container build, and release packaging.
 	- Add dependency caching, artifact retention, and tagged release automation.
 	- Add basic provenance goals such as checksums and release notes generation.
 	- Acceptance criteria hint: pull requests run deterministic checks and tagged commits produce releasable artifacts.
 
-- [ ] Define project conventions and architecture guardrails
+- [x] Create the Helm chart for production deployment
+	- Add a `chart/` directory with a Helm chart that deploys the hibou server, PostgreSQL, and Trivy server as direct deployments (not subcharts).
+	- Include configurable values for image tags, resource limits, environment variables, ingress, persistence, and replica counts.
+	- Add health probe and service definitions matching the application's `/api/v1/health` endpoint.
+	- Acceptance criteria hint: `helm install` produces a working stack with hibou, PostgreSQL, and Trivy without external chart dependencies.
+
+- [ ] Scaffold the Astro documentation site
+	- Add a `docs/` directory with an Astro project (Starlight theme) for user guides, admin runbooks, deployment guides, and integration recipes.
+	- Add a Makefile target for building and previewing the docs site locally.
+	- Acceptance criteria hint: `make docs` builds a navigable documentation site from markdown content.
+
+- [x] Define project conventions and architecture guardrails
 	- Publish coding standards for Go and Vue, naming conventions, logging conventions, and API versioning rules.
 	- Choose key libraries early: Cobra for CLI, router (`Chi`), migrations, query generation (`sqlc` or equivalent), auth/session layer, job runner, and UI primitives. Establish the `internal/` package layout from day one so domain logic lives in well-tested libraries and HTTP handlers, CLI commands, and workers are thin adapters.
 	- Capture initial architecture decisions in ADRs so the first implementation phase does not drift.
@@ -35,7 +46,7 @@
 
 ## Phase 1 - Core Foundation
 
-- [ ] Design the PostgreSQL data model and migration system
+- [x] Design the PostgreSQL data model and migration system
 	- Model organizations, teams, repositories, refs, snapshots, components, vulnerabilities, findings, releases, deployments, clients, users, roles, and notification rules.
 	- Treat tagged refs as the release source of truth while adding first-class release and deployment records for lifecycle tracking, rollback history, and client impact analysis.
 	- Introduce migration tooling, seed data strategy, and idempotent schema evolution rules.
@@ -63,7 +74,7 @@
 - [ ] Create the base REST API and OpenAPI contract
 	- Stand up versioned JSON endpoints, middleware, validation, error envelopes, pagination, filtering, and sorting.
 	- Cover upload status polling, PR delta and gate retrieval, clients, releases, deployments, notification rules, API keys, org membership, and RBAC administration in the public API surface.
-	- Auto-generate and publish OpenAPI 3 documentation from code or source annotations.
+	- Use `swaggo/swag` to generate OpenAPI/Swagger from Go handler annotations (following the Coder pattern: annotations on handlers, generated `swagger.json` in a dedicated `apidoc/` package, Swagger UI served at `/api/v1/docs`).
 	- Add health, readiness, and metrics endpoints for operators.
 	- Acceptance criteria hint: consumers can explore a stable documented API before advanced analysis features land.
 
@@ -88,7 +99,7 @@
 ## Phase 2 - Analysis Engine
 
 - [ ] Integrate SBOM vulnerability scanning with Trivy server
-	- Support Trivy server connectivity as an internal service and as a Helm-managed subchart.
+	- Support Trivy server connectivity as an internal service deployed directly via the project Helm chart.
 	- Define the scan trigger model for new snapshots, rescans, and database refresh events.
 	- Persist scan provenance, DB version metadata, and retry behavior.
 	- Acceptance criteria hint: an uploaded SBOM produces persisted vulnerability results linked to the originating snapshot.
@@ -287,7 +298,8 @@
 	- Acceptance criteria hint: every new subsystem lands with the narrowest useful automated test coverage and regression protection.
 
 - [ ] Documentation and developer education
-	- Publish OpenAPI docs, user guides, admin runbooks, deployment guides, and integration recipes.
+	- Maintain the Astro documentation site (`docs/`) with user guides, admin runbooks, deployment guides, and integration recipes.
+	- Publish Swagger/OpenAPI docs via `swaggo/swag`-generated `swagger.json` served at `/api/v1/docs`.
 	- Add architecture diagrams, ADRs, onboarding docs, and troubleshooting playbooks.
 	- Acceptance criteria hint: maintainers and adopters can deploy and extend the platform without reverse-engineering the codebase.
 

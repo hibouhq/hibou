@@ -597,6 +597,9 @@ The platform uses Apache Casbin with a PostgreSQL adapter for policy persistence
 - `developer`
   - Read repository data, upload analysis artifacts, trigger scans where allowed, and manage personal API keys.
 
+- `release_manager`
+  - Manage the release lifecycle for assigned repositories: create releases, publish releases, approve or reject release gates, manage deployments to clients, and override quality gate decisions. Scoped to specific organizations and optionally to individual repositories or teams.
+
 - `auditor`
   - Read-only access across assigned organizational scope plus permission to export compliance evidence.
 
@@ -609,17 +612,34 @@ The platform uses Apache Casbin with a PostgreSQL adapter for policy persistence
 p, admin, orgs, *, *
 p, developer, repos, read, *
 p, developer, uploads, create, *
+p, release_manager, releases, create, *
+p, release_manager, releases, publish, *
+p, release_manager, gates, decide, *
+p, release_manager, deployments, manage, *
+p, release_manager, repos, read, *
 p, auditor, reports, export, *
 p, viewer, repos, read, assigned
 g, alice, admin, org:acme
 g, bob, developer, team:payments
+g, carol, release_manager, org:acme
+g, dave, release_manager, repo:acme/payments
 ```
 
 ### Role mapping options
 
 - Local platform-managed role assignments.
 - Optional binding from git-provider org/team roles to platform roles.
+- Role scoping supports organization-level, team-level, and repository-level granularity. A release manager for one repository does not automatically have release permissions on other repositories.
 - Future support for external group claims from OIDC providers.
+
+### Scoping model
+
+Casbin evaluates policies against a request of the form `(subject, resource_type, action, scope)`. The `scope` dimension is the org, team, or repo the role is bound to via the `g` grouping rules. A release manager assigned to `repo:acme/payments` can only perform release actions on that specific repository. The platform enforces this by including the resource's owning scope in every policy check.
+
+Example isolation:
+
+- `g, dave, release_manager, repo:acme/payments` grants dave release permissions only on `acme/payments`.
+- Dave requesting `(dave, releases, publish, repo:acme/billing)` is denied because there is no matching grouping rule for that scope.
 
 ## 9. Frontend architecture
 

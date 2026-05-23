@@ -1030,7 +1030,81 @@ Performance work to add:
 - Search debouncing where needed for API-backed views.
 - Background prefetch only for high-probability next views, not the whole app.
 
-## Porting Guidance Summary
+## 11. Known Bugs in Current Implementation
+
+These are verified bugs in the current UI that must be fixed in Hibou. Each entry references the current component and describes the expected correct behavior.
+
+### 11.1 DepGraph tooltip clips at container edges
+
+**Component**: `DepGraph.vue` (tooltip positioning in mouseenter handler)
+
+The tooltip is positioned using raw mouse coordinates with a fixed offset (`clientX - rect.left + 12`). When hovering over nodes near the right or bottom edges of the graph container, the tooltip overflows and gets clipped or extends outside the visible area.
+
+**Expected fix**: Clamp tooltip position to keep it within container bounds. Flip to left/above the cursor when near right/bottom edges.
+
+### 11.2 DepTable tool filter hardcodes tool names
+
+**Component**: `DepTable.vue` (filter select options)
+
+The tool filter dropdown has hardcoded options (`<option value="Veracode">`, `<option value="SonarCloud">`, etc.) instead of dynamically deriving available tools from the data.
+
+**Expected fix**: Compute unique tool names from the current dataset and populate the dropdown dynamically, similar to how `SonarIssueTable` derives its type/status options.
+
+### 11.3 DepTable severity filter lists duplicate severity levels
+
+**Component**: `DepTable.vue` (severity filter select)
+
+The severity dropdown contains both "Very High" and "V.High" as separate options, which represent the same severity level. Users may select one and miss results tagged with the other variant.
+
+**Expected fix**: Normalize severity values to canonical names before filtering. Use a single canonical label per severity level.
+
+### 11.4 RefPicker has no ESC key handler
+
+**Component**: `RefPicker.vue`
+
+Pressing Escape does not close the dropdown. The only way to dismiss it is clicking outside the component.
+
+**Expected fix**: Add a `keydown.escape` handler that closes the dropdown and restores the original selection text.
+
+### 11.5 RefPicker doesn't restore text on cancel
+
+**Component**: `RefPicker.vue`
+
+If the user types partial search text in the RefPicker input and then clicks outside without selecting an item, the input retains the partial search text instead of restoring the currently selected value.
+
+**Expected fix**: On dropdown close without selection, reset the input text to `props.currentValue`.
+
+### 11.6 LibDetailModal doesn't lock body scroll
+
+**Component**: `LibDetailModal.vue`
+
+When the modal overlay is open, the page body behind it remains scrollable. Scrolling the mouse wheel scrolls the background page, which is confusing and can lose the user's scroll position.
+
+**Expected fix**: Set `document.body.style.overflow = 'hidden'` on mount and restore the original value on unmount.
+
+### 11.7 DepGraph search only triggers on Enter key
+
+**Component**: `DepGraph.vue` (search input)
+
+The search input only fires the search on `@keydown.enter`. There is no debounced live search on input. Users who type a query and wait see no results until they discover the Enter requirement.
+
+**Expected fix**: Add a debounced `@input` handler (300ms) that triggers `highlightSearch` automatically. Keep the Enter handler for immediate search.
+
+### 11.8 Inconsistent z-index layering across overlays
+
+**Components**: `SonarIssueTable.vue`, `LibDetailModal.vue`, `AppSidebar.vue`, `App.vue`
+
+Different overlay components use different z-index values without a documented scale:
+- Sidebar: `z-50`
+- Mobile backdrop: `z-40`  
+- Rule info panel backdrop: `z-200`
+- Library detail modal backdrop: `z-300`
+
+This creates unpredictable stacking when multiple overlays are open simultaneously.
+
+**Expected fix**: Define a z-index scale in the design system and apply it consistently. Suggested scale: base content (0), sticky headers (10), dropdowns (20), sidebar (30), mobile backdrop (35), modals/overlays (40), toasts/notifications (50).
+
+## 12. Porting Guidance Summary
 
 What to keep almost unchanged:
 

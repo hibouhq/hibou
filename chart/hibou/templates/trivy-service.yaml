@@ -1,0 +1,19 @@
+{{- if .Values.trivy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hibou.trivyServiceName" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trivy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: trivy
+    {{- include "hibou.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 4954
+      targetPort: http
+      protocol: TCP
+{{- end }}

@@ -35,6 +35,7 @@ jobs:
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'always' || 'never' }}
           runCmd: |
             make lint
+            cd site && npm run typecheck && cd ..
             make test
             make build
 

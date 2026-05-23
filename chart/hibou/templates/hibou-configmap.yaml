@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hibou.fullname" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+data:
+  HIBOU_LOG_LEVEL: {{ .Values.hibou.env.HIBOU_LOG_LEVEL | quote }}
+  HIBOU_LOG_FORMAT: {{ .Values.hibou.env.HIBOU_LOG_FORMAT | quote }}
+  HIBOU_TRIVY_URL: {{ include "hibou.trivyURL" . | quote }}

@@ -1,0 +1,64 @@
+hibou:
+  image:
+    repository: ghcr.io/hibouhq/lehibou
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    HIBOU_LOG_LEVEL: info
+    HIBOU_LOG_FORMAT: json
+  databaseURL: ""
+  trivyURL: ""
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16"
+    pullPolicy: IfNotPresent
+  auth:
+    # WARNING: Override these values in production. These defaults are for local development only.
+    username: hibou
+    password: hibou
+    database: hibou
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+trivy:
+  enabled: true
+  image:
+    repository: aquasec/trivy
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+ingress:
+  enabled: false
+  className: ""
+  hosts:
+    - host: hibou.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []

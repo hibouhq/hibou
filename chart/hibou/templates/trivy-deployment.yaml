@@ -1,0 +1,35 @@
+{{- if .Values.trivy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hibou.trivyServiceName" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    app.kubernetes.io/component: trivy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: trivy
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: trivy
+        {{- include "hibou.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: trivy
+          image: {{ printf "%s:%s" .Values.trivy.image.repository .Values.trivy.image.tag | quote }}
+          imagePullPolicy: {{ .Values.trivy.image.pullPolicy }}
+          args:
+            - server
+            - --listen
+            - 0.0.0.0:4954
+          ports:
+            - name: http
+              containerPort: 4954
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.trivy.resources | nindent 12 }}
+{{- end }}

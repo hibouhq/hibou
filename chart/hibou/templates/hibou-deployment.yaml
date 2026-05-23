@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hibou.fullname" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.hibou.replicas }}
+  selector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hibou.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: hibou
+          image: {{ printf "%s:%s" .Values.hibou.image.repository .Values.hibou.image.tag | quote }}
+          imagePullPolicy: {{ .Values.hibou.image.pullPolicy }}
+          args:
+            - serve
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "hibou.fullname" . }}
+          env:
+            - name: HIBOU_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.postgresqlSecretName" . }}
+                  key: database-url
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.hibou.resources | nindent 12 }}
