@@ -15,6 +15,27 @@ services:
       timeout: 5s
       retries: 5
 
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:9
+    ports:
+      - '3000:3000'
+      - '2222:22'
+    environment:
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__ROOT_URL: http://localhost:3000
+      FORGEJO__server__DOMAIN: localhost
+      FORGEJO__server__HTTP_PORT: '3000'
+      FORGEJO__service__DISABLE_REGISTRATION: 'false'
+      FORGEJO__service__REQUIRE_SIGNIN_VIEW: 'false'
+      FORGEJO__oauth2__ENABLE: 'true'
+    volumes:
+      - forgejo-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsSo', '/dev/null', 'http://localhost:3000/api/v1/version']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   trivy:
     image: aquasec/trivy:latest
     command: ['server', '--listen', '0.0.0.0:4954']
@@ -23,3 +44,4 @@ services:
 
 volumes:
   postgres-data:
+  forgejo-data:

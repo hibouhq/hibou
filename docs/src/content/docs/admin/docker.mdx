@@ -1,0 +1,63 @@
+---
+title: Docker Deployment
+description: Deploy Hibou with Docker Compose
+---
+
+## Docker Compose
+
+Hibou provides a `docker-compose.yml` for development and small-scale deployments.
+
+### Services
+
+| Service | Image | Port | Purpose |
+|---------|-------|------|---------|
+| `postgres` | `postgres:16` | 5432 | Primary database |
+| `forgejo` | `codeberg.org/forgejo/forgejo:9` | 3000 | Git forge (dev) |
+| `trivy` | `aquasec/trivy:latest` | 4954 | Vulnerability scanner |
+
+### Starting
+
+```bash
+# Start all services
+make up
+
+# Or directly:
+docker compose up -d
+```
+
+### Stopping
+
+```bash
+make down
+# Or:
+docker compose down
+```
+
+### Volumes
+
+| Volume | Purpose |
+|--------|---------|
+| `pgdata` | PostgreSQL data persistence |
+| `forgejo-data` | Forgejo repositories and config |
+
+### Network
+
+All services share the `hibou` Docker network. The Hibou server (run via `make dev`) connects to services at their container names:
+
+- Database: `localhost:5432` (mapped from container)
+- Forgejo: `localhost:3000`
+- Trivy: `localhost:4954`
+
+## Production Deployment
+
+For production, build the Hibou binary and use the provided `Dockerfile`:
+
+```bash
+docker build -t hibou .
+```
+
+The production image is a minimal scratch-based container containing only the compiled binary and embedded frontend assets.
+
+### Helm Chart
+
+A Helm chart is available in `chart/hibou/` for Kubernetes deployments. See the chart's `values.yaml` for configuration options.

@@ -11,7 +11,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/hibouhq/lehibou/internal/auth"
 	"github.com/hibouhq/lehibou/internal/config"
+	"github.com/hibouhq/lehibou/internal/forge"
+	"github.com/hibouhq/lehibou/internal/rbac"
 	"github.com/hibouhq/lehibou/internal/server"
 	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/ui"
@@ -54,7 +57,36 @@ var serveCmd = &cobra.Command{
 			log.Warn().Msg("no embedded SPA found, API-only mode")
 		}
 
-		srv := server.New(cfg, log, siteFS)
+		enforcer, err := rbac.New(db)
+		if err != nil {
+			return fmt.Errorf("creating rbac enforcer: %w", err)
+		}
+
+		forges := make(map[string]forge.Provider)
+		for _, fc := range cfg.Forges {
+			if fc.ClientID == "" {
+				continue
+			}
+			switch fc.Type {
+			case "github":
+				forges[fc.ID] = forge.NewGitHub(fc.ClientID, fc.ClientSecret, fc.WebhookSecret)
+			case "forgejo", "gitea":
+				forges[fc.ID] = forge.NewForgejo(fc.URL, fc.ClientID, fc.ClientSecret, fc.WebhookSecret)
+			case "gitlab":
+				forges[fc.ID] = forge.NewGitLab(fc.URL, fc.ClientID, fc.ClientSecret, fc.WebhookSecret)
+			default:
+				log.Warn().Str("type", fc.Type).Str("id", fc.ID).Msg("unknown forge type, skipping")
+			}
+		}
+
+		authMgr := auth.New(auth.Config{
+			SessionSecret: cfg.SessionSecret,
+			CookieDomain:  cfg.Host,
+			CookieSecure:  cfg.Host != "0.0.0.0" && cfg.Host != "localhost",
+			Providers:     forges,
+		}, store.NewQueries(db))
+
+		srv := server.New(cfg, log, db, enforcer, authMgr, forges, siteFS)
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()

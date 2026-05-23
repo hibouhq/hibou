@@ -1,0 +1,37 @@
+---
+title: Organizations
+description: Managing organizations in Hibou
+---
+
+Organizations are the primary unit of tenancy in Hibou. Each organization has its own repositories, teams, and security findings.
+
+## Creating an Organization
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orgs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-org", "display_name": "My Organization"}'
+```
+
+Or via the UI: navigate to **Organizations** → **Create Organization**.
+
+## Organization Roles
+
+| Role | Permissions |
+|------|------------|
+| `owner` | Full access, manage members and settings |
+| `admin` | Manage repos and teams, view all findings |
+| `member` | View repos, view findings |
+
+## Linking to a Forge
+
+Organizations can be linked to forge organizations. When linked, repositories from that forge organization can be imported and webhooks are automatically registered.
+
+## Multi-Tenancy
+
+Each organization is fully isolated:
+- Separate repositories and scan results
+- Independent team memberships
+- Own API keys (scoped to org)
+- Separate RBAC policies

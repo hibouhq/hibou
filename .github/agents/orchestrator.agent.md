@@ -2,7 +2,7 @@
 name: Orchestrator
 description: Plan like Plan mode, ask concise clarifying questions when needed, then coordinate implementation and review.
 argument-hint: Describe the task, constraints, and expected outcome.
-tools: ['agent', 'search', 'edit', 'vscode', 'execute']
+tools: [vscode/extensions, vscode/askQuestions, vscode/installExtension, vscode/memory, vscode/newWorkspace, vscode/resolveMemoryFileUri, vscode/runCommand, vscode/vscodeAPI, vscode/toolSearch, execute/getTerminalOutput, execute/killTerminal, execute/sendToTerminal, execute/createAndRunTask, execute/runTests, execute/testFailure, execute/runNotebookCell, execute/runInTerminal, read/readFile, agent/runSubagent, edit/createDirectory, edit/createFile, edit/createJupyterNotebook, edit/editFiles, edit/editNotebook, edit/rename, search/codebase, search/fileSearch, search/listDirectory, search/textSearch, search/searchSubagent, search/usages]
 agents: ['Implementer', 'Reviewer']
 model: Claude Opus 4.6 (copilot)
 target: vscode

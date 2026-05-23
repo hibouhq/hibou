@@ -1,0 +1,151 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - "v*"
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (e.g., v0.1.0 or latest)"
+        required: false
+        default: "latest"
+
+# Allow only one concurrent deployment per version
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # Tag push: extract version (v1.0.0 -> v1.0)
+            TAG="${{ github.ref_name }}"
+            # Use major.minor for version path (like ArgoCD)
+            VERSION=$(echo "$TAG" | sed -E 's/^(v[0-9]+\.[0-9]+).*/\1/')
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ github.event.inputs.version }}" && "${{ github.event.inputs.version }}" != "latest" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=latest" >> "$GITHUB_OUTPUT"
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install docs dependencies
+        run: cd docs && npm ci
+
+      - name: Build docs
+        env:
+          DOCS_VERSION: ${{ steps.version.outputs.version }}
+          DOCS_BASE: /${{ steps.version.outputs.version }}
+          PUBLIC_DOCS_VERSION: ${{ steps.version.outputs.version }}
+        run: cd docs && npm run build
+
+      - name: Download existing site
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages-current
+          path: _site
+        continue-on-error: true
+
+      - name: Assemble versioned site
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          IS_LATEST="${{ steps.version.outputs.is_latest }}"
+          mkdir -p _site
+
+          # Copy built docs into version subdirectory
+          rm -rf "_site/$VERSION"
+          cp -r docs/dist "_site/$VERSION"
+
+          # If this is a tag release, also deploy as "stable"
+          if [[ "$IS_LATEST" == "false" ]]; then
+            rm -rf _site/stable
+            cp -r docs/dist _site/stable
+          fi
+
+          # Update versions.json
+          if [[ -f _site/versions.json ]]; then
+            # Add version if not present, ensure latest and stable are first
+            jq --arg v "$VERSION" \
+              'if (. | index($v)) then . else . + [$v] end' \
+              _site/versions.json > _site/versions.tmp
+            mv _site/versions.tmp _site/versions.json
+          else
+            echo '["stable", "latest"]' > _site/versions.json
+            if [[ "$VERSION" != "latest" && "$VERSION" != "stable" ]]; then
+              jq --arg v "$VERSION" '. + [$v]' _site/versions.json > _site/versions.tmp
+              mv _site/versions.tmp _site/versions.json
+            fi
+          fi
+
+          # Ensure "stable" is always in versions.json
+          if ! jq -e '. | index("stable")' _site/versions.json > /dev/null 2>&1; then
+            jq '. = ["stable"] + .' _site/versions.json > _site/versions.tmp
+            mv _site/versions.tmp _site/versions.json
+          fi
+
+          # Root index.html redirects to /stable/
+          cat > _site/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <meta charset="utf-8">
+              <meta http-equiv="refresh" content="0; url=./stable/">
+              <link rel="canonical" href="./stable/">
+              <title>Redirecting to Hibou Docs</title>
+            </head>
+            <body>
+              <p>Redirecting to <a href="./stable/">stable documentation</a>...</p>
+            </body>
+          </html>
+          EOF
+
+          echo "Site structure:"
+          ls -la _site/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Save site state for future builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages-current
+          path: _site
+          retention-days: 90
+          overwrite: true
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

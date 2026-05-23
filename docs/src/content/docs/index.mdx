@@ -1,0 +1,32 @@
+---
+title: Hibou Documentation
+description: DevSecOps security platform for your Git forges
+template: splash
+hero:
+  tagline: Connect your forges. Scan your code. Ship with confidence.
+  actions:
+    - text: Get Started
+      link: /getting-started/introduction/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/hibouhq/lehibou
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Multi-Forge" icon="setting">
+    Connect GitHub, Forgejo, Gitea, and GitLab — even multiple instances of the same type.
+  </Card>
+  <Card title="Automated Scanning" icon="approve-check">
+    Webhook-driven security scans on every push and pull request via Trivy.
+  </Card>
+  <Card title="Multi-Tenant" icon="group">
+    Organizations, teams, and RBAC for isolated security management.
+  </Card>
+  <Card title="Open API" icon="open-book">
+    Full REST API with OpenAPI documentation for automation and integrations.
+  </Card>
+</CardGrid>

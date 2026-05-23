@@ -53,44 +53,44 @@
 	- Add query generation and repository interfaces that keep read/write paths explicit.
 	- Acceptance criteria hint: the platform can create a clean database, migrate forward, and serve typed reads/writes for core entities.
 
-- [ ] Implement authentication and session management
+- [x] Implement authentication and session management
 	- Add OIDC/OAuth2 login for SSO providers and git-provider login flows for GitHub-first onboarding.
 	- Implement secure session handling, refresh behavior, logout, and tenant-aware user bootstrapping.
 	- Support API keys for CI uploads with scoped permissions and expiry controls.
 	- Acceptance criteria hint: both interactive users and CI systems can authenticate without bypassing RBAC.
 
-- [ ] Introduce RBAC and policy enforcement
+- [x] Introduce RBAC and policy enforcement
 	- Integrate Apache Casbin with PostgreSQL-backed policies.
-	- Define baseline roles: `admin`, `developer`, `auditor`, and `viewer`.
+	- Define baseline roles: `admin`, `developer`, `auditor`, `release_manager`, and `viewer`.
 	- Map permissions to org, team, repository, and API-scope boundaries.
 	- Acceptance criteria hint: policy tests demonstrate that reads, uploads, exports, and settings changes are constrained correctly.
 
-- [ ] Deliver multi-tenant organization hierarchy
+- [x] Deliver multi-tenant organization hierarchy
 	- Implement organization -> team -> repository relationships from day one.
 	- Add tenant scoping for every API path, query, background job, and audit event.
 	- Build bootstrap flows for org creation, repo enrollment, and membership assignment.
 	- Acceptance criteria hint: data from one organization cannot be reached or inferred by another tenant.
 
-- [ ] Create the base REST API and OpenAPI contract
+- [x] Create the base REST API and OpenAPI contract
 	- Stand up versioned JSON endpoints, middleware, validation, error envelopes, pagination, filtering, and sorting.
 	- Cover upload status polling, PR delta and gate retrieval, clients, releases, deployments, notification rules, API keys, org membership, and RBAC administration in the public API surface.
 	- Use `swaggo/swag` to generate OpenAPI/Swagger from Go handler annotations (following the Coder pattern: annotations on handlers, generated `swagger.json` in a dedicated `apidoc/` package, Swagger UI served at `/api/v1/docs`).
 	- Add health, readiness, and metrics endpoints for operators.
 	- Acceptance criteria hint: consumers can explore a stable documented API before advanced analysis features land.
 
-- [ ] Build the ingestion surface
+- [x] Build the ingestion surface
 	- Implement authenticated upload APIs for CycloneDX, SPDX, SARIF, and generic findings. Require ref, commit SHA, and repository identity on every upload so snapshots are pinned to exact source revisions.
 	- Validate payload format, identify repo/ref ownership, persist raw artifacts where needed, and enqueue async processing.
 	- Track ingestion status, failures, retryability, and audit metadata.
 	- Acceptance criteria hint: a CI pipeline can submit SBOM and SARIF data and observe processing state end to end.
 
-- [ ] Add GitHub app and webhook integration
+- [x] Add GitHub app and webhook integration
 	- Support repo discovery, installation setup, webhook verification, PR/ref mapping, and status update permissions.
 	- Establish the minimum event set for push, pull request, and repository lifecycle events.
 	- Prepare provider abstraction boundaries so Forgejo/Gitea and GitLab can be added later without rewriting ingestion flows.
 	- Acceptance criteria hint: a GitHub-connected org can onboard repositories and tie uploads to canonical refs.
 
-- [ ] Ship the first usable frontend shell
+- [x] Ship the first usable frontend shell
 	- Implement the application shell, auth flow, tenant selector, sidebar navigation, theme handling, and route guards.
 	- Add placeholder overview, repository, uploads, admin, and settings views wired to live APIs.
 	- Build a consistent empty-state, loading-state, and error-state system.

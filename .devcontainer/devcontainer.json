@@ -17,6 +17,8 @@
         "dbaeumer.vscode-eslint",
         "eamodio.gitlens",
         "ms-ossdata.vscode-pgsql",
+        "astro-build.astro-vscode",
+        "editorconfig.editorconfig",
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",
@@ -29,6 +31,6 @@
       }
     }
   },
-  "postCreateCommand": "go mod download && go install github.com/go-delve/delve/cmd/dlv@latest && cd site && npm install",
+  "postCreateCommand": "go mod download && go install github.com/go-delve/delve/cmd/dlv@latest && go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest && cd site && npm install",
   "remoteUser": "vscode"
 }

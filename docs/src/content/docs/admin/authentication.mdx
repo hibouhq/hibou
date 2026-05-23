@@ -1,0 +1,82 @@
+---
+title: Authentication
+description: How authentication works in Hibou
+---
+
+Hibou uses OAuth2 for user authentication, delegating identity to your configured forge providers.
+
+## OAuth2 Flow
+
+1. User clicks **Login** and selects a forge provider
+2. Hibou redirects to the forge's OAuth2 authorization endpoint
+3. User grants access on the forge
+4. Forge redirects back to `/auth/callback` with an authorization code
+5. Hibou exchanges the code for an access token
+6. Hibou fetches user info from the forge API
+7. A session cookie is set and the user is redirected to the dashboard
+
+## Session Management
+
+Sessions are stored as encrypted cookies using the `HIBOU_SESSION_SECRET` value.
+
+:::danger
+Change the default session secret (`change-me-in-production`) before deploying. Use a random 32+ character string:
+```bash
+openssl rand -hex 32
+```
+:::
+
+## API Authentication
+
+The API supports two authentication methods:
+
+### Session Cookie
+
+Browser-based requests use the session cookie automatically.
+
+### Bearer Token (API Keys)
+
+For programmatic access, use API keys:
+
+```bash
+curl -H "Authorization: Bearer <api-key>" http://localhost:8080/api/v1/repos
+```
+
+API keys are created in the Settings page and are scoped to the user and their organization memberships.
+
+## Available Providers Endpoint
+
+```
+GET /auth/providers
+```
+
+Returns the list of configured authentication providers:
+
+```json
+[
+  {
+    "id": "forgejo-local",
+    "type": "forgejo",
+    "name": "forgejo-local"
+  },
+  {
+    "id": "github-com",
+    "type": "github",
+    "name": "github-com"
+  }
+]
+```
+
+## Dev Login (Development Only)
+
+When no forge providers are configured, Hibou exposes a development login endpoint:
+
+```
+POST /auth/dev-login
+```
+
+This creates a local user with admin privileges and sets a session cookie. The Dev Login button is visible on the login page only when no providers are configured.
+
+:::caution
+Dev Login bypasses all OAuth2 security. It is intended for local development only and must not be exposed in production.
+:::

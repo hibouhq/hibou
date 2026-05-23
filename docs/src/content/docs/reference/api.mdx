@@ -1,0 +1,94 @@
+---
+title: REST API
+description: API reference and OpenAPI documentation
+---
+
+Hibou exposes a REST API documented with OpenAPI (Swagger).
+
+## OpenAPI Specification
+
+The full OpenAPI spec is available at:
+
+```
+GET /swagger/index.html
+```
+
+The raw spec files:
+- `/swagger/doc.json` — JSON format
+- `/swagger/swagger.yaml` — YAML format
+
+## Base URL
+
+All API endpoints are prefixed with `/api/v1/`.
+
+## Authentication
+
+See [Authentication](/admin/authentication) for details on session cookies and API keys.
+
+## Core Endpoints
+
+### Organizations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/orgs` | List organizations |
+| `POST` | `/api/v1/orgs` | Create organization |
+| `GET` | `/api/v1/orgs/{id}` | Get organization |
+| `PUT` | `/api/v1/orgs/{id}` | Update organization |
+| `DELETE` | `/api/v1/orgs/{id}` | Delete organization |
+
+### Repositories
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/orgs/{org_id}/repos` | List repos in org |
+| `POST` | `/api/v1/orgs/{org_id}/repos` | Add repo to org |
+| `GET` | `/api/v1/repos/{id}` | Get repository |
+| `DELETE` | `/api/v1/repos/{id}` | Remove repository |
+
+### Teams
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/orgs/{org_id}/teams` | List teams |
+| `POST` | `/api/v1/orgs/{org_id}/teams` | Create team |
+| `PUT` | `/api/v1/teams/{id}` | Update team |
+| `DELETE` | `/api/v1/teams/{id}` | Delete team |
+
+### Uploads (Scan Results)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/repos/{id}/upload` | Upload SBOM/SARIF/findings |
+| `GET` | `/api/v1/repos/{id}/status` | Get scan status |
+
+### Authentication
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/auth/providers` | List auth providers |
+| `GET` | `/auth/login/{provider}` | Initiate OAuth2 flow |
+| `GET` | `/auth/callback` | OAuth2 callback |
+| `POST` | `/auth/logout` | Destroy session |
+| `GET` | `/api/v1/me` | Get current user |
+
+### API Keys
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/apikeys` | List user's API keys |
+| `POST` | `/api/v1/apikeys` | Create API key |
+| `DELETE` | `/api/v1/apikeys/{id}` | Revoke API key |
+
+## Pagination
+
+List endpoints support pagination via query parameters:
+
+```
+GET /api/v1/orgs?page=1&per_page=20
+```
+
+Response headers include:
+- `X-Total-Count` — Total number of items
+- `X-Page` — Current page
+- `X-Per-Page` — Items per page

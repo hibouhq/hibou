@@ -1,0 +1,47 @@
+---
+title: Environment Variables
+description: Complete reference of all environment variables
+---
+
+All Hibou configuration is done via environment variables. Variables use the `HIBOU_` prefix.
+
+## Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HIBOU_HOST` | `0.0.0.0` | Network interface to bind |
+| `HIBOU_PORT` | `8080` | HTTP port |
+| `HIBOU_DATABASE_URL` | `postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable` | PostgreSQL DSN |
+| `HIBOU_LOG_LEVEL` | `info` | Minimum log level (`debug`, `info`, `warn`, `error`) |
+| `HIBOU_LOG_FORMAT` | `console` | Output format (`console`, `json`) |
+| `HIBOU_SESSION_SECRET` | `change-me-in-production` | Cookie encryption key (32+ chars recommended) |
+| `HIBOU_TRIVY_URL` | `http://localhost:4954` | Trivy server endpoint |
+
+## Forge Providers (Indexed)
+
+Forges are configured using a zero-indexed pattern. Replace `N` with `0`, `1`, `2`, etc.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HIBOU_FORGE_N_TYPE` | Yes | Provider type: `github`, `forgejo`, `gitea`, `gitlab` |
+| `HIBOU_FORGE_N_ID` | Yes | Unique identifier for this instance |
+| `HIBOU_FORGE_N_URL` | Forgejo/GitLab | Base URL of the forge instance |
+| `HIBOU_FORGE_N_CLIENT_ID` | Yes | OAuth2 application client ID |
+| `HIBOU_FORGE_N_CLIENT_SECRET` | Yes | OAuth2 application client secret |
+| `HIBOU_FORGE_N_WEBHOOK_SECRET` | Yes | HMAC secret for webhook verification |
+
+### Index Rules
+
+- Indexes start at `0` and increment by `1`
+- Hibou stops reading at the first missing index (gap)
+- IDs must be unique across all forges
+- The `URL` field is required for Forgejo, Gitea, and GitLab (not required for GitHub)
+
+### Type-Specific Notes
+
+| Type | URL Required | Notes |
+|------|-------------|-------|
+| `github` | No | Defaults to github.com |
+| `forgejo` | Yes | Forgejo v7+ recommended |
+| `gitea` | Yes | Uses same provider as `forgejo` |
+| `gitlab` | Yes | GitLab v15+ recommended |

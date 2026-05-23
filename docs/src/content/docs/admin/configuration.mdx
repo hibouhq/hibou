@@ -1,0 +1,60 @@
+---
+title: Configuration
+description: All configuration options for Hibou
+---
+
+Hibou is configured entirely via environment variables with the `HIBOU_` prefix.
+
+## Core Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HIBOU_HOST` | `0.0.0.0` | Listen address |
+| `HIBOU_PORT` | `8080` | Listen port |
+| `HIBOU_DATABASE_URL` | `postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable` | PostgreSQL connection string |
+| `HIBOU_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `HIBOU_LOG_FORMAT` | `console` | Log format: `console` or `json` |
+| `HIBOU_TRIVY_URL` | `http://localhost:4954` | Trivy server URL |
+| `HIBOU_SESSION_SECRET` | `change-me-in-production` | Secret for session cookie encryption |
+
+## Forge Configuration
+
+Forges use an indexed configuration pattern inspired by [Coder](https://coder.com). Each forge is identified by its index number.
+
+See [Forge Providers](/admin/forge-providers) for detailed configuration.
+
+| Variable Pattern | Description |
+|-----------------|-------------|
+| `HIBOU_FORGE_N_TYPE` | Forge type: `github`, `forgejo`, `gitea`, or `gitlab` |
+| `HIBOU_FORGE_N_ID` | Unique identifier for this forge instance |
+| `HIBOU_FORGE_N_URL` | Base URL (required for Forgejo/GitLab) |
+| `HIBOU_FORGE_N_CLIENT_ID` | OAuth2 client ID |
+| `HIBOU_FORGE_N_CLIENT_SECRET` | OAuth2 client secret |
+| `HIBOU_FORGE_N_WEBHOOK_SECRET` | Shared secret for webhook signature verification |
+
+Where `N` is a zero-based index (0, 1, 2, …).
+
+## Example `.env`
+
+```bash
+HIBOU_HOST=0.0.0.0
+HIBOU_PORT=8080
+HIBOU_DATABASE_URL=postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable
+HIBOU_LOG_LEVEL=debug
+HIBOU_SESSION_SECRET=my-secret-key
+
+# Forge 0: Local Forgejo
+HIBOU_FORGE_0_TYPE=forgejo
+HIBOU_FORGE_0_ID=forgejo-local
+HIBOU_FORGE_0_URL=http://localhost:3000
+HIBOU_FORGE_0_CLIENT_ID=abc123
+HIBOU_FORGE_0_CLIENT_SECRET=secret456
+HIBOU_FORGE_0_WEBHOOK_SECRET=whsec_xyz
+
+# Forge 1: GitHub.com
+HIBOU_FORGE_1_TYPE=github
+HIBOU_FORGE_1_ID=github-com
+HIBOU_FORGE_1_CLIENT_ID=gh_client_id
+HIBOU_FORGE_1_CLIENT_SECRET=gh_client_secret
+HIBOU_FORGE_1_WEBHOOK_SECRET=gh_webhook_secret
+```

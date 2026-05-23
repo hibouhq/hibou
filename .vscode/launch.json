@@ -8,12 +8,10 @@
       "mode": "auto",
       "program": "${workspaceFolder}/main.go",
       "args": ["serve"],
+      "envFile": "${workspaceFolder}/.env",
       "env": {
-        "HIBOU_DB_HOST": "localhost",
-        "HIBOU_DB_PORT": "5432",
-        "HIBOU_DB_USER": "hibou",
-        "HIBOU_DB_PASSWORD": "hibou",
-        "HIBOU_DB_NAME": "hibou"
+        "HIBOU_LOG_LEVEL": "debug",
+        "HIBOU_LOG_FORMAT": "console"
       }
     },
     {

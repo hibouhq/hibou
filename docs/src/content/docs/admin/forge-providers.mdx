@@ -1,0 +1,168 @@
+---
+title: Forge Providers
+description: Configure Git forge connections with multi-instance support
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Hibou supports connecting to multiple Git forges simultaneously. You can even connect multiple instances of the same forge type (e.g., two separate Forgejo servers).
+
+## Supported Forges
+
+| Type | Value | Notes |
+|------|-------|-------|
+| GitHub | `github` | GitHub.com or GitHub Enterprise |
+| Forgejo | `forgejo` | Forgejo instances (v7+) |
+| Gitea | `gitea` | Gitea instances (uses same provider as Forgejo) |
+| GitLab | `gitlab` | GitLab.com or self-hosted |
+
+## Indexed Configuration Pattern
+
+Each forge is configured via environment variables using a zero-based index:
+
+```
+HIBOU_FORGE_{N}_TYPE
+HIBOU_FORGE_{N}_ID
+HIBOU_FORGE_{N}_URL
+HIBOU_FORGE_{N}_CLIENT_ID
+HIBOU_FORGE_{N}_CLIENT_SECRET
+HIBOU_FORGE_{N}_WEBHOOK_SECRET
+```
+
+Where `{N}` is `0`, `1`, `2`, etc. Hibou reads indexes sequentially and stops at the first gap.
+
+:::note
+The `ID` field must be unique across all configured forges. It is used internally to identify the forge and in API responses.
+:::
+
+## Multiple Instances
+
+You can configure multiple instances of the same forge type. For example, connecting both a staging and production Forgejo:
+
+```bash
+# Staging Forgejo
+HIBOU_FORGE_0_TYPE=forgejo
+HIBOU_FORGE_0_ID=forgejo-staging
+HIBOU_FORGE_0_URL=https://git.staging.example.com
+HIBOU_FORGE_0_CLIENT_ID=...
+HIBOU_FORGE_0_CLIENT_SECRET=...
+HIBOU_FORGE_0_WEBHOOK_SECRET=...
+
+# Production Forgejo
+HIBOU_FORGE_1_TYPE=forgejo
+HIBOU_FORGE_1_ID=forgejo-prod
+HIBOU_FORGE_1_URL=https://git.example.com
+HIBOU_FORGE_1_CLIENT_ID=...
+HIBOU_FORGE_1_CLIENT_SECRET=...
+HIBOU_FORGE_1_WEBHOOK_SECRET=...
+```
+
+## Provider Setup
+
+<Tabs>
+<TabItem label="Forgejo / Gitea">
+
+### 1. Create an OAuth2 Application
+
+In your Forgejo instance:
+1. Go to **Site Administration** → **Applications**
+2. Click **Create a new OAuth2 Application**
+3. Set:
+   - **Application Name**: `Hibou`
+   - **Redirect URI**: `http://YOUR_HIBOU_URL/auth/callback`
+4. Save and copy the **Client ID** and **Client Secret**
+
+### 2. Configure Webhook Secret
+
+Choose a random string for webhook signature verification:
+
+```bash
+openssl rand -hex 32
+```
+
+### 3. Environment Variables
+
+```bash
+HIBOU_FORGE_0_TYPE=forgejo
+HIBOU_FORGE_0_ID=my-forgejo
+HIBOU_FORGE_0_URL=https://git.example.com
+HIBOU_FORGE_0_CLIENT_ID=<client-id>
+HIBOU_FORGE_0_CLIENT_SECRET=<client-secret>
+HIBOU_FORGE_0_WEBHOOK_SECRET=<webhook-secret>
+```
+
+### API Compatibility
+
+Forgejo and Gitea share the same API. Use type `forgejo` for Forgejo instances and `gitea` for Gitea instances — both use the same underlying provider implementation.
+
+</TabItem>
+<TabItem label="GitHub">
+
+### 1. Create an OAuth App
+
+1. Go to **Settings** → **Developer settings** → **OAuth Apps**
+2. Click **New OAuth App**
+3. Set:
+   - **Application name**: `Hibou`
+   - **Homepage URL**: `http://YOUR_HIBOU_URL`
+   - **Authorization callback URL**: `http://YOUR_HIBOU_URL/auth/callback`
+4. Save and copy the **Client ID** and **Client Secret**
+
+### 2. Configure Webhook Secret
+
+```bash
+openssl rand -hex 32
+```
+
+### 3. Environment Variables
+
+```bash
+HIBOU_FORGE_0_TYPE=github
+HIBOU_FORGE_0_ID=github-com
+HIBOU_FORGE_0_CLIENT_ID=<client-id>
+HIBOU_FORGE_0_CLIENT_SECRET=<client-secret>
+HIBOU_FORGE_0_WEBHOOK_SECRET=<webhook-secret>
+```
+
+:::note
+GitHub does not require a `URL` field — it defaults to `https://github.com` and `https://api.github.com`.
+:::
+
+</TabItem>
+<TabItem label="GitLab">
+
+### 1. Create an Application
+
+1. Go to **Admin Area** → **Applications** (or user settings for non-admin)
+2. Click **New Application**
+3. Set:
+   - **Name**: `Hibou`
+   - **Redirect URI**: `http://YOUR_HIBOU_URL/auth/callback`
+   - **Scopes**: `read_user`, `read_api`
+4. Save and copy the **Application ID** and **Secret**
+
+### 2. Environment Variables
+
+```bash
+HIBOU_FORGE_0_TYPE=gitlab
+HIBOU_FORGE_0_ID=gitlab-com
+HIBOU_FORGE_0_URL=https://gitlab.com
+HIBOU_FORGE_0_CLIENT_ID=<application-id>
+HIBOU_FORGE_0_CLIENT_SECRET=<secret>
+HIBOU_FORGE_0_WEBHOOK_SECRET=<webhook-secret>
+```
+
+</TabItem>
+</Tabs>
+
+## Webhook Verification
+
+Each forge provider validates incoming webhook payloads using HMAC signatures:
+
+| Forge | Header | Algorithm |
+|-------|--------|-----------|
+| GitHub | `X-Hub-Signature-256` | HMAC-SHA256 |
+| Forgejo/Gitea | `X-Gitea-Signature` | HMAC-SHA256 |
+| GitLab | `X-Gitlab-Token` | Token comparison |
+
+Requests with invalid or missing signatures are rejected with HTTP 401.

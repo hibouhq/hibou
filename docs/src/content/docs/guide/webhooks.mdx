@@ -1,0 +1,50 @@
+---
+title: Webhooks
+description: Forge webhook integration
+---
+
+Hibou uses webhooks to receive real-time notifications from your forges about repository events.
+
+## Supported Events
+
+| Event | Forge | Description |
+|-------|-------|-------------|
+| `push` | All | Code pushed to a branch |
+| `pull_request` | All | PR opened, synchronized, or closed |
+
+## Webhook Endpoint
+
+All forges send webhooks to a single endpoint:
+
+```
+POST /api/v1/webhooks/{forge_id}
+```
+
+Where `{forge_id}` is the ID of the configured forge (e.g., `forgejo-local`, `github-com`).
+
+## Signature Verification
+
+Every incoming webhook is verified using the forge-specific signature mechanism:
+
+| Forge | Header | Method |
+|-------|--------|--------|
+| GitHub | `X-Hub-Signature-256` | HMAC-SHA256 of body |
+| Forgejo/Gitea | `X-Gitea-Signature` | HMAC-SHA256 of body |
+| GitLab | `X-Gitlab-Token` | Direct token comparison |
+
+Requests with invalid signatures are rejected with HTTP 401.
+
+## Automatic Registration
+
+When a repository is imported into Hibou, webhooks are registered automatically on the forge. The webhook URL and secret are configured based on the forge provider settings.
+
+## Manual Setup
+
+If automatic webhook registration is not available, you can manually configure webhooks in your forge:
+
+1. Go to your repository's **Settings** → **Webhooks**
+2. Add a new webhook:
+   - **URL**: `https://your-hibou-instance/api/v1/webhooks/{forge_id}`
+   - **Content Type**: `application/json`
+   - **Secret**: The `WEBHOOK_SECRET` configured for that forge
+   - **Events**: Push, Pull Request

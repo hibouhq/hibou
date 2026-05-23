@@ -2,9 +2,14 @@
 /hibou
 /dist/
 
+# Node
+node_modules/
+docs/node_modules/
+
 # Frontend
 site/node_modules/
 internal/ui/dist/
+internal/apidoc/
 
 # IDE
 .idea/
@@ -21,3 +26,7 @@ Thumbs.db
 # Test
 coverage/
 *.coverprofile
+# Docs
+docs/node_modules/
+docs/dist/
+docs/.astro/

@@ -1,0 +1,37 @@
+---
+title: Introduction
+description: What is Hibou and why use it
+---
+
+Hibou is an open-source DevSecOps security platform that connects to your Git forges (GitHub, Forgejo/Gitea, GitLab) and provides centralized security scanning, vulnerability tracking, and compliance reporting.
+
+## Key Features
+
+- **Multi-forge support** — Connect GitHub, Forgejo, Gitea, and GitLab instances simultaneously
+- **Multiple instances** — Run several instances of the same forge type (e.g., two Forgejo servers)
+- **Automatic scanning** — Webhook-driven security scans on push and pull request events
+- **RBAC** — Role-based access control with organizations and teams
+- **Multi-tenant** — Isolated organizations with separate repositories and team memberships
+- **REST API** — Full OpenAPI-documented API for automation
+
+## Architecture
+
+Hibou consists of:
+
+| Component | Technology |
+|-----------|-----------|
+| Backend API | Go (Chi router) |
+| Frontend | Vue 3 + TypeScript + Tailwind CSS |
+| Database | PostgreSQL 16 |
+| Scanner | Trivy |
+| Auth | OAuth2 per forge provider |
+| RBAC | Casbin |
+
+## How It Works
+
+1. An administrator configures one or more forge providers (GitHub, Forgejo, etc.)
+2. Users authenticate via OAuth2 through their forge
+3. Organizations are created and linked to forge organizations
+4. Repositories are imported and webhooks are registered
+5. On push/PR events, Hibou triggers security scans via Trivy
+6. Results are stored and visible in the dashboard

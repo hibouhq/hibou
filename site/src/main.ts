@@ -1,22 +1,34 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import { createRouter, createWebHistory } from 'vue-router'
 
+import router from '@/router'
+import { useAuthStore } from '@/stores/auth'
 import App from './App.vue'
 import './style/main.css'
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes: [
-    {
-      path: '/',
-      name: 'home',
-      component: () => import('./views/HomeView.vue'),
-    },
-  ],
+const app = createApp(App)
+
+const pinia = createPinia()
+
+app.use(pinia)
+app.use(router)
+
+router.beforeEach(async (to) => {
+  const auth = useAuthStore(pinia)
+
+  if (auth.loading) {
+    await auth.fetchUser()
+  }
+
+  if (!to.meta.public && !auth.isAuthenticated) {
+    return { name: 'login' }
+  }
+
+  if (to.name === 'login' && auth.isAuthenticated) {
+    return { name: 'dashboard' }
+  }
+
+  return true
 })
 
-const app = createApp(App)
-app.use(createPinia())
-app.use(router)
 app.mount('#app')

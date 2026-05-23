@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "generate",
+      "type": "shell",
+      "command": "make generate",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "make lint",
+      "group": "test",
+      "problemMatcher": ["$go", "$eslint-stylish"]
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "make test",
+      "group": "test",
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "make build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$go"]
+    },
+    {
+      "label": "dev",
+      "type": "shell",
+      "command": "make dev",
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

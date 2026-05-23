@@ -1,0 +1,76 @@
+---
+import Default from "@astrojs/starlight/components/SiteTitle.astro";
+---
+
+<div class="site-title-with-version">
+    <Default {...Astro.props}><slot /></Default>
+    <select
+        id="version-select"
+        class="version-select"
+        aria-label="Documentation version"
+    >
+        <option value="stable">stable</option>
+        <option value="latest">latest</option>
+    </select>
+</div>
+
+<script>
+    async function loadVersions() {
+        const select = document.getElementById(
+            "version-select",
+        ) as HTMLSelectElement;
+        if (!select) return;
+
+        try {
+            const origin = window.location.origin;
+            const res = await fetch(`${origin}/versions.json`);
+            if (!res.ok) return;
+
+            const versions: string[] = await res.json();
+            const currentPath = window.location.pathname;
+            const match = currentPath.match(/^\/([^/]+)\//);
+            const currentVersion = match ? match[1] : "latest";
+
+            select.innerHTML = "";
+            for (const v of versions) {
+                const opt = document.createElement("option");
+                opt.value = v;
+                opt.textContent = v;
+                if (v === currentVersion) opt.selected = true;
+                select.appendChild(opt);
+            }
+
+            select.addEventListener("change", () => {
+                const newVersion = select.value;
+                const rest = currentPath.replace(/^\/[^/]+/, "");
+                window.location.href = `${origin}/${newVersion}${rest}`;
+            });
+        } catch {
+            // Local dev — no versions.json, keep default
+        }
+    }
+
+    loadVersions();
+</script>
+
+<style>
+    .site-title-with-version {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .version-select {
+        background: var(--sl-color-bg-nav);
+        color: var(--sl-color-white);
+        border: 1px solid var(--sl-color-gray-5);
+        border-radius: 0.25rem;
+        padding: 0.2rem 0.4rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+    }
+
+    .version-select:hover {
+        border-color: var(--sl-color-gray-3);
+    }
+</style>

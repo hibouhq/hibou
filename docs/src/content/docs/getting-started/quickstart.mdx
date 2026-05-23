@@ -1,0 +1,68 @@
+---
+title: Quick Start
+description: Get Hibou running in under 5 minutes
+---
+
+import { Steps, Code } from '@astrojs/starlight/components';
+
+## Prerequisites
+
+- Docker & Docker Compose
+- Git
+
+## Setup
+
+<Steps>
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/hibouhq/lehibou.git
+   cd lehibou
+   ```
+
+2. **Copy the environment file**
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Start infrastructure**
+
+   ```bash
+   make up
+   ```
+
+   This starts PostgreSQL, Forgejo, and Trivy containers.
+
+4. **Provision the development forge**
+
+   ```bash
+   make setup
+   ```
+
+   This creates a Forgejo admin user, registers an OAuth2 application, and writes the credentials to `.env`.
+
+5. **Run the server**
+
+   ```bash
+   make dev
+   ```
+
+   The API is available at `http://localhost:8080` and the UI at `http://localhost:8080`.
+
+</Steps>
+
+## Development Login
+
+When no forge providers are configured (or for quick local development), Hibou exposes a **Dev Login** button on the login page. This creates a local admin user without requiring OAuth2.
+
+:::caution
+Dev Login should never be used in production. It is only available when no forge providers are configured or in development mode.
+:::
+
+## Next Steps
+
+- [Configure forge providers](/admin/forge-providers) to connect your Git hosting
+- [Set up organizations](/guide/organizations) to manage teams and repositories
+- [Enable security scanning](/guide/security-scans) for your repositories

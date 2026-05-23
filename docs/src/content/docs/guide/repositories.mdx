@@ -1,0 +1,43 @@
+---
+title: Repositories
+description: Managing repositories in Hibou
+---
+
+Repositories in Hibou represent monitored source code repositories from your connected forges.
+
+## Importing Repositories
+
+Hibou operates in a "plug and play" mode — repositories are discovered automatically from your forge organizations. There is no need to manually create repositories.
+
+When you link an organization to a forge, Hibou can:
+1. List all repositories from that forge organization
+2. Register webhooks for push and pull request events
+3. Begin monitoring for security vulnerabilities
+
+## Repository Status
+
+Each repository tracks:
+- **Last scan date** — When the most recent security scan was performed
+- **Finding count** — Number of open security findings
+- **Webhook status** — Whether webhooks are active
+
+## Viewing Repositories
+
+```bash
+# List repositories in an organization
+curl http://localhost:8080/api/v1/orgs/{org_id}/repos \
+  -H "Authorization: Bearer <token>"
+
+# Get a specific repository
+curl http://localhost:8080/api/v1/repos/{repo_id} \
+  -H "Authorization: Bearer <token>"
+```
+
+## Security Findings
+
+Each repository maintains its own set of security findings from scans. Findings include:
+- Vulnerability ID (CVE)
+- Severity (critical, high, medium, low)
+- Affected package and version
+- Fixed version (if available)
+- Scan source (SBOM, SARIF, Trivy)

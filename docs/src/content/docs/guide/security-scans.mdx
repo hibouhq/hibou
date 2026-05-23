@@ -1,0 +1,58 @@
+---
+title: Security Scans
+description: How security scanning works in Hibou
+---
+
+Hibou performs security scans using [Trivy](https://trivy.dev) and accepts results in SBOM and SARIF formats.
+
+## Scan Triggers
+
+Scans are triggered automatically via webhooks:
+
+| Event | Action |
+|-------|--------|
+| Push to default branch | Full scan of the repository |
+| Pull request opened/updated | Scan of the PR branch |
+
+## Upload Formats
+
+You can also upload scan results directly:
+
+### SBOM (Software Bill of Materials)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "type=sbom" \
+  -F "file=@sbom.json"
+```
+
+Supported formats: CycloneDX, SPDX.
+
+### SARIF (Static Analysis Results Interchange Format)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "type=sarif" \
+  -F "file=@results.sarif"
+```
+
+### Raw Findings
+
+```bash
+curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "type=findings" \
+  -F "file=@findings.json"
+```
+
+## Commit Status
+
+After scanning a pull request, Hibou reports the result back to the forge as a commit status:
+
+- **Success** — No new critical/high vulnerabilities found
+- **Failure** — New vulnerabilities detected
+- **Pending** — Scan in progress
+
+This integrates with forge branch protection rules to block merging vulnerable code.
