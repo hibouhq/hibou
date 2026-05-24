@@ -260,7 +260,7 @@ The UI draws inspiration from a combination of **GitHub** and **SonarCloud**:
 
 The result should feel like a GitHub-native security tool — users familiar with GitHub's navigation will feel immediately at home.
 
-- [ ] Redesign the global layout and navigation
+- [x] Redesign the global layout and navigation
 	- **Top navbar** (GitHub-style): Hibou logo/brand on the left, global search in the center, notification bell + user avatar (with photo from forge OAuth) on the right. Org selector as a dropdown next to the brand (like GitHub's org/repo switcher).
 	- **Left sidebar** (narrow icon rail): icons for Dashboard, Repositories, Teams, Audit Logs, Settings. Hovering or clicking expands the label. Collapsible — 48–56px when collapsed, ~200px when expanded.
 	- **User links**: clicking the avatar shows a dropdown with profile, API keys, preferences, and logout — matching GitHub's user menu pattern.
@@ -268,30 +268,30 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Ensure the layout is responsive: on small screens the rail collapses to icons-only, on very small screens it becomes a hamburger top-nav.
 	- Acceptance criteria hint: the shell looks and feels like GitHub meets a modern DevOps tool — not a 2018 admin panel.
 
-- [ ] Build the Audit Logs view (Coder-style)
-	- Replace the current `Uploads` view with a full audit log page at `/orgs/:slug/audit`.
+- [x] Build the Audit Logs view (Coder-style)
+	- Replace the current `Uploads` view with a full audit log page at `/orgs/:provider/:slug/audit`.
 	- Display a filterable, paginated table of audit events with columns: timestamp, actor (user or system), action, resource type, resource name, IP address, and status.
 	- Add filter controls above the table: multi-select dropdowns for action type (e.g., `scan.triggered`, `suppression.created`, `gate.overridden`, `config.changed`, `upload.completed`, `member.added`), resource type (repository, organization, team, API key, notification rule), actor, and date range picker.
 	- Each row is expandable or links to a detail panel showing the full event payload (JSON diff for config changes, before/after for suppressions, etc.).
 	- Support URL-shareable filter state via query parameters.
 	- Acceptance criteria hint: an admin can answer "who changed what, when" with the same UX quality as the Coder audit log.
 
-- [ ] Build the organization overview dashboard
+- [x] Build the organization overview dashboard
 	- Show health summaries, severity distribution, trending indicators, and top-risk repositories across the tenant.
 	- Add filtering by team, repo, severity, tool, and time window.
 	- Expose drilldowns that connect aggregate widgets to detailed views.
 	- Acceptance criteria hint: platform operators can identify hotspots without leaving the overview page.
 
-- [ ] Implement repository detail views with horizontal tab navigation
+- [x] Implement repository detail views with horizontal tab navigation
 	- Add a repository landing page with a header showing repo name, provider badge, and a **branch/PR selector** (SonarCloud-inspired, improved).
 	- Below the header, render **horizontal tabs**: `Weaknesses` | `Dependencies` | `Malware` | `Runtime` | `Secrets`. Tabs use `RouterLink` with active indicator underline (GitHub-style). No vertical stacked cards.
 	- `Runtime` and `Secrets` tabs show a tasteful "coming soon" empty state (icon + short description) — not a grey card.
 	- The `Malware` tab surfaces known malicious packages detected during SBOM analysis, visually distinct from standard vulnerability findings.
-	- Tab selection and branch/PR selection are both reflected in the URL (`/orgs/:slug/repos/:repo/weaknesses?ref=main`) so views are shareable and bookmarkable.
+	- Tab selection and branch/PR selection are both reflected in the URL (`/orgs/:provider/:slug/repos/:repo/weaknesses?ref=main`) so views are shareable and bookmarkable.
 	- Preserve consistent cross-tab filtering: severity, tool source, and status filters persist when switching tabs.
 	- Acceptance criteria hint: users can switch between analysis domains with one click and share deep links to specific views.
 
-- [ ] Implement the branch/PR selector with lifecycle awareness
+- [x] Implement the branch/PR selector with lifecycle awareness
 	- Inspired by SonarCloud's branch/PR picker but improved with real-time lifecycle state:
 	- The selector dropdown is divided into sections: **Branches** (sorted: default branch first, then alphabetical) and **Pull Requests** (sorted: most recently updated first).
 	- Each branch shows: name, quality gate status badge (pass/fail/pending), last scan date.
@@ -303,51 +303,51 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Support tabs within the dropdown: `All` | `Branches` | `Pull Requests` (like SonarCloud).
 	- Acceptance criteria hint: the selector never shows stale merged PRs indefinitely. Users always see current, actionable branches and PRs. Merged PRs are visually struck through immediately and auto-pruned from the UI after a grace period.
 
-- [ ] Deliver the weaknesses experience
+- [x] Deliver the weaknesses experience
 	- Build a findings table grouped and filterable by tool, rule, severity, file path, and status.
 	- Support deduplicated aggregation across sources and deep-linking into raw evidence.
 	- Add trend widgets for issue arrival and remediation over time.
 	- Acceptance criteria hint: one repository can surface all code-level weaknesses regardless of originating scanner.
 
-- [ ] Deliver the dependencies experience
+- [x] Deliver the dependencies experience
 	- Build a full dependency table with vulnerability overlays, fix-version hints, and source attribution.
 	- Implement an SBOM viewer and an interactive dependency graph with search, expand/collapse, and vulnerable-node highlighting.
 	- Support large graphs and tables with pagination, virtualization, or incremental loading.
 	- Acceptance criteria hint: users can identify vulnerable transitive dependencies without drowning in duplicate graph noise.
 
-- [ ] Add branch, release, and snapshot navigation
+- [x] Add branch, release, and snapshot navigation
 	- Model branch and release lists, detail pages, and ref-aware navigation patterns.
 	- Expose latest snapshot status, scan freshness, and comparison entry points.
 	- Connect client mapping views to release entities.
 	- Acceptance criteria hint: the UI supports both active branches and shipped releases as first-class analysis targets.
 
-- [ ] Deliver general-purpose ref comparison and SBOM diffing
+- [x] Deliver general-purpose ref comparison and SBOM diffing
 	- Build a comparison view that accepts any two refs (branch vs release, release vs release, branch vs branch) and shows a full dependency diff: added, removed, and version-changed components, plus new and resolved vulnerabilities.
 	- Include a ref-picker with autocomplete for base and target selection.
 	- Show version upgrade/downgrade direction, vulnerability impact of changes, and finding deltas.
 	- Expose via both API (`GET /api/v1/repos/{repo}/compare?base=...&target=...`) and CLI (`secplatform compare`).
 	- Acceptance criteria hint: users can compare any two refs to see exactly what changed in the dependency tree and vulnerability posture between them.
 
-- [ ] Build time-series trends and historical analytics
+- [x] Build time-series trends and historical analytics
 	- Add charts for vulnerability counts, finding counts, quality gate results, and remediation trends.
 	- Support time-window selection, grouping, and per-tool overlays.
 	- Retain enough historical snapshot data to support longitudinal reporting without expensive recomputation.
 	- Acceptance criteria hint: teams can measure whether risk is improving or regressing over time.
 
-- [ ] Introduce PR-focused review views
+- [x] Introduce PR-focused review views
 	- Create a PR summary page with new/resolved/unchanged findings and quality gate outcomes.
 	- Mirror the fast scan-to-action model used by modern PR analysis tools while preserving drilldown into full details.
 	- Provide comparison links back to branch snapshots when deeper analysis is needed.
 	- Acceptance criteria hint: reviewers can triage PR risk from a focused delta screen rather than a full repository dashboard.
 
-- [ ] Add client and delivery management
+- [x] Add client and delivery management
 	- Implement CRUD for clients, releases, deployments, and impact lookup workflows.
 	- Preserve deployment history, rollback state, environment-specific rollout tracking, and contact metadata for downstream consumers.
 	- Support views such as "which clients are impacted by CVE-X" and "which releases are deployed at client Y".
 	- Ensure this data remains tenant-scoped and exportable for operations teams.
 	- Acceptance criteria hint: downstream release impact can be answered from the platform without external spreadsheets.
 
-- [ ] Add global search and advanced filtering
+- [x] Add global search and advanced filtering
 	- Support cross-repo search for vulnerabilities, components, findings, and affected clients.
 	- Provide structured filters, saved views, and sharable URLs.
 	- Index key search fields without coupling the first version to an external search engine.

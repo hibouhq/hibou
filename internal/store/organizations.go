@@ -3,10 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
-
-	"encoding/json"
 
 	"github.com/google/uuid"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
@@ -17,22 +16,24 @@ type Organization struct {
 	Name        string          `json:"name"`
 	Slug        string          `json:"slug"`
 	DisplayName string          `json:"display_name"`
+	Provider    string          `json:"provider"`
 	Settings    json.RawMessage `json:"settings"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
-func (q *Queries) CreateOrganization(ctx context.Context, name, slug, displayName string) (*Organization, error) {
+func (q *Queries) CreateOrganization(ctx context.Context, name, slug, displayName, provider string) (*Organization, error) {
 	row, err := q.db.CreateOrganization(ctx, dbgen.CreateOrganizationParams{
 		Name:        name,
 		Slug:        slug,
 		DisplayName: displayName,
+		Provider:    provider,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return orgFromRow(row), nil
+	return orgFromFields(row.ID, row.Name, row.Slug, row.DisplayName, row.Provider, row.Settings, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (q *Queries) GetOrganizationByID(ctx context.Context, id uuid.UUID) (*Organization, error) {
@@ -44,11 +45,14 @@ func (q *Queries) GetOrganizationByID(ctx context.Context, id uuid.UUID) (*Organ
 		return nil, err
 	}
 
-	return orgFromRow(row), nil
+	return orgFromFields(row.ID, row.Name, row.Slug, row.DisplayName, row.Provider, row.Settings, row.CreatedAt, row.UpdatedAt), nil
 }
 
-func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (*Organization, error) {
-	row, err := q.db.GetOrganizationBySlug(ctx, slug)
+func (q *Queries) GetOrganizationByProviderAndSlug(ctx context.Context, provider, slug string) (*Organization, error) {
+	row, err := q.db.GetOrganizationByProviderAndSlug(ctx, dbgen.GetOrganizationByProviderAndSlugParams{
+		Provider: provider,
+		Slug:     slug,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -56,7 +60,7 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (*Orga
 		return nil, err
 	}
 
-	return orgFromRow(row), nil
+	return orgFromFields(row.ID, row.Name, row.Slug, row.DisplayName, row.Provider, row.Settings, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (q *Queries) ListOrganizationsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Organization, int, error) {
@@ -76,6 +80,7 @@ func (q *Queries) ListOrganizationsByUser(ctx context.Context, userID uuid.UUID,
 			Name:        row.Name,
 			Slug:        row.Slug,
 			DisplayName: row.DisplayName,
+			Provider:    row.Provider,
 			Settings:    row.Settings,
 			CreatedAt:   row.CreatedAt,
 			UpdatedAt:   row.UpdatedAt,
@@ -103,21 +108,22 @@ func (q *Queries) UpdateOrganization(ctx context.Context, id uuid.UUID, name, di
 		return nil, err
 	}
 
-	return orgFromRow(row), nil
+	return orgFromFields(row.ID, row.Name, row.Slug, row.DisplayName, row.Provider, row.Settings, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (q *Queries) DeleteOrganization(ctx context.Context, id uuid.UUID) error {
 	return q.db.DeleteOrganization(ctx, id)
 }
 
-func orgFromRow(row dbgen.Organization) *Organization {
+func orgFromFields(id uuid.UUID, name, slug, displayName, provider string, settings json.RawMessage, createdAt, updatedAt time.Time) *Organization {
 	return &Organization{
-		ID:          row.ID,
-		Name:        row.Name,
-		Slug:        row.Slug,
-		DisplayName: row.DisplayName,
-		Settings:    row.Settings,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:          id,
+		Name:        name,
+		Slug:        slug,
+		DisplayName: displayName,
+		Provider:    provider,
+		Settings:    settings,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
 	}
 }

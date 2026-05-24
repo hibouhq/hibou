@@ -2,6 +2,7 @@
 /hibou
 /dist/
 tmp/
+lehibou
 
 # Node
 node_modules/
@@ -27,6 +28,14 @@ Thumbs.db
 # Test
 coverage/
 *.coverprofile
+playwright-report/
+test-results/
+.playwright-cache/
+.playwright-cli/
+
+# Debug artifacts
+*.snapshot.yaml
+
 # Docs
 docs/node_modules/
 docs/dist/

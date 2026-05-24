@@ -255,6 +255,7 @@ func (f *Forgejo) ParseWebhookEvent(eventType string, payload []byte) (WebhookEv
 		}
 		return PullRequestEvent{
 			Action:       event.Action,
+			Merged:       event.PullRequest.Merged,
 			Number:       event.Number,
 			Title:        event.PullRequest.Title,
 			SourceBranch: event.PullRequest.Head.Ref,
@@ -475,8 +476,9 @@ type forgejoPullRequestEvent struct {
 	Number      int               `json:"number"`
 	Repository  forgejoRepository `json:"repository"`
 	PullRequest struct {
-		Title string `json:"title"`
-		Head  struct {
+		Title  string `json:"title"`
+		Merged bool   `json:"merged"`
+		Head   struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		} `json:"head"`

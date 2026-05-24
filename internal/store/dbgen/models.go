@@ -613,13 +613,14 @@ type Client struct {
 	OrgID             uuid.UUID       `json:"org_id"`
 	Name              string          `json:"name"`
 	Slug              string          `json:"slug"`
-	Environment       string          `json:"environment"`
 	ContactEmail      sql.NullString  `json:"contact_email"`
 	ContactName       sql.NullString  `json:"contact_name"`
 	NotificationPrefs json.RawMessage `json:"notification_prefs"`
 	Metadata          json.RawMessage `json:"metadata"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
+	ClientType        string          `json:"client_type"`
+	Labels            json.RawMessage `json:"labels"`
 }
 
 type Component struct {
@@ -716,6 +717,7 @@ type Organization struct {
 	Settings    json.RawMessage `json:"settings"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+	Provider    string          `json:"provider"`
 }
 
 type QualityGate struct {
@@ -744,6 +746,11 @@ type Ref struct {
 	LatestCommitSha  sql.NullString `json:"latest_commit_sha"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
+	PrState          sql.NullString `json:"pr_state"`
+	PrTitle          string         `json:"pr_title"`
+	PrSourceBranch   string         `json:"pr_source_branch"`
+	PrMergedAt       sql.NullTime   `json:"pr_merged_at"`
+	PrClosedAt       sql.NullTime   `json:"pr_closed_at"`
 }
 
 type Release struct {

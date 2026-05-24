@@ -10,12 +10,19 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/lehibou/internal/store"
 )
+
+type orgResponse struct {
+	*store.Organization
+	ForgeURL string `json:"forge_url,omitempty"`
+}
 
 type createOrgRequest struct {
 	Name        string `json:"name"`
 	Slug        string `json:"slug"`
 	DisplayName string `json:"display_name"`
+	Provider    string `json:"provider"`
 }
 
 type updateOrgRequest struct {
@@ -51,6 +58,7 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Slug = strings.TrimSpace(input.Slug)
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.Provider = strings.TrimSpace(input.Provider)
 
 	if input.Name == "" {
 		api.JSONError(w, http.StatusBadRequest, "name is required")
@@ -68,6 +76,13 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusBadRequest, "display_name is required")
 		return
 	}
+	if input.Provider == "" {
+		input.Provider = "github"
+	}
+	if !isValidOrgProvider(input.Provider) {
+		api.JSONError(w, http.StatusBadRequest, "provider must be one of github, gitlab, or forgejo")
+		return
+	}
 
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -79,7 +94,7 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	queries := s.queries.WithTx(tx)
-	org, err := queries.CreateOrganization(r.Context(), input.Name, input.Slug, input.DisplayName)
+	org, err := queries.CreateOrganization(r.Context(), input.Name, input.Slug, input.DisplayName, input.Provider)
 	if err != nil {
 		if isUniqueViolation(err) {
 			api.JSONError(w, http.StatusBadRequest, "organization slug already exists")
@@ -93,6 +108,13 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to add organization member")
 		return
 	}
+
+	// Every org starts with an "Internal" client representing the platform's own deployment.
+	if _, err := queries.CreateClient(r.Context(), org.ID, "Internal", "internal", nil, "internal", nil, nil, nil, nil); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create default client")
+		return
+	}
+
 	if err := tx.Commit(); err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to create organization")
 		return
@@ -108,6 +130,30 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusCreated, org)
+}
+
+func isValidOrgProvider(provider string) bool {
+	switch provider {
+	case "github", "gitlab", "forgejo":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) forgeWebURL(provider string) string {
+	for _, fc := range s.cfg.Forges {
+		if fc.ID == provider {
+			if fc.URL != "" {
+				return fc.URL
+			}
+			if fc.Type == "github" {
+				return "https://github.com"
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // @Summary      List organizations
@@ -135,20 +181,26 @@ func (s *Server) handleListOrgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSONList(w, orgs, pagination.Page, pagination.PerPage, total)
+	enriched := make([]orgResponse, len(orgs))
+	for i := range orgs {
+		enriched[i] = orgResponse{Organization: &orgs[i], ForgeURL: s.forgeWebURL(orgs[i].Provider)}
+	}
+
+	api.JSONList(w, enriched, pagination.Page, pagination.PerPage, total)
 }
 
 // @Summary      Get organization
-// @Description  Get an organization by slug when the caller is a member
+// @Description  Get an organization by provider and slug when the caller is a member
 // @Tags         organizations
 // @Produce      json
+// @Param        provider  path      string  true  "Forge provider"
 // @Param        slug  path      string  true  "Organization slug"
 // @Success      200   {object}  api.Response{data=store.Organization}
 // @Failure      401   {object}  api.Response
 // @Failure      404   {object}  api.Response
 // @Failure      500   {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug} [get]
+// @Router       /orgs/{provider}/{slug} [get]
 func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -156,7 +208,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -176,7 +228,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, org)
+	api.JSON(w, http.StatusOK, orgResponse{Organization: org, ForgeURL: s.forgeWebURL(org.Provider)})
 }
 
 // @Summary      Update organization
@@ -184,6 +236,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 // @Tags         organizations
 // @Accept       json
 // @Produce      json
+// @Param        provider  path      string            true  "Forge provider"
 // @Param        slug  path      string            true  "Organization slug"
 // @Param        body  body      updateOrgRequest  true  "Organization updates"
 // @Success      200   {object}  api.Response{data=store.Organization}
@@ -192,7 +245,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 // @Failure      404   {object}  api.Response
 // @Failure      500   {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug} [put]
+// @Router       /orgs/{provider}/{slug} [put]
 func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -206,7 +259,7 @@ func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), slug)
+	org, err := s.queries.GetOrganizationByProviderAndSlug(r.Context(), chi.URLParam(r, "provider"), slug)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -261,13 +314,14 @@ func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
 // @Description  Delete an organization when the caller is an admin
 // @Tags         organizations
 // @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
 // @Param        slug  path  string  true  "Organization slug"
 // @Success      204   "No Content"
 // @Failure      401   {object}  api.Response
 // @Failure      404   {object}  api.Response
 // @Failure      500   {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug} [delete]
+// @Router       /orgs/{provider}/{slug} [delete]
 func (s *Server) handleDeleteOrg(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -275,7 +329,7 @@ func (s *Server) handleDeleteOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return

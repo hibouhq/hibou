@@ -16,10 +16,11 @@ import (
 )
 
 type seededOrg struct {
-	name  string
-	slug  string
-	teams []string
-	repos []seededRepo
+	name     string
+	slug     string
+	provider string
+	teams    []string
+	repos    []seededRepo
 }
 
 type seededRepo struct {
@@ -27,6 +28,7 @@ type seededRepo struct {
 	slug       string
 	team       string
 	label      string
+	providerID string
 	components []seededComponent
 	findings   []seededFinding
 }
@@ -52,9 +54,10 @@ type seededFinding struct {
 
 var seedOrgs = []seededOrg{
 	{
-		name:  "Acme Corp",
-		slug:  "acme",
-		teams: []string{"backend", "frontend", "security"},
+		name:     "Acme Corp",
+		slug:     "acme",
+		provider: "github",
+		teams:    []string{"backend", "frontend", "security"},
 		repos: []seededRepo{
 			{
 				name:  "api-gateway",
@@ -129,9 +132,10 @@ var seedOrgs = []seededOrg{
 		},
 	},
 	{
-		name:  "Cloud Native Foundation",
-		slug:  "cloudnative",
-		teams: []string{"infrastructure", "contributors"},
+		name:     "Cloud Native Foundation",
+		slug:     "cloudnative",
+		provider: "github",
+		teams:    []string{"infrastructure", "contributors"},
 		repos: []seededRepo{
 			{
 				name:  "service-mesh",
@@ -188,9 +192,10 @@ var seedOrgs = []seededOrg{
 		},
 	},
 	{
-		name:  "DevTools Inc",
-		slug:  "devtools",
-		teams: []string{"platform", "integrations"},
+		name:     "DevTools Inc",
+		slug:     "devtools",
+		provider: "forgejo",
+		teams:    []string{"platform", "integrations"},
 		repos: []seededRepo{
 			{
 				name:  "ci-pipeline",
@@ -245,6 +250,13 @@ var seedOrgs = []seededOrg{
 					finding("trivy", "insecure-tls-version", store.SeverityLevelMedium, "open", "cmd/mirror/main.go", 87, 92, "Registry mirror client supports deprecated TLS versions.", map[string]any{"remote": "partner-mirror"}),
 				},
 			},
+			{
+				name:       "k9s",
+				slug:       "k9s",
+				team:       "platform",
+				label:      "initial",
+				providerID: "hibou-admin/k9s",
+			},
 		},
 	},
 }
@@ -252,7 +264,7 @@ var seedOrgs = []seededOrg{
 func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 	queries := store.NewQueries(db)
 
-	existingOrg, err := queries.GetOrganizationBySlug(ctx, "acme")
+	existingOrg, err := queries.GetOrganizationByProviderAndSlug(ctx, "github", "acme")
 	if err != nil {
 		return fmt.Errorf("checking existing seed data: %w", err)
 	}
@@ -276,7 +288,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 	}
 
 	for orgIndex, orgSeed := range seedOrgs {
-		org, err := queries.CreateOrganization(ctx, orgSeed.name, orgSeed.slug, orgSeed.name)
+		org, err := queries.CreateOrganization(ctx, orgSeed.name, orgSeed.slug, orgSeed.name, orgSeed.provider)
 		if err != nil {
 			return fmt.Errorf("creating organization %s: %w", orgSeed.slug, err)
 		}
@@ -300,8 +312,11 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 				return fmt.Errorf("seed repo %s/%s references unknown team %s", orgSeed.slug, repoSeed.slug, repoSeed.team)
 			}
 
-			providerID := fmt.Sprintf("%s-%s", orgSeed.slug, repoSeed.slug)
-			repo, err := queries.CreateRepository(ctx, org.ID, &team.ID, repoSeed.name, repoSeed.slug, "local", providerID, "main", "synced")
+			providerID := repoSeed.providerID
+			if providerID == "" {
+				providerID = fmt.Sprintf("%s-%s", orgSeed.slug, repoSeed.slug)
+			}
+			repo, err := queries.CreateRepository(ctx, org.ID, &team.ID, repoSeed.name, repoSeed.slug, orgSeed.provider, providerID, "main", "synced")
 			if err != nil {
 				return fmt.Errorf("creating repository %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}

@@ -164,11 +164,27 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Route("/orgs", func(r chi.Router) {
 				r.Post("/", s.handleCreateOrg)
 				r.Get("/", s.handleListOrgs)
-				r.Route("/{slug}", func(r chi.Router) {
+				r.Route("/{provider}/{slug}", func(r chi.Router) {
 					r.Get("/", s.handleGetOrg)
 					r.Put("/", s.handleUpdateOrg)
 					r.Delete("/", s.handleDeleteOrg)
+					r.Get("/dashboard", s.handleGetOrgDashboard)
 					r.Get("/compliance/export", s.handleComplianceExport)
+					r.Get("/audit-logs", s.handleListAuditLogs)
+					r.Get("/search", s.handleGlobalSearch)
+					r.Route("/clients", func(r chi.Router) {
+						r.Post("/", s.handleCreateClient)
+						r.Get("/", s.handleListClients)
+						r.Get("/label-keys", s.handleListClientLabelKeys)
+						r.Route("/{clientSlug}", func(r chi.Router) {
+							r.Get("/", s.handleGetClient)
+							r.Put("/", s.handleUpdateClient)
+							r.Delete("/", s.handleDeleteClient)
+							r.Get("/deployments", s.handleListClientDeployments)
+							r.Post("/deployments", s.handleCreateDeployment)
+							r.Get("/impact", s.handleGetClientImpact)
+						})
+					})
 					r.Route("/teams", func(r chi.Router) {
 						r.Post("/", s.handleCreateTeam)
 						r.Get("/", s.handleListTeams)
@@ -181,6 +197,17 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Route("/repos", func(r chi.Router) {
 						r.Get("/", s.handleListRepos)
 						r.Get("/{repoSlug}", s.handleGetRepo)
+						r.Post("/{repoSlug}/releases", s.handleCreateRelease)
+						r.Get("/{repoSlug}/releases", s.handleListReleases)
+						r.Get("/{repoSlug}/refs", s.handleListRefs)
+						r.Get("/{repoSlug}/refs/enhanced", s.handleListRefsEnhanced)
+						r.Get("/{repoSlug}/snapshots", s.handleListSnapshots)
+						r.Get("/{repoSlug}/compare", s.handleCompareRefs)
+						r.Get("/{repoSlug}/trends", s.handleGetTrends)
+						r.Get("/{repoSlug}/pr/{number}", s.handleGetPRSummary)
+						r.Get("/{repoSlug}/findings", s.handleGetRefFindings)
+						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
+						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
 						r.Route("/{repoSlug}/delta", func(r chi.Router) {

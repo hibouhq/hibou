@@ -8,6 +8,7 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,17 @@ UPDATE snapshots SET status = 'archived' WHERE id = $1
 func (q *Queries) ArchiveSnapshot(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.ExecContext(ctx, archiveSnapshot, id)
 	return err
+}
+
+const countComponentsBySnapshot = `-- name: CountComponentsBySnapshot :one
+SELECT COUNT(*)::bigint FROM snapshot_components WHERE snapshot_id = $1
+`
+
+func (q *Queries) CountComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countComponentsBySnapshot, snapshotID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const countSnapshotsByRef = `-- name: CountSnapshotsByRef :one
@@ -210,6 +222,59 @@ func (q *Queries) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.
 			&i.Ecosystem,
 			&i.Licenses,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listComponentsBySnapshotWithVulns = `-- name: ListComponentsBySnapshotWithVulns :many
+SELECT c.id, c.purl, c.name, c.version, c.ecosystem, c.licenses, c.created_at, COUNT(DISTINCT vm.advisory_id)::bigint AS vuln_count
+FROM components c
+JOIN snapshot_components sc ON sc.component_id = c.id
+LEFT JOIN vuln_matches vm ON vm.snapshot_id = sc.snapshot_id AND vm.component_id = c.id AND vm.is_affected = TRUE
+WHERE sc.snapshot_id = $1
+GROUP BY c.id
+ORDER BY c.name, c.version
+`
+
+type ListComponentsBySnapshotWithVulnsRow struct {
+	ID        uuid.UUID       `json:"id"`
+	Purl      string          `json:"purl"`
+	Name      string          `json:"name"`
+	Version   string          `json:"version"`
+	Ecosystem string          `json:"ecosystem"`
+	Licenses  json.RawMessage `json:"licenses"`
+	CreatedAt time.Time       `json:"created_at"`
+	VulnCount int64           `json:"vuln_count"`
+}
+
+func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapshotID uuid.UUID) ([]ListComponentsBySnapshotWithVulnsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listComponentsBySnapshotWithVulns, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListComponentsBySnapshotWithVulnsRow{}
+	for rows.Next() {
+		var i ListComponentsBySnapshotWithVulnsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Purl,
+			&i.Name,
+			&i.Version,
+			&i.Ecosystem,
+			&i.Licenses,
+			&i.CreatedAt,
+			&i.VulnCount,
 		); err != nil {
 			return nil, err
 		}

@@ -17,6 +17,7 @@ import (
 )
 
 type uploadRequest struct {
+	Provider      string `json:"provider"`
 	Org           string `json:"org"`
 	Repo          string `json:"repo"`
 	Ref           string `json:"ref"`
@@ -248,8 +249,9 @@ func (s *Server) handleUploadFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refName := input.Ref
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), nil, &input.CommitSHA)
+	refType := refTypeFromName(input.Ref)
+	refName := normalizeStoredRefName(input.Ref)
+	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, nil, nil, &input.CommitSHA)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to create upload")
 		return
@@ -428,8 +430,9 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 		return nil, err
 	}
 
-	refName := input.Ref
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), nil, &input.CommitSHA)
+	refType := refTypeFromName(input.Ref)
+	refName := normalizeStoredRefName(input.Ref)
+	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, nil, nil, &input.CommitSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +459,7 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 }
 
 func (s *Server) resolveUploadTarget(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
-	org, err := queries.GetOrganizationBySlug(r.Context(), input.Org)
+	org, err := queries.GetOrganizationByProviderAndSlug(r.Context(), input.Provider, input.Org)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -484,6 +487,7 @@ func (s *Server) resolveUploadTarget(r *http.Request, queries *store.Queries, us
 }
 
 func normalizeUploadRequest(input *uploadRequest) {
+	input.Provider = strings.TrimSpace(input.Provider)
 	input.Org = strings.TrimSpace(input.Org)
 	input.Repo = strings.TrimSpace(input.Repo)
 	input.Ref = strings.TrimSpace(input.Ref)
@@ -492,6 +496,9 @@ func normalizeUploadRequest(input *uploadRequest) {
 }
 
 func validateUploadRequest(input uploadRequest) error {
+	if input.Provider == "" {
+		return fmt.Errorf("provider is required")
+	}
 	if input.Org == "" {
 		return fmt.Errorf("org is required")
 	}
@@ -508,6 +515,7 @@ func validateUploadRequest(input uploadRequest) error {
 }
 
 func refTypeFromName(name string) store.RefType {
+	name = strings.TrimSpace(name)
 	if strings.HasPrefix(name, "refs/pull/") || strings.HasPrefix(name, "refs/merge-requests/") {
 		return store.RefTypePullRequest
 	}
@@ -515,6 +523,17 @@ func refTypeFromName(name string) store.RefType {
 		return store.RefTypeTag
 	}
 	return store.RefTypeBranch
+}
+
+func normalizeStoredRefName(name string) string {
+	name = strings.TrimSpace(name)
+	if strings.HasPrefix(name, "refs/heads/") {
+		return strings.TrimPrefix(name, "refs/heads/")
+	}
+	if strings.HasPrefix(name, "refs/tags/") {
+		return strings.TrimPrefix(name, "refs/tags/")
+	}
+	return name
 }
 
 func severityFromString(value string) (store.SeverityLevel, error) {

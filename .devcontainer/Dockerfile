@@ -43,6 +43,9 @@ RUN <<EOF
     apt-get clean -y
     rm -rf /var/lib/apt/lists/*
     corepack enable
+
+    npm install -g @playwright/cli@latest
+    playwright-cli --version
 EOF
 
 RUN <<EOF

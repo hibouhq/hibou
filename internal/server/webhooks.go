@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/hibouhq/lehibou/internal/api"
 	"github.com/hibouhq/lehibou/internal/forge"
@@ -87,7 +89,9 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 		return nil
 	}
 
-	_, err = s.queries.UpsertRef(r.Context(), repo.ID, event.Ref, refTypeFromName(event.Ref), nil, stringPtr(event.After))
+	refType := refTypeFromName(event.Ref)
+	refName := normalizeStoredRefName(event.Ref)
+	_, err = s.queries.UpsertRef(r.Context(), repo.ID, refName, refType, nil, nil, stringPtr(event.After))
 	return err
 }
 
@@ -110,9 +114,48 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID strin
 		return nil
 	}
 
+	var mergeTargetRefID *uuid.UUID
+	if targetBranch := strings.TrimSpace(event.TargetBranch); targetBranch != "" {
+		targetRef, err := s.queries.UpsertRef(r.Context(), repo.ID, targetBranch, refTypeFromName(targetBranch), nil, nil, nil)
+		if err != nil {
+			return err
+		}
+		if targetRef != nil {
+			mergeTargetRefID = &targetRef.ID
+		}
+	}
+
 	refName := pullRequestRefName(providerID, event.Number)
-	_, err = s.queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), nil, stringPtr(event.HeadSHA))
+	ref, err := s.queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), nil, mergeTargetRefID, stringPtr(event.HeadSHA))
+	if err != nil {
+		return err
+	}
+	if ref == nil {
+		return nil
+	}
+
+	prState, prMergedAt, prClosedAt, shouldUpdate := pullRequestLifecycleState(event.Action, event.Merged)
+	if !shouldUpdate {
+		return nil
+	}
+
+	_, err = s.queries.UpdateRefPRState(r.Context(), ref.ID, stringPtr(prState), event.Title, event.SourceBranch, prMergedAt, prClosedAt)
 	return err
+}
+
+func pullRequestLifecycleState(action string, merged bool) (string, *time.Time, *time.Time, bool) {
+	now := time.Now().UTC()
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "closed":
+		if merged {
+			return "merged", &now, &now, true
+		}
+		return "closed", nil, &now, true
+	case "opened", "reopened":
+		return "open", nil, nil, true
+	default:
+		return "", nil, nil, false
+	}
 }
 
 func webhookEventType(providerID string, r *http.Request) string {

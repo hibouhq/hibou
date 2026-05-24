@@ -23,6 +23,42 @@ func (q *Queries) CountVulnMatchesBySnapshot(ctx context.Context, snapshotID uui
 	return column_1, err
 }
 
+const countVulnsBySeverity = `-- name: CountVulnsBySeverity :many
+SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
+FROM advisories a
+JOIN vuln_matches vm ON vm.advisory_id = a.id
+WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE AND vm.suppressed = FALSE
+GROUP BY a.severity
+`
+
+type CountVulnsBySeverityRow struct {
+	Severity string `json:"severity"`
+	Count    int64  `json:"count"`
+}
+
+func (q *Queries) CountVulnsBySeverity(ctx context.Context, snapshotID uuid.UUID) ([]CountVulnsBySeverityRow, error) {
+	rows, err := q.db.QueryContext(ctx, countVulnsBySeverity, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountVulnsBySeverityRow{}
+	for rows.Next() {
+		var i CountVulnsBySeverityRow
+		if err := rows.Scan(&i.Severity, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVulnMatchesBySnapshot = `-- name: ListVulnMatchesBySnapshot :many
 SELECT id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, suppressed, suppressed_reason, first_seen_at, last_seen_at FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE ORDER BY first_seen_at DESC
 `
@@ -48,6 +84,42 @@ func (q *Queries) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid
 			&i.FirstSeenAt,
 			&i.LastSeenAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVulnSummaryBySnapshot = `-- name: ListVulnSummaryBySnapshot :many
+SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
+FROM advisories a
+JOIN vuln_matches vm ON vm.advisory_id = a.id
+WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE
+GROUP BY a.severity
+`
+
+type ListVulnSummaryBySnapshotRow struct {
+	Severity string `json:"severity"`
+	Count    int64  `json:"count"`
+}
+
+func (q *Queries) ListVulnSummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]ListVulnSummaryBySnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, listVulnSummaryBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVulnSummaryBySnapshotRow{}
+	for rows.Next() {
+		var i ListVulnSummaryBySnapshotRow
+		if err := rows.Scan(&i.Severity, &i.Count); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

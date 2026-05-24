@@ -120,6 +120,7 @@ func (PushEvent) EventType() string {
 
 type PullRequestEvent struct {
 	Action       string
+	Merged       bool
 	Number       int
 	Title        string
 	SourceBranch string

@@ -12,14 +12,15 @@
     <ul v-else class="space-y-2">
       <li v-for="repo in repos" :key="repo.id">
         <RouterLink
-          :to="`/orgs/${slug}/repos/${repo.slug}`"
+          :to="`/orgs/${provider}/${slug}/repos/${repo.slug}`"
           class="block rounded-lg border border-gray-800 bg-gray-900 p-4 transition-colors hover:border-gray-600"
         >
-          <div class="font-medium">
+          <div class="flex items-center gap-2 font-medium">
+            <ForgeIcon :provider="repo.provider" size="sm" class="text-gray-400" />
             {{ repo.name }}
           </div>
-          <div class="text-sm text-gray-500">
-            {{ repo.provider }} · {{ repo.default_branch }}
+          <div class="ml-[22px] text-sm text-gray-500">
+            {{ repo.default_branch }}
           </div>
         </RouterLink>
       </li>
@@ -28,24 +29,31 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type Repository } from '@/api/client'
+import ForgeIcon from '@/components/ForgeIcon.vue'
 
 const route = useRoute()
-const slug = route.params.slug as string
+const provider = computed(() => route.params.provider as string)
+const slug = computed(() => route.params.slug as string)
 const repos = ref<Repository[]>([])
 const loading = ref(true)
 
-onMounted(async () => {
-  try {
-    const res = await api.listRepos(slug)
-    repos.value = res.data
-  } catch {
-    repos.value = []
-  } finally {
-    loading.value = false
-  }
-})
+watch(
+  [provider, slug],
+  async ([newProvider, newSlug]) => {
+    loading.value = true
+    try {
+      const res = await api.listRepos(newProvider, newSlug)
+      repos.value = res.data
+    } catch {
+      repos.value = []
+    } finally {
+      loading.value = false
+    }
+  },
+  { immediate: true },
+)
 </script>

@@ -113,7 +113,7 @@ Key features:
 - D3 force-directed rendering with `d3-force`, `d3-zoom`, `d3-drag`, and `d3-selection`.
 - Progressive breadth-first expansion from the root node.
 - Click node to expand or collapse descendants.
-- Search supports exact `ecosystem:name` syntax such as `maven:commons-io` and plain free text.
+- Search supports exact `ecosystem:name` syntax such as `maven:commons-io` and plain free text, or separate ? better UX ideally, and completion. 
 - Search can auto-expand the hidden parent chain when the target is outside the currently visible subgraph.
 - Toolbar includes search input, reset, expand-all, collapse-all, and visible node count.
 - Hover tooltip shows component name, version, ecosystem, vulnerability count, and child count.
@@ -1096,7 +1096,7 @@ The search input only fires the search on `@keydown.enter`. There is no debounce
 
 Different overlay components use different z-index values without a documented scale:
 - Sidebar: `z-50`
-- Mobile backdrop: `z-40`  
+- Mobile backdrop: `z-40`
 - Rule info panel backdrop: `z-200`
 - Library detail modal backdrop: `z-300`
 

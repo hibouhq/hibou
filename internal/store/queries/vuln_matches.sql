@@ -23,3 +23,17 @@ UPDATE vuln_matches SET suppressed = TRUE, suppressed_reason = $2 WHERE id = $1 
 
 -- name: UnsuppressVulnMatch :one
 UPDATE vuln_matches SET suppressed = FALSE, suppressed_reason = '' WHERE id = $1 RETURNING *;
+
+-- name: ListVulnSummaryBySnapshot :many
+SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
+FROM advisories a
+JOIN vuln_matches vm ON vm.advisory_id = a.id
+WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE
+GROUP BY a.severity;
+
+-- name: CountVulnsBySeverity :many
+SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
+FROM advisories a
+JOIN vuln_matches vm ON vm.advisory_id = a.id
+WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE AND vm.suppressed = FALSE
+GROUP BY a.severity;

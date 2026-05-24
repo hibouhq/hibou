@@ -109,9 +109,27 @@ print_credentials() {
 
   if [ -f .env ]; then
     echo "==> Auto-updating .env..."
-    sed -i "s|^HIBOU_FORGE_0_CLIENT_ID=.*|HIBOU_FORGE_0_CLIENT_ID=$client_id|" .env
-    sed -i "s|^HIBOU_FORGE_0_CLIENT_SECRET=.*|HIBOU_FORGE_0_CLIENT_SECRET=$client_secret|" .env
+    grep -q "^HIBOU_FORGE_0_TYPE=" .env && sed -i "s|^HIBOU_FORGE_0_TYPE=.*|HIBOU_FORGE_0_TYPE=forgejo|" .env
+    grep -q "^HIBOU_FORGE_0_ID=" .env && sed -i "s|^HIBOU_FORGE_0_ID=.*|HIBOU_FORGE_0_ID=forgejo|" .env
+    grep -q "^HIBOU_FORGE_0_URL=" .env && sed -i "s|^HIBOU_FORGE_0_URL=.*|HIBOU_FORGE_0_URL=$FORGEJO_URL|" .env
+    grep -q "^HIBOU_FORGE_0_CLIENT_ID=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_ID=.*|HIBOU_FORGE_0_CLIENT_ID=$client_id|" .env
+    grep -q "^HIBOU_FORGE_0_CLIENT_SECRET=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_SECRET=.*|HIBOU_FORGE_0_CLIENT_SECRET=$client_secret|" .env
     echo "    .env updated."
+  fi
+
+  if ! grep -q "^HIBOU_FORGE_0_TYPE=" .env 2>/dev/null; then
+    cat >> .env <<FORGE_EOF
+
+# Forge: local Forgejo
+HIBOU_FORGE_0_TYPE=forgejo
+HIBOU_FORGE_0_ID=forgejo
+HIBOU_FORGE_0_URL=$FORGEJO_URL
+HIBOU_FORGE_0_CLIENT_ID=$client_id
+HIBOU_FORGE_0_CLIENT_SECRET=$client_secret
+FORGE_EOF
+    echo "    Forge config appended to .env"
+  else
+    echo "    Forge config already in .env"
   fi
 }
 

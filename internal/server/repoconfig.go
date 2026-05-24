@@ -18,7 +18,7 @@ import (
 )
 
 func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {
-	org, repo, _, ok := s.loadAuthorizedRepo(w, r, false)
+	org, repo, _, ok := s.loadAuthorizedRepoWithUser(w, r, false)
 	if !ok {
 		return
 	}
@@ -52,7 +52,7 @@ func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOnboardRepo(w http.ResponseWriter, r *http.Request) {
-	org, repo, user, ok := s.loadAuthorizedRepo(w, r, true)
+	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
 	if !ok {
 		return
 	}
@@ -97,14 +97,14 @@ func (s *Server) handleGetConfigSchema(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(repoconfig.SchemaBytes())
 }
 
-func (s *Server) loadAuthorizedRepo(w http.ResponseWriter, r *http.Request, requireAdmin bool) (*store.Organization, *store.Repository, *store.User, bool) {
+func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Request, requireAdmin bool) (*store.Organization, *store.Repository, *store.User, bool) {
 	user := UserFromContext(r.Context())
 	if user == nil {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, nil, nil, false
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return nil, nil, nil, false

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/hibouhq/lehibou/internal/api"
 	"github.com/hibouhq/lehibou/internal/compliance"
 )
@@ -25,7 +23,7 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return

@@ -25,6 +25,7 @@ type updateTeamRequest struct {
 // @Tags         teams
 // @Accept       json
 // @Produce      json
+// @Param        provider  path      string             true  "Forge provider"
 // @Param        slug  path      string             true  "Organization slug"
 // @Param        body  body      createTeamRequest  true  "Team details"
 // @Success      201   {object}  api.Response{data=store.Team}
@@ -34,7 +35,7 @@ type updateTeamRequest struct {
 // @Failure      404   {object}  api.Response
 // @Failure      500   {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug}/teams [post]
+// @Router       /orgs/{provider}/{slug}/teams [post]
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -42,7 +43,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -101,6 +102,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 // @Description  List teams in an organization visible to organization members
 // @Tags         teams
 // @Produce      json
+// @Param        provider  path      string  true   "Forge provider"
 // @Param        slug      path      string  true   "Organization slug"
 // @Param        page      query     int     false  "Page number"
 // @Param        per_page  query     int     false  "Items per page"
@@ -109,7 +111,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 // @Failure      404       {object}  api.Response
 // @Failure      500       {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug}/teams [get]
+// @Router       /orgs/{provider}/{slug}/teams [get]
 func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -117,7 +119,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -147,6 +149,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 // @Description  Get a team by slug when the caller belongs to the organization
 // @Tags         teams
 // @Produce      json
+// @Param        provider  path      string  true  "Forge provider"
 // @Param        slug      path      string  true  "Organization slug"
 // @Param        teamSlug  path      string  true  "Team slug"
 // @Success      200       {object}  api.Response{data=store.Team}
@@ -154,7 +157,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 // @Failure      404       {object}  api.Response
 // @Failure      500       {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug}/teams/{teamSlug} [get]
+// @Router       /orgs/{provider}/{slug}/teams/{teamSlug} [get]
 func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -162,7 +165,7 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -196,6 +199,7 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 // @Tags         teams
 // @Accept       json
 // @Produce      json
+// @Param        provider  path      string             true  "Forge provider"
 // @Param        slug      path      string             true  "Organization slug"
 // @Param        teamSlug  path      string             true  "Team slug"
 // @Param        body      body      updateTeamRequest  true  "Team updates"
@@ -206,7 +210,7 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 // @Failure      404       {object}  api.Response
 // @Failure      500       {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug}/teams/{teamSlug} [put]
+// @Router       /orgs/{provider}/{slug}/teams/{teamSlug} [put]
 func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -214,7 +218,7 @@ func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -287,6 +291,7 @@ func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 // @Description  Delete a team when the caller is an organization admin
 // @Tags         teams
 // @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
 // @Param        slug      path  string  true  "Organization slug"
 // @Param        teamSlug  path  string  true  "Team slug"
 // @Success      204       "No Content"
@@ -295,7 +300,7 @@ func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 // @Failure      404       {object}  api.Response
 // @Failure      500       {object}  api.Response
 // @Security     BearerAuth
-// @Router       /orgs/{slug}/teams/{teamSlug} [delete]
+// @Router       /orgs/{provider}/{slug}/teams/{teamSlug} [delete]
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
@@ -303,7 +308,7 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return

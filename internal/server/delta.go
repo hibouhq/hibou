@@ -27,7 +27,7 @@ func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	org, err := s.queries.GetOrganizationBySlug(r.Context(), chi.URLParam(r, "slug"))
+	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return

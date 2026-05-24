@@ -50,7 +50,12 @@ setup-full: up-all ## Full setup with Forgejo OAuth (for OAuth testing)
 	@./scripts/setup-dev.sh
 
 .PHONY: start
-start: setup ## One command: setup + start the app
+start: setup-full ## One command: full setup with real data + start the app
+	@./scripts/seed-real.sh
+	@$(MAKE) dev
+
+.PHONY: start-quick
+start-quick: setup ## Quick start with fake seed data
 	@$(MAKE) dev
 
 .PHONY: seed
@@ -98,7 +103,8 @@ build-all: build-frontend ## Cross-compile for all target platforms
 .PHONY: dev
 dev: ## Run backend + Vite dev server concurrently
 	@trap 'kill 0' EXIT; \
-		go run . serve & \
+		set -a; [ -f .env ] && . ./.env; set +a; \
+		HIBOU_ARTIFACT_PATH=tmp/artifacts go run . serve & \
 		cd $(FRONTEND) && npx vite --host 0.0.0.0 & \
 		wait
 

@@ -20,3 +20,15 @@ SELECT * FROM findings WHERE snapshot_id = $1 AND tool = $2 ORDER BY severity AS
 
 -- name: CountFindingsBySnapshotAndTool :one
 SELECT COUNT(*)::bigint FROM findings WHERE snapshot_id = $1 AND tool = $2;
+
+-- name: ListFindingSummaryBySnapshot :many
+SELECT severity::text, COUNT(*)::bigint AS count
+FROM findings
+WHERE snapshot_id = $1
+GROUP BY severity;
+
+-- name: CountFindingsBySeverity :many
+SELECT severity::text, COUNT(*)::bigint AS count
+FROM findings
+WHERE snapshot_id = $1
+GROUP BY severity;

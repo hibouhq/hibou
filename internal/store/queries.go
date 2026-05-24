@@ -13,6 +13,8 @@ type Queries struct {
 	sqlDB *sql.DB
 }
 
+type ListComponentsBySnapshotWithVulnsRow = dbgen.ListComponentsBySnapshotWithVulnsRow
+
 func NewQueries(db *sql.DB) *Queries {
 	return &Queries{db: dbgen.New(db), sqlDB: db}
 }
@@ -43,6 +45,14 @@ func (q *Queries) InvalidateAdvisoryCacheByProvider(ctx context.Context, provide
 
 func (q *Queries) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Component, error) {
 	return q.db.ListComponentsBySnapshot(ctx, snapshotID)
+}
+
+func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListComponentsBySnapshotWithVulnsRow, error) {
+	return q.db.ListComponentsBySnapshotWithVulns(ctx, snapshotID)
+}
+
+func (q *Queries) CountComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
+	return q.db.CountComponentsBySnapshot(ctx, snapshotID)
 }
 
 func (q *Queries) GetComponentByID(ctx context.Context, id uuid.UUID) (dbgen.Component, error) {
@@ -161,6 +171,22 @@ func (q *Queries) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid
 
 func (q *Queries) ListAllFindingsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Finding, error) {
 	return q.db.ListAllFindingsBySnapshot(ctx, snapshotID)
+}
+
+func (q *Queries) ListFindingSummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListFindingSummaryBySnapshotRow, error) {
+	return q.db.ListFindingSummaryBySnapshot(ctx, snapshotID)
+}
+
+func (q *Queries) CountFindingsBySeverity(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.CountFindingsBySeverityRow, error) {
+	return q.db.CountFindingsBySeverity(ctx, snapshotID)
+}
+
+func (q *Queries) ListVulnSummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListVulnSummaryBySnapshotRow, error) {
+	return q.db.ListVulnSummaryBySnapshot(ctx, snapshotID)
+}
+
+func (q *Queries) CountVulnsBySeverity(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.CountVulnsBySeverityRow, error) {
+	return q.db.CountVulnsBySeverity(ctx, snapshotID)
 }
 
 func (q *Queries) ListIntegrationsByOrg(ctx context.Context, orgID uuid.UUID) ([]dbgen.Integration, error) {

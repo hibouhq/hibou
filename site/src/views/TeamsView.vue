@@ -27,23 +27,30 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { api, type Team } from '@/api/client'
 
 const route = useRoute()
+const provider = computed(() => route.params.provider as string)
+const slug = computed(() => route.params.slug as string)
 const teams = ref<Team[]>([])
 const loading = ref(true)
 
-onMounted(async () => {
-  try {
-    const res = await api.listTeams(route.params.slug as string)
-    teams.value = res.data
-  } catch {
-    teams.value = []
-  } finally {
-    loading.value = false
-  }
-})
+watch(
+  [provider, slug],
+  async ([newProvider, newSlug]) => {
+    loading.value = true
+    try {
+      const res = await api.listTeams(newProvider, newSlug)
+      teams.value = res.data
+    } catch {
+      teams.value = []
+    } finally {
+      loading.value = false
+    }
+  },
+  { immediate: true },
+)
 </script>

@@ -7,16 +7,53 @@
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
-  "forwardPorts": [8080, 3000, 3030, 4321, 4322, 4954, 5432],
+  "postCreateCommand": ".devcontainer/scripts/post-create.sh",
+  "forwardPorts": [
+    8080,
+    3000,
+    3030,
+    4321,
+    4322,
+    4954,
+    5432
+  ],
   "portsAttributes": {
-    "3000": { "label": "Vite Dev Server (Frontend)", "onAutoForward": "notify" },
-    "3030": { "label": "Forgejo", "onAutoForward": "silent" },
-    "4321": { "label": "Astro Docs", "onAutoForward": "silent" },
-    "4322": { "label": "Astro Docs (HMR)", "onAutoForward": "silent" },
-    "4954": { "label": "Trivy Server", "onAutoForward": "silent" },
-    "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
-    "8080": { "label": "Hibou API Server", "onAutoForward": "notify" }
+    "3000": {
+      "label": "Vite Dev Server (Frontend)",
+      "onAutoForward": "notify"
+    },
+    "3030": {
+      "label": "Forgejo",
+      "onAutoForward": "silent"
+    },
+    "4321": {
+      "label": "Astro Docs",
+      "onAutoForward": "silent"
+    },
+    "4322": {
+      "label": "Astro Docs (HMR)",
+      "onAutoForward": "silent"
+    },
+    "4954": {
+      "label": "Trivy Server",
+      "onAutoForward": "silent"
+    },
+    "5432": {
+      "label": "PostgreSQL",
+      "onAutoForward": "silent"
+    },
+    "8080": {
+      "label": "Hibou API Server",
+      "onAutoForward": "notify"
+    }
   },
+  "mounts": [
+    {
+      "source": "vscode-home-${devcontainerId}",
+      "target": "/home/vscode/",
+      "type": "volume"
+    }
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -28,6 +65,7 @@
         "ms-ossdata.vscode-pgsql",
         "astro-build.astro-vscode",
         "editorconfig.editorconfig",
+        "github.vscode-github-actions",
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",
@@ -40,6 +78,4 @@
       }
     }
   },
-  "postCreateCommand": "go mod download && go install github.com/go-delve/delve/cmd/dlv@latest && go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest && cd site && npm install",
-  "remoteUser": "vscode"
 }

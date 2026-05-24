@@ -273,6 +273,7 @@ func (g *GitHub) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 		}
 		parsed := PullRequestEvent{
 			Action:       event.Action,
+			Merged:       event.PullRequest.Merged,
 			Number:       event.Number,
 			Title:        event.PullRequest.Title,
 			SourceBranch: event.PullRequest.Head.Ref,
@@ -503,7 +504,8 @@ type githubPullRequestEvent struct {
 	Number      int              `json:"number"`
 	Repository  githubRepository `json:"repository"`
 	PullRequest struct {
-		Title string `json:"title"`
+		Title  string `json:"title"`
+		Merged bool   `json:"merged"`
 		Head  struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`

@@ -13,6 +13,41 @@ import (
 	"github.com/google/uuid"
 )
 
+const countFindingsBySeverity = `-- name: CountFindingsBySeverity :many
+SELECT severity::text, COUNT(*)::bigint AS count
+FROM findings
+WHERE snapshot_id = $1
+GROUP BY severity
+`
+
+type CountFindingsBySeverityRow struct {
+	Severity string `json:"severity"`
+	Count    int64  `json:"count"`
+}
+
+func (q *Queries) CountFindingsBySeverity(ctx context.Context, snapshotID uuid.UUID) ([]CountFindingsBySeverityRow, error) {
+	rows, err := q.db.QueryContext(ctx, countFindingsBySeverity, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountFindingsBySeverityRow{}
+	for rows.Next() {
+		var i CountFindingsBySeverityRow
+		if err := rows.Scan(&i.Severity, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countFindingsBySnapshot = `-- name: CountFindingsBySnapshot :one
 SELECT COUNT(*)::bigint FROM findings WHERE snapshot_id = $1
 `
@@ -151,6 +186,41 @@ func (q *Queries) ListAllFindingsBySnapshot(ctx context.Context, snapshotID uuid
 			&i.Metadata,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFindingSummaryBySnapshot = `-- name: ListFindingSummaryBySnapshot :many
+SELECT severity::text, COUNT(*)::bigint AS count
+FROM findings
+WHERE snapshot_id = $1
+GROUP BY severity
+`
+
+type ListFindingSummaryBySnapshotRow struct {
+	Severity string `json:"severity"`
+	Count    int64  `json:"count"`
+}
+
+func (q *Queries) ListFindingSummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]ListFindingSummaryBySnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFindingSummaryBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFindingSummaryBySnapshotRow{}
+	for rows.Next() {
+		var i ListFindingSummaryBySnapshotRow
+		if err := rows.Scan(&i.Severity, &i.Count); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
