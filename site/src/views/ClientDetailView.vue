@@ -1,27 +1,44 @@
 <template>
   <section class="space-y-6">
     <div class="rounded-3xl border border-surface-border bg-surface-raised p-6 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.9)]">
-      <div v-if="loading" class="text-sm text-gray-500">
+      <div
+        v-if="loading"
+        class="text-sm text-gray-500"
+      >
         Loading client details...
       </div>
 
       <template v-else>
-        <div v-if="error" class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200">
+        <div
+          v-if="error"
+          class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
+        >
           {{ error }}
         </div>
 
-        <div v-if="client" :class="['space-y-6', error ? 'mt-6' : '']">
+        <div
+          v-if="client"
+          :class="['space-y-6', error ? 'mt-6' : '']"
+        >
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">Client</p>
+              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+                Client
+              </p>
               <h1 class="mt-2 text-3xl font-semibold tracking-tight text-white">
                 {{ client.name }}
               </h1>
               <div class="mt-3 flex flex-wrap items-center gap-3">
-                <span :class="clientTypeClass(client.client_type)" class="rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]">
+                <span
+                  :class="clientTypeClass(client.client_type)"
+                  class="rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]"
+                >
                   {{ client.client_type }}
                 </span>
-                <span :class="activeVersionBadgeClass" class="rounded-full px-4 py-1.5 text-sm font-medium tracking-[0.08em]">
+                <span
+                  :class="activeVersionBadgeClass"
+                  class="rounded-full px-4 py-1.5 text-sm font-medium tracking-[0.08em]"
+                >
                   {{ activeVersion ? `Active ${activeVersion}` : 'No active version' }}
                 </span>
               </div>
@@ -54,7 +71,12 @@
                     </span>
                   </span>
                 </template>
-                <p v-else class="text-sm text-gray-500">No labels configured for this client.</p>
+                <p
+                  v-else
+                  class="text-sm text-gray-500"
+                >
+                  No labels configured for this client.
+                </p>
               </div>
             </div>
 
@@ -67,44 +89,77 @@
             </button>
           </div>
 
-          <section v-if="showDeploymentForm" class="rounded-3xl border border-surface-border-subtle bg-surface-overlay/70 p-5">
+          <section
+            v-if="showDeploymentForm"
+            class="rounded-3xl border border-surface-border-subtle bg-surface-overlay/70 p-5"
+          >
             <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <label class="space-y-2 text-sm text-gray-300">
                 <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Repository</span>
-                <select v-model="deploymentForm.repoSlug" class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100">
+                <select
+                  v-model="deploymentForm.repoSlug"
+                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+                >
                   <option value="">Select repository</option>
-                  <option v-for="repo in repos" :key="repo.id" :value="repo.slug">{{ repo.name }}</option>
+                  <option
+                    v-for="repo in repos"
+                    :key="repo.id"
+                    :value="repo.slug"
+                  >{{ repo.name }}</option>
                 </select>
               </label>
 
               <label class="space-y-2 text-sm text-gray-300">
                 <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Release</span>
-                <select v-model="deploymentForm.releaseId" class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100">
+                <select
+                  v-model="deploymentForm.releaseId"
+                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+                >
                   <option value="">Select release</option>
-                  <option v-for="release in releases" :key="release.id" :value="release.id">{{ release.version }}</option>
+                  <option
+                    v-for="release in releases"
+                    :key="release.id"
+                    :value="release.id"
+                  >{{ release.version }}</option>
                 </select>
               </label>
 
               <label class="space-y-2 text-sm text-gray-300">
                 <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Environment</span>
-                <input v-model="deploymentForm.environment" class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100" type="text">
+                <input
+                  v-model="deploymentForm.environment"
+                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+                  type="text"
+                >
               </label>
 
               <label class="space-y-2 text-sm text-gray-300">
                 <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Deployed By</span>
-                <input v-model="deploymentForm.deployedBy" class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100" type="text">
+                <input
+                  v-model="deploymentForm.deployedBy"
+                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+                  type="text"
+                >
               </label>
             </div>
 
             <div class="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_220px_auto]">
               <label class="space-y-2 text-sm text-gray-300">
                 <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Notes</span>
-                <input v-model="deploymentForm.notes" class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100" type="text">
+                <input
+                  v-model="deploymentForm.notes"
+                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+                  type="text"
+                >
               </label>
 
               <label class="space-y-2 text-sm text-gray-300">
                 <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Deployed At</span>
-                <input v-model="deploymentForm.deployedAt" class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100" type="datetime-local">
+                <input
+                  v-model="deploymentForm.deployedAt"
+                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+                  type="datetime-local"
+                >
               </label>
 
               <button
@@ -117,12 +172,19 @@
               </button>
             </div>
 
-            <p v-if="deploymentError" class="mt-3 text-sm text-danger">{{ deploymentError }}</p>
+            <p
+              v-if="deploymentError"
+              class="mt-3 text-sm text-danger"
+            >
+              {{ deploymentError }}
+            </p>
           </section>
 
           <section class="grid gap-4 md:grid-cols-2">
             <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
-              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">Labels</p>
+              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+                Labels
+              </p>
               <div
                 v-if="clientLabelEntries(client).length > 0"
                 class="mt-3 space-y-2 text-sm text-gray-300"
@@ -158,9 +220,14 @@
               </div>
             </div>
             <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
-              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">Client Type</p>
+              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+                Client Type
+              </p>
               <div class="mt-2">
-                <span :class="clientTypeClass(client.client_type)" class="rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]">
+                <span
+                  :class="clientTypeClass(client.client_type)"
+                  class="rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]"
+                >
                   {{ client.client_type }}
                 </span>
               </div>
@@ -168,7 +235,10 @@
           </section>
         </div>
 
-        <div v-else-if="!error" class="text-sm text-gray-500">
+        <div
+          v-else-if="!error"
+          class="text-sm text-gray-500"
+        >
           Client not found.
         </div>
       </template>
@@ -176,37 +246,66 @@
 
     <section class="rounded-3xl border border-surface-border bg-surface-raised p-6">
       <div>
-        <h2 class="text-xl font-semibold text-white">Impact Analysis</h2>
+        <h2 class="text-xl font-semibold text-white">
+          Impact Analysis
+        </h2>
         <p class="mt-2 text-sm text-gray-400">
           Vulnerabilities currently affecting this client's active deployments.
         </p>
       </div>
 
       <div class="mt-6 overflow-hidden rounded-2xl border border-surface-border-subtle">
-        <div v-if="impactLoading" class="px-4 py-10 text-sm text-gray-500">
+        <div
+          v-if="impactLoading"
+          class="px-4 py-10 text-sm text-gray-500"
+        >
           Loading impact analysis...
         </div>
-        <div v-else-if="impact.length === 0" class="px-4 py-10 text-sm text-gray-500">
+        <div
+          v-else-if="impact.length === 0"
+          class="px-4 py-10 text-sm text-gray-500"
+        >
           No active-deployment vulnerabilities found for this client.
         </div>
-        <div v-else class="overflow-x-auto">
+        <div
+          v-else
+          class="overflow-x-auto"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Severity</th>
-                <th class="px-4 py-3 font-medium">Canonical ID</th>
-                <th class="px-4 py-3 font-medium">Component</th>
-                <th class="px-4 py-3 font-medium">Release</th>
+                <th class="px-4 py-3 font-medium">
+                  Severity
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Canonical ID
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Component
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Release
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
-              <tr v-for="item in impact" :key="`${item.canonical_id}-${item.component_name}-${item.release_version}`" class="transition hover:bg-white/5">
+              <tr
+                v-for="item in impact"
+                :key="`${item.canonical_id}-${item.component_name}-${item.release_version}`"
+                class="transition hover:bg-white/5"
+              >
                 <td class="px-4 py-4">
                   <span :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.severity)]">{{ item.severity }}</span>
                 </td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">{{ item.canonical_id }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ item.component_name }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ item.release_version }}</td>
+                <td class="px-4 py-4 font-mono text-xs text-accent">
+                  {{ item.canonical_id }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ item.component_name }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ item.release_version }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -216,41 +315,77 @@
 
     <section class="rounded-3xl border border-surface-border bg-surface-raised p-6">
       <div>
-        <h2 class="text-xl font-semibold text-white">Deployments</h2>
+        <h2 class="text-xl font-semibold text-white">
+          Deployments
+        </h2>
         <p class="mt-2 text-sm text-gray-400">
           Release history and rollout status for this client.
         </p>
       </div>
 
       <div class="mt-6 overflow-hidden rounded-2xl border border-surface-border-subtle">
-        <div v-if="deploymentsLoading" class="px-4 py-10 text-sm text-gray-500">
+        <div
+          v-if="deploymentsLoading"
+          class="px-4 py-10 text-sm text-gray-500"
+        >
           Loading deployments...
         </div>
-        <div v-else-if="deployments.length === 0" class="px-4 py-10 text-sm text-gray-500">
+        <div
+          v-else-if="deployments.length === 0"
+          class="px-4 py-10 text-sm text-gray-500"
+        >
           No deployments recorded yet.
         </div>
-        <div v-else class="overflow-x-auto">
+        <div
+          v-else
+          class="overflow-x-auto"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Release</th>
-                <th class="px-4 py-3 font-medium">Environment</th>
-                <th class="px-4 py-3 font-medium">Status</th>
-                <th class="px-4 py-3 font-medium">Date</th>
-                <th class="px-4 py-3 font-medium">Deployed By</th>
+                <th class="px-4 py-3 font-medium">
+                  Release
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Environment
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Status
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Date
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Deployed By
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
-              <tr v-for="deployment in deployments" :key="deployment.id" class="transition hover:bg-white/5">
-                <td class="px-4 py-4 text-gray-300">{{ deployment.release_version || deployment.release_id }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ deployment.environment }}</td>
+              <tr
+                v-for="deployment in deployments"
+                :key="deployment.id"
+                class="transition hover:bg-white/5"
+              >
+                <td class="px-4 py-4 text-gray-300">
+                  {{ deployment.release_version || deployment.release_id }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ deployment.environment }}
+                </td>
                 <td class="px-4 py-4">
-                  <span :class="statusClass(deployment.status)" class="rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em]">
+                  <span
+                    :class="statusClass(deployment.status)"
+                    class="rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em]"
+                  >
                     {{ deployment.status }}
                   </span>
                 </td>
-                <td class="px-4 py-4 text-gray-400">{{ formatDate(deployment.deployed_at) }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ deployment.deployed_by || 'System' }}</td>
+                <td class="px-4 py-4 text-gray-400">
+                  {{ formatDate(deployment.deployed_at) }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ deployment.deployed_by || 'System' }}
+                </td>
               </tr>
             </tbody>
           </table>

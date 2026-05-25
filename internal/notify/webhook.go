@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -24,7 +25,7 @@ func (s *WebhookSender) Send(ctx context.Context, p Payload) error {
 		webhookURL = configString(config, "webhook_url")
 	}
 	if webhookURL == "" {
-		return fmt.Errorf("webhook url is required")
+		return errors.New("webhook url is required")
 	}
 	secret := configString(config, "secret")
 	body, err := json.Marshal(p)

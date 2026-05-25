@@ -97,7 +97,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
+	snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
 	if !ok {
 		return
 	}
@@ -155,7 +155,7 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	_, snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
+	snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
 	if !ok {
 		return
 	}
@@ -190,7 +190,7 @@ func (s *Server) handleGetRefSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
+	snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
 	if !ok {
 		return
 	}
@@ -363,33 +363,33 @@ func (s *Server) loadAuthorizedRepo(r *http.Request, w http.ResponseWriter) (*st
 	return org, repo, true
 }
 
-func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWriter, repo *store.Repository) (*store.Ref, *store.Snapshot, bool) {
+func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWriter, repo *store.Repository) (*store.Snapshot, bool) {
 	snapshotID := strings.TrimSpace(r.URL.Query().Get("snapshot"))
 	if snapshotID != "" {
 		parsed, err := uuid.Parse(snapshotID)
 		if err != nil {
 			api.JSONError(w, http.StatusBadRequest, "invalid snapshot")
-			return nil, nil, false
+			return nil, false
 		}
 		snapshot, err := s.queries.GetSnapshotByID(r.Context(), parsed)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load snapshot")
-			return nil, nil, false
+			return nil, false
 		}
 		if snapshot == nil {
 			api.JSONError(w, http.StatusNotFound, "snapshot not found")
-			return nil, nil, false
+			return nil, false
 		}
 		ref, err := s.queries.GetRefByID(r.Context(), snapshot.RefID)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load snapshot reference")
-			return nil, nil, false
+			return nil, false
 		}
 		if ref == nil || ref.RepoID != repo.ID {
 			api.JSONError(w, http.StatusForbidden, "snapshot does not belong to this repository")
-			return nil, nil, false
+			return nil, false
 		}
-		return ref, snapshot, true
+		return snapshot, true
 	}
 
 	refName := strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -398,20 +398,20 @@ func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWrite
 	}
 	if refName == "" {
 		api.JSONError(w, http.StatusBadRequest, "ref is required")
-		return nil, nil, false
+		return nil, false
 	}
 
 	ref, snapshot, err := s.resolveSnapshotForRepo(r, repo, refName)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load repository reference")
-		return nil, nil, false
+		return nil, false
 	}
 	if ref == nil {
 		api.JSONError(w, http.StatusNotFound, "ref not found")
-		return nil, nil, false
+		return nil, false
 	}
 
-	return ref, snapshot, true
+	return snapshot, true
 }
 
 func (s *Server) resolveSnapshotForRepo(r *http.Request, repo *store.Repository, refName string) (*store.Ref, *store.Snapshot, error) {

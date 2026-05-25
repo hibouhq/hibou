@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
 	"github.com/rs/zerolog"
+
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
 type stubExportStore struct {

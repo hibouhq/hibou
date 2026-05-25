@@ -3,13 +3,22 @@
     <h2 class="mb-4 text-2xl font-bold">
       Teams
     </h2>
-    <div v-if="loading" class="text-gray-500">
+    <div
+      v-if="loading"
+      class="text-gray-500"
+    >
       Loading...
     </div>
-    <div v-else-if="teams.length === 0" class="text-gray-500">
+    <div
+      v-else-if="teams.length === 0"
+      class="text-gray-500"
+    >
       No teams yet.
     </div>
-    <ul v-else class="space-y-2">
+    <ul
+      v-else
+      class="space-y-2"
+    >
       <li
         v-for="team in teams"
         :key="team.id"

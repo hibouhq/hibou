@@ -8,10 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -67,10 +69,10 @@ func (g *GitHub) ListRepositories(ctx context.Context, opts ListReposOptions) ([
 	path := "/user/repos"
 	values := url.Values{}
 	if opts.Page > 0 {
-		values.Set("page", fmt.Sprintf("%d", opts.Page))
+		values.Set("page", strconv.Itoa(opts.Page))
 	}
 	if opts.PerPage > 0 {
-		values.Set("per_page", fmt.Sprintf("%d", opts.PerPage))
+		values.Set("per_page", strconv.Itoa(opts.PerPage))
 	}
 	if encoded := values.Encode(); encoded != "" {
 		path += "?" + encoded
@@ -231,7 +233,7 @@ func (g *GitHub) ValidateWebhookPayload(r *http.Request, secret string) ([]byte,
 	signature := r.Header.Get("X-Hub-Signature-256")
 	const prefix = "sha256="
 	if !strings.HasPrefix(signature, prefix) {
-		return nil, fmt.Errorf("github webhook signature missing or malformed")
+		return nil, errors.New("github webhook signature missing or malformed")
 	}
 
 	expectedMAC := hmac.New(sha256.New, []byte(activeSecret))
@@ -245,7 +247,7 @@ func (g *GitHub) ValidateWebhookPayload(r *http.Request, secret string) ([]byte,
 		return nil, fmt.Errorf("decode github webhook signature: %w", err)
 	}
 	if !hmac.Equal(provided, expected) {
-		return nil, fmt.Errorf("github webhook signature mismatch")
+		return nil, errors.New("github webhook signature mismatch")
 	}
 
 	return payload, nil
@@ -302,7 +304,7 @@ func (g *GitHub) OAuth2Config(redirectURL string) *oauth2.Config {
 
 func (g *GitHub) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, error) {
 	if token == nil || token.AccessToken == "" {
-		return nil, fmt.Errorf("github user info requires access token")
+		return nil, errors.New("github user info requires access token")
 	}
 
 	request, err := g.newRequest(ctx, http.MethodGet, "/user", nil)
@@ -506,7 +508,7 @@ type githubPullRequestEvent struct {
 	PullRequest struct {
 		Title  string `json:"title"`
 		Merged bool   `json:"merged"`
-		Head  struct {
+		Head   struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		} `json:"head"`

@@ -60,7 +60,7 @@ func parsePyPIVersion(v string) pypiVersion {
 		v = v[:idx]
 	}
 	if idx := strings.IndexByte(v, '!'); idx >= 0 {
-		parsed.epoch = parseIntDefault(v[:idx], 0)
+		parsed.epoch = parseIntDefault(v[:idx])
 		v = v[idx+1:]
 	}
 	m := pypiReleaseRe.FindStringSubmatch(v)
@@ -68,7 +68,7 @@ func parsePyPIVersion(v string) pypiVersion {
 		return pypiVersion{}
 	}
 	for _, part := range strings.Split(m[1], ".") {
-		parsed.release = append(parsed.release, parseIntDefault(part, 0))
+		parsed.release = append(parsed.release, parseIntDefault(part))
 	}
 	parsed.release = trimTrailingZeroInts(parsed.release)
 	parsed.valid = true
@@ -79,7 +79,7 @@ func parsePyPIVersion(v string) pypiVersion {
 				parsed.valid = false
 				return parsed
 			}
-			parsed.pre = encodePyPIPre(normalizePyPIStage(match[1]), parseIntDefault(match[2], 0))
+			parsed.pre = encodePyPIPre(normalizePyPIStage(match[1]), parseIntDefault(match[2]))
 			remaining = remaining[len(match[0]):]
 			continue
 		}
@@ -88,7 +88,7 @@ func parsePyPIVersion(v string) pypiVersion {
 				parsed.valid = false
 				return parsed
 			}
-			parsed.post = parseIntDefault(match[2], 0)
+			parsed.post = parseIntDefault(match[2])
 			remaining = remaining[len(match[0]):]
 			continue
 		}
@@ -97,7 +97,7 @@ func parsePyPIVersion(v string) pypiVersion {
 				parsed.valid = false
 				return parsed
 			}
-			parsed.dev = parseIntDefault(match[2], 0)
+			parsed.dev = parseIntDefault(match[2])
 			remaining = remaining[len(match[0]):]
 			continue
 		}

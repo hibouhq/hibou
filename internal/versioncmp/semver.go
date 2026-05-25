@@ -56,9 +56,9 @@ func parseSemver(v string) semverVersion {
 	}
 
 	parsed := semverVersion{
-		major: parseIntDefault(core[0], 0),
-		minor: parseIntDefault(core[1], 0),
-		patch: parseIntDefault(core[2], 0),
+		major: parseIntDefault(core[0]),
+		minor: parseIntDefault(core[1]),
+		patch: parseIntDefault(core[2]),
 		valid: true,
 	}
 
@@ -101,7 +101,7 @@ func compareSemverPrerelease(a, b []string) int {
 		bNum := isDigits(b[i])
 		switch {
 		case aNum && bNum:
-			if cmp := cmpInts(parseIntDefault(a[i], 0), parseIntDefault(b[i], 0)); cmp != 0 {
+			if cmp := cmpInts(parseIntDefault(a[i]), parseIntDefault(b[i])); cmp != 0 {
 				return cmp
 			}
 		case aNum && !bNum:

@@ -2,7 +2,6 @@ package notify
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestEmailSenderRequiresTLSDialPath(t *testing.T) {
 	config := mustJSON(t, map[string]any{"smtp_host": "127.0.0.1", "smtp_port": 1, "smtp_from": "alerts@example.com\r\nBcc: attacker@example.com", "recipients": []string{"team@example.com\r\nCc: attacker@example.com"}})
 	payload := Payload{
 		Title:    "Scan complete\r\nX-Injected: true",
-		Metadata: map[string]any{"integration_config": json.RawMessage(config)},
+		Metadata: map[string]any{"integration_config": config},
 	}
 
 	err := sender.Send(context.Background(), payload)

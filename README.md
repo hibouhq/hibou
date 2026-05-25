@@ -104,6 +104,8 @@ See [.env.example](.env.example) for all available options.
 | `HIBOU_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `HIBOU_LOG_FORMAT` | `console` | Log format (console, json) |
 | `HIBOU_TRIVY_URL` | `http://localhost:4954` | Trivy server URL |
+| `HIBOU_MCP_ENABLED` | `true` | Enable the built-in MCP server |
+| `HIBOU_MCP_PORT` | `8081` | MCP server port |
 
 ## Contributing
 

@@ -36,6 +36,4 @@ var seedCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(seedCmd)
-}
+// seedCmd is registered conditionally in root.go based on personality.

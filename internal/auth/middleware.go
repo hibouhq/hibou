@@ -2,7 +2,7 @@ package auth
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -66,7 +66,7 @@ func (m *Manager) AuthenticateRequest(r *http.Request, queries *store.Queries) (
 
 func authenticateBearerToken(r *http.Request, queries *store.Queries) (*store.User, error) {
 	if queries == nil {
-		return nil, fmt.Errorf("queries not configured")
+		return nil, errors.New("queries not configured")
 	}
 
 	authorization := r.Header.Get("Authorization")
@@ -76,7 +76,7 @@ func authenticateBearerToken(r *http.Request, queries *store.Queries) (*store.Us
 
 	key := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
 	if key == "" {
-		return nil, fmt.Errorf("missing bearer token")
+		return nil, errors.New("missing bearer token")
 	}
 
 	apiKey, err := queries.GetAPIKeyByHash(r.Context(), store.HashAPIKey(key))
@@ -84,10 +84,10 @@ func authenticateBearerToken(r *http.Request, queries *store.Queries) (*store.Us
 		return nil, err
 	}
 	if apiKey == nil || apiKey.User == nil {
-		return nil, fmt.Errorf("invalid API key")
+		return nil, errors.New("invalid API key")
 	}
 	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
-		return nil, fmt.Errorf("API key expired")
+		return nil, errors.New("API key expired")
 	}
 
 	if err := queries.UpdateAPIKeyLastUsed(r.Context(), apiKey.ID); err != nil {

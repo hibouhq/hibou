@@ -17,6 +17,8 @@ services:
 
   forgejo:
     image: codeberg.org/forgejo/forgejo:9
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     ports:
       - '3030:3000'
       - '2222:22'

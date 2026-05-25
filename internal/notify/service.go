@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -63,7 +64,7 @@ func (s *Service) handleScanCompleted(ctx context.Context, payload any) {
 		s.log.Debug().Err(err).Msg("resolve recipients for scan completed")
 		return
 	}
-	body := fmt.Sprintf("Scan completed for repo %s", repoName)
+	body := "Scan completed for repo " + repoName
 	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
 		Type:     string(events.ScanCompleted),
 		Title:    "Scan completed",
@@ -79,7 +80,7 @@ func (s *Service) handleScanFailed(ctx context.Context, payload any) {
 		s.log.Debug().Err(err).Msg("resolve recipients for scan failed")
 		return
 	}
-	body := fmt.Sprintf("Scan failed for repo %s", repoName)
+	body := "Scan failed for repo " + repoName
 	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
 		Type:     string(events.ScanFailed),
 		Title:    "Scan failed",
@@ -133,7 +134,7 @@ func (s *Service) createForRecipients(ctx context.Context, recipients []uuid.UUI
 func (s *Service) resolveRecipients(ctx context.Context, payload any) (string, uuid.UUID, []uuid.UUID, error) {
 	resolver, ok := s.store.(recipientResolver)
 	if !ok {
-		return "", uuid.Nil, nil, fmt.Errorf("store does not support recipient resolution")
+		return "", uuid.Nil, nil, errors.New("store does not support recipient resolution")
 	}
 
 	data, _ := payload.(map[string]any)
@@ -143,7 +144,7 @@ func (s *Service) resolveRecipients(ctx context.Context, payload any) (string, u
 
 	snapshotID := uuidFromPayload(data, "snapshot_id")
 	if snapshotID == uuid.Nil {
-		return stringValue(data, "repo_name", "repository"), uuidFromPayload(data, "repo_id"), nil, fmt.Errorf("snapshot_id is required")
+		return stringValue(data, "repo_name", "repository"), uuidFromPayload(data, "repo_id"), nil, errors.New("snapshot_id is required")
 	}
 
 	snapshot, err := resolver.GetSnapshotByID(ctx, snapshotID)

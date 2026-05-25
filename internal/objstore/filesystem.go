@@ -21,7 +21,7 @@ type FilesystemStore struct {
 func NewFilesystemStore(basePath string) (*FilesystemStore, error) {
 	trimmed := strings.TrimSpace(basePath)
 	if trimmed == "" {
-		return nil, fmt.Errorf("base path is required")
+		return nil, errors.New("base path is required")
 	}
 	if err := os.MkdirAll(trimmed, 0o755); err != nil {
 		return nil, fmt.Errorf("create base path: %w", err)

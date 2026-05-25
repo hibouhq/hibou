@@ -20,7 +20,11 @@
               @change="handleFilterChange('action', ($event.target as HTMLSelectElement).value)"
             >
               <option value="">All actions</option>
-              <option v-for="action in actionOptions" :key="action" :value="action">
+              <option
+                v-for="action in actionOptions"
+                :key="action"
+                :value="action"
+              >
                 {{ action }}
               </option>
             </select>
@@ -34,7 +38,11 @@
               @change="handleFilterChange('resource_type', ($event.target as HTMLSelectElement).value)"
             >
               <option value="">All resource types</option>
-              <option v-for="resourceType in resourceTypeOptions" :key="resourceType" :value="resourceType">
+              <option
+                v-for="resourceType in resourceTypeOptions"
+                :key="resourceType"
+                :value="resourceType"
+              >
                 {{ resourceType }}
               </option>
             </select>
@@ -52,11 +60,17 @@
     </section>
 
     <section class="overflow-hidden rounded-3xl border border-surface-border bg-surface-raised">
-      <div v-if="loading" class="px-6 py-10 text-sm text-gray-500">
+      <div
+        v-if="loading"
+        class="px-6 py-10 text-sm text-gray-500"
+      >
         Loading audit logs...
       </div>
 
-      <div v-else-if="entries.length === 0" class="px-6 py-10 text-sm text-gray-500">
+      <div
+        v-else-if="entries.length === 0"
+        class="px-6 py-10 text-sm text-gray-500"
+      >
         No audit log entries match the current filters.
       </div>
 
@@ -65,18 +79,38 @@
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay/80 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-6 py-4 font-medium">Date/Time</th>
-                <th class="px-6 py-4 font-medium">Actor</th>
-                <th class="px-6 py-4 font-medium">Action</th>
-                <th class="px-6 py-4 font-medium">Resource Type</th>
-                <th class="px-6 py-4 font-medium">Resource</th>
-                <th class="px-6 py-4 font-medium">IP Address</th>
+                <th class="px-6 py-4 font-medium">
+                  Date/Time
+                </th>
+                <th class="px-6 py-4 font-medium">
+                  Actor
+                </th>
+                <th class="px-6 py-4 font-medium">
+                  Action
+                </th>
+                <th class="px-6 py-4 font-medium">
+                  Resource Type
+                </th>
+                <th class="px-6 py-4 font-medium">
+                  Resource
+                </th>
+                <th class="px-6 py-4 font-medium">
+                  IP Address
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
-              <template v-for="entry in entries" :key="entry.id">
-                <tr class="cursor-pointer transition hover:bg-white/5" @click="toggleExpanded(entry.id)">
-                  <td class="whitespace-nowrap px-6 py-4 text-gray-300">{{ formatDate(entry.created_at) }}</td>
+              <template
+                v-for="entry in entries"
+                :key="entry.id"
+              >
+                <tr
+                  class="cursor-pointer transition hover:bg-white/5"
+                  @click="toggleExpanded(entry.id)"
+                >
+                  <td class="whitespace-nowrap px-6 py-4 text-gray-300">
+                    {{ formatDate(entry.created_at) }}
+                  </td>
                   <td class="px-6 py-4">
                     <div class="flex items-center gap-3">
                       <span class="font-medium text-white">{{ entry.actor_display }}</span>
@@ -85,13 +119,27 @@
                       </span>
                     </div>
                   </td>
-                  <td class="px-6 py-4 font-mono text-xs text-accent">{{ entry.action }}</td>
-                  <td class="px-6 py-4 text-gray-300">{{ entry.resource_type }}</td>
-                  <td class="px-6 py-4 text-gray-300">{{ entry.resource_id }}</td>
-                  <td class="px-6 py-4 text-gray-400">{{ entry.ip_address }}</td>
+                  <td class="px-6 py-4 font-mono text-xs text-accent">
+                    {{ entry.action }}
+                  </td>
+                  <td class="px-6 py-4 text-gray-300">
+                    {{ entry.resource_type }}
+                  </td>
+                  <td class="px-6 py-4 text-gray-300">
+                    {{ entry.resource_id }}
+                  </td>
+                  <td class="px-6 py-4 text-gray-400">
+                    {{ entry.ip_address }}
+                  </td>
                 </tr>
-                <tr v-if="expandedRows.includes(entry.id)" class="bg-surface-overlay/70">
-                  <td colspan="6" class="px-6 py-4">
+                <tr
+                  v-if="expandedRows.includes(entry.id)"
+                  class="bg-surface-overlay/70"
+                >
+                  <td
+                    colspan="6"
+                    class="px-6 py-4"
+                  >
                     <pre class="overflow-x-auto rounded-2xl border border-surface-border bg-surface px-4 py-3 text-xs text-gray-300">{{ formatContext(entry.context) }}</pre>
                   </td>
                 </tr>

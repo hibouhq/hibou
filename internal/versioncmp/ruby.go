@@ -68,7 +68,7 @@ func parseRubyTokens(v string) []rubyToken {
 			}
 			seg := part[:start]
 			if numeric {
-				tokens = append(tokens, rubyToken{numeric: true, value: parseIntDefault(seg, 0)})
+				tokens = append(tokens, rubyToken{numeric: true, value: parseIntDefault(seg)})
 			} else {
 				tokens = append(tokens, rubyToken{text: seg})
 			}

@@ -33,7 +33,7 @@ func (m *Maven) Compare(a, b string) int {
 		max = len(tb)
 	}
 	for i := 0; i < max; i++ {
-		left, right := defaultMavenToken(), defaultMavenToken()
+		var left, right mavenToken
 		if i < len(ta) {
 			left = ta[i]
 		} else {
@@ -89,7 +89,7 @@ func tokenizeMaven(v string) []mavenToken {
 		part := v[start:i]
 		qualifier := lastSep == '-' || prevWasQualifier
 		if isDigits(part) {
-			tokens = append(tokens, mavenToken{numeric: true, qualifier: qualifier, value: parseIntDefault(part, 0)})
+			tokens = append(tokens, mavenToken{numeric: true, qualifier: qualifier, value: parseIntDefault(part)})
 			prevWasQualifier = qualifier
 		} else {
 			tokens = append(tokens, mavenToken{qualifier: true, qual: normalizeMavenQualifier(part)})

@@ -2,6 +2,7 @@ package delta
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -56,7 +57,7 @@ func NewService(store DeltaStore, log zerolog.Logger) *Service {
 // ComputeDelta compares a PR snapshot against its target branch snapshot.
 func (s *Service) ComputeDelta(ctx context.Context, prSnapshotID, targetSnapshotID uuid.UUID) (*DeltaResult, error) {
 	if s == nil || s.store == nil {
-		return nil, fmt.Errorf("delta store is not configured")
+		return nil, errors.New("delta store is not configured")
 	}
 
 	prVulns, err := s.store.ListVulnMatchesBySnapshot(ctx, prSnapshotID)

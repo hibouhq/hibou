@@ -221,7 +221,7 @@ func (ing *Ingester) findExistingAdvisory(ctx context.Context, result IngestResu
 		if err == nil {
 			return advisoryRecord, true, nil
 		}
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			return dbgen.Advisory{}, false, fmt.Errorf("lookup advisory by alias %s: %w", alias, err)
 		}
 	}

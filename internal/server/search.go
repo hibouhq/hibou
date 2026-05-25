@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
 	"github.com/hibouhq/lehibou/internal/api"
 )
 

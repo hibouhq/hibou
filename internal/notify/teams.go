@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -16,7 +17,7 @@ func (s *TeamsSender) Send(ctx context.Context, p Payload) error {
 	config := integrationConfig(p)
 	webhookURL := configString(config, "webhook_url")
 	if webhookURL == "" {
-		return fmt.Errorf("teams webhook_url is required")
+		return errors.New("teams webhook_url is required")
 	}
 	card := map[string]any{
 		"type": "message",

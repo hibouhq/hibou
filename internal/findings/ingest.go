@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -43,7 +44,7 @@ func NewIngester(store IngestStore, log zerolog.Logger) *Ingester {
 
 func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []GenericFinding) (int, error) {
 	if i == nil || i.store == nil {
-		return 0, fmt.Errorf("store is required")
+		return 0, errors.New("store is required")
 	}
 
 	created := 0
@@ -60,7 +61,7 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 
 		startLine := finding.StartLine
 		endLine := finding.EndLine
-		locationHash := hashSegments(finding.Tool, finding.RuleID, finding.FilePath, fmt.Sprintf("%d", startLine))
+		locationHash := hashSegments(finding.Tool, finding.RuleID, finding.FilePath, strconv.Itoa(int(startLine)))
 		fingerprint := strings.TrimSpace(finding.Fingerprint)
 		if fingerprint == "" {
 			fingerprint = locationHash
@@ -106,7 +107,7 @@ func severityFromString(value string) (store.SeverityLevel, error) {
 	case "info", "informational":
 		return store.SeverityLevelInfo, nil
 	default:
-		return "", fmt.Errorf("finding severity must be one of critical, high, medium, low, info")
+		return "", errors.New("finding severity must be one of critical, high, medium, low, info")
 	}
 }
 

@@ -3,7 +3,9 @@
     <div class="rounded-3xl border border-surface-border bg-surface-raised p-6 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.9)]">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div class="min-w-0 flex-1">
-          <h1 class="text-3xl font-semibold tracking-tight text-white">Search</h1>
+          <h1 class="text-3xl font-semibold tracking-tight text-white">
+            Search
+          </h1>
           <p class="mt-2 text-sm text-gray-400">
             Search across vulnerabilities, components, findings, and clients in this organization.
           </p>
@@ -34,41 +36,68 @@
           </button>
         </div>
 
-        <label v-if="showSeverityFilter" class="space-y-2 text-sm text-gray-300">
+        <label
+          v-if="showSeverityFilter"
+          class="space-y-2 text-sm text-gray-300"
+        >
           <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Severity</span>
-          <select v-model="selectedSeverity" class="rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100" @change="applySearch(1)">
+          <select
+            v-model="selectedSeverity"
+            class="rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
+            @change="applySearch(1)"
+          >
             <option value="">All severities</option>
-            <option v-for="option in severityOptions" :key="option" :value="option">{{ option }}</option>
+            <option
+              v-for="option in severityOptions"
+              :key="option"
+              :value="option"
+            >{{ option }}</option>
           </select>
         </label>
       </div>
     </div>
 
     <section class="overflow-hidden rounded-3xl border border-surface-border bg-surface-raised">
-      <div v-if="loading" class="px-6 py-10 text-sm text-gray-500">
+      <div
+        v-if="loading"
+        class="px-6 py-10 text-sm text-gray-500"
+      >
         Searching...
       </div>
 
-      <div v-else-if="error" class="px-6 py-6">
+      <div
+        v-else-if="error"
+        class="px-6 py-6"
+      >
         <div class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200">
           {{ error }}
         </div>
       </div>
 
-      <div v-else-if="!results.length" class="px-6 py-10 text-sm text-gray-500">
+      <div
+        v-else-if="!results.length"
+        class="px-6 py-10 text-sm text-gray-500"
+      >
         No results for '{{ searchInput.trim() || 'your query' }}'.
       </div>
 
       <template v-else>
         <div class="divide-y divide-surface-border-subtle">
-          <article v-for="result in results" :key="`${result.type}-${result.id}`" class="px-6 py-4 transition hover:bg-white/5">
+          <article
+            v-for="result in results"
+            :key="`${result.type}-${result.id}`"
+            class="px-6 py-4 transition hover:bg-white/5"
+          >
             <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="rounded-full border border-surface-border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-gray-300">
                     {{ result.type }}
                   </span>
-                  <span v-if="result.severity" :class="['rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em]', severityClass(result.severity)]">
+                  <span
+                    v-if="result.severity"
+                    :class="['rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em]', severityClass(result.severity)]"
+                  >
                     {{ result.severity }}
                   </span>
                 </div>
@@ -80,10 +109,15 @@
                 >
                   {{ result.title }}
                 </component>
-                <p class="mt-1 text-sm text-gray-400">{{ result.subtitle }}</p>
+                <p class="mt-1 text-sm text-gray-400">
+                  {{ result.subtitle }}
+                </p>
               </div>
 
-              <pre v-if="result.metadata" class="overflow-x-auto rounded-2xl border border-surface-border bg-surface-overlay px-3 py-2 text-[11px] text-gray-500">{{ JSON.stringify(result.metadata, null, 2) }}</pre>
+              <pre
+                v-if="result.metadata"
+                class="overflow-x-auto rounded-2xl border border-surface-border bg-surface-overlay px-3 py-2 text-[11px] text-gray-500"
+              >{{ JSON.stringify(result.metadata, null, 2) }}</pre>
             </div>
           </article>
         </div>

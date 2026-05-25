@@ -1,11 +1,17 @@
 <template>
   <section class="space-y-6">
     <div class="rounded-3xl border border-surface-border bg-surface-raised p-6 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.9)]">
-      <div v-if="loading" class="text-sm text-gray-500">
+      <div
+        v-if="loading"
+        class="text-sm text-gray-500"
+      >
         Loading pull request review...
       </div>
 
-      <div v-else-if="summary" class="space-y-6">
+      <div
+        v-else-if="summary"
+        class="space-y-6"
+      >
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <RouterLink
@@ -23,8 +29,13 @@
           </div>
 
           <div class="rounded-3xl border border-surface-border bg-surface-overlay px-5 py-4 text-right">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">Quality gate</p>
-            <p class="mt-2 text-2xl font-semibold" :class="gateState.className">
+            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Quality gate
+            </p>
+            <p
+              class="mt-2 text-2xl font-semibold"
+              :class="gateState.className"
+            >
               {{ gateState.label }}
             </p>
             <p class="mt-2 text-xs text-gray-500">
@@ -35,73 +46,137 @@
 
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">New findings</p>
-            <p class="mt-3 text-3xl font-semibold text-white">{{ newFindingsCount }}</p>
+            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              New findings
+            </p>
+            <p class="mt-3 text-3xl font-semibold text-white">
+              {{ newFindingsCount }}
+            </p>
           </article>
           <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">Resolved findings</p>
-            <p class="mt-3 text-3xl font-semibold text-white">{{ resolvedFindingsCount }}</p>
+            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Resolved findings
+            </p>
+            <p class="mt-3 text-3xl font-semibold text-white">
+              {{ resolvedFindingsCount }}
+            </p>
           </article>
           <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">New vulns</p>
-            <p class="mt-3 text-3xl font-semibold text-white">{{ newVulnsCount }}</p>
+            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              New vulns
+            </p>
+            <p class="mt-3 text-3xl font-semibold text-white">
+              {{ newVulnsCount }}
+            </p>
           </article>
           <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">Resolved vulns</p>
-            <p class="mt-3 text-3xl font-semibold text-white">{{ resolvedVulnsCount }}</p>
+            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Resolved vulns
+            </p>
+            <p class="mt-3 text-3xl font-semibold text-white">
+              {{ resolvedVulnsCount }}
+            </p>
           </article>
         </div>
 
-        <div v-if="showNoAnalysisData" class="rounded-2xl border border-surface-border bg-surface-overlay p-4 text-sm text-gray-300">
+        <div
+          v-if="showNoAnalysisData"
+          class="rounded-2xl border border-surface-border bg-surface-overlay p-4 text-sm text-gray-300"
+        >
           No analysis data is available for this pull request yet.
         </div>
 
-        <div v-else-if="summary.gate?.reasons?.length" class="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
-          <p class="font-medium text-white">Gate reasons</p>
+        <div
+          v-else-if="summary.gate?.reasons?.length"
+          class="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger"
+        >
+          <p class="font-medium text-white">
+            Gate reasons
+          </p>
           <ul class="mt-2 space-y-2">
-            <li v-for="reason in summary.gate.reasons" :key="reason">{{ reason }}</li>
+            <li
+              v-for="reason in summary.gate.reasons"
+              :key="reason"
+            >
+              {{ reason }}
+            </li>
           </ul>
         </div>
       </div>
 
-      <div v-else class="text-sm text-gray-500">
+      <div
+        v-else
+        class="text-sm text-gray-500"
+      >
         Pull request review not found.
       </div>
     </div>
 
     <section class="rounded-3xl border border-surface-border bg-surface-raised p-6">
       <div>
-        <h2 class="text-xl font-semibold text-white">New findings</h2>
-        <p class="mt-2 text-sm text-gray-400">Only findings introduced by this pull request are listed here.</p>
+        <h2 class="text-xl font-semibold text-white">
+          New findings
+        </h2>
+        <p class="mt-2 text-sm text-gray-400">
+          Only findings introduced by this pull request are listed here.
+        </p>
       </div>
 
       <div class="mt-6 overflow-hidden rounded-2xl border border-surface-border-subtle">
-        <div v-if="!summary?.delta?.new_findings?.length" class="px-4 py-10 text-sm text-gray-500">
+        <div
+          v-if="!summary?.delta?.new_findings?.length"
+          class="px-4 py-10 text-sm text-gray-500"
+        >
           No newly introduced findings were detected.
         </div>
 
-        <div v-else class="overflow-x-auto">
+        <div
+          v-else
+          class="overflow-x-auto"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Severity</th>
-                <th class="px-4 py-3 font-medium">Tool</th>
-                <th class="px-4 py-3 font-medium">Rule</th>
-                <th class="px-4 py-3 font-medium">File</th>
-                <th class="px-4 py-3 font-medium">Message</th>
+                <th class="px-4 py-3 font-medium">
+                  Severity
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Tool
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Rule
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  File
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Message
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
-              <tr v-for="finding in summary.delta.new_findings" :key="finding.fingerprint" class="transition hover:bg-white/5">
+              <tr
+                v-for="finding in summary.delta.new_findings"
+                :key="finding.fingerprint"
+                class="transition hover:bg-white/5"
+              >
                 <td class="px-4 py-4">
                   <span :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(finding.severity)]">
                     {{ finding.severity }}
                   </span>
                 </td>
-                <td class="px-4 py-4 text-gray-300">{{ finding.tool }}</td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">{{ finding.rule_id }}</td>
-                <td class="px-4 py-4 text-gray-400">{{ finding.file_path }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ finding.message }}</td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ finding.tool }}
+                </td>
+                <td class="px-4 py-4 font-mono text-xs text-accent">
+                  {{ finding.rule_id }}
+                </td>
+                <td class="px-4 py-4 text-gray-400">
+                  {{ finding.file_path }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ finding.message }}
+                </td>
               </tr>
             </tbody>
           </table>

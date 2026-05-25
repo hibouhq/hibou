@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/hibouhq/lehibou/internal/store"
 )
 

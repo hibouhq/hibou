@@ -75,7 +75,7 @@ type clientImpactVulnerabilityResponse struct {
 // @Produce      json
 // @Param        provider  path      string               true  "Forge provider"
 // @Param        slug      path      string               true  "Organization slug"
-// @Param        body      body      createClientRequest  true  "Client details"
+// @Param        payload   body      createClientRequest  true  "Client details"
 // @Success      201       {object}  api.Response{data=store.Client}
 // @Failure      400       {object}  api.Response
 // @Failure      401       {object}  api.Response
@@ -226,7 +226,7 @@ func (s *Server) handleGetClient(w http.ResponseWriter, r *http.Request) {
 // @Param        provider    path      string               true  "Forge provider"
 // @Param        slug        path      string               true  "Organization slug"
 // @Param        clientSlug  path      string               true  "Client slug"
-// @Param        body        body      updateClientRequest  true  "Client updates"
+// @Param        payload     body      updateClientRequest  true  "Client updates"
 // @Success      200         {object}  api.Response{data=store.Client}
 // @Failure      400         {object}  api.Response
 // @Failure      401         {object}  api.Response
@@ -358,7 +358,7 @@ func (s *Server) handleListClientDeployments(w http.ResponseWriter, r *http.Requ
 // @Param        provider    path      string                   true  "Forge provider"
 // @Param        slug        path      string                   true  "Organization slug"
 // @Param        clientSlug  path      string                   true  "Client slug"
-// @Param        body        body      createDeploymentRequest  true  "Deployment details"
+// @Param        payload     body      createDeploymentRequest  true  "Deployment details"
 // @Success      201         {object}  api.Response{data=server.deploymentResponse}
 // @Failure      400         {object}  api.Response
 // @Failure      401         {object}  api.Response
@@ -582,16 +582,6 @@ func trimStringPtr(value *string) {
 	}
 	trimmed := strings.TrimSpace(*value)
 	*value = trimmed
-}
-
-func nilIfBlank(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	if *value == "" {
-		return nil
-	}
-	return value
 }
 
 func normalizeClientType(value string, fallback string) (string, bool) {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 

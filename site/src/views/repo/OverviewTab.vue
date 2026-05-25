@@ -1,14 +1,23 @@
 <template>
   <div class="space-y-5">
-    <div v-if="loading" class="py-8 text-center text-sm text-gray-400">
+    <div
+      v-if="loading"
+      class="py-8 text-center text-sm text-gray-400"
+    >
       Loading overview...
     </div>
 
-    <div v-else-if="error" class="rounded-xl border border-danger/30 bg-danger/10 px-4 py-5 text-sm text-red-200">
+    <div
+      v-else-if="error"
+      class="rounded-xl border border-danger/30 bg-danger/10 px-4 py-5 text-sm text-red-200"
+    >
       {{ error }}
     </div>
 
-    <div v-else-if="!summary || !summary.snapshot_date" class="rounded-2xl border border-dashed border-surface-border-subtle bg-surface-overlay/40 px-5 py-10 text-center text-sm text-gray-400">
+    <div
+      v-else-if="!summary || !summary.snapshot_date"
+      class="rounded-2xl border border-dashed border-surface-border-subtle bg-surface-overlay/40 px-5 py-10 text-center text-sm text-gray-400"
+    >
       No analysis data available for this ref.
     </div>
 
@@ -20,12 +29,12 @@
               <span class="text-lg font-semibold text-white">{{ findingsTotal }}</span>
               <span class="text-xs text-gray-400">findings</span>
             </div>
-            <span class="h-1 w-1 rounded-full bg-gray-600"></span>
+            <span class="h-1 w-1 rounded-full bg-gray-600" />
             <div class="flex items-end gap-1.5">
               <span class="text-lg font-semibold text-white">{{ vulnsTotal }}</span>
               <span class="text-xs text-gray-400">vulnerabilities</span>
             </div>
-            <span class="h-1 w-1 rounded-full bg-gray-600"></span>
+            <span class="h-1 w-1 rounded-full bg-gray-600" />
             <div class="flex items-end gap-1.5">
               <span class="text-lg font-semibold text-white">{{ summary.components_total }}</span>
               <span class="text-xs text-gray-400">components</span>
@@ -42,7 +51,7 @@
               :key="`findings-bar-${segment.key}`"
               :class="segment.barClass"
               :style="{ width: `${segment.width}%` }"
-            ></div>
+            />
           </div>
 
           <div class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-medium">
@@ -79,17 +88,31 @@
               :key="`finding-card-${segment.key}`"
               :class="segment.barClass"
               :style="{ width: `${segment.width}%` }"
-            ></div>
+            />
           </div>
 
           <div class="mt-3 grid grid-cols-5 gap-2 text-[11px]">
-            <div v-for="item in findingCells" :key="`finding-${item.key}`" class="space-y-1">
-              <div :class="item.valueClass" class="font-semibold">{{ item.value }}</div>
-              <div class="uppercase tracking-[0.14em] text-gray-500">{{ item.label }}</div>
+            <div
+              v-for="item in findingCells"
+              :key="`finding-${item.key}`"
+              class="space-y-1"
+            >
+              <div
+                :class="item.valueClass"
+                class="font-semibold"
+              >
+                {{ item.value }}
+              </div>
+              <div class="uppercase tracking-[0.14em] text-gray-500">
+                {{ item.label }}
+              </div>
             </div>
           </div>
 
-          <RouterLink :to="tabLink('repo-weaknesses')" class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white">
+          <RouterLink
+            :to="tabLink('repo-weaknesses')"
+            class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
+          >
             View ->
           </RouterLink>
         </section>
@@ -115,17 +138,31 @@
               :key="`vuln-card-${segment.key}`"
               :class="segment.barClass"
               :style="{ width: `${segment.width}%` }"
-            ></div>
+            />
           </div>
 
           <div class="mt-3 grid grid-cols-5 gap-2 text-[11px]">
-            <div v-for="item in vulnCells" :key="`vuln-${item.key}`" class="space-y-1">
-              <div :class="item.valueClass" class="font-semibold">{{ item.value }}</div>
-              <div class="uppercase tracking-[0.14em] text-gray-500">{{ item.label }}</div>
+            <div
+              v-for="item in vulnCells"
+              :key="`vuln-${item.key}`"
+              class="space-y-1"
+            >
+              <div
+                :class="item.valueClass"
+                class="font-semibold"
+              >
+                {{ item.value }}
+              </div>
+              <div class="uppercase tracking-[0.14em] text-gray-500">
+                {{ item.label }}
+              </div>
             </div>
           </div>
 
-          <RouterLink :to="tabLink('repo-dependencies')" class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white">
+          <RouterLink
+            :to="tabLink('repo-dependencies')"
+            class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
+          >
             View ->
           </RouterLink>
         </section>
@@ -146,14 +183,17 @@
           </div>
 
           <div class="mt-4 h-1 overflow-hidden rounded-full bg-surface-border-subtle">
-            <div class="h-full w-full bg-accent/60"></div>
+            <div class="h-full w-full bg-accent/60" />
           </div>
 
           <p class="mt-3 text-sm text-gray-300">
             packages tracked
           </p>
 
-          <RouterLink :to="tabLink('repo-trends')" class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white">
+          <RouterLink
+            :to="tabLink('repo-trends')"
+            class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
+          >
             View ->
           </RouterLink>
         </section>

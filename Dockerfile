@@ -41,6 +41,11 @@ EOF
 FROM gcr.io/distroless/base-debian12
 
 COPY --from=go-build /out/hibou /usr/local/bin/hibou
+
+RUN <<EOF
+    ln -s /usr/local/bin/hibou /usr/local/bin/hibou-server
+EOF
+
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/hibou"]
 CMD ["serve"]

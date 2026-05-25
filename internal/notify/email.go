@@ -3,9 +3,11 @@ package notify
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
+	"strconv"
 	"strings"
 )
 
@@ -34,7 +36,7 @@ func (s *EmailSender) Send(ctx context.Context, p Payload) error {
 	recipients := configStringSlice(config, "recipients")
 
 	if host == "" || port == 0 || from == "" || len(recipients) == 0 {
-		return fmt.Errorf("email integration requires smtp_host, smtp_port, smtp_from, and recipients")
+		return errors.New("email integration requires smtp_host, smtp_port, smtp_from, and recipients")
 	}
 	auth := s.auth
 	if auth == nil && username != "" {
@@ -44,7 +46,7 @@ func (s *EmailSender) Send(ctx context.Context, p Payload) error {
 	recipients = sanitizeAddressList(recipients)
 	subject := sanitizeHeader(p.Title)
 	if from == "" || len(recipients) == 0 {
-		return fmt.Errorf("email integration requires valid smtp_from and recipients")
+		return errors.New("email integration requires valid smtp_from and recipients")
 	}
 
 	message := strings.Join([]string{
@@ -86,7 +88,7 @@ func sanitizeAddressList(values []string) []string {
 }
 
 func sendMailWithRequiredTLS(host string, port int, auth smtp.Auth, from string, recipients []string, message []byte) error {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
 
 	if port == 465 {
@@ -112,7 +114,7 @@ func sendMailWithRequiredTLS(host string, port int, auth smtp.Auth, from string,
 	defer client.Close()
 
 	if ok, _ := client.Extension("STARTTLS"); !ok {
-		return fmt.Errorf("smtp server does not support STARTTLS")
+		return errors.New("smtp server does not support STARTTLS")
 	}
 	if err := client.StartTLS(tlsConfig); err != nil {
 		return fmt.Errorf("STARTTLS required but failed: %w", err)
@@ -124,7 +126,7 @@ func sendMailWithRequiredTLS(host string, port int, auth smtp.Auth, from string,
 func sendSMTPMessage(client *smtp.Client, auth smtp.Auth, from string, recipients []string, message []byte) error {
 	if auth != nil {
 		if ok, _ := client.Extension("AUTH"); !ok {
-			return fmt.Errorf("smtp server does not support authentication")
+			return errors.New("smtp server does not support authentication")
 		}
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("authenticate smtp session: %w", err)

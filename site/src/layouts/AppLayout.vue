@@ -9,33 +9,113 @@
             aria-label="Toggle navigation"
             @click="isMobileNavOpen = !isMobileNavOpen"
           >
-            <Menu v-if="!isMobileNavOpen" class="h-5 w-5" />
-            <X v-else class="h-5 w-5" />
+            <Menu
+              v-if="!isMobileNavOpen"
+              class="h-5 w-5"
+            />
+            <X
+              v-else
+              class="h-5 w-5"
+            />
           </button>
 
-          <RouterLink to="/orgs" class="flex items-center gap-3 text-sm font-semibold text-white">
+          <RouterLink
+            to="/orgs"
+            class="flex items-center gap-3 text-sm font-semibold text-white"
+          >
             <span class="flex h-8 w-8 items-center justify-center rounded-xl border border-surface-border bg-surface-overlay shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
-              <svg viewBox="0 0 32 32" class="h-5 w-5 text-accent" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M8 24V12L12 8L16 12L20 8L24 12V24L16 28L8 24Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
-                <circle cx="13" cy="16" r="2" fill="currentColor" />
-                <circle cx="19" cy="16" r="2" fill="currentColor" />
-                <path d="M16 18L14.5 20H17.5L16 18Z" fill="currentColor" />
+              <svg
+                viewBox="0 0 32 32"
+                class="h-5 w-5 text-accent"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M8 24V12L12 8L16 12L20 8L24 12V24L16 28L8 24Z"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linejoin="round"
+                />
+                <circle
+                  cx="13"
+                  cy="16"
+                  r="2"
+                  fill="currentColor"
+                />
+                <circle
+                  cx="19"
+                  cy="16"
+                  r="2"
+                  fill="currentColor"
+                />
+                <path
+                  d="M16 18L14.5 20H17.5L16 18Z"
+                  fill="currentColor"
+                />
               </svg>
             </span>
             <span class="hidden sm:inline">Hibou</span>
           </RouterLink>
 
           <div class="flex items-center gap-1.5 text-sm">
-            <RouterLink
-              v-if="currentOrgSlug && currentOrgProvider"
-              :to="`/orgs/${currentOrgProvider}/${currentOrgSlug}`"
-              class="max-w-[10rem] truncate text-gray-300 transition hover:text-white"
-            >
-              {{ currentOrgName }}
-            </RouterLink>
+            <template v-if="currentOrgSlug && currentOrgProvider">
+              <div
+                ref="orgMenuRef"
+                class="relative flex items-center gap-1"
+              >
+                <RouterLink
+                  :to="`/orgs/${currentOrgProvider}/${currentOrgSlug}`"
+                  class="max-w-[10rem] truncate text-gray-300 transition hover:text-white"
+                >
+                  {{ currentOrgName }}
+                </RouterLink>
+                <button
+                  v-if="orgStore.orgs.length > 1"
+                  class="rounded p-0.5 text-gray-400 transition hover:bg-surface-overlay hover:text-white"
+                  type="button"
+                  @click.stop="toggleOrgMenu"
+                >
+                  <ChevronDown class="h-3.5 w-3.5" />
+                </button>
+                <div
+                  v-if="isOrgMenuOpen"
+                  class="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-64 overflow-hidden rounded-xl border border-surface-border bg-surface-overlay shadow-2xl"
+                >
+                  <div
+                    v-if="orgStore.orgs.length >= 5"
+                    class="border-b border-surface-border-subtle p-2"
+                  >
+                    <input
+                      v-model="orgSearch"
+                      type="search"
+                      placeholder="Find an organization..."
+                      class="w-full rounded-md border border-surface-border bg-surface-raised px-2.5 py-1.5 text-xs text-gray-100 placeholder:text-gray-500 focus:border-accent/50 focus:outline-none"
+                    >
+                  </div>
+                  <div class="max-h-64 overflow-auto p-1">
+                    <RouterLink
+                      v-for="orgItem in filteredOrgList"
+                      :key="orgItem.id"
+                      :to="`/orgs/${orgItem.provider}/${orgItem.slug}`"
+                      class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition"
+                      :class="orgItem.slug === currentOrgSlug && orgItem.provider === currentOrgProvider
+                        ? 'bg-accent-muted text-white'
+                        : 'text-gray-300 hover:bg-surface-raised hover:text-white'"
+                      @click="isOrgMenuOpen = false"
+                    >
+                      <Building2 class="h-3.5 w-3.5 shrink-0 text-gray-500" />
+                      <span class="truncate">{{ orgItem.display_name || orgItem.name }}</span>
+                    </RouterLink>
+                  </div>
+                </div>
+              </div>
+            </template>
             <template v-if="currentRepoSlug">
               <span class="text-gray-500">/</span>
-              <div ref="repoMenuRef" class="relative flex items-center gap-1">
+              <div
+                ref="repoMenuRef"
+                class="relative flex items-center gap-1"
+              >
                 <RouterLink
                   :to="`/orgs/${currentOrgProvider}/${currentOrgSlug}/repos/${currentRepoSlug}`"
                   class="max-w-[14rem] truncate font-semibold text-white transition hover:text-accent"
@@ -53,7 +133,10 @@
                   v-if="isRepoMenuOpen"
                   class="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-64 overflow-hidden rounded-xl border border-surface-border bg-surface-overlay shadow-2xl"
                 >
-                  <div v-if="repoList.length >= 5" class="border-b border-surface-border-subtle p-2">
+                  <div
+                    v-if="repoList.length >= 5"
+                    class="border-b border-surface-border-subtle p-2"
+                  >
                     <input
                       v-model="repoSearch"
                       type="search"
@@ -62,7 +145,10 @@
                     >
                   </div>
                   <div class="max-h-64 overflow-auto p-1">
-                    <div v-if="repoListLoading" class="px-3 py-4 text-xs text-gray-500">
+                    <div
+                      v-if="repoListLoading"
+                      class="px-3 py-4 text-xs text-gray-500"
+                    >
                       Loading...
                     </div>
                     <RouterLink
@@ -117,7 +203,10 @@
             </span>
           </button>
 
-          <div ref="userMenuRef" class="relative">
+          <div
+            ref="userMenuRef"
+            class="relative"
+          >
             <button
               class="flex items-center gap-3 rounded-xl border border-surface-border bg-surface-overlay px-2.5 py-1.5 transition hover:border-accent/50"
               type="button"
@@ -198,8 +287,14 @@
           :class="isActive(item) ? 'bg-accent-muted text-accent' : ''"
           @click="isMobileNavOpen = false"
         >
-          <component :is="item.icon" class="h-5 w-5 shrink-0" />
-          <span v-if="!isRailCollapsed || isMobile" class="truncate">{{ item.label }}</span>
+          <component
+            :is="item.icon"
+            class="h-5 w-5 shrink-0"
+          />
+          <span
+            v-if="!isRailCollapsed || isMobile"
+            class="truncate"
+          >{{ item.label }}</span>
           <span
             v-else
             class="pointer-events-none absolute left-[calc(100%+0.75rem)] hidden rounded-lg border border-surface-border bg-surface-overlay px-2 py-1 text-xs text-gray-100 shadow-xl group-hover:flex"
@@ -209,14 +304,23 @@
         </RouterLink>
       </nav>
 
-      <div v-if="!isMobile" class="border-t border-surface-border-subtle p-2">
+      <div
+        v-if="!isMobile"
+        class="border-t border-surface-border-subtle p-2"
+      >
         <button
           class="flex w-full items-center justify-center rounded-xl px-3 py-2 text-gray-400 transition hover:bg-white/5 hover:text-white"
           type="button"
           @click="isRailCollapsed = !isRailCollapsed"
         >
-          <ChevronRight v-if="isRailCollapsed" class="h-5 w-5" />
-          <ChevronLeft v-else class="h-5 w-5" />
+          <ChevronRight
+            v-if="isRailCollapsed"
+            class="h-5 w-5"
+          />
+          <ChevronLeft
+            v-else
+            class="h-5 w-5"
+          />
         </button>
       </div>
     </aside>
@@ -235,6 +339,7 @@
 <script setup lang="ts">
 import {
   Bell,
+  Building2,
   BookOpen,
   ChevronDown,
   ChevronLeft,
@@ -266,6 +371,9 @@ const isMobileNavOpen = ref(false)
 const isRailCollapsed = ref(true)
 const isUserMenuOpen = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
+const isOrgMenuOpen = ref(false)
+const orgMenuRef = ref<HTMLElement | null>(null)
+const orgSearch = ref('')
 const isRepoMenuOpen = ref(false)
 const repoMenuRef = ref<HTMLElement | null>(null)
 const repoList = ref<Repository[]>([])
@@ -322,6 +430,17 @@ const filteredRepoList = computed(() => {
 
   return repoList.value.filter((repoItem) => (
     repoItem.name.toLowerCase().includes(query) || repoItem.slug.toLowerCase().includes(query)
+  ))
+})
+
+const filteredOrgList = computed(() => {
+  const query = orgSearch.value.trim().toLowerCase()
+  if (!query) {
+    return orgStore.orgs
+  }
+
+  return orgStore.orgs.filter((org) => (
+    (org.display_name || org.name || org.slug).toLowerCase().includes(query)
   ))
 })
 
@@ -394,6 +513,8 @@ watch(
   () => {
     syncCurrentOrg()
     isMobileNavOpen.value = false
+    orgSearch.value = ''
+    isOrgMenuOpen.value = false
     repoList.value = []
     repoSearch.value = ''
     isRepoMenuOpen.value = false
@@ -447,6 +568,10 @@ function toggleUserMenu() {
   isUserMenuOpen.value = !isUserMenuOpen.value
 }
 
+function toggleOrgMenu() {
+  isOrgMenuOpen.value = !isOrgMenuOpen.value
+}
+
 async function toggleRepoMenu() {
   isRepoMenuOpen.value = !isRepoMenuOpen.value
   if (!isRepoMenuOpen.value || repoList.value.length > 0 || !currentOrgProvider.value || !currentOrgSlug.value) {
@@ -469,6 +594,10 @@ function handleDocumentClick(event: MouseEvent) {
 
   if (target && userMenuRef.value && !userMenuRef.value.contains(target)) {
     isUserMenuOpen.value = false
+  }
+
+  if (target && orgMenuRef.value && !orgMenuRef.value.contains(target)) {
+    isOrgMenuOpen.value = false
   }
 
   if (target && repoMenuRef.value && !repoMenuRef.value.contains(target)) {

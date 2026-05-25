@@ -1,11 +1,17 @@
 <template>
-  <div ref="rootRef" class="relative flex flex-wrap items-center gap-3">
+  <div
+    ref="rootRef"
+    class="relative flex flex-wrap items-center gap-3"
+  >
     <button
       class="inline-flex items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-200 transition hover:border-accent/50 hover:text-white"
       type="button"
       @click.stop="isOpen = !isOpen"
     >
-      <component :is="selectedIcon" class="h-4 w-4 shrink-0 text-gray-400" />
+      <component
+        :is="selectedIcon"
+        class="h-4 w-4 shrink-0 text-gray-400"
+      />
       <span class="max-w-[12rem] truncate">{{ selectedLabel }}</span>
       <ChevronDown class="h-3.5 w-3.5 text-gray-400" />
     </button>
@@ -15,7 +21,10 @@
         <GitBranch class="h-3.5 w-3.5" />
         {{ branchCount }} Branches
       </span>
-      <span v-if="tagCount > 0" class="flex items-center gap-1">
+      <span
+        v-if="tagCount > 0"
+        class="flex items-center gap-1"
+      >
         <Tag class="h-3.5 w-3.5" />
         {{ tagCount }} Tags
       </span>
@@ -27,7 +36,9 @@
       class="absolute left-0 top-[calc(100%+0.5rem)] z-30 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-surface-border bg-surface-overlay shadow-2xl"
     >
       <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-3">
-        <h3 class="text-sm font-medium text-gray-100">Switch branches/tags</h3>
+        <h3 class="text-sm font-medium text-gray-100">
+          Switch branches/tags
+        </h3>
         <button
           class="rounded-md p-1 text-gray-500 transition hover:bg-surface-raised hover:text-white"
           type="button"
@@ -64,10 +75,16 @@
       </div>
 
       <div class="max-h-96 overflow-auto p-2">
-        <div v-if="loading" class="px-3 py-10 text-sm text-gray-500">
+        <div
+          v-if="loading"
+          class="px-3 py-10 text-sm text-gray-500"
+        >
           Loading refs...
         </div>
-        <div v-else-if="filteredRefs.length === 0" class="px-3 py-10 text-sm text-gray-500">
+        <div
+          v-else-if="filteredRefs.length === 0"
+          class="px-3 py-10 text-sm text-gray-500"
+        >
           No refs match the current search.
         </div>
         <button
@@ -81,21 +98,45 @@
           type="button"
           @click="selectRef(refItem.name)"
         >
-          <Check v-if="isSelected(refItem)" class="h-4 w-4 shrink-0 text-accent" />
-          <span v-else class="h-4 w-4 shrink-0" />
-          <Star v-if="refItem.name === defaultBranch" class="h-3 w-3 shrink-0 text-warning" />
-          <component :is="refIcon(refItem)" class="h-4 w-4 shrink-0 text-gray-400" />
+          <Check
+            v-if="isSelected(refItem)"
+            class="h-4 w-4 shrink-0 text-accent"
+          />
+          <span
+            v-else
+            class="h-4 w-4 shrink-0"
+          />
+          <Star
+            v-if="refItem.name === defaultBranch"
+            class="h-3 w-3 shrink-0 text-warning"
+          />
+          <component
+            :is="refIcon(refItem)"
+            class="h-4 w-4 shrink-0 text-gray-400"
+          />
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
-              <span class="min-w-0 truncate text-gray-100" :class="titleClass(refItem)">{{ refPrimaryLabel(refItem) }}</span>
-              <span v-if="refItem.name === defaultBranch" class="rounded border border-surface-border px-1.5 py-0.5 text-[10px] text-gray-400">
+              <span
+                class="min-w-0 truncate text-gray-100"
+                :class="titleClass(refItem)"
+              >{{ refPrimaryLabel(refItem) }}</span>
+              <span
+                v-if="refItem.name === defaultBranch"
+                class="rounded border border-surface-border px-1.5 py-0.5 text-[10px] text-gray-400"
+              >
                 default
               </span>
-              <span v-if="refItem.pr_state" :class="stateBadgeClass(refItem.pr_state)">
+              <span
+                v-if="refItem.pr_state"
+                :class="stateBadgeClass(refItem.pr_state)"
+              >
                 {{ refItem.pr_state }}
               </span>
             </div>
-            <p v-if="refSecondaryLabel(refItem)" class="mt-0.5 truncate text-[11px] text-gray-500">
+            <p
+              v-if="refSecondaryLabel(refItem)"
+              class="mt-0.5 truncate text-[11px] text-gray-500"
+            >
               {{ refSecondaryLabel(refItem) }}
             </p>
           </div>
@@ -105,7 +146,10 @@
               :class="compactStatusClass(refItem.latest_snapshot_status)"
               class="flex items-center gap-1 text-[11px]"
             >
-              <span class="h-2 w-2 rounded-full" :class="statusDotClass(refItem.latest_snapshot_status)" />
+              <span
+                class="h-2 w-2 rounded-full"
+                :class="statusDotClass(refItem.latest_snapshot_status)"
+              />
               {{ capitalizeStatus(refItem.latest_snapshot_status) }}
             </span>
           </span>

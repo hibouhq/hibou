@@ -1,11 +1,17 @@
 <template>
   <div class="space-y-6">
     <section class="rounded-3xl border border-surface-border bg-surface-raised p-6 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.9)]">
-      <div v-if="loading" class="text-sm text-gray-500">
+      <div
+        v-if="loading"
+        class="text-sm text-gray-500"
+      >
         Loading organization dashboard...
       </div>
 
-      <div v-else-if="error" class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200">
+      <div
+        v-else-if="error"
+        class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
+      >
         {{ error }}
       </div>
 
@@ -13,7 +19,11 @@
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div class="mb-3 flex flex-wrap items-center gap-3">
-              <ForgeIcon :provider="org.provider" size="lg" class="text-gray-300" />
+              <ForgeIcon
+                :provider="org.provider"
+                size="lg"
+                class="text-gray-300"
+              />
               <h1 class="text-3xl font-semibold tracking-tight text-white">
                 {{ org.display_name || org.name }}
               </h1>
@@ -24,10 +34,18 @@
           </div>
 
           <div class="flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-gray-500">
-            <span v-for="item in findingBadges" :key="`findings-${item.key}`" :class="['rounded-full px-3 py-1 font-medium', severityClass(item.key)]">
+            <span
+              v-for="item in findingBadges"
+              :key="`findings-${item.key}`"
+              :class="['rounded-full px-3 py-1 font-medium', severityClass(item.key)]"
+            >
               {{ item.key }} {{ item.value }} findings
             </span>
-            <span v-for="item in vulnBadges" :key="`vulns-${item.key}`" :class="['rounded-full px-3 py-1 font-medium', severityClass(item.key)]">
+            <span
+              v-for="item in vulnBadges"
+              :key="`vulns-${item.key}`"
+              :class="['rounded-full px-3 py-1 font-medium', severityClass(item.key)]"
+            >
               {{ item.key }} {{ item.value }} vulns
             </span>
           </div>
@@ -35,20 +53,36 @@
 
         <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">Repositories</div>
-            <div class="mt-3 text-3xl font-semibold text-white">{{ dashboard.repos.length }}</div>
+            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Repositories
+            </div>
+            <div class="mt-3 text-3xl font-semibold text-white">
+              {{ dashboard.repos.length }}
+            </div>
           </article>
           <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">Findings</div>
-            <div class="mt-3 text-3xl font-semibold text-white">{{ totalFindings }}</div>
+            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Findings
+            </div>
+            <div class="mt-3 text-3xl font-semibold text-white">
+              {{ totalFindings }}
+            </div>
           </article>
           <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">Vulnerabilities</div>
-            <div class="mt-3 text-3xl font-semibold text-white">{{ totalVulns }}</div>
+            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Vulnerabilities
+            </div>
+            <div class="mt-3 text-3xl font-semibold text-white">
+              {{ totalVulns }}
+            </div>
           </article>
           <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">Components</div>
-            <div class="mt-3 text-3xl font-semibold text-white">{{ dashboard.totals.components_total }}</div>
+            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
+              Components
+            </div>
+            <div class="mt-3 text-3xl font-semibold text-white">
+              {{ dashboard.totals.components_total }}
+            </div>
           </article>
         </div>
       </template>
@@ -57,56 +91,100 @@
     <section class="overflow-hidden rounded-3xl border border-surface-border bg-surface-raised">
       <div class="flex items-center justify-between border-b border-surface-border-subtle px-6 py-4">
         <div>
-          <h2 class="text-lg font-semibold text-white">Top-risk repositories</h2>
-          <p class="mt-1 text-sm text-gray-400">Repositories ranked by critical and high-severity findings.</p>
+          <h2 class="text-lg font-semibold text-white">
+            Top-risk repositories
+          </h2>
+          <p class="mt-1 text-sm text-gray-400">
+            Repositories ranked by critical and high-severity findings.
+          </p>
         </div>
       </div>
 
-      <div v-if="!loading && dashboard && dashboard.repos.length === 0" class="px-6 py-10 text-sm text-gray-500">
+      <div
+        v-if="!loading && dashboard && dashboard.repos.length === 0"
+        class="px-6 py-10 text-sm text-gray-500"
+      >
         No repositories have been synchronized for this organization yet.
       </div>
 
-      <div v-else-if="dashboard" class="overflow-x-auto">
+      <div
+        v-else-if="dashboard"
+        class="overflow-x-auto"
+      >
         <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
           <thead class="bg-surface-overlay/80 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
             <tr>
-              <th class="px-6 py-4 font-medium">Repository</th>
-              <th class="px-6 py-4 font-medium">Findings</th>
-              <th class="px-6 py-4 font-medium">Vulnerabilities</th>
-              <th class="px-6 py-4 font-medium">Components</th>
-              <th class="px-6 py-4 font-medium">Last scan</th>
+              <th class="px-6 py-4 font-medium">
+                Repository
+              </th>
+              <th class="px-6 py-4 font-medium">
+                Findings
+              </th>
+              <th class="px-6 py-4 font-medium">
+                Vulnerabilities
+              </th>
+              <th class="px-6 py-4 font-medium">
+                Components
+              </th>
+              <th class="px-6 py-4 font-medium">
+                Last scan
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y divide-surface-border-subtle">
-            <tr v-for="entry in dashboard.repos" :key="entry.repo_id" class="transition hover:bg-white/5">
+            <tr
+              v-for="entry in dashboard.repos"
+              :key="entry.repo_id"
+              class="transition hover:bg-white/5"
+            >
               <td class="px-6 py-4">
                 <RouterLink
                   :to="`/orgs/${provider}/${slug}/repos/${entry.repo_slug}`"
                   class="flex items-center gap-3 text-white transition hover:text-accent"
                 >
-                  <ForgeIcon :provider="entry.provider" size="sm" class="text-gray-400" />
+                  <ForgeIcon
+                    :provider="entry.provider"
+                    size="sm"
+                    class="text-gray-400"
+                  />
                   <div>
-                    <div class="font-medium">{{ entry.repo_name }}</div>
-                    <div class="text-xs uppercase tracking-[0.18em] text-gray-500">{{ entry.repo_slug }}</div>
+                    <div class="font-medium">
+                      {{ entry.repo_name }}
+                    </div>
+                    <div class="text-xs uppercase tracking-[0.18em] text-gray-500">
+                      {{ entry.repo_slug }}
+                    </div>
                   </div>
                 </RouterLink>
               </td>
               <td class="px-6 py-4">
                 <div class="flex flex-wrap gap-2">
-                  <span v-for="item in toSeverityItems(entry.findings)" :key="`${entry.repo_id}-finding-${item.key}`" :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]">
+                  <span
+                    v-for="item in toSeverityItems(entry.findings)"
+                    :key="`${entry.repo_id}-finding-${item.key}`"
+                    :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]"
+                  >
                     {{ item.key }} {{ item.value }}
                   </span>
                 </div>
               </td>
               <td class="px-6 py-4">
                 <div class="flex flex-wrap gap-2">
-                  <span v-for="item in toSeverityItems(entry.vulns)" :key="`${entry.repo_id}-vuln-${item.key}`" :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]">
+                  <span
+                    v-for="item in toSeverityItems(entry.vulns)"
+                    :key="`${entry.repo_id}-vuln-${item.key}`"
+                    :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]"
+                  >
                     {{ item.key }} {{ item.value }}
                   </span>
                 </div>
               </td>
-              <td class="px-6 py-4 text-gray-300">{{ entry.components_total }}</td>
-              <td class="px-6 py-4 text-gray-400">{{ formatDate(entry.last_scan) }}</td>
+              <td class="px-6 py-4 text-gray-300">
+                {{ entry.components_total }}
+              </td>
+              <td class="px-6 py-4 text-gray-400">
+                {{ formatDate(entry.last_scan) }}
+              </td>
             </tr>
           </tbody>
         </table>

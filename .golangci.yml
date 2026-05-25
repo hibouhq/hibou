@@ -1,23 +1,76 @@
+version: "2"
+
 run:
   timeout: 5m
 
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 linters:
   enable:
+    - bodyclose
+    - copyloopvar
+    - dupword
     - errcheck
+    - errorlint
+    - gocritic
+    - gosec
     - govet
-    - staticcheck
-    - unused
-    - gosimple
     - ineffassign
-    - typecheck
+    - misspell
+    - nolintlint
+    - perfsprint
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+    - usestdlibvars
+    - wastedassign
+  settings:
+    errcheck:
+      check-type-assertions: false
+      exclude-functions:
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+    gocritic:
+      disabled-checks:
+        - appendAssign
+    nolintlint:
+      require-specific: true
+      require-explanation: true
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+        - name: unused-parameter
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+    paths:
+      - site/
+    warn-unused: true
+
+formatters:
+  enable:
     - gofmt
     - goimports
-    - misspell
-    - revive
-
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-        arguments:
-          - disableStutteringCheck
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/hibouhq/lehibou
+  exclusions:
+    generated: lax
+    paths:
+      - site/

@@ -8,6 +8,9 @@ FORGEJO_ADMIN_USER="${FORGEJO_ADMIN_USER:-hibou-admin}"
 FORGEJO_ADMIN_PASS="${FORGEJO_ADMIN_PASS:-hibou-admin}"
 FORGEJO_ADMIN_EMAIL="${FORGEJO_ADMIN_EMAIL:-admin@localhost}"
 HIBOU_CALLBACK_URL="${HIBOU_CALLBACK_URL:-http://localhost:8080/api/v1/auth/callback?provider=forgejo}"
+HIBOU_CALLBACK_URL_VITE="${HIBOU_CALLBACK_URL_VITE:-http://localhost:3000/api/v1/auth/callback?provider=forgejo}"
+WEBHOOK_SECRET="${WEBHOOK_SECRET:-hibou-webhook-dev-secret}"
+WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8080/api/v1/webhooks/forgejo}"
 
 wait_for_forgejo() {
   echo "==> Waiting for Forgejo to be ready..."
@@ -81,9 +84,73 @@ for app in apps:
       -d "{
         \"name\": \"hibou\",
         \"confidential_client\": true,
-        \"redirect_uris\": [\"$HIBOU_CALLBACK_URL\"]
+        \"redirect_uris\": [\"$HIBOU_CALLBACK_URL\", \"$HIBOU_CALLBACK_URL_VITE\"]
       }")
   fi
+}
+
+setup_webhooks() {
+  echo "==> Configuring Forgejo webhooks..."
+
+  local repos_json repo_lines
+  repos_json=$(curl -sf "$FORGEJO_URL/api/v1/user/repos?limit=100" \
+    -H "Authorization: token $ADMIN_TOKEN")
+  repo_lines=$(printf '%s' "$repos_json" | python3 -c '
+import json
+import sys
+
+for repo in json.load(sys.stdin):
+    owner = (repo.get("owner") or {}).get("login") or ""
+    name = repo.get("name") or ""
+    if owner and name:
+        print(f"{owner}\t{name}")
+')
+
+  if [ -z "$repo_lines" ]; then
+    echo "    No repositories found for webhook setup"
+    return
+  fi
+
+  while IFS=$'\t' read -r owner repo; do
+    [ -n "$owner" ] || continue
+    [ -n "$repo" ] || continue
+
+    local hooks_json existing_hook
+    hooks_json=$(curl -sf "$FORGEJO_URL/api/v1/repos/$owner/$repo/hooks?limit=100" \
+      -H "Authorization: token $ADMIN_TOKEN")
+    existing_hook=$(printf '%s' "$hooks_json" | TARGET_URL="$WEBHOOK_URL" python3 -c '
+import json
+import os
+import sys
+
+target_url = os.environ["TARGET_URL"]
+for hook in json.load(sys.stdin):
+    config = hook.get("config") or {}
+    if config.get("url") == target_url:
+        print("found")
+        break
+')
+
+    if [ "$existing_hook" = "found" ]; then
+      echo "    $owner/$repo: webhook already configured"
+      continue
+    fi
+
+    curl -sf "$FORGEJO_URL/api/v1/repos/$owner/$repo/hooks" \
+      -H "Authorization: token $ADMIN_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"type\": \"forgejo\",
+        \"active\": true,
+        \"config\": {
+          \"url\": \"$WEBHOOK_URL\",
+          \"content_type\": \"json\",
+          \"secret\": \"$WEBHOOK_SECRET\"
+        },
+        \"events\": [\"push\", \"pull_request\", \"create\", \"delete\"]
+      }" >/dev/null
+    echo "    $owner/$repo: webhook created"
+  done <<< "$repo_lines"
 }
 
 print_credentials() {
@@ -101,10 +168,12 @@ print_credentials() {
   echo "  HIBOU_FORGE_0_URL=$FORGEJO_URL"
   echo "  HIBOU_FORGE_0_CLIENT_ID=$client_id"
   echo "  HIBOU_FORGE_0_CLIENT_SECRET=$client_secret"
+  echo "  HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET"
   echo ""
   echo "Forgejo admin login: $FORGEJO_URL"
   echo "  Username: $FORGEJO_ADMIN_USER"
   echo "  Password: $FORGEJO_ADMIN_PASS"
+  echo "Webhook secret: $WEBHOOK_SECRET"
   echo ""
 
   if [ -f .env ]; then
@@ -114,6 +183,10 @@ print_credentials() {
     grep -q "^HIBOU_FORGE_0_URL=" .env && sed -i "s|^HIBOU_FORGE_0_URL=.*|HIBOU_FORGE_0_URL=$FORGEJO_URL|" .env
     grep -q "^HIBOU_FORGE_0_CLIENT_ID=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_ID=.*|HIBOU_FORGE_0_CLIENT_ID=$client_id|" .env
     grep -q "^HIBOU_FORGE_0_CLIENT_SECRET=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_SECRET=.*|HIBOU_FORGE_0_CLIENT_SECRET=$client_secret|" .env
+    grep -q "^HIBOU_FORGE_0_WEBHOOK_SECRET=" .env && sed -i "s|^HIBOU_FORGE_0_WEBHOOK_SECRET=.*|HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET|" .env
+    if ! grep -q "^HIBOU_FORGE_0_WEBHOOK_SECRET=" .env; then
+      echo "HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> .env
+    fi
     echo "    .env updated."
   fi
 
@@ -126,6 +199,7 @@ HIBOU_FORGE_0_ID=forgejo
 HIBOU_FORGE_0_URL=$FORGEJO_URL
 HIBOU_FORGE_0_CLIENT_ID=$client_id
 HIBOU_FORGE_0_CLIENT_SECRET=$client_secret
+HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET
 FORGE_EOF
     echo "    Forge config appended to .env"
   else
@@ -144,6 +218,7 @@ main() {
   create_admin_user
   generate_admin_token
   create_oauth_app
+  setup_webhooks
   print_credentials
   cleanup_token
 }

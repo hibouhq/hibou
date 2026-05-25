@@ -44,6 +44,7 @@ func (a *Adapter) LoadPolicy(model model.Model) error {
 			}
 		}
 
+		//nolint:errcheck // persist.LoadPolicyLine only returns error for invalid CSV, which cannot happen with our formatted input
 		persist.LoadPolicyLine(strings.Join(tokens, ", "), model)
 	}
 
@@ -107,6 +108,7 @@ func (a *Adapter) RemovePolicy(sec string, ptype string, rule []string) error {
 	args := []any{ptype}
 
 	for index, value := range rule {
+		//nolint:gosec,perfsprint // G202: query parameters are positional ($1, $2...), not interpolated values.
 		query += fmt.Sprintf(` AND v%d = $%d`, index, index+2)
 		args = append(args, value)
 	}
@@ -128,6 +130,7 @@ func (a *Adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int,
 			continue
 		}
 
+		//nolint:gosec,perfsprint // G202: query parameters are positional ($1, $2...), not interpolated values.
 		query += fmt.Sprintf(` AND v%d = $%d`, fieldIndex+index, placeholder)
 		args = append(args, value)
 		placeholder++
@@ -147,12 +150,14 @@ type execer interface {
 func (a *Adapter) insertRule(exec execer, ptype string, rule []string) error {
 	values := make([]any, 7)
 	values[0] = ptype
-	for index := 0; index < 6; index++ {
-		if index < len(rule) {
-			values[index+1] = rule[index]
-			continue
+	for index := 1; index < len(values); index++ {
+		values[index] = ""
+	}
+	for index, value := range rule {
+		if index >= len(values)-1 {
+			break
 		}
-		values[index+1] = ""
+		values[index+1] = value
 	}
 
 	if _, err := exec.ExecContext(

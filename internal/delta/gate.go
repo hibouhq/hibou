@@ -2,6 +2,7 @@ package delta
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -38,7 +39,7 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 		delta = &DeltaResult{}
 	}
 	if s == nil || s.gateStore == nil {
-		return nil, fmt.Errorf("gate store is not configured")
+		return nil, errors.New("gate store is not configured")
 	}
 
 	gates, err := s.gateStore.ListQualityGatesByRepo(ctx, repoID)

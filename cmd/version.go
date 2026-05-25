@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	buildversion "github.com/hibouhq/lehibou/internal/version"
 	"github.com/spf13/cobra"
+
+	buildversion "github.com/hibouhq/lehibou/internal/version"
 )
 
 var versionCmd = &cobra.Command{
@@ -17,8 +18,4 @@ var versionCmd = &cobra.Command{
 			fmt.Printf("go: %s\n", info.GoVersion)
 		}
 	},
-}
-
-func init() {
-	rootCmd.AddCommand(versionCmd)
 }

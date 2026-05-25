@@ -226,7 +226,7 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 	switch eventType {
 	case events.ScanCompleted:
 		payload.Title = "Scan completed"
-		payload.Body = fmt.Sprintf("Scan completed for repo %s", payload.RepoName)
+		payload.Body = "Scan completed for repo " + payload.RepoName
 	case events.ScanFailed:
 		errMsg := stringValue(data, "error", "unknown error")
 		payload.Title = "Scan failed"

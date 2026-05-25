@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -79,7 +81,7 @@ type uploadStatusResponse struct {
 // @Tags         uploads
 // @Accept       json
 // @Produce      json
-// @Param        body  body      server.sbomUploadRequest  true  "SBOM upload payload"
+// @Param        payload  body      server.sbomUploadRequest  true  "SBOM upload payload"
 // @Success      202   {object}  api.Response{data=server.uploadResponse}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
@@ -139,7 +141,7 @@ func (s *Server) handleUploadSBOM(w http.ResponseWriter, r *http.Request) {
 // @Tags         uploads
 // @Accept       json
 // @Produce      json
-// @Param        body  body      server.sarifUploadRequest  true  "SARIF upload payload"
+// @Param        payload  body      server.sarifUploadRequest  true  "SARIF upload payload"
 // @Success      202   {object}  api.Response{data=server.uploadResponse}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
@@ -200,7 +202,7 @@ func (s *Server) handleUploadSARIF(w http.ResponseWriter, r *http.Request) {
 // @Tags         uploads
 // @Accept       json
 // @Produce      json
-// @Param        body  body      server.findingsUploadRequest  true  "Findings upload payload"
+// @Param        payload  body      server.findingsUploadRequest  true  "Findings upload payload"
 // @Success      202   {object}  api.Response{data=server.uploadResponse}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
@@ -243,7 +245,7 @@ func (s *Server) handleUploadFindings(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	queries := s.queries.WithTx(tx)
-	_, repo, err := s.resolveUploadTarget(r, queries, user.ID, input.uploadRequest)
+	repo, err := s.resolveUploadTarget(r, queries, user.ID, input.uploadRequest)
 	if err != nil {
 		s.writeUploadError(w, err)
 		return
@@ -425,7 +427,7 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 	}()
 
 	queries := s.queries.WithTx(tx)
-	_, repo, err := s.resolveUploadTarget(r, queries, userID, input)
+	repo, err := s.resolveUploadTarget(r, queries, userID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -458,32 +460,32 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 	return snapshot, nil
 }
 
-func (s *Server) resolveUploadTarget(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
+func (s *Server) resolveUploadTarget(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Repository, error) {
 	org, err := queries.GetOrganizationByProviderAndSlug(r.Context(), input.Provider, input.Org)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if org == nil {
-		return nil, nil, errNotFound("organization not found")
+		return nil, errNotFound("organization not found")
 	}
 
 	role, err := queries.GetOrgMemberRole(r.Context(), org.ID, userID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if role == "" {
-		return nil, nil, errNotFound("organization not found")
+		return nil, errNotFound("organization not found")
 	}
 
 	repo, err := queries.GetRepositoryBySlug(r.Context(), org.ID, input.Repo)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if repo == nil {
-		return nil, nil, errNotFound("repository not found")
+		return nil, errNotFound("repository not found")
 	}
 
-	return org, repo, nil
+	return repo, nil
 }
 
 func normalizeUploadRequest(input *uploadRequest) {
@@ -497,19 +499,19 @@ func normalizeUploadRequest(input *uploadRequest) {
 
 func validateUploadRequest(input uploadRequest) error {
 	if input.Provider == "" {
-		return fmt.Errorf("provider is required")
+		return errors.New("provider is required")
 	}
 	if input.Org == "" {
-		return fmt.Errorf("org is required")
+		return errors.New("org is required")
 	}
 	if input.Repo == "" {
-		return fmt.Errorf("repo is required")
+		return errors.New("repo is required")
 	}
 	if input.Ref == "" {
-		return fmt.Errorf("ref is required")
+		return errors.New("ref is required")
 	}
 	if input.CommitSHA == "" {
-		return fmt.Errorf("commit_sha is required")
+		return errors.New("commit_sha is required")
 	}
 	return nil
 }
@@ -549,18 +551,18 @@ func severityFromString(value string) (store.SeverityLevel, error) {
 	case "info", "informational":
 		return store.SeverityLevelInfo, nil
 	default:
-		return "", fmt.Errorf("finding.severity must be one of critical, high, medium, low, info")
+		return "", errors.New("finding.severity must be one of critical, high, medium, low, info")
 	}
 }
 
 func findingLocationHash(tool, ruleID, filePath string, startLine, endLine *int32) string {
 	start := ""
 	if startLine != nil {
-		start = fmt.Sprintf("%d", *startLine)
+		start = strconv.Itoa(int(*startLine))
 	}
 	end := ""
 	if endLine != nil {
-		end = fmt.Sprintf("%d", *endLine)
+		end = strconv.Itoa(int(*endLine))
 	}
 	sum := sha256.Sum256([]byte(strings.Join([]string{tool, ruleID, filePath, start, end}, ":")))
 	return hex.EncodeToString(sum[:])
@@ -625,10 +627,5 @@ func (s *Server) writeUploadError(w http.ResponseWriter, err error) {
 }
 
 func errorAsNotFound(err error, target *notFoundError) bool {
-	value, ok := err.(notFoundError)
-	if !ok {
-		return false
-	}
-	*target = value
-	return true
+	return errors.As(err, target)
 }

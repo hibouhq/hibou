@@ -106,13 +106,15 @@ func (s *Server) listFilteredAuditLogs(ctx context.Context, orgID uuid.UUID, act
 
 	whereClause := strings.Join(whereParts, " AND ")
 
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM audit_logs WHERE %s", whereClause)
+	countQuery := "SELECT COUNT(*) FROM audit_logs WHERE " + whereClause
 	var total int
+	//nolint:gosec // G701: countQuery only contains trusted SQL fragments and bound parameters.
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	listArgs := append(append([]any{}, args...), limit, offset)
+	//nolint:gosec // G201: whereClause is assembled from fixed predicates with positional placeholders only.
 	listQuery := fmt.Sprintf(`
 SELECT id, actor_type, actor_display, action, resource_type, resource_id, context, ip_address, created_at
 FROM audit_logs
@@ -121,6 +123,7 @@ ORDER BY created_at DESC
 LIMIT $%d OFFSET $%d
 `, whereClause, len(args)+1, len(args)+2)
 
+	//nolint:gosec // G701: listQuery only contains trusted SQL fragments and bound parameters.
 	rows, err := s.db.QueryContext(ctx, listQuery, listArgs...)
 	if err != nil {
 		return nil, 0, err

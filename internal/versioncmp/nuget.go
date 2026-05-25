@@ -41,7 +41,7 @@ func parseNuGet(v string) nugetVersion {
 		if !isDigits(nums[i]) {
 			return nugetVersion{}
 		}
-		parsed.parts[i] = parseIntDefault(nums[i], 0)
+		parsed.parts[i] = parseIntDefault(nums[i])
 	}
 	if len(parts) == 2 {
 		ids := strings.Split(parts[1], ".")

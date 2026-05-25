@@ -8,10 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"golang.org/x/oauth2"
@@ -49,10 +51,10 @@ func (f *Forgejo) ListRepositories(ctx context.Context, opts ListReposOptions) (
 	path := "/api/v1/user/repos"
 	values := url.Values{}
 	if opts.Page > 0 {
-		values.Set("page", fmt.Sprintf("%d", opts.Page))
+		values.Set("page", strconv.Itoa(opts.Page))
 	}
 	if opts.PerPage > 0 {
-		values.Set("limit", fmt.Sprintf("%d", opts.PerPage))
+		values.Set("limit", strconv.Itoa(opts.PerPage))
 	}
 	if encoded := values.Encode(); encoded != "" {
 		path += "?" + encoded
@@ -214,7 +216,7 @@ func (f *Forgejo) ValidateWebhookPayload(r *http.Request, secret string) ([]byte
 
 	signature := r.Header.Get("X-Gitea-Signature")
 	if signature == "" {
-		return nil, fmt.Errorf("forgejo webhook signature missing")
+		return nil, errors.New("forgejo webhook signature missing")
 	}
 
 	expectedMAC := hmac.New(sha256.New, []byte(activeSecret))
@@ -228,7 +230,7 @@ func (f *Forgejo) ValidateWebhookPayload(r *http.Request, secret string) ([]byte
 		return nil, fmt.Errorf("decode forgejo webhook signature: %w", err)
 	}
 	if !hmac.Equal(provided, expected) {
-		return nil, fmt.Errorf("forgejo webhook signature mismatch")
+		return nil, errors.New("forgejo webhook signature mismatch")
 	}
 
 	return payload, nil
@@ -283,7 +285,7 @@ func (f *Forgejo) OAuth2Config(redirectURL string) *oauth2.Config {
 
 func (f *Forgejo) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, error) {
 	if token == nil || token.AccessToken == "" {
-		return nil, fmt.Errorf("forgejo user info requires access token")
+		return nil, errors.New("forgejo user info requires access token")
 	}
 
 	request, err := f.newRequest(ctx, http.MethodGet, "/api/v1/user", nil)
@@ -414,7 +416,7 @@ type forgejoPullRequestResource struct {
 
 func (r forgejoRepository) toRepository() Repository {
 	return Repository{
-		ProviderID:    fmt.Sprintf("%d", r.ID),
+		ProviderID:    strconv.FormatInt(r.ID, 10),
 		Owner:         r.Owner.Login,
 		Name:          r.Name,
 		FullName:      r.FullName,
@@ -456,7 +458,7 @@ func (u forgejoUser) toUserInfo() UserInfo {
 	}
 
 	return UserInfo{
-		ProviderID:  fmt.Sprintf("%d", u.ID),
+		ProviderID:  strconv.FormatInt(u.ID, 10),
 		Email:       u.Email,
 		DisplayName: displayName,
 		AvatarURL:   u.AvatarURL,

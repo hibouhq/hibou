@@ -78,8 +78,17 @@
           {{ comparison.base.ref_name }}
         </p>
         <p class="mt-1 text-sm text-gray-400">
-          <a v-if="commitUrl(comparison.base.commit_sha)" :href="commitUrl(comparison.base.commit_sha) || undefined" target="_blank" rel="noopener" class="font-mono hover:text-accent hover:underline">{{ comparison.base.commit_sha.slice(0, 12) }}</a>
-          <span v-else class="font-mono">{{ comparison.base.commit_sha.slice(0, 12) }}</span>
+          <a
+            v-if="commitUrl(comparison.base.commit_sha)"
+            :href="commitUrl(comparison.base.commit_sha) || undefined"
+            target="_blank"
+            rel="noopener"
+            class="font-mono hover:text-accent hover:underline"
+          >{{ comparison.base.commit_sha.slice(0, 12) }}</a>
+          <span
+            v-else
+            class="font-mono"
+          >{{ comparison.base.commit_sha.slice(0, 12) }}</span>
           · {{ formatDateTime(comparison.base.date) }}
         </p>
       </div>
@@ -92,8 +101,17 @@
           {{ comparison.head.ref_name }}
         </p>
         <p class="mt-1 text-sm text-gray-400">
-          <a v-if="commitUrl(comparison.head.commit_sha)" :href="commitUrl(comparison.head.commit_sha) || undefined" target="_blank" rel="noopener" class="font-mono hover:text-accent hover:underline">{{ comparison.head.commit_sha.slice(0, 12) }}</a>
-          <span v-else class="font-mono">{{ comparison.head.commit_sha.slice(0, 12) }}</span>
+          <a
+            v-if="commitUrl(comparison.head.commit_sha)"
+            :href="commitUrl(comparison.head.commit_sha) || undefined"
+            target="_blank"
+            rel="noopener"
+            class="font-mono hover:text-accent hover:underline"
+          >{{ comparison.head.commit_sha.slice(0, 12) }}</a>
+          <span
+            v-else
+            class="font-mono"
+          >{{ comparison.head.commit_sha.slice(0, 12) }}</span>
           · {{ formatDateTime(comparison.head.date) }}
         </p>
       </div>
@@ -122,20 +140,38 @@
           Findings Delta
         </summary>
 
-        <div v-if="findingRows.length === 0" class="px-4 py-8 text-sm text-gray-500">
+        <div
+          v-if="findingRows.length === 0"
+          class="px-4 py-8 text-sm text-gray-500"
+        >
           No finding changes between these refs.
         </div>
 
-        <div v-else class="overflow-x-auto">
+        <div
+          v-else
+          class="overflow-x-auto"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay/60 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Change</th>
-                <th class="px-4 py-3 font-medium">Severity</th>
-                <th class="px-4 py-3 font-medium">Tool</th>
-                <th class="px-4 py-3 font-medium">Rule</th>
-                <th class="px-4 py-3 font-medium">File</th>
-                <th class="px-4 py-3 font-medium">Message</th>
+                <th class="px-4 py-3 font-medium">
+                  Change
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Severity
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Tool
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Rule
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  File
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Message
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
@@ -154,10 +190,18 @@
                     {{ finding.severity }}
                   </span>
                 </td>
-                <td class="px-4 py-4 text-gray-300">{{ finding.tool }}</td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">{{ finding.rule_id }}</td>
-                <td class="px-4 py-4 text-gray-400">{{ finding.file_path }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ finding.message }}</td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ finding.tool }}
+                </td>
+                <td class="px-4 py-4 font-mono text-xs text-accent">
+                  {{ finding.rule_id }}
+                </td>
+                <td class="px-4 py-4 text-gray-400">
+                  {{ finding.file_path }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ finding.message }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -172,18 +216,32 @@
           Vulnerability Delta
         </summary>
 
-        <div v-if="vulnRows.length === 0" class="px-4 py-8 text-sm text-gray-500">
+        <div
+          v-if="vulnRows.length === 0"
+          class="px-4 py-8 text-sm text-gray-500"
+        >
           No vulnerability changes between these refs.
         </div>
 
-        <div v-else class="overflow-x-auto">
+        <div
+          v-else
+          class="overflow-x-auto"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay/60 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Change</th>
-                <th class="px-4 py-3 font-medium">Severity</th>
-                <th class="px-4 py-3 font-medium">Canonical ID</th>
-                <th class="px-4 py-3 font-medium">Component</th>
+                <th class="px-4 py-3 font-medium">
+                  Change
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Severity
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Canonical ID
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Component
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
@@ -202,8 +260,12 @@
                     {{ vuln.severity }}
                   </span>
                 </td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">{{ vuln.canonical_id }}</td>
-                <td class="px-4 py-4 text-gray-300">{{ vuln.component_name || 'Multiple components' }}</td>
+                <td class="px-4 py-4 font-mono text-xs text-accent">
+                  {{ vuln.canonical_id }}
+                </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ vuln.component_name || 'Multiple components' }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -218,19 +280,35 @@
           Component Changes
         </summary>
 
-        <div v-if="componentRows.length === 0" class="px-4 py-8 text-sm text-gray-500">
+        <div
+          v-if="componentRows.length === 0"
+          class="px-4 py-8 text-sm text-gray-500"
+        >
           No component additions or removals between these refs.
         </div>
 
-        <div v-else class="overflow-x-auto">
+        <div
+          v-else
+          class="overflow-x-auto"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay/60 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Change</th>
-                <th class="px-4 py-3 font-medium">Package</th>
-                <th class="px-4 py-3 font-medium">Version</th>
-                <th class="px-4 py-3 font-medium">Ecosystem</th>
-                <th class="px-4 py-3 font-medium">Vulns</th>
+                <th class="px-4 py-3 font-medium">
+                  Change
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Package
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Version
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Ecosystem
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Vulns
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
@@ -245,16 +323,24 @@
                   </span>
                 </td>
                 <td class="px-4 py-4 text-gray-200">
-                  <div class="font-medium">{{ component.name }}</div>
-                  <div class="text-xs text-gray-500">{{ component.purl }}</div>
+                  <div class="font-medium">
+                    {{ component.name }}
+                  </div>
+                  <div class="text-xs text-gray-500">
+                    {{ component.purl }}
+                  </div>
                 </td>
-                <td class="px-4 py-4 text-gray-300">{{ component.version }}</td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ component.version }}
+                </td>
                 <td class="px-4 py-4">
                   <span class="rounded-full border border-surface-border px-2.5 py-1 text-xs uppercase tracking-[0.14em] text-gray-300">
                     {{ component.ecosystem }}
                   </span>
                 </td>
-                <td class="px-4 py-4 text-gray-300">{{ component.vuln_count }}</td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ component.vuln_count }}
+                </td>
               </tr>
             </tbody>
           </table>

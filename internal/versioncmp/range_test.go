@@ -1,6 +1,9 @@
 package versioncmp
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestInRange(t *testing.T) {
 	tests := []struct {
@@ -42,7 +45,8 @@ func TestInRange(t *testing.T) {
 			if err == nil {
 				t.Fatalf("InRange(%q, %q, ...) error = nil, want error", tt.ecosystem, tt.version)
 			}
-			if _, ok := err.(*EcosystemError); !ok {
+			var ecosystemErr *EcosystemError
+			if !errors.As(err, &ecosystemErr) {
 				t.Fatalf("InRange(%q, %q, ...) error type = %T, want *EcosystemError", tt.ecosystem, tt.version, err)
 			}
 			continue

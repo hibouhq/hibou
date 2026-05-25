@@ -38,10 +38,10 @@ The platform is implemented as a Go service that embeds a Vue 3 single-page appl
                             +---------------+--------------+
                                             |
                                             v
-+---------------------+        +------------------------------+
-| GitHub App/OAuth    |------->|       API Server Layer       |
-| Webhooks / Uploads  |        | Auth, REST, OpenAPI, RBAC,   |
-+---------------------+        | tenancy, query orchestration |
++---------------------+        +------------------------------+        +------------------+
+| GitHub App/OAuth    |------->|       API Server Layer       |<-------| Built-in MCP     |
+| Webhooks / Uploads  |        | Auth, REST, OpenAPI, RBAC,   |        | Server / tools   |
++---------------------+        | tenancy, query orchestration |        +------------------+
                                +------+-------------+---------+
                                       |             |
                                       |             |
@@ -63,24 +63,32 @@ The platform is implemented as a Go service that embeds a Vue 3 single-page appl
                          +------------------+
                          | PostgreSQL       |
                          | System of record |
-                         +---------+--------+
-                                   |
-                                   v
-                         +------------------+
-                         | Built-in MCP     |
-                         | Server / tools   |
                          +------------------+
 ```
 
-### CLI interface
+### CLI interface and multi-personality binary
 
-The same binary doubles as a full-featured CLI client, built with Cobra. Running `./secplatform serve` starts the server, while other subcommands interact with a running instance as a client.
+The platform ships as a **single Go binary** that exposes different command surfaces depending on the name it is invoked as (ArgoCD pattern). At startup, the binary inspects `os.Args[0]` (after resolving symlinks) to determine its personality:
 
-Representative command tree:
+| Invocation name   | Personality     | Available commands                                    |
+|-------------------|-----------------|-------------------------------------------------------|
+| `hibou`           | User CLI        | login, logout, status, upload, repos, config, completion, version |
+| `hibou-server`    | Server          | serve, seed, completion, version                      |
+| `hibou-worker`    | Worker (future) | worker, version                                       |
+
+- **User CLI** (`hibou`): The default personality. Only exposes client-side commands that talk to a remote Hibou server via REST API. Server-only commands like `serve` are hidden and disabled. This is what end users and CI pipelines use.
+- **Server** (`hibou-server`): Exposes `serve` (starts API server, SPA, workers, MCP) and `seed` (populate sample data). User CLI commands are hidden. In the container image, a symlink `hibou-server -> hibou` is created and used as the entrypoint.
+- **Worker** (`hibou-worker`, future): For scaled-out worker deployments. Only exposes worker-related commands.
+
+This ensures that `hibou --help` on a developer's machine never shows `serve` or other server internals, keeping the CLI clean and focused. The container `Dockerfile` copies the binary as `hibou` and creates a `hibou-server` symlink for the server entrypoint.
+
+Representative command tree (user CLI personality):
 
 ```text
-secplatform
-├── serve                    # Start API server, SPA, workers, MCP
+hibou
+├── login                    # Authenticate with a Hibou server
+├── logout                   # Clear stored credentials
+├── status                   # Show current auth status
 ├── upload
 │   ├── sbom                 # Upload an SBOM file
 │   ├── sarif                # Upload a SARIF file
@@ -88,23 +96,9 @@ secplatform
 ├── repos
 │   ├── list                 # List repositories
 │   └── show                 # Show repository details
-├── vulns
-│   ├── list                 # List vulnerabilities
-│   ├── show                 # Show vulnerability details
-│   └── impact               # Impact analysis for a CVE
-├── deps
-│   ├── list                 # List dependencies for a ref
-│   └── tree                 # Show dependency tree
-├── clients
-│   ├── list                 # List clients
-│   ├── create               # Register a client
-│   └── deployments          # Manage deployments
-├── releases
-│   ├── list                 # List releases
-│   └── create               # Create a release
 ├── config
-│   ├── set-server           # Configure server URL
-│   └── set-token            # Configure auth token
+│   ├── set-org              # Set default organization
+│   └── show                 # Show current configuration
 ├── completion               # Generate shell completions
 │   ├── bash
 │   ├── zsh
@@ -113,7 +107,19 @@ secplatform
 └── version                  # Print version info
 ```
 
-The CLI authenticates via API key or token stored in a local config file (`~/.config/secplatform/config.yaml`). All CLI commands map to public REST API calls, ensuring the CLI never bypasses the API layer.
+Additional commands for vulnerabilities, dependencies, clients, and releases will be added as the API surface stabilizes.
+
+Server personality command tree:
+
+```text
+hibou-server
+├── serve                    # Start API server, SPA, workers, MCP
+├── seed                     # Populate database with sample data
+├── completion               # Generate shell completions
+└── version                  # Print version info
+```
+
+The CLI authenticates via API key or token stored in a local config file (`~/.config/hibou/config.yaml`). All CLI commands map to public REST API calls, ensuring the CLI never bypasses the API layer.
 
 ### Internal library architecture
 
@@ -742,17 +748,18 @@ The platform includes a built-in MCP server so AI assistants can query live secu
 - In-process on a separate port for long-running service mode, or
 - Exposed as a subcommand for local/sidecar usage.
 
-The MCP server must share the same authorization and tenancy rules as the primary API.
+The MCP server **calls through the API service layer** (the same internal Go interfaces used by REST handlers), never directly to PostgreSQL. This ensures all RBAC, tenancy, and authorization rules are enforced identically for AI clients and human users.
 
 ## 12. Deployment
 
 ### Single binary runtime
 
-- `./secplatform serve` starts the API, embedded SPA, background workers, and optional MCP endpoint.
-- `./secplatform upload sbom --repo payments-api --ref refs/heads/main --commit abc123 --file bom.json` uploads an SBOM from the CLI.
-- `./secplatform vulns impact CVE-2026-1234` queries impact analysis from the terminal.
-- `./secplatform completion zsh > _secplatform` generates shell completions.
-- The binary auto-detects whether it is running as a server or client based on the subcommand.
+- `hibou-server serve` starts the API, embedded SPA, background workers, and optional MCP endpoint.
+- `hibou upload sbom --repo payments-api --ref refs/heads/main --commit abc123 --file bom.json` uploads an SBOM from the CLI.
+- `hibou vulns impact CVE-2026-1234` queries impact analysis from the terminal.
+- `hibou completion zsh > _hibou` generates shell completions.
+- The binary determines its personality from `os.Args[0]`: `hibou-server` exposes server commands, `hibou` (default) exposes user CLI commands.
+- In the container image, `hibou` is the single binary and `hibou-server` is a symlink to it.
 
 ### Helm chart
 

@@ -41,7 +41,7 @@ func parseDebianVersion(v string) debianVersion {
 	v = strings.TrimSpace(v)
 	parsed := debianVersion{}
 	if idx := strings.IndexByte(v, ':'); idx >= 0 {
-		parsed.epoch = parseIntDefault(v[:idx], 0)
+		parsed.epoch = parseIntDefault(v[:idx])
 		v = v[idx+1:]
 	}
 	if idx := strings.LastIndexByte(v, '-'); idx >= 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -81,7 +82,7 @@ func (s *Service) QueryWithCache(ctx context.Context, prov provider.AdvisoryProv
 			hitResults = append(hitResults, cachedResults...)
 			continue
 		}
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("cache: get advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
 		}
 		missQueries = append(missQueries, query)

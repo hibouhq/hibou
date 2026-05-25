@@ -29,7 +29,7 @@ type createReleaseRequest struct {
 // @Param        provider  path      string                true  "Forge provider"
 // @Param        slug      path      string                true  "Organization slug"
 // @Param        repoSlug  path      string                true  "Repository slug"
-// @Param        body      body      createReleaseRequest  true  "Release details"
+// @Param        payload   body      createReleaseRequest  true  "Release details"
 // @Success      201       {object}  api.Response{data=store.Release}
 // @Failure      400       {object}  api.Response
 // @Failure      401       {object}  api.Response

@@ -27,7 +27,7 @@ type updateTeamRequest struct {
 // @Produce      json
 // @Param        provider  path      string             true  "Forge provider"
 // @Param        slug  path      string             true  "Organization slug"
-// @Param        body  body      createTeamRequest  true  "Team details"
+// @Param        payload  body      createTeamRequest  true  "Team details"
 // @Success      201   {object}  api.Response{data=store.Team}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
@@ -202,7 +202,7 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 // @Param        provider  path      string             true  "Forge provider"
 // @Param        slug      path      string             true  "Organization slug"
 // @Param        teamSlug  path      string             true  "Team slug"
-// @Param        body      body      updateTeamRequest  true  "Team updates"
+// @Param        payload   body      updateTeamRequest  true  "Team updates"
 // @Success      200       {object}  api.Response{data=store.Team}
 // @Failure      400       {object}  api.Response
 // @Failure      401       {object}  api.Response

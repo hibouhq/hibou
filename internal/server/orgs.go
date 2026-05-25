@@ -35,7 +35,7 @@ type updateOrgRequest struct {
 // @Tags         organizations
 // @Accept       json
 // @Produce      json
-// @Param        body  body      createOrgRequest  true  "Organization details"
+// @Param        payload  body      createOrgRequest  true  "Organization details"
 // @Success      201   {object}  api.Response{data=store.Organization}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
@@ -238,7 +238,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 // @Produce      json
 // @Param        provider  path      string            true  "Forge provider"
 // @Param        slug  path      string            true  "Organization slug"
-// @Param        body  body      updateOrgRequest  true  "Organization updates"
+// @Param        payload  body      updateOrgRequest  true  "Organization updates"
 // @Success      200   {object}  api.Response{data=store.Organization}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response

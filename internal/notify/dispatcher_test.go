@@ -81,6 +81,11 @@ func TestDispatcherFansOutToMultipleSenders(t *testing.T) {
 
 	awaitPayload(t, slackSender.calledCh)
 	awaitPayload(t, teamsSender.calledCh)
+	awaitCondition(t, 2*time.Second, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.auditLogs) >= 2 && len(store.healthUpdates) >= 2
+	})
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -110,6 +115,11 @@ func TestDispatcherSenderFailureDoesNotCrash(t *testing.T) {
 
 	awaitPayload(t, failing.calledCh)
 	awaitPayload(t, success.calledCh)
+	awaitCondition(t, 2*time.Second, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.healthUpdates) >= 2
+	})
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -161,6 +171,18 @@ func awaitPayload(t *testing.T, ch <-chan Payload) Payload {
 		t.Fatal("timed out waiting for payload")
 		return Payload{}
 	}
+}
+
+func awaitCondition(t *testing.T, timeout time.Duration, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for condition")
 }
 
 func mustJSON(t *testing.T, value map[string]any) json.RawMessage {

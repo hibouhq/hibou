@@ -10,7 +10,7 @@
 ## Phase 0 - Project Bootstrap
 
 - [x] Establish repository scaffolding and baseline architecture
-	- Create a Go monorepo layout for API, workers, internal packages, Cobra CLI, and embedded web assets. The binary serves as both server (`serve`) and client CLI, with shell completion support (`completion bash/zsh/fish/powershell`).
+	- Create a Go monorepo layout for API, workers, internal packages, Cobra CLI, and embedded web assets. The binary uses a multi-personality pattern (ArgoCD-style): invoked as `hibou` it acts as a user CLI, invoked as `hibou-server` (symlink) it acts as the server, with shell completion support (`completion bash/zsh/fish/powershell`).
 	- Initialize the Vue 3 SPA with Vite, TypeScript, Pinia, Vue Router, and a shared design token layer.
 	- Define package boundaries so the backend can embed the built SPA into a single distributable binary.
 	- Acceptance criteria hint: a fresh clone builds both backend and frontend locally and produces one runnable binary.
@@ -355,7 +355,7 @@ The result should feel like a GitHub-native security tool — users familiar wit
 
 ## Phase 4 - AI, Notifications, and Integrations
 
-- [ ] Build the embedded MCP server
+- [x] Build the embedded MCP server
 	- Expose security-aware MCP tools for vulnerability listings, dependency graphs, impact analysis, and ref comparisons.
 	- Reuse the platform authorization model so AI clients only see data they are entitled to access.
 	- Document prompt-safe response shapes and pagination behavior for large result sets.
@@ -372,6 +372,47 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Add rule scoping by org, team, repo, ref pattern, severity, and tool source.
 	- Surface a dry-run or preview mode so administrators can validate rules before enabling them.
 	- Acceptance criteria hint: alerts are configurable enough to be useful without requiring code changes.
+
+- [x] Implement multi-personality binary
+	- The single compiled binary changes its available commands based on the name it is invoked as (`os.Args[0]`).
+	- **`hibou`** (default): User CLI personality. Exposes only client-side commands (`upload`, `repos`, `vulns`, `deps`, `clients`, `releases`, `config`, `completion`, `version`). Server commands like `serve` are hidden and disabled. This is what developers and CI pipelines install.
+	- **`hibou-server`**: Server personality. Exposes `serve`, `migrate`, `completion`, and `version`. User CLI commands are hidden. Used as the container entrypoint via a symlink.
+	- **`hibou-worker`** (future): Worker personality for scaled-out deployments.
+	- Update `cmd/root.go` to inspect `os.Args[0]` (resolved past symlinks), determine the personality, and conditionally register command subtrees.
+	- Update the `Dockerfile` to copy the binary as `hibou` and create a symlink `hibou-server -> hibou`. Use `hibou-server serve` as the container `CMD`.
+	- Update the `Makefile` build target to produce a single `hibou` binary. The `make install` target should also create the `hibou-server` symlink.
+	- Ensure `hibou --help` never shows `serve` or other server internals — keep the user CLI clean and focused.
+	- This must be completed before the GitHub Action, since the action will distribute `hibou` as a user CLI tool.
+	- Acceptance criteria hint: `hibou --help` shows only client commands, `hibou-server --help` shows only server commands, both resolve to the same binary file.
+
+- [x] Auto-configure Forgejo webhooks in dev setup
+	- `scripts/setup-dev.sh` now creates webhooks on all Forgejo repos for the admin user, pointing to `http://host.docker.internal:8080/api/v1/webhooks/forgejo` with HMAC-SHA256 secret validation.
+	- `scripts/seed-real.sh` creates a webhook on the mirrored k9s repo after seeding.
+	- `docker-compose.yml` adds `extra_hosts: ["host.docker.internal:host-gateway"]` to the forgejo service so webhooks can reach the host.
+	- Webhook secret is auto-configured in `.env` as `HIBOU_FORGE_0_WEBHOOK_SECRET`.
+	- Events: push, pull_request, create, delete.
+	- Future: GitHub and GitLab webhook auto-configuration will follow the same pattern.
+	- Acceptance criteria hint: `make start` results in Forgejo automatically notifying hibou on push and PR events.
+
+- [x] Add org dropdown to navbar breadcrumb
+	- The organization name in the top navbar now has a ChevronDown dropdown (matching the repo dropdown pattern).
+	- Dropdown shows all orgs from `orgStore.orgs` with search filtering (when >= 5 orgs).
+	- Current org is highlighted. Clicking an org navigates to it and closes the dropdown.
+	- Dropdown only appears when there are multiple orgs.
+
+- [x] Implement CLI UX for user personality
+	- `hibou login` — authenticate with server URL + API token (interactive or `--token` flag). Validates with `/users/me`. Stores in `~/.config/hibou/config.yaml`.
+	- `hibou login --sso` — opens browser to server UI for SSO login + API key creation, then prompts to paste token.
+	- `hibou logout` — clears stored token.
+	- `hibou status` — shows current server, org, user info, auth status.
+	- `hibou upload sbom|sarif|findings` — uploads security artifacts. Supports `--server`/`--token` flags and `HIBOU_SERVER`/`HIBOU_TOKEN` env vars for CI. SARIF and findings accept `--tool` flag.
+	- `hibou repos list|show` — thin wrappers over repo API.
+	- `hibou config set-org|show` — manage default org context.
+	- Server-side `POST /api/v1/auth/cli-token` endpoint for browser-to-CLI token exchange (session-only, rejects API key auth).
+	- `internal/cliconfig/` — config file read/write with 0600 permissions.
+	- `internal/cliclient/` — thin HTTP client with Bearer auth and API envelope handling.
+	- Future: `vulns`, `deps`, `clients`, `releases` commands will be added as APIs stabilize.
+	- Acceptance criteria hint: `hibou login && hibou repos list && hibou upload sbom sbom.json --org forgejo/devtools --repo myapp --ref refs/heads/main --sha abc123` works end-to-end.
 
 - [ ] Publish an official GitHub Action
 	- Create a maintained action that uploads SBOM, SARIF, and generic findings from CI pipelines.
@@ -404,10 +445,6 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Reuse the GitHub-first data model without forcing provider-specific leaks through the whole system.
 	- Acceptance criteria hint: a non-GitHub tenant can onboard repositories with feature parity for core ingestion flows.
 
-- [ ] Add coverage tracking
-	- Model line and branch coverage as a first-class signal alongside vulnerabilities and findings.
-	- Support trend views, PR delta coverage, and simple quality gates.
-	- Acceptance criteria hint: teams can correlate security posture with code health signals in one product.
 
 - [ ] Deliver secret scanning tracking
 	- Integrate with GitHub secret scanning and third-party tools such as truffleHog or gitleaks or betterleaks. (should be tool agnostic)
@@ -469,6 +506,11 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Define backup, restore, migration rollback, and incident response expectations.
 	- Acceptance criteria hint: operators can run the system in production without flying blind.
 
+- [ ] Add coverage tracking
+	- Model line and branch coverage as a first-class signal alongside vulnerabilities and findings.
+	- Support trend views, PR delta coverage, and simple quality gates.
+	- Acceptance criteria hint: teams can correlate security posture with code health signals in one product.
+
 ## Milestone map
 
 - [ ] Milestone A - Public alpha foundation
@@ -485,3 +527,7 @@ The result should feel like a GitHub-native security tool — users familiar wit
 
 - [ ] Milestone E - Ecosystem breadth
 	- Includes additional git providers, coverage, secrets, license policies, plugins, and Kubernetes automation.
+
+## Side quest
+
+- [ ] replace current config by go-viper.

@@ -3,9 +3,16 @@
     <div class="flex flex-wrap items-end gap-2">
       <label class="space-y-2 text-sm text-gray-300">
         <span class="block text-[11px] uppercase tracking-[0.12em] text-gray-500">Ecosystem</span>
-        <select v-model="ecosystemFilter" class="w-full rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-100">
+        <select
+          v-model="ecosystemFilter"
+          class="w-full rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-100"
+        >
           <option value="">All ecosystems</option>
-          <option v-for="option in ecosystems" :key="option" :value="option">{{ option }}</option>
+          <option
+            v-for="option in ecosystems"
+            :key="option"
+            :value="option"
+          >{{ option }}</option>
         </select>
       </label>
 
@@ -21,23 +28,42 @@
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
-      <div v-if="loading" class="px-4 py-10 text-sm text-gray-500">
+      <div
+        v-if="loading"
+        class="px-4 py-10 text-sm text-gray-500"
+      >
         Loading components...
       </div>
 
-      <div v-else-if="filteredComponents.length === 0" class="px-4 py-10 text-sm text-gray-500">
+      <div
+        v-else-if="filteredComponents.length === 0"
+        class="px-4 py-10 text-sm text-gray-500"
+      >
         No components found.
       </div>
 
-      <div v-else class="overflow-x-auto">
+      <div
+        v-else
+        class="overflow-x-auto"
+      >
         <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
           <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
             <tr>
-              <th class="px-3 py-2 font-medium">Ecosystem</th>
-              <th class="px-3 py-2 font-medium">Package</th>
-              <th class="px-3 py-2 font-medium">Version</th>
-              <th class="px-3 py-2 font-medium">Vulns</th>
-              <th class="px-3 py-2 font-medium">Severity</th>
+              <th class="px-3 py-2 font-medium">
+                Ecosystem
+              </th>
+              <th class="px-3 py-2 font-medium">
+                Package
+              </th>
+              <th class="px-3 py-2 font-medium">
+                Version
+              </th>
+              <th class="px-3 py-2 font-medium">
+                Vulns
+              </th>
+              <th class="px-3 py-2 font-medium">
+                Severity
+              </th>
             </tr>
           </thead>
           <tbody class="divide-y divide-surface-border-subtle">
@@ -53,20 +79,32 @@
                 </span>
               </td>
               <td class="px-3 py-2.5 text-gray-200">
-                <div class="font-medium">{{ component.name }}</div>
-                <div class="text-xs text-gray-500">{{ component.purl }}</div>
+                <div class="font-medium">
+                  {{ component.name }}
+                </div>
+                <div class="text-xs text-gray-500">
+                  {{ component.purl }}
+                </div>
               </td>
-              <td class="px-3 py-2.5 text-gray-300">{{ component.version }}</td>
+              <td class="px-3 py-2.5 text-gray-300">
+                {{ component.version }}
+              </td>
               <td class="px-3 py-2.5 text-gray-300">
                 <span class="rounded-full border border-surface-border px-2.5 py-1 text-xs font-medium text-white">
                   {{ component.vuln_count }}
                 </span>
               </td>
               <td class="px-3 py-2.5">
-                <span v-if="component.highest_severity" :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(component.highest_severity)]">
+                <span
+                  v-if="component.highest_severity"
+                  :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(component.highest_severity)]"
+                >
                   {{ component.highest_severity }}
                 </span>
-                <span v-else class="text-gray-500">none</span>
+                <span
+                  v-else
+                  class="text-gray-500"
+                >none</span>
               </td>
             </tr>
           </tbody>

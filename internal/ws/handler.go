@@ -11,8 +11,6 @@ import (
 	"github.com/hibouhq/lehibou/internal/store"
 )
 
-const closeStatusUnauthorized = websocket.StatusCode(4001)
-
 type subscriptionPayload struct {
 	Topics []string `json:"topics"`
 }

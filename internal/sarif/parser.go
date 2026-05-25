@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"regexp"
 	"sort"
@@ -18,7 +18,7 @@ var cwePattern = regexp.MustCompile(`(?i)\bCWE-\d+\b`)
 
 func Parse(r io.Reader) (*Document, error) {
 	if r == nil {
-		return nil, fmt.Errorf("reader is required")
+		return nil, errors.New("reader is required")
 	}
 
 	var doc Document
@@ -32,7 +32,7 @@ func Parse(r io.Reader) (*Document, error) {
 
 func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 	if doc == nil {
-		return nil, fmt.Errorf("document is required")
+		return nil, errors.New("document is required")
 	}
 
 	findings := make([]Finding, 0)

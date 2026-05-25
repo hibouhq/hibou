@@ -22,6 +22,13 @@ export default defineConfig({
         changeOrigin: true,
         cookieDomainRewrite: '',
         ws: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            if (req.headers.host) {
+              proxyReq.setHeader('X-Forwarded-Host', req.headers.host)
+            }
+          })
+        },
       },
     },
   },

@@ -3,20 +3,36 @@
     <h2 class="mb-4 text-2xl font-bold">
       Repositories
     </h2>
-    <div v-if="loading" class="text-gray-500">
+    <div
+      v-if="loading"
+      class="text-gray-500"
+    >
       Loading...
     </div>
-    <div v-else-if="repos.length === 0" class="text-gray-500">
+    <div
+      v-else-if="repos.length === 0"
+      class="text-gray-500"
+    >
       No repositories synced yet.
     </div>
-    <ul v-else class="space-y-2">
-      <li v-for="repo in repos" :key="repo.id">
+    <ul
+      v-else
+      class="space-y-2"
+    >
+      <li
+        v-for="repo in repos"
+        :key="repo.id"
+      >
         <RouterLink
           :to="`/orgs/${provider}/${slug}/repos/${repo.slug}`"
           class="block rounded-lg border border-gray-800 bg-gray-900 p-4 transition-colors hover:border-gray-600"
         >
           <div class="flex items-center gap-2 font-medium">
-            <ForgeIcon :provider="repo.provider" size="sm" class="text-gray-400" />
+            <ForgeIcon
+              :provider="repo.provider"
+              size="sm"
+              class="text-gray-400"
+            />
             {{ repo.name }}
           </div>
           <div class="ml-[22px] text-sm text-gray-500">

@@ -49,6 +49,10 @@ setup: up ## Quick dev setup: start postgres + seed sample data
 setup-full: up-all ## Full setup with Forgejo OAuth (for OAuth testing)
 	@./scripts/setup-dev.sh
 
+.PHONY: fix-auth
+fix-auth: ## Fix OAuth redirect for VS Code port forwarding (PORT=<forwarded_port>)
+	@./scripts/fix-oauth-port.sh $(PORT)
+
 .PHONY: start
 start: setup-full ## One command: full setup with real data + start the app
 	@./scripts/seed-real.sh
@@ -89,6 +93,11 @@ build: build-frontend ## Build the hibou binary for the current platform
 	mkdir -p $(DIST)
 	go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) .
 
+.PHONY: install
+install: build ## Install hibou binary and create hibou-server symlink
+	install -m 755 $(DIST)/$(BINARY) $(shell go env GOPATH)/bin/$(BINARY)
+	ln -sf $(BINARY) $(shell go env GOPATH)/bin/hibou-server
+
 .PHONY: build-all
 build-all: build-frontend ## Cross-compile for all target platforms
 	$(foreach platform,$(PLATFORMS),\
@@ -109,8 +118,8 @@ dev: ## Run backend + Vite dev server concurrently
 		wait
 
 .PHONY: db-migrate
-db-migrate: ## Database migrations run automatically on hibou serve startup
-	@echo "Migrations run automatically on 'hibou serve'. Set HIBOU_DATABASE_URL as needed and start the server."
+db-migrate: ## Database migrations run automatically on hibou-server serve startup
+	@echo "Migrations run automatically on 'hibou-server serve'. Set HIBOU_DATABASE_URL as needed and start the server."
 
 
 .PHONY: generate

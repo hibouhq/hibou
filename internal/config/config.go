@@ -15,6 +15,8 @@ import (
 type Config struct {
 	Host          string        `env:"HIBOU_HOST"            envDefault:"0.0.0.0"`
 	Port          int           `env:"HIBOU_PORT"            envDefault:"8080"`
+	MCPEnabled    bool          `env:"HIBOU_MCP_ENABLED"     envDefault:"true"`
+	MCPPort       int           `env:"HIBOU_MCP_PORT"        envDefault:"8081"`
 	BaseURL       string        `env:"HIBOU_BASE_URL"`
 	DatabaseURL   string        `env:"HIBOU_DATABASE_URL"    envDefault:"postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable"`
 	LogLevel      string        `env:"HIBOU_LOG_LEVEL"       envDefault:"info"`
@@ -49,6 +51,10 @@ type ForgeConfig struct {
 
 func (c Config) ListenAddr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+func (c Config) MCPListenAddr() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.MCPPort)
 }
 
 // CookieDomain returns the domain for session cookies.

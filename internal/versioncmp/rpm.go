@@ -38,7 +38,7 @@ func parseRPMVersion(v string) rpmVersion {
 	parsed := rpmVersion{}
 
 	if idx := strings.IndexByte(v, ':'); idx >= 0 {
-		parsed.epoch = parseIntDefault(v[:idx], 0)
+		parsed.epoch = parseIntDefault(v[:idx])
 		v = v[idx+1:]
 	}
 	if idx := strings.LastIndexByte(v, '-'); idx >= 0 {

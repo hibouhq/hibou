@@ -49,13 +49,13 @@ func parseAPKVersion(v string) apkVersion {
 	parsed := apkVersion{base: v}
 	if idx := strings.LastIndex(v, "-r"); idx >= 0 {
 		parsed.base = v[:idx]
-		parsed.revision = parseIntDefault(v[idx+2:], 0)
+		parsed.revision = parseIntDefault(v[idx+2:])
 	}
 	for _, suffix := range []string{"alpha", "beta", "pre", "rc", "p"} {
 		marker := "_" + suffix
 		if idx := strings.Index(parsed.base, marker); idx >= 0 {
 			parsed.suffix = suffix
-			parsed.suffixNo = parseIntDefault(parsed.base[idx+len(marker):], 0)
+			parsed.suffixNo = parseIntDefault(parsed.base[idx+len(marker):])
 			parsed.base = parsed.base[:idx]
 			break
 		}

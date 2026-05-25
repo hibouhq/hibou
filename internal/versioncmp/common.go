@@ -28,13 +28,13 @@ func cmpStrings(a, b string) int {
 	}
 }
 
-func parseIntDefault(s string, def int) int {
+func parseIntDefault(s string) int {
 	if s == "" {
-		return def
+		return 0
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil {
-		return def
+		return 0
 	}
 	return v
 }
@@ -45,18 +45,6 @@ func isDigits(s string) bool {
 	}
 	for _, r := range s {
 		if !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
-func isLetters(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if !unicode.IsLetter(r) {
 			return false
 		}
 	}

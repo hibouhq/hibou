@@ -7,6 +7,8 @@ FORGEJO_ADMIN_USER="${FORGEJO_ADMIN_USER:-hibou-admin}"
 FORGEJO_ADMIN_PASS="${FORGEJO_ADMIN_PASS:-hibou-admin}"
 FORGEJO_OWNER="${FORGEJO_OWNER:-$FORGEJO_ADMIN_USER}"
 TMPDIR_BASE="$(mktemp -d)"
+WEBHOOK_SECRET="${WEBHOOK_SECRET:-hibou-webhook-dev-secret}"
+WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8080/api/v1/webhooks/forgejo}"
 
 FORGEJO_TOKEN=""
 API_KEY=""
@@ -107,6 +109,47 @@ mirror_k9s_repo() {
   echo "    Migration complete"
 }
 
+setup_k9s_webhook() {
+  echo "==> Configuring Forgejo webhook for k9s..."
+
+  local hooks_json existing_hook
+  hooks_json=$(curl -sf "$FORGEJO_URL/api/v1/repos/$FORGEJO_OWNER/k9s/hooks?limit=100" \
+    -H "Authorization: token $FORGEJO_TOKEN")
+  existing_hook=$(printf '%s' "$hooks_json" | TARGET_URL="$WEBHOOK_URL" python3 -c '
+import json
+import os
+import sys
+
+target_url = os.environ["TARGET_URL"]
+for hook in json.load(sys.stdin):
+    config = hook.get("config") or {}
+    if config.get("url") == target_url:
+        print("found")
+        break
+')
+
+  if [[ "$existing_hook" == "found" ]]; then
+    echo "    k9s webhook already configured"
+    return
+  fi
+
+  curl -sf "$FORGEJO_URL/api/v1/repos/$FORGEJO_OWNER/k9s/hooks" \
+    -H "Authorization: token $FORGEJO_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"type\": \"forgejo\",
+      \"active\": true,
+      \"config\": {
+        \"url\": \"$WEBHOOK_URL\",
+        \"content_type\": \"json\",
+        \"secret\": \"$WEBHOOK_SECRET\"
+      },
+      \"events\": [\"push\", \"pull_request\", \"create\", \"delete\"]
+    }" >/dev/null
+
+  echo "    k9s webhook created"
+}
+
 download_release_sbom() {
   local tag=$1
   local output_file=$2
@@ -181,6 +224,7 @@ PY
 seed_hibou_data() {
   echo "==> Starting Hibou and seeding local data..."
   go build -o "$TMPDIR_BASE/hibou" . 2>/dev/null
+  ln -sf hibou "$TMPDIR_BASE/hibou-server"
 
   env \
     HIBOU_ARTIFACT_PATH=tmp/artifacts \
@@ -190,13 +234,13 @@ seed_hibou_data() {
     HIBOU_FORGE_0_CLIENT_ID= \
     HIBOU_FORGE_0_CLIENT_SECRET= \
     HIBOU_FORGE_0_WEBHOOK_SECRET= \
-    "$TMPDIR_BASE/hibou" serve >/tmp/hibou-seed-real.log 2>&1 &
+    "$TMPDIR_BASE/hibou-server" serve >/tmp/hibou-seed-real.log 2>&1 &
   HIBOU_PID=$!
 
   wait_for_hibou
 
   echo "==> Running hibou seed command..."
-  "$TMPDIR_BASE/hibou" seed >/dev/null
+  "$TMPDIR_BASE/hibou-server" seed >/dev/null
 
   # Fix provider for devtools org if seeded before the forgejo switch,
   # ensure k9s repo exists, and fix default_branch if set to 'main'.
@@ -391,6 +435,7 @@ main() {
 
   echo "==> Mirroring k9s repository to Forgejo..."
   mirror_k9s_repo
+  setup_k9s_webhook
 
   seed_hibou_data
 

@@ -78,6 +78,7 @@ const retentionInterval = 24 * time.Hour
 func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) *Server {
 	r := chi.NewRouter()
 
+	//nolint:staticcheck // TODO: replace deprecated RealIP middleware with a proxy-aware alternative.
 	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log))
@@ -151,6 +152,7 @@ func (s *Server) routes(siteFS fs.FS) {
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
+			r.Post("/auth/cli-token", s.handleCreateCLIToken)
 			r.Get("/users/me", s.handleGetMe)
 			r.Get("/notifications", s.notifySvc.HandleListNotifications)
 			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)

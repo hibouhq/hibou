@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/hibouhq/lehibou/internal/forge"
 	"github.com/hibouhq/lehibou/internal/store"
 )
@@ -26,6 +28,7 @@ const (
 // Config holds authentication settings.
 type Config struct {
 	SessionSecret string
+	BaseURL       string
 	CookieDomain  string
 	CookieSecure  bool
 	Providers     map[string]forge.Provider
@@ -90,7 +93,7 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	if code == "" {
-		return nil, fmt.Errorf("missing oauth code")
+		return nil, errors.New("missing oauth code")
 	}
 
 	token, err := provider.OAuth2Config(m.callbackURL(r, providerID)).Exchange(r.Context(), code)
@@ -103,13 +106,13 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 		return nil, fmt.Errorf("load provider user info: %w", err)
 	}
 	if info == nil {
-		return nil, fmt.Errorf("provider returned no user info")
+		return nil, errors.New("provider returned no user info")
 	}
 	if strings.TrimSpace(info.ProviderID) == "" {
-		return nil, fmt.Errorf("provider user info missing provider id")
+		return nil, errors.New("provider user info missing provider id")
 	}
 	if strings.TrimSpace(info.Email) == "" {
-		return nil, fmt.Errorf("provider user info missing email")
+		return nil, errors.New("provider user info missing email")
 	}
 
 	avatarURL := optionalString(info.AvatarURL)
@@ -130,7 +133,7 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 	if providerUser == nil {
-		return nil, fmt.Errorf("user disappeared during update")
+		return nil, errors.New("user disappeared during update")
 	}
 
 	return providerUser, nil
@@ -166,7 +169,7 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 
 	parts := strings.Split(cookie.Value, "|")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid session cookie format")
+		return nil, errors.New("invalid session cookie format")
 	}
 
 	userIDBytes, err := hex.DecodeString(parts[0])
@@ -185,7 +188,7 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 	userID := string(userIDBytes)
 	timestamp := string(timestampBytes)
 	if !hmac.Equal(providedSig, m.sign(userID, timestamp)) {
-		return nil, fmt.Errorf("invalid session signature")
+		return nil, errors.New("invalid session signature")
 	}
 
 	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)
@@ -193,7 +196,7 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 		return nil, fmt.Errorf("parse session timestamp: %w", err)
 	}
 	if time.Since(time.Unix(issuedAt, 0)) > sessionMaxAge {
-		return nil, fmt.Errorf("session expired")
+		return nil, errors.New("session expired")
 	}
 
 	parsedUserID, err := uuid.Parse(userID)
@@ -206,7 +209,7 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 		activeQueries = m.queries
 	}
 	if activeQueries == nil {
-		return nil, fmt.Errorf("queries not configured")
+		return nil, errors.New("queries not configured")
 	}
 
 	user, err := activeQueries.GetUserByID(r.Context(), parsedUserID)
@@ -214,7 +217,7 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 		return nil, fmt.Errorf("load session user: %w", err)
 	}
 	if user == nil {
-		return nil, fmt.Errorf("session user not found")
+		return nil, errors.New("session user not found")
 	}
 
 	return user, nil
@@ -227,7 +230,7 @@ func (m *Manager) ClearSession(w http.ResponseWriter) {
 func (m *Manager) provider(providerID string) (forge.Provider, error) {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" {
-		return nil, fmt.Errorf("provider is required")
+		return nil, errors.New("provider is required")
 	}
 
 	provider, ok := m.cfg.Providers[providerID]
@@ -239,6 +242,10 @@ func (m *Manager) provider(providerID string) (forge.Provider, error) {
 }
 
 func (m *Manager) callbackURL(r *http.Request, providerID string) string {
+	if m.cfg.BaseURL != "" {
+		return fmt.Sprintf("%s/api/v1/auth/callback?provider=%s", strings.TrimRight(m.cfg.BaseURL, "/"), providerID)
+	}
+
 	scheme := "http"
 	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
 		scheme = proto
@@ -251,13 +258,13 @@ func (m *Manager) callbackURL(r *http.Request, providerID string) string {
 		host = r.Host
 	}
 
-	return fmt.Sprintf("%s://%s/auth/callback?provider=%s", scheme, host, providerID)
-	}
+	return fmt.Sprintf("%s://%s/api/v1/auth/callback?provider=%s", scheme, host, providerID)
+}
 
 func (m *Manager) validateOAuthState(cookieValue, providerID, state string) error {
 	parts := strings.Split(cookieValue, "|")
 	if len(parts) != 4 {
-		return fmt.Errorf("invalid oauth state cookie format")
+		return errors.New("invalid oauth state cookie format")
 	}
 
 	stateBytes, err := hex.DecodeString(parts[0])
@@ -281,13 +288,13 @@ func (m *Manager) validateOAuthState(cookieValue, providerID, state string) erro
 	storedProviderID := string(providerBytes)
 	timestamp := string(timestampBytes)
 	if storedProviderID != providerID {
-		return fmt.Errorf("oauth provider mismatch")
+		return errors.New("oauth provider mismatch")
 	}
 	if storedState != state {
-		return fmt.Errorf("oauth state mismatch")
+		return errors.New("oauth state mismatch")
 	}
 	if !hmac.Equal(providedSig, m.sign(storedState, storedProviderID, timestamp)) {
-		return fmt.Errorf("oauth state signature mismatch")
+		return errors.New("oauth state signature mismatch")
 	}
 
 	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)
@@ -295,7 +302,7 @@ func (m *Manager) validateOAuthState(cookieValue, providerID, state string) erro
 		return fmt.Errorf("parse oauth timestamp: %w", err)
 	}
 	if time.Since(time.Unix(issuedAt, 0)) > oauthStateMaxAge {
-		return fmt.Errorf("oauth state expired")
+		return errors.New("oauth state expired")
 	}
 
 	return nil

@@ -31,7 +31,7 @@ type createAPIKeyResponse struct {
 // @Tags         api-keys
 // @Accept       json
 // @Produce      json
-// @Param        body  body      createAPIKeyRequest  true  "API key details"
+// @Param        payload  body      createAPIKeyRequest  true  "API key details"
 // @Success      201   {object}  api.Response{data=server.createAPIKeyResponse}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response

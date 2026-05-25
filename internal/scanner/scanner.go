@@ -316,7 +316,7 @@ func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, er
 		ErrorMessage: err.Error(),
 		CompletedAt:  sql.NullTime{Time: completedAt, Valid: true},
 	}); updateErr != nil {
-		return fmt.Errorf("%v; update scan failure: %w", err, updateErr)
+		return fmt.Errorf("%w; update scan failure: %w", err, updateErr)
 	}
 	s.publish(ctx, events.ScanFailed, map[string]any{
 		"scan_id":     scanID.String(),

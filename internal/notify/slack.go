@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -16,7 +17,7 @@ func (s *SlackSender) Send(ctx context.Context, p Payload) error {
 	config := integrationConfig(p)
 	webhookURL := configString(config, "webhook_url")
 	if webhookURL == "" {
-		return fmt.Errorf("slack webhook_url is required")
+		return errors.New("slack webhook_url is required")
 	}
 	body, err := json.Marshal(map[string]any{
 		"text": renderNotificationText(p),
