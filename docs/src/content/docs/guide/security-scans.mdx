@@ -21,7 +21,7 @@ You can also upload scan results directly:
 ### SBOM (Software Bill of Materials)
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
+curl -X POST http://localhost:8585/api/v1/repos/{repo_id}/upload \
   -H "Authorization: Bearer <token>" \
   -F "type=sbom" \
   -F "file=@sbom.json"
@@ -32,7 +32,7 @@ Supported formats: CycloneDX, SPDX.
 ### SARIF (Static Analysis Results Interchange Format)
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
+curl -X POST http://localhost:8585/api/v1/repos/{repo_id}/upload \
   -H "Authorization: Bearer <token>" \
   -F "type=sarif" \
   -F "file=@results.sarif"
@@ -41,7 +41,7 @@ curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
 ### Raw Findings
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/repos/{repo_id}/upload \
+curl -X POST http://localhost:8585/api/v1/repos/{repo_id}/upload \
   -H "Authorization: Bearer <token>" \
   -F "type=findings" \
   -F "file=@findings.json"

@@ -1,15 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "forkProcessing": "enabled",
   "extends": [
-    "github>invarnt/dockerize-exec//renovate-presets/commons.json5"
+    "github>hibouhq/lehibou//renovate-presets/commons.json5"
+  ],
+  "ignorePaths": [
+    "**/testdata/**",
+    "**/fixtures/**"
   ],
   "packageRules": [
-    {
-      "matchDatasources": [
-        "golang-version"
-      ],
-      "rangeStrategy": "bump"
-    }
   ]
 }

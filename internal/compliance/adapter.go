@@ -3,6 +3,7 @@ package compliance
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -87,6 +88,10 @@ func (a *StoreAdapter) GetComponentsByIDs(ctx context.Context, ids []uuid.UUID) 
 	return a.queries.GetComponentsByIDs(ctx, ids)
 }
 
+func (a *StoreAdapter) ListVEXStatementsByAdvisory(ctx context.Context, arg dbgen.ListVEXStatementsByAdvisoryParams) ([]dbgen.VexStatement, error) {
+	return a.queries.ListVEXStatementsByAdvisory(ctx, arg)
+}
+
 func (a *StoreAdapter) GetRefByID(ctx context.Context, id uuid.UUID) (dbgen.Ref, error) {
 	ref, err := a.queries.GetRefByID(ctx, id)
 	if err != nil || ref == nil {
@@ -103,6 +108,54 @@ func (a *StoreAdapter) GetRefByID(ctx context.Context, id uuid.UUID) (dbgen.Ref,
 		CreatedAt:        ref.CreatedAt,
 		UpdatedAt:        ref.UpdatedAt,
 	}, nil
+}
+
+func (a *StoreAdapter) CountRepositoriesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountRepositoriesByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) CountVEXStatementsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountVEXStatementsByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) ListVEXStatementsByOrg(ctx context.Context, arg dbgen.ListVEXStatementsByOrgParams) ([]dbgen.VexStatement, error) {
+	return a.queries.ListVEXStatementsByOrg(ctx, arg)
+}
+
+func (a *StoreAdapter) CountAuditLogsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountAuditLogsByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) ListAuditLogs(ctx context.Context, arg dbgen.ListAuditLogsParams) ([]dbgen.AuditLog, error) {
+	return a.queries.ListAuditLogs(ctx, arg)
+}
+
+func (a *StoreAdapter) ListQualityGatesByOrg(ctx context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error) {
+	return a.queries.ListQualityGatesByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) CountVulnMatchesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountVulnMatchesByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) CountFindingsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountFindingsByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) CountScansByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountScansByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) LatestScanByOrg(ctx context.Context, orgID uuid.UUID) (time.Time, error) {
+	return a.queries.LatestScanCompletedAtByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) CountMalwareAdvisoriesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountMalwareAdvisoriesByOrg(ctx, orgID)
+}
+
+func (a *StoreAdapter) CountComponentsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountComponentsByOrg(ctx, orgID)
 }
 
 func stringToNull(value *string) sql.NullString {

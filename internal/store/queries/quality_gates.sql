@@ -36,3 +36,10 @@ SELECT *
 FROM quality_gates
 WHERE repo_id = $1
 ORDER BY name ASC;
+
+-- name: UpdateQualityGate :one
+UPDATE quality_gates SET name = $2, description = $3, max_critical = $4, max_high = $5, max_medium = $6, max_new_findings = $7, finding_severities = $8, enabled = $9, updated_at = NOW()
+WHERE id = $1 RETURNING *;
+
+-- name: DeleteQualityGate :exec
+DELETE FROM quality_gates WHERE id = $1;

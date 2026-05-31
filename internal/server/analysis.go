@@ -107,9 +107,10 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	severityFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("severity")))
-	toolFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("tool")))
-	statusFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	severityFilter := parseCSVQueryFilter(r.URL.Query().Get("severity"))
+	toolFilter := parseCSVQueryFilter(r.URL.Query().Get("tool"))
+	statusFilter := parseCSVQueryFilter(r.URL.Query().Get("status"))
+	fileFilter := parseCSVQueryFilter(r.URL.Query().Get("file"))
 	pagination := api.ParsePagination(r)
 
 	rows, err := s.queries.ListAllFindingsBySnapshot(r.Context(), snapshot.ID)
@@ -120,13 +121,16 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 
 	filtered := make([]findingResponse, 0, len(rows))
 	for _, row := range rows {
-		if severityFilter != "" && strings.ToLower(string(row.Severity)) != severityFilter {
+		if !matchesCSVQueryFilter(severityFilter, string(row.Severity)) {
 			continue
 		}
-		if toolFilter != "" && strings.ToLower(row.Tool) != toolFilter {
+		if !matchesCSVQueryFilter(toolFilter, row.Tool) {
 			continue
 		}
-		if statusFilter != "" && strings.ToLower(row.Status) != statusFilter {
+		if !matchesCSVQueryFilter(statusFilter, row.Status) {
+			continue
+		}
+		if !matchesFileFilter(fileFilter, row.FilePath) {
 			continue
 		}
 		filtered = append(filtered, findingResponse{
@@ -147,6 +151,47 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 
 	paged := paginateSlice(filtered, pagination.Offset, pagination.PerPage)
 	api.JSONList(w, paged, pagination.Page, pagination.PerPage, len(filtered))
+}
+
+func parseCSVQueryFilter(raw string) map[string]struct{} {
+	values := make(map[string]struct{})
+
+	for _, fragment := range strings.Split(raw, ",") {
+		normalized := strings.ToLower(strings.TrimSpace(fragment))
+		if normalized == "" {
+			continue
+		}
+		values[normalized] = struct{}{}
+	}
+
+	if len(values) == 0 {
+		return nil
+	}
+
+	return values
+}
+
+func matchesCSVQueryFilter(filter map[string]struct{}, value string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+
+	_, ok := filter[strings.ToLower(strings.TrimSpace(value))]
+	return ok
+}
+
+func matchesFileFilter(filter map[string]struct{}, filePath string) bool {
+	if len(filter) == 0 {
+		return true
+	}
+
+	normalized := strings.ToLower(filePath)
+	for pattern := range filter {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) {
@@ -534,7 +579,8 @@ func (s *Server) loadCountedVulns(r *http.Request, vulnMatches []dbgen.VulnMatch
 	advisoryIDs := make([]uuid.UUID, 0, len(vulnMatches))
 	seenAdvisories := make(map[uuid.UUID]struct{})
 	for _, match := range vulnMatches {
-		if !match.IsAffected || match.Suppressed {
+		// TODO(vex): Query vex_statements for effective vulnerability status.
+		if !match.IsAffected {
 			continue
 		}
 		if _, ok := seenAdvisories[match.AdvisoryID]; ok {
@@ -559,7 +605,8 @@ func (s *Server) loadCountedVulns(r *http.Request, vulnMatches []dbgen.VulnMatch
 	counted := make([]countedVuln, 0, len(vulnMatches))
 	seenPairs := make(map[string]struct{})
 	for _, match := range vulnMatches {
-		if !match.IsAffected || match.Suppressed {
+		// TODO(vex): Query vex_statements for effective vulnerability status.
+		if !match.IsAffected {
 			continue
 		}
 		advisory, ok := advisoryByID[match.AdvisoryID]

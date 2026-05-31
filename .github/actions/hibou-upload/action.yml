@@ -1,0 +1,193 @@
+name: hibou-upload
+description: "Upload SBOM, SARIF, or coverage artifacts to Hibou. Works with GitHub Actions and Forgejo Actions."
+
+inputs:
+  server:
+    description: "Hibou server URL."
+    required: true
+  token:
+    description: "Hibou API token."
+    required: true
+  org:
+    description: "Organization slug in provider/slug form (e.g. github/my-org). Auto-detected from CI environment when omitted."
+    required: false
+  repo:
+    description: "Repository slug. Auto-detected from CI environment when omitted."
+    required: false
+  file:
+    description: "Path(s) to artifact files. Supports glob patterns and newline-separated paths."
+    required: true
+  ref:
+    description: "Git ref. Defaults to GITHUB_REF / GITEA_REF."
+    required: false
+  sha:
+    description: "Commit SHA. Defaults to GITHUB_SHA / GITEA_SHA."
+    required: false
+  complete:
+    description: "Complete the snapshot after uploading. Set to 'false' for intermediate uploads in multi-job pipelines."
+    required: false
+    default: "true"
+  expect:
+    description: "Expected number of distinct upload API calls for the snapshot. Server auto-completes when this many are received. Use for parallel pipelines where no single job knows it is last."
+    required: false
+    default: "0"
+  reachability:
+    description: "Run CI-side reachability analysis after upload. Comma-separated languages: 'java', 'rust', 'java,rust'. Go reachability runs server-side automatically when enabled. Set to 'false' to skip (default)."
+    required: false
+    default: "false"
+  bytecode-path:
+    description: "Java bytecode path override for non-standard build layouts (e.g. Ant with custom output dirs). Auto-discovery handles Maven and Gradle projects of any size without configuration."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install hibou CLI
+      shell: bash
+      env:
+        HIBOU_SERVER: ${{ inputs.server }}
+        HIBOU_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        runner_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        runner_arch="$(uname -m)"
+
+        case "$runner_os" in
+          linux*)
+            runner_os="linux"
+            ;;
+          darwin*)
+            runner_os="darwin"
+            ;;
+          mingw*|msys*|cygwin*)
+            runner_os="windows"
+            ;;
+          *)
+            echo "unsupported runner OS: $runner_os" >&2
+            exit 1
+            ;;
+        esac
+
+        case "$runner_arch" in
+          x86_64|amd64)
+            runner_arch="amd64"
+            ;;
+          aarch64|arm64)
+            runner_arch="arm64"
+            ;;
+          *)
+            echo "unsupported runner architecture: $runner_arch" >&2
+            exit 1
+            ;;
+        esac
+
+        ext=""
+        if [[ "$runner_os" == "windows" ]]; then
+          ext=".exe"
+        fi
+
+        # Check if existing hibou matches server version
+        server_version="$(curl -fsSL "${HIBOU_SERVER}/api/v1/bin/version" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)"
+        if command -v hibou >/dev/null 2>&1; then
+          local_version="$(hibou version --short 2>/dev/null || echo '')"
+          if [[ "$local_version" == "$server_version" ]]; then
+            echo "hibou ${local_version} already installed and matches server"
+            echo "HIBOU_BIN=hibou" >> "$GITHUB_ENV"
+            exit 0
+          fi
+        fi
+
+        echo "Downloading hibou ${server_version} from server..."
+        curl -fsSL "${HIBOU_SERVER}/api/v1/bin/${runner_os}/${runner_arch}" -o "$RUNNER_TEMP/hibou${ext}"
+        chmod +x "$RUNNER_TEMP/hibou${ext}"
+        printf 'HIBOU_BIN=%s\n' "$RUNNER_TEMP/hibou${ext}" >> "$GITHUB_ENV"
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+    - name: Upload artifact
+      shell: bash
+      env:
+        INPUT_ORG: ${{ inputs.org }}
+        INPUT_REPO: ${{ inputs.repo }}
+        INPUT_FILE: ${{ inputs.file }}
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_SHA: ${{ inputs.sha }}
+        INPUT_COMPLETE: ${{ inputs.complete }}
+        INPUT_EXPECT: ${{ inputs.expect }}
+        INPUT_REACHABILITY: ${{ inputs.reachability }}
+        INPUT_BYTECODE_PATH: ${{ inputs.bytecode-path }}
+        HIBOU_SERVER: ${{ inputs.server }}
+        HIBOU_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        # Auto-detect provider, org, and repo from CI environment
+        org="$INPUT_ORG"
+        repo="$INPUT_REPO"
+        ref="$INPUT_REF"
+        sha="$INPUT_SHA"
+
+        if [[ -z "$org" || -z "$repo" ]]; then
+          if [[ -n "${GITEA_REPOSITORY:-}" ]]; then
+            # Forgejo/Gitea
+            [[ -n "$org" ]]  || org="forgejo/${GITEA_REPOSITORY_OWNER}"
+            [[ -n "$repo" ]] || repo="${GITEA_REPOSITORY#*/}"
+          elif [[ -n "${GITHUB_REPOSITORY_OWNER:-}" ]]; then
+            # GitHub
+            [[ -n "$org" ]]  || org="github/${GITHUB_REPOSITORY_OWNER}"
+            [[ -n "$repo" ]] || repo="${GITHUB_REPOSITORY#*/}"
+          fi
+        fi
+
+        [[ -n "$org" ]]  || { echo 'org could not be detected; set it explicitly' >&2; exit 1; }
+        [[ -n "$repo" ]] || { echo 'repo could not be detected; set it explicitly' >&2; exit 1; }
+
+        [[ -n "$ref" ]] || ref="${GITHUB_REF:-${GITEA_REF:-}}"
+        [[ -n "$sha" ]] || sha="${GITHUB_SHA:-${GITEA_SHA:-}}"
+        [[ -n "$ref" && -n "$sha" ]] || { echo 'ref and sha are required' >&2; exit 1; }
+
+        # Expand globs and newline-separated paths into file list
+        files=()
+        while IFS= read -r pattern; do
+          pattern="$(echo "$pattern" | xargs)"
+          [[ -n "$pattern" ]] || continue
+          for f in $pattern; do
+            [[ -f "$f" ]] && files+=("$f")
+          done
+        done <<< "$INPUT_FILE"
+
+        [[ ${#files[@]} -gt 0 ]] || { echo 'no files found matching the provided pattern(s)' >&2; exit 1; }
+
+        complete_flag=""
+        if [[ "$INPUT_COMPLETE" == "false" ]]; then
+          complete_flag="--complete=false"
+        fi
+
+        expect_flag=""
+        if [[ "$INPUT_EXPECT" != "0" && -n "$INPUT_EXPECT" ]]; then
+          expect_flag="--expect=$INPUT_EXPECT"
+        fi
+
+        hibou upload "${files[@]}" --org "$org" --repo "$repo" --ref "$ref" --sha "$sha" $complete_flag $expect_flag
+
+        # Run CI-side reachability analysis if requested
+        if [[ "$INPUT_REACHABILITY" != "false" && -n "$INPUT_REACHABILITY" ]]; then
+          reachability_args=(--org "$org" --repo "$repo" --ref "$ref" --sha "$sha")
+
+          # Parse comma-separated languages
+          IFS=',' read -ra langs <<< "$INPUT_REACHABILITY"
+          lang_flags=()
+          for lang in "${langs[@]}"; do
+            lang="$(echo "$lang" | xargs)"
+            lang_flags+=(--lang "$lang")
+          done
+
+          # Add bytecode path override if provided (Java)
+          bytecode_flags=""
+          if [[ -n "$INPUT_BYTECODE_PATH" ]]; then
+            bytecode_flags="--bytecode $INPUT_BYTECODE_PATH"
+          fi
+
+          hibou analyze reachability "${lang_flags[@]}" "${reachability_args[@]}" $bytecode_flags
+        fi

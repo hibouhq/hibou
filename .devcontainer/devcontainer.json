@@ -9,20 +9,16 @@
   },
   "postCreateCommand": ".devcontainer/scripts/post-create.sh",
   "forwardPorts": [
-    3000,
     3030,
+    3000,
     4321,
     4322,
     4954,
     5432,
-    8080,
+    8585,
     8081,
   ],
   "portsAttributes": {
-    "3000": {
-      "label": "Vite Dev Server (Frontend)",
-      "onAutoForward": "notify"
-    },
     "3030": {
       "label": "Forgejo",
       "onAutoForward": "silent"
@@ -43,9 +39,14 @@
       "label": "PostgreSQL",
       "onAutoForward": "silent"
     },
-    "8080": {
+    "3000": {
+      "label": "Hibou Frontend (Vite)",
+      "onAutoForward": "notify"
+    },
+    "8585": {
       "label": "Hibou API Server",
-      "onAutoForward": "silent"
+      "onAutoForward": "silent",
+      "requireLocalPort": true
     },
     "8081": {
       "label": "Hibou MCP server",

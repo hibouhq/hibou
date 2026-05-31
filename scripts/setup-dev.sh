@@ -7,10 +7,10 @@ FORGEJO_URL="${FORGEJO_URL:-http://localhost:3030}"
 FORGEJO_ADMIN_USER="${FORGEJO_ADMIN_USER:-hibou-admin}"
 FORGEJO_ADMIN_PASS="${FORGEJO_ADMIN_PASS:-hibou-admin}"
 FORGEJO_ADMIN_EMAIL="${FORGEJO_ADMIN_EMAIL:-admin@localhost}"
-HIBOU_CALLBACK_URL="${HIBOU_CALLBACK_URL:-http://localhost:8080/api/v1/auth/callback?provider=forgejo}"
+HIBOU_CALLBACK_URL="${HIBOU_CALLBACK_URL:-http://localhost:8585/api/v1/auth/callback?provider=forgejo}"
 HIBOU_CALLBACK_URL_VITE="${HIBOU_CALLBACK_URL_VITE:-http://localhost:3000/api/v1/auth/callback?provider=forgejo}"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-hibou-webhook-dev-secret}"
-WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8080/api/v1/webhooks/forgejo}"
+WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8585/api/v1/webhooks/forgejo}"
 
 wait_for_forgejo() {
   echo "==> Waiting for Forgejo to be ready..."
@@ -156,7 +156,7 @@ for hook in json.load(sys.stdin):
 print_credentials() {
   local client_id client_secret
   client_id=$(echo "$APP_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['client_id'])")
-  client_secret=$(echo "$APP_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('client_secret','(already created — check .env)'))")
+  client_secret=$(echo "$APP_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('client_secret',''))")
 
   echo ""
   echo "==> Setup complete!"
@@ -167,7 +167,11 @@ print_credentials() {
   echo "  HIBOU_FORGE_0_ID=forgejo"
   echo "  HIBOU_FORGE_0_URL=$FORGEJO_URL"
   echo "  HIBOU_FORGE_0_CLIENT_ID=$client_id"
-  echo "  HIBOU_FORGE_0_CLIENT_SECRET=$client_secret"
+  if [ -n "$client_secret" ]; then
+    echo "  HIBOU_FORGE_0_CLIENT_SECRET=$client_secret"
+  else
+    echo "  HIBOU_FORGE_0_CLIENT_SECRET=(already set — kept from .env)"
+  fi
   echo "  HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET"
   echo ""
   echo "Forgejo admin login: $FORGEJO_URL"
@@ -182,7 +186,10 @@ print_credentials() {
     grep -q "^HIBOU_FORGE_0_ID=" .env && sed -i "s|^HIBOU_FORGE_0_ID=.*|HIBOU_FORGE_0_ID=forgejo|" .env
     grep -q "^HIBOU_FORGE_0_URL=" .env && sed -i "s|^HIBOU_FORGE_0_URL=.*|HIBOU_FORGE_0_URL=$FORGEJO_URL|" .env
     grep -q "^HIBOU_FORGE_0_CLIENT_ID=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_ID=.*|HIBOU_FORGE_0_CLIENT_ID=$client_id|" .env
-    grep -q "^HIBOU_FORGE_0_CLIENT_SECRET=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_SECRET=.*|HIBOU_FORGE_0_CLIENT_SECRET=$client_secret|" .env
+    # Only update client secret if we got a new one (Forgejo doesn't return it for existing apps)
+    if [ -n "$client_secret" ] && [ "$client_secret" != "(already created — check .env)" ]; then
+      grep -q "^HIBOU_FORGE_0_CLIENT_SECRET=" .env && sed -i "s|^HIBOU_FORGE_0_CLIENT_SECRET=.*|HIBOU_FORGE_0_CLIENT_SECRET=$client_secret|" .env
+    fi
     grep -q "^HIBOU_FORGE_0_WEBHOOK_SECRET=" .env && sed -i "s|^HIBOU_FORGE_0_WEBHOOK_SECRET=.*|HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET|" .env
     if ! grep -q "^HIBOU_FORGE_0_WEBHOOK_SECRET=" .env; then
       echo "HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> .env

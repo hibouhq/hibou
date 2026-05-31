@@ -5,14 +5,17 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 
@@ -30,32 +33,39 @@ import (
 	"github.com/hibouhq/lehibou/internal/repoconfig"
 	"github.com/hibouhq/lehibou/internal/retention"
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/toolcatalog"
 	"github.com/hibouhq/lehibou/internal/version"
 	"github.com/hibouhq/lehibou/internal/ws"
 )
 
 type Server struct {
-	cfg              config.Config
-	db               *sql.DB
-	enforcer         *rbac.Enforcer
-	authMgr          *auth.Manager
-	forges           map[string]forge.Provider
-	log              zerolog.Logger
-	queries          *store.Queries
-	bus              *events.Bus
-	objStore         objstore.Store
-	wsHub            *ws.Hub
-	notifySvc        *notify.Service
-	deltaSvc         *delta.Service
-	repoConfigLoader *repoconfig.Loader
-	onboardingSvc    *repoconfig.OnboardingService
-	complianceSvc    *compliance.Service
-	retentionWorker  *retention.Worker
-	dispatcher       *notify.Dispatcher
-	annotator        *forge.Annotator
-	startedAt        time.Time
-	router           chi.Router
-	http             *http.Server
+	cfg               config.Config
+	db                *sql.DB
+	enforcer          *rbac.Enforcer
+	authMgr           *auth.Manager
+	forges            map[string]forge.Provider
+	log               zerolog.Logger
+	queries           *store.Queries
+	bus               *events.Bus
+	objStore          objstore.Store
+	wsHub             *ws.Hub
+	notifySvc         *notify.Service
+	deltaSvc          *delta.Service
+	repoConfigLoader  *repoconfig.Loader
+	onboardingSvc     *repoconfig.OnboardingService
+	complianceSvc     *compliance.Service
+	toolCatalogSvc    *toolcatalog.Service
+	retentionWorker   *retention.Worker
+	dispatcher        *notify.Dispatcher
+	staleScanChecker  *notify.StaleScanChecker
+	annotator         *forge.Annotator
+	forgeIPAllowlists map[string]*forgeIPAllowlist
+	forgeLimiters     map[string]*ipRateLimiter
+	lifecycleCtx      context.Context
+	shutdownCancel    context.CancelFunc
+	startedAt         time.Time
+	router            chi.Router
+	http              *http.Server
 }
 
 type healthResponse struct {
@@ -77,6 +87,7 @@ const retentionInterval = 24 * time.Hour
 
 func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) *Server {
 	r := chi.NewRouter()
+	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
 
 	//nolint:staticcheck // TODO: replace deprecated RealIP middleware with a proxy-aware alternative.
 	r.Use(middleware.RealIP)
@@ -85,16 +96,18 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	r.Use(middleware.Recoverer)
 
 	s := &Server{
-		cfg:       cfg,
-		db:        db,
-		enforcer:  enforcer,
-		authMgr:   authMgr,
-		forges:    forges,
-		log:       log,
-		queries:   store.NewQueries(db),
-		bus:       events.New(log),
-		startedAt: time.Now(),
-		router:    r,
+		cfg:            cfg,
+		db:             db,
+		enforcer:       enforcer,
+		authMgr:        authMgr,
+		forges:         forges,
+		log:            log,
+		lifecycleCtx:   lifecycleCtx,
+		shutdownCancel: shutdownCancel,
+		queries:        store.NewQueries(db),
+		bus:            events.New(log),
+		startedAt:      time.Now(),
+		router:         r,
 		http: &http.Server{
 			Handler:           r,
 			ReadHeaderTimeout: 10 * time.Second,
@@ -110,10 +123,12 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 		s.objStore = artifactStore
 	}
 	s.notifySvc = notify.NewService(s.queries, s.wsHub, s.bus, log)
-	s.deltaSvc = delta.NewService(delta.NewStoreAdapter(s.queries), log)
+	deltaStore := delta.NewStoreAdapter(s.queries)
+	s.deltaSvc = delta.NewService(deltaStore, log, deltaStore)
 	s.repoConfigLoader = repoconfig.NewLoader(s.forges, log)
 	s.onboardingSvc = repoconfig.NewOnboardingService(s.forges, log)
 	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
+	s.toolCatalogSvc = toolcatalog.NewService(toolcatalog.NewStoreAdapter(s.queries))
 	if s.objStore != nil {
 		s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, log, retention.DefaultPolicy())
 	}
@@ -124,20 +139,61 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 		&notify.WebhookSender{},
 		&notify.EmailSender{},
 	)
+	s.staleScanChecker = notify.NewStaleScanChecker(s.queries, s.bus, log)
 	s.annotator = forge.NewAnnotator(forges, s.deltaSvc, s.bus, forge.NewAnnotatorStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, log)
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
 	s.annotator.Subscribe()
+	s.forgeIPAllowlists = make(map[string]*forgeIPAllowlist)
+	s.forgeLimiters = make(map[string]*ipRateLimiter)
+	for _, fc := range cfg.Forges {
+		if fc.IPAllowlist || fc.AllowedCIDRs != "" {
+			var source forgeIPSource
+			if fc.Type == "github" {
+				source = newGitHubIPSource(fc.URL)
+			}
+			cidrs := forgeDefaultCIDRs(fc, log)
+			if source != nil || len(cidrs) > 0 {
+				s.forgeIPAllowlists[fc.ID] = newForgeIPAllowlist(s.lifecycleCtx, log, source, cidrs)
+			}
+		}
+		if fc.RateLimitRPS > 0 {
+			s.forgeLimiters[fc.ID] = newIPRateLimiter(s.lifecycleCtx, fc.RateLimitRPS, int(fc.RateLimitRPS)*5)
+		}
+	}
 
 	s.routes(siteFS)
 	return s
 }
 
+// forgeDefaultCIDRs returns the static CIDR list for a forge. User-provided
+// AllowedCIDRs always take precedence. For GitLab SaaS (no custom URL),
+// built-in defaults are used when none are specified.
+func forgeDefaultCIDRs(fc config.ForgeConfig, log zerolog.Logger) []string {
+	if fc.AllowedCIDRs != "" {
+		return strings.Split(fc.AllowedCIDRs, ",")
+	}
+
+	switch fc.Type {
+	case "gitlab":
+		if fc.URL == "" {
+			log.Info().Str("forge", fc.ID).Msg("using built-in GitLab SaaS IP ranges")
+			return gitlabSaaSCIDRs
+		}
+		log.Warn().Str("forge", fc.ID).Msg("self-hosted GitLab with IP allowlist but no AllowedCIDRs configured")
+	}
+
+	return nil
+}
+
 func (s *Server) routes(siteFS fs.FS) {
+	s.router.Handle("/metrics", promhttp.Handler())
 	s.router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", s.handleHealth)
 		r.Get("/ready", s.handleReady)
 		r.Get("/metrics", s.handleMetrics)
+		r.Get("/bin/version", s.handleBinVersion)
+		r.Get("/bin/{os}/{arch}", s.handleBinDownload)
 		r.Get("/schemas/hibou-config.schema.json", s.handleGetConfigSchema)
 		r.Get("/ws", s.wsHub.HTTPHandler(s.authMgr, s.queries))
 		r.Get("/docs/*", httpSwagger.Handler(
@@ -148,7 +204,10 @@ func (s *Server) routes(siteFS fs.FS) {
 		r.Get("/auth/callback", auth.CallbackHandler(s.authMgr))
 		r.Post("/auth/logout", auth.LogoutHandler(s.authMgr))
 		r.Post("/auth/dev-login", auth.DevLoginHandler(s.authMgr))
-		r.Post("/webhooks/{provider}", s.handleWebhook)
+		r.Route("/webhooks/{provider}", func(r chi.Router) {
+			r.Use(s.webhookProtection)
+			r.Post("/", s.handleWebhook)
+		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
@@ -172,8 +231,49 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Delete("/", s.handleDeleteOrg)
 					r.Get("/dashboard", s.handleGetOrgDashboard)
 					r.Get("/compliance/export", s.handleComplianceExport)
+					r.Get("/compliance/iso27001", s.handleISO27001Export)
+					r.Get("/compliance/soa", s.handleSoAExport)
+					r.Get("/settings", s.handleGetOrgSettings)
+					r.Put("/settings", s.handleUpdateOrgSettings)
 					r.Get("/audit-logs", s.handleListAuditLogs)
+					r.Get("/tool-catalog", s.handleGetToolCatalog)
 					r.Get("/search", s.handleGlobalSearch)
+					r.Route("/members", func(r chi.Router) {
+						r.Get("/", s.handleListOrgMembers)
+						r.Post("/", s.handleAddOrgMember)
+						r.Put("/{userID}/role", s.handleUpdateOrgMemberRole)
+						r.Delete("/{userID}", s.handleRemoveOrgMember)
+					})
+					r.Route("/integrations", func(r chi.Router) {
+						r.Post("/", s.handleCreateIntegration)
+						r.Get("/", s.handleListIntegrations)
+						r.Route("/{integrationID}", func(r chi.Router) {
+							r.Get("/", s.handleGetIntegration)
+							r.Get("/health", s.handleGetIntegrationHealth)
+							r.Post("/replay", s.handleReplayIntegration)
+							r.Put("/", s.handleUpdateIntegration)
+							r.Delete("/", s.handleDeleteIntegration)
+						})
+					})
+					r.Route("/notification-rules", func(r chi.Router) {
+						r.Post("/", s.handleCreateNotificationRule)
+						r.Post("/dry-run", s.handleDryRunNotificationRule)
+						r.Get("/", s.handleListNotificationRules)
+						r.Route("/{ruleID}", func(r chi.Router) {
+							r.Get("/", s.handleGetNotificationRule)
+							r.Put("/", s.handleUpdateNotificationRule)
+							r.Delete("/", s.handleDeleteNotificationRule)
+						})
+					})
+					r.Route("/quality-gates", func(r chi.Router) {
+						r.Post("/", s.handleCreateQualityGate)
+						r.Get("/", s.handleListQualityGates)
+						r.Route("/{gateID}", func(r chi.Router) {
+							r.Get("/", s.handleGetQualityGate)
+							r.Put("/", s.handleUpdateQualityGate)
+							r.Delete("/", s.handleDeleteQualityGate)
+						})
+					})
 					r.Route("/clients", func(r chi.Router) {
 						r.Post("/", s.handleCreateClient)
 						r.Get("/", s.handleListClients)
@@ -194,10 +294,19 @@ func (s *Server) routes(siteFS fs.FS) {
 							r.Get("/", s.handleGetTeam)
 							r.Put("/", s.handleUpdateTeam)
 							r.Delete("/", s.handleDeleteTeam)
+							r.Route("/members", func(r chi.Router) {
+								r.Get("/", s.handleListTeamMembers)
+								r.Post("/", s.handleAddTeamMember)
+								r.Put("/{userID}/role", s.handleUpdateTeamMemberRole)
+								r.Delete("/{userID}", s.handleRemoveTeamMember)
+							})
 						})
 					})
 					r.Route("/repos", func(r chi.Router) {
+						r.Post("/", s.handleEnrollRepo)
 						r.Get("/", s.handleListRepos)
+						r.Put("/{repoSlug}", s.handleUpdateRepo)
+						r.Delete("/{repoSlug}", s.handleRemoveRepo)
 						r.Get("/{repoSlug}", s.handleGetRepo)
 						r.Post("/{repoSlug}/releases", s.handleCreateRelease)
 						r.Get("/{repoSlug}/releases", s.handleListReleases)
@@ -212,22 +321,56 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
+						r.Route("/{repoSlug}/vex", func(r chi.Router) {
+							r.Post("/", s.handleCreateVEXStatement)
+							r.Get("/", s.handleListVEXStatements)
+							r.Get("/export", s.handleExportVEX)
+							r.Get("/{statementID}", s.handleGetVEXStatement)
+							r.Put("/{statementID}", s.handleUpdateVEXStatement)
+							r.Delete("/{statementID}", s.handleDeleteVEXStatement)
+						})
 						r.Route("/{repoSlug}/delta", func(r chi.Router) {
 							r.Get("/", s.handleGetDelta)
 						})
 					})
 				})
 			})
-			r.Post("/upload/sbom", s.handleUploadSBOM)
-			r.Post("/upload/sarif", s.handleUploadSARIF)
-			r.Post("/upload/findings", s.handleUploadFindings)
+			r.Post("/upload", s.handleUploadAuto)
 			r.Get("/uploads/{id}/status", s.handleGetUploadStatus)
 		})
 	})
 
 	if siteFS != nil {
 		s.router.Handle("/*", spaHandler(siteFS))
+	} else {
+		s.router.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `<!DOCTYPE html><html><head><title>Hibou</title></head><body style="font-family:system-ui;background:#0d1117;color:#c9d1d9;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h1>🦉 Hibou</h1><p>Frontend not built. Run <code style="background:#161b22;padding:2px 8px;border-radius:4px">make build-frontend</code> then restart,<br>or use the Vite dev server on <a href="http://localhost:3000" style="color:#58a6ff">port 3000</a>.</p></div></body></html>`)
+		}))
 	}
+}
+
+// webhookProtection dynamically applies per-forge IP allowlisting and rate
+// limiting based on the {provider} URL parameter.
+func (s *Server) webhookProtection(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider := chi.URLParam(r, "provider")
+		handler := next
+
+		if lim, ok := s.forgeLimiters[provider]; ok {
+			handler = lim.Middleware(handler)
+		}
+		if al, ok := s.forgeIPAllowlists[provider]; ok {
+			handler = al.Middleware(handler)
+		}
+
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -238,6 +381,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	if s.retentionWorker != nil {
 		go s.runRetentionLoop(ctx)
+	}
+	if s.staleScanChecker != nil {
+		go s.staleScanChecker.Start(ctx)
 	}
 
 	s.log.Info().
@@ -258,10 +404,20 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.log.Info().Msg("shutting down server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return s.http.Shutdown(shutdownCtx)
+		return s.Shutdown(shutdownCtx)
 	case err := <-errCh:
+		if s.shutdownCancel != nil {
+			s.shutdownCancel()
+		}
 		return err
 	}
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
+	return s.http.Shutdown(ctx)
 }
 
 func (s *Server) runRetentionLoop(ctx context.Context) {

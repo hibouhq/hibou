@@ -96,11 +96,47 @@ func (q *Queries) ListOrganizationsByUser(ctx context.Context, userID uuid.UUID,
 	return organizations, int(total), nil
 }
 
+func (q *Queries) ListOrganizations(ctx context.Context) ([]Organization, error) {
+	rows, err := q.db.ListOrganizations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	organizations := make([]Organization, len(rows))
+	for i, row := range rows {
+		organizations[i] = Organization{
+			ID:          row.ID,
+			Name:        row.Name,
+			Slug:        row.Slug,
+			DisplayName: row.DisplayName,
+			Provider:    row.Provider,
+			Settings:    row.Settings,
+			CreatedAt:   row.CreatedAt,
+			UpdatedAt:   row.UpdatedAt,
+		}
+	}
+	return organizations, nil
+}
+
 func (q *Queries) UpdateOrganization(ctx context.Context, id uuid.UUID, name, displayName string) (*Organization, error) {
 	row, err := q.db.UpdateOrganization(ctx, dbgen.UpdateOrganizationParams{
 		ID:          id,
 		Name:        name,
 		DisplayName: displayName,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return orgFromFields(row.ID, row.Name, row.Slug, row.DisplayName, row.Provider, row.Settings, row.CreatedAt, row.UpdatedAt), nil
+}
+
+func (q *Queries) UpdateOrganizationSettings(ctx context.Context, id uuid.UUID, settings json.RawMessage) (*Organization, error) {
+	row, err := q.db.UpdateOrganizationSettings(ctx, dbgen.UpdateOrganizationSettingsParams{
+		ID:       id,
+		Settings: settings,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

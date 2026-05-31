@@ -2,13 +2,13 @@
 set -euo pipefail
 
 FORGEJO_URL="${FORGEJO_URL:-http://localhost:3030}"
-HIBOU_URL="${HIBOU_URL:-http://localhost:8080}"
+HIBOU_URL="${HIBOU_URL:-http://localhost:8585}"
 FORGEJO_ADMIN_USER="${FORGEJO_ADMIN_USER:-hibou-admin}"
 FORGEJO_ADMIN_PASS="${FORGEJO_ADMIN_PASS:-hibou-admin}"
 FORGEJO_OWNER="${FORGEJO_OWNER:-$FORGEJO_ADMIN_USER}"
 TMPDIR_BASE="$(mktemp -d)"
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-hibou-webhook-dev-secret}"
-WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8080/api/v1/webhooks/forgejo}"
+WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8585/api/v1/webhooks/forgejo}"
 
 FORGEJO_TOKEN=""
 API_KEY=""
@@ -215,7 +215,7 @@ with open(os.environ["PAYLOAD_FILE"], "w", encoding="utf-8") as fh:
     json.dump(payload, fh)
 PY
 
-  curl -sf "$HIBOU_URL/api/v1/upload/sbom" \
+  curl -sf "$HIBOU_URL/api/v1/upload" \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     --data @"$payload_file" >/dev/null
@@ -226,7 +226,21 @@ seed_hibou_data() {
   go build -o "$TMPDIR_BASE/hibou" . 2>/dev/null
   ln -sf hibou "$TMPDIR_BASE/hibou-server"
 
+  # Use a dedicated port to avoid conflicts with any running hibou instance.
+  local seed_port=8586
+  HIBOU_URL="http://localhost:$seed_port"
+
+  # Kill anything already on the seed port.
+  local pid_on_port
+  pid_on_port=$(lsof -ti :$seed_port 2>/dev/null || true)
+  if [[ -n "$pid_on_port" ]]; then
+    kill $pid_on_port 2>/dev/null || true
+    sleep 1
+  fi
+
   env \
+    HIBOU_PORT=$seed_port \
+    HIBOU_MCP_ENABLED=false \
     HIBOU_ARTIFACT_PATH=tmp/artifacts \
     HIBOU_FORGE_0_TYPE= \
     HIBOU_FORGE_0_ID= \
@@ -255,6 +269,12 @@ seed_hibou_data() {
     UPDATE repositories SET default_branch = 'master'
       WHERE slug = 'k9s' AND default_branch = 'main'
         AND org_id = (SELECT id FROM organizations WHERE slug = 'devtools');
+    -- Auto-add all forgejo users to the devtools org so OAuth login sees orgs.
+    INSERT INTO org_members (user_id, org_id, role)
+      SELECT u.id, o.id, 'admin'
+      FROM users u, organizations o
+      WHERE u.provider = 'forgejo' AND o.slug = 'devtools'
+      ON CONFLICT DO NOTHING;
   " >/dev/null 2>&1 || true
 
   echo "==> Authenticating with Hibou dev login..."

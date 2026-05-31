@@ -17,7 +17,7 @@
         "customManagers:dockerfileVersions",
         "security:openssf-scorecard",
         "mergeConfidence:all-badges",
-        "github>Invarnt/dockerize-exec//renovate-presets/fix/openssf-merge-confidence-columns.json5",
+        "github>hibouhq/lehibou//renovate-presets/fix/openssf-merge-confidence-columns.json5",
     ],
     "packageRules": [
         {
@@ -76,6 +76,43 @@
             ],
             "addLabels": [
                 "docker"
+            ]
+        },
+        {
+            "description": "Add labels for PRs related to JavaScript and Node.js",
+            "matchCategories": [
+                "js"
+            ],
+            "addLabels": [
+                "javascript"
+            ]
+        },
+        {
+            "description": "Add labels for PRs related to Helm",
+            "matchManagers": [
+                "helmv3",
+                "helm-values"
+            ],
+            "addLabels": [
+                "helm"
+            ]
+        },
+        {
+            "description": "Add labels for PRs related to Terraform",
+            "matchManagers": [
+                "terraform"
+            ],
+            "addLabels": [
+                "terraform"
+            ]
+        },
+        {
+            "description": "Add labels for PRs related to GitHub Actions",
+            "matchManagers": [
+                "github-actions"
+            ],
+            "addLabels": [
+                "ci"
             ]
         }
     ]

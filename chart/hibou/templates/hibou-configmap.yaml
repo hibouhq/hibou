@@ -5,11 +5,30 @@ metadata:
   labels:
     {{- include "hibou.labels" . | nindent 4 }}
 data:
+  HIBOU_HOST: "0.0.0.0"
+  HIBOU_PORT: "8080"
   HIBOU_LOG_LEVEL: {{ .Values.hibou.logging.level | quote }}
   HIBOU_LOG_FORMAT: {{ .Values.hibou.logging.format | quote }}
   HIBOU_TRIVY_URL: {{ include "hibou.trivyURL" . | quote }}
   HIBOU_OSV_URL: {{ .Values.hibou.advisory.osv.url | quote }}
   HIBOU_CACHE_TTL: {{ .Values.hibou.advisory.cache.ttl | quote }}
+  HIBOU_MAX_UPLOAD_SIZE: {{ .Values.hibou.maxUploadSize | quote }}
   {{- with (include "hibou.baseURL" .) }}
   HIBOU_BASE_URL: {{ . | quote }}
+  {{- end }}
+  {{- range $i, $forge := .Values.hibou.forges }}
+  {{ printf "HIBOU_FORGE_%d_TYPE" $i }}: {{ $forge.type | quote }}
+  {{ printf "HIBOU_FORGE_%d_ID" $i }}: {{ $forge.id | default $forge.type | quote }}
+  {{- if $forge.url }}
+  {{ printf "HIBOU_FORGE_%d_URL" $i }}: {{ $forge.url | quote }}
+  {{- end }}
+  {{- if $forge.ipAllowlist }}
+  {{ printf "HIBOU_FORGE_%d_IP_ALLOWLIST" $i }}: "true"
+  {{- end }}
+  {{- if $forge.allowedCIDRs }}
+  {{ printf "HIBOU_FORGE_%d_ALLOWED_CIDRS" $i }}: {{ $forge.allowedCIDRs | quote }}
+  {{- end }}
+  {{- if $forge.rateLimitRPS }}
+  {{ printf "HIBOU_FORGE_%d_RATE_LIMIT_RPS" $i }}: {{ $forge.rateLimitRPS | quote }}
+  {{- end }}
   {{- end }}

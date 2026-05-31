@@ -275,7 +275,7 @@ func (q *Queries) SearchAdvisoriesBySeverity(ctx context.Context, arg SearchAdvi
 }
 
 const searchClients = `-- name: SearchClients :many
-SELECT id, org_id, name, slug, contact_email, contact_name, notification_prefs, metadata, created_at, updated_at, client_type, labels FROM clients WHERE org_id = $1 AND name ILIKE $2 ESCAPE '\\' ORDER BY name ASC LIMIT $3 OFFSET $4
+SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at FROM clients WHERE org_id = $1 AND name ILIKE $2 ESCAPE '\\' ORDER BY name ASC LIMIT $3 OFFSET $4
 `
 
 type SearchClientsParams struct {
@@ -304,14 +304,14 @@ func (q *Queries) SearchClients(ctx context.Context, arg SearchClientsParams) ([
 			&i.OrgID,
 			&i.Name,
 			&i.Slug,
+			&i.ClientType,
 			&i.ContactEmail,
 			&i.ContactName,
 			&i.NotificationPrefs,
+			&i.Labels,
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ClientType,
-			&i.Labels,
 		); err != nil {
 			return nil, err
 		}
@@ -381,7 +381,7 @@ func (q *Queries) SearchComponents(ctx context.Context, arg SearchComponentsPara
 }
 
 const searchFindings = `-- name: SearchFindings :many
-SELECT f.id, f.snapshot_id, f.tool, f.rule_id, f.severity, f.status, f.file_path, f.start_line, f.end_line, f.location_hash, f.message, f.fingerprint, f.metadata, f.created_at
+SELECT f.id, f.snapshot_id, f.tool, f.rule_id, f.severity, f.status, f.file_path, f.start_line, f.end_line, f.location_hash, f.message, f.fingerprint, f.metadata, f.labels, f.created_at
 FROM findings f
 JOIN snapshots s ON s.id = f.snapshot_id
 JOIN refs r ON r.id = s.ref_id
@@ -425,6 +425,7 @@ func (q *Queries) SearchFindings(ctx context.Context, arg SearchFindingsParams) 
 			&i.Message,
 			&i.Fingerprint,
 			&i.Metadata,
+			&i.Labels,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -441,7 +442,7 @@ func (q *Queries) SearchFindings(ctx context.Context, arg SearchFindingsParams) 
 }
 
 const searchFindingsBySeverity = `-- name: SearchFindingsBySeverity :many
-SELECT f.id, f.snapshot_id, f.tool, f.rule_id, f.severity, f.status, f.file_path, f.start_line, f.end_line, f.location_hash, f.message, f.fingerprint, f.metadata, f.created_at
+SELECT f.id, f.snapshot_id, f.tool, f.rule_id, f.severity, f.status, f.file_path, f.start_line, f.end_line, f.location_hash, f.message, f.fingerprint, f.metadata, f.labels, f.created_at
 FROM findings f
 JOIN snapshots s ON s.id = f.snapshot_id
 JOIN refs r ON r.id = s.ref_id
@@ -489,6 +490,7 @@ func (q *Queries) SearchFindingsBySeverity(ctx context.Context, arg SearchFindin
 			&i.Message,
 			&i.Fingerprint,
 			&i.Metadata,
+			&i.Labels,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

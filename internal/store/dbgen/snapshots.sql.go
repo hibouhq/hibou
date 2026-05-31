@@ -48,7 +48,7 @@ func (q *Queries) CountSnapshotsByRef(ctx context.Context, refID uuid.UUID) (int
 const createSnapshot = `-- name: CreateSnapshot :one
 INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key
+RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
 `
 
 type CreateSnapshotParams struct {
@@ -75,14 +75,58 @@ func (q *Queries) CreateSnapshot(ctx context.Context, arg CreateSnapshotParams) 
 		&i.Label,
 		&i.Status,
 		&i.RawArtifactUrl,
-		&i.CreatedAt,
 		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createSnapshotWithLabels = `-- name: CreateSnapshotWithLabels :one
+INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url, labels, image_digest)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
+`
+
+type CreateSnapshotWithLabelsParams struct {
+	RefID          uuid.UUID       `json:"ref_id"`
+	CommitSha      string          `json:"commit_sha"`
+	Label          sql.NullString  `json:"label"`
+	Status         SnapshotStatus  `json:"status"`
+	RawArtifactUrl sql.NullString  `json:"raw_artifact_url"`
+	Labels         json.RawMessage `json:"labels"`
+	ImageDigest    sql.NullString  `json:"image_digest"`
+}
+
+func (q *Queries) CreateSnapshotWithLabels(ctx context.Context, arg CreateSnapshotWithLabelsParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, createSnapshotWithLabels,
+		arg.RefID,
+		arg.CommitSha,
+		arg.Label,
+		arg.Status,
+		arg.RawArtifactUrl,
+		arg.Labels,
+		arg.ImageDigest,
+	)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Label,
+		&i.Status,
+		&i.RawArtifactUrl,
+		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getLatestSnapshotByRef = `-- name: GetLatestSnapshotByRef :one
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (Snapshot, error) {
@@ -95,14 +139,16 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 		&i.Label,
 		&i.Status,
 		&i.RawArtifactUrl,
-		&i.CreatedAt,
 		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getSnapshotAtDate = `-- name: GetSnapshotAtDate :one
-SELECT s.id, s.ref_id, s.commit_sha, s.label, s.status, s.raw_artifact_url, s.created_at, s.artifact_key FROM snapshots s
+SELECT s.id, s.ref_id, s.commit_sha, s.label, s.status, s.raw_artifact_url, s.artifact_key, s.labels, s.image_digest, s.created_at FROM snapshots s
 JOIN refs r ON r.id = s.ref_id
 WHERE r.repo_id = $1
 	AND r.name = $2
@@ -128,14 +174,16 @@ func (q *Queries) GetSnapshotAtDate(ctx context.Context, arg GetSnapshotAtDatePa
 		&i.Label,
 		&i.Status,
 		&i.RawArtifactUrl,
-		&i.CreatedAt,
 		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getSnapshotByID = `-- name: GetSnapshotByID :one
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots WHERE id = $1
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE id = $1
 `
 
 func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, error) {
@@ -148,14 +196,16 @@ func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, 
 		&i.Label,
 		&i.Status,
 		&i.RawArtifactUrl,
-		&i.CreatedAt,
 		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listArchivedSnapshotsForPurge = `-- name: ListArchivedSnapshotsForPurge :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots
 WHERE created_at < $1
 	AND status = 'archived'
 ORDER BY created_at ASC
@@ -183,8 +233,10 @@ func (q *Queries) ListArchivedSnapshotsForPurge(ctx context.Context, arg ListArc
 			&i.Label,
 			&i.Status,
 			&i.RawArtifactUrl,
-			&i.CreatedAt,
 			&i.ArtifactKey,
+			&i.Labels,
+			&i.ImageDigest,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -290,7 +342,7 @@ func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapsho
 }
 
 const listExpiredSnapshots = `-- name: ListExpiredSnapshots :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots
 WHERE created_at < $1
 	AND status IN ('complete', 'active')
 ORDER BY created_at ASC
@@ -318,8 +370,10 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnaps
 			&i.Label,
 			&i.Status,
 			&i.RawArtifactUrl,
-			&i.CreatedAt,
 			&i.ArtifactKey,
+			&i.Labels,
+			&i.ImageDigest,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -335,7 +389,7 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnaps
 }
 
 const listSnapshotsByRef = `-- name: ListSnapshotsByRef :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListSnapshotsByRefParams struct {
@@ -360,8 +414,60 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 			&i.Label,
 			&i.Status,
 			&i.RawArtifactUrl,
-			&i.CreatedAt,
 			&i.ArtifactKey,
+			&i.Labels,
+			&i.ImageDigest,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSnapshotsByRefWithLabels = `-- name: ListSnapshotsByRefWithLabels :many
+SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4
+`
+
+type ListSnapshotsByRefWithLabelsParams struct {
+	RefID  uuid.UUID       `json:"ref_id"`
+	Labels json.RawMessage `json:"labels"`
+	Limit  int32           `json:"limit"`
+	Offset int32           `json:"offset"`
+}
+
+func (q *Queries) ListSnapshotsByRefWithLabels(ctx context.Context, arg ListSnapshotsByRefWithLabelsParams) ([]Snapshot, error) {
+	rows, err := q.db.QueryContext(ctx, listSnapshotsByRefWithLabels,
+		arg.RefID,
+		arg.Labels,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Snapshot{}
+	for rows.Next() {
+		var i Snapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.RefID,
+			&i.CommitSha,
+			&i.Label,
+			&i.Status,
+			&i.RawArtifactUrl,
+			&i.ArtifactKey,
+			&i.Labels,
+			&i.ImageDigest,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -386,7 +492,7 @@ func (q *Queries) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
 }
 
 const setSnapshotArtifactKey = `-- name: SetSnapshotArtifactKey :one
-UPDATE snapshots SET artifact_key = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key
+UPDATE snapshots SET artifact_key = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
 `
 
 type SetSnapshotArtifactKeyParams struct {
@@ -404,14 +510,16 @@ func (q *Queries) SetSnapshotArtifactKey(ctx context.Context, arg SetSnapshotArt
 		&i.Label,
 		&i.Status,
 		&i.RawArtifactUrl,
-		&i.CreatedAt,
 		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const updateSnapshotStatus = `-- name: UpdateSnapshotStatus :one
-UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, created_at, artifact_key
+UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
 `
 
 type UpdateSnapshotStatusParams struct {
@@ -429,8 +537,10 @@ func (q *Queries) UpdateSnapshotStatus(ctx context.Context, arg UpdateSnapshotSt
 		&i.Label,
 		&i.Status,
 		&i.RawArtifactUrl,
-		&i.CreatedAt,
 		&i.ArtifactKey,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
 	)
 	return i, err
 }

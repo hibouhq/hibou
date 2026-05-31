@@ -23,6 +23,7 @@ type stubExportStore struct {
 	findings            []dbgen.Finding
 	advisories          []dbgen.Advisory
 	components          []dbgen.Component
+	vexStatements       map[uuid.UUID][]dbgen.VexStatement
 	repoErr             error
 	shotErr             error
 	advisoryBatchCalls  int
@@ -59,6 +60,13 @@ func (s *stubExportStore) GetComponentsByIDs(context.Context, []uuid.UUID) ([]db
 	return s.components, nil
 }
 
+func (s *stubExportStore) ListVEXStatementsByAdvisory(_ context.Context, arg dbgen.ListVEXStatementsByAdvisoryParams) ([]dbgen.VexStatement, error) {
+	if s.vexStatements == nil {
+		return nil, nil
+	}
+	return s.vexStatements[arg.AdvisoryID], nil
+}
+
 func (s *stubExportStore) GetRefByID(context.Context, uuid.UUID) (dbgen.Ref, error) {
 	return s.ref, nil
 }
@@ -76,7 +84,20 @@ func TestGenerateReport(t *testing.T) {
 		vulns:      []dbgen.VulnMatch{{SnapshotID: snapshotID, AdvisoryID: advisoryID, ComponentID: componentID, IsAffected: true, FirstSeenAt: time.Unix(1700000000, 0)}},
 		findings:   []dbgen.Finding{{Tool: "semgrep", RuleID: "G101", Severity: dbgen.SeverityLevelHigh, FilePath: "main.go", Message: "issue", Status: "open"}},
 		advisories: []dbgen.Advisory{{ID: advisoryID, CanonicalID: "CVE-2026-0001", Severity: dbgen.SeverityLevelCritical}},
-		components: []dbgen.Component{{ID: componentID, Name: "github.com/acme/lib", Version: "1.2.3"}},
+		components: []dbgen.Component{{ID: componentID, Name: "github.com/acme/lib", Version: "1.2.3", Purl: "pkg:golang/github.com/acme/lib@1.2.3"}},
+		vexStatements: map[uuid.UUID][]dbgen.VexStatement{
+			advisoryID: {
+				{
+					AdvisoryID:    advisoryID,
+					RepoID:        uuid.NullUUID{UUID: repoID, Valid: true},
+					ComponentPurl: sql.NullString{String: "pkg:golang/github.com/acme/lib@1.2.3", Valid: true},
+					Status:        dbgen.VexStatusNotAffected,
+					Justification: dbgen.NullVexJustification{VexJustification: dbgen.VexJustificationComponentNotPresent, Valid: true},
+					Source:        dbgen.VexSourceImported,
+					UpdatedAt:     time.Unix(1700000100, 0),
+				},
+			},
+		},
 	}
 
 	svc := NewService(store, zerolog.New(io.Discard))
@@ -96,8 +117,17 @@ func TestGenerateReport(t *testing.T) {
 	if report.Summary.Critical != 1 || report.Summary.High != 1 {
 		t.Fatalf("Summary = %+v, want critical=1 high=1", report.Summary)
 	}
+	if report.Summary.VEXNotAffected != 1 || report.Summary.VEXFixed != 0 {
+		t.Fatalf("VEX summary = %+v, want not_affected=1 fixed=0", report.Summary)
+	}
 	if len(report.Vulnerabilities) != 1 || len(report.Findings) != 1 {
 		t.Fatalf("unexpected report sizes: vulns=%d findings=%d", len(report.Vulnerabilities), len(report.Findings))
+	}
+	if report.Vulnerabilities[0].VEXStatus != string(dbgen.VexStatusNotAffected) {
+		t.Fatalf("VEXStatus = %q, want %q", report.Vulnerabilities[0].VEXStatus, dbgen.VexStatusNotAffected)
+	}
+	if report.Vulnerabilities[0].VEXSource != string(dbgen.VexSourceImported) {
+		t.Fatalf("VEXSource = %q, want %q", report.Vulnerabilities[0].VEXSource, dbgen.VexSourceImported)
 	}
 	if store.advisoryBatchCalls != 1 || store.componentBatchCalls != 1 {
 		t.Fatalf("batch lookup calls = (%d, %d), want (1, 1)", store.advisoryBatchCalls, store.componentBatchCalls)

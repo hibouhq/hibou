@@ -1,0 +1,140 @@
+spec:
+  inputs:
+    server:
+      description: "Hibou server URL."
+      type: string
+    token:
+      description: "Hibou API token (use CI/CD variable reference)."
+      type: string
+    file:
+      description: "Path(s) to artifact files. Supports glob patterns and newline-separated paths."
+      type: string
+    org:
+      description: "Organization slug in provider/slug form. Auto-detected from CI_PROJECT_NAMESPACE when omitted."
+      type: string
+      default: ""
+    repo:
+      description: "Repository slug. Auto-detected from CI_PROJECT_NAME when omitted."
+      type: string
+      default: ""
+    ref:
+      description: "Git ref. Defaults to CI_COMMIT_REF_NAME."
+      type: string
+      default: ""
+    sha:
+      description: "Commit SHA. Defaults to CI_COMMIT_SHA."
+      type: string
+      default: ""
+    complete:
+      description: "Complete the snapshot after uploading. Set to 'false' for intermediate uploads in multi-job pipelines."
+      type: string
+      default: "true"
+    expect:
+      description: "Expected number of distinct upload API calls for the snapshot. Server auto-completes when this many are received. Use for parallel pipelines where no single job knows it is last."
+      type: string
+      default: "0"
+    reachability:
+      description: "Run CI-side reachability analysis after upload. Comma-separated languages: 'java', 'rust', 'java,rust'. Go reachability runs server-side automatically when enabled. Set to 'false' to skip (default)."
+      type: string
+      default: "false"
+    bytecode_path:
+      description: "Java bytecode path override for non-standard build layouts (e.g. Ant with custom output dirs). Auto-discovery handles Maven and Gradle projects of any size without configuration."
+      type: string
+      default: ""
+    stage:
+      description: "Pipeline stage for the upload job."
+      type: string
+      default: "test"
+
+---
+
+hibou-upload:
+  stage: $[[ inputs.stage ]]
+  image: alpine:latest
+  variables:
+    HIBOU_SERVER: $[[ inputs.server ]]
+    HIBOU_TOKEN: $[[ inputs.token ]]
+    HIBOU_UPLOAD_FILE: $[[ inputs.file ]]
+    HIBOU_UPLOAD_ORG: $[[ inputs.org ]]
+    HIBOU_UPLOAD_REPO: $[[ inputs.repo ]]
+    HIBOU_UPLOAD_REF: $[[ inputs.ref ]]
+    HIBOU_UPLOAD_SHA: $[[ inputs.sha ]]
+    HIBOU_UPLOAD_COMPLETE: $[[ inputs.complete ]]
+    HIBOU_UPLOAD_EXPECT: $[[ inputs.expect ]]
+    HIBOU_REACHABILITY: $[[ inputs.reachability ]]
+    HIBOU_BYTECODE_PATH: $[[ inputs.bytecode_path ]]
+  before_script:
+    - apk add --no-cache curl bash
+  script:
+    - |
+      set -euo pipefail
+
+      # Detect OS/arch
+      runner_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+      runner_arch="$(uname -m)"
+      case "$runner_arch" in
+        x86_64|amd64) runner_arch="amd64" ;;
+        aarch64|arm64) runner_arch="arm64" ;;
+        *) echo "unsupported architecture: $runner_arch" >&2; exit 1 ;;
+      esac
+
+      # Download hibou CLI from server
+      server_version="$(curl -fsSL "${HIBOU_SERVER}/api/v1/bin/version" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)"
+      echo "Downloading hibou ${server_version} from server..."
+      curl -fsSL "${HIBOU_SERVER}/api/v1/bin/${runner_os}/${runner_arch}" -o /usr/local/bin/hibou
+      chmod +x /usr/local/bin/hibou
+
+      # Auto-detect org and repo
+      org="${HIBOU_UPLOAD_ORG}"
+      repo="${HIBOU_UPLOAD_REPO}"
+      [[ -n "$org" ]]  || org="gitlab/${CI_PROJECT_NAMESPACE}"
+      [[ -n "$repo" ]] || repo="${CI_PROJECT_NAME}"
+
+      # Auto-detect ref and sha
+      ref="${HIBOU_UPLOAD_REF}"
+      sha="${HIBOU_UPLOAD_SHA}"
+      [[ -n "$ref" ]] || ref="refs/heads/${CI_COMMIT_REF_NAME}"
+      [[ -n "$sha" ]] || sha="${CI_COMMIT_SHA}"
+
+      # Expand globs and newline-separated paths into file list
+      files=()
+      while IFS= read -r pattern; do
+        pattern="$(echo "$pattern" | xargs)"
+        [[ -n "$pattern" ]] || continue
+        for f in $pattern; do
+          [[ -f "$f" ]] && files+=("$f")
+        done
+      done <<< "$HIBOU_UPLOAD_FILE"
+
+      [[ ${#files[@]} -gt 0 ]] || { echo 'no files found' >&2; exit 1; }
+
+      complete_flag=""
+      if [[ "$HIBOU_UPLOAD_COMPLETE" == "false" ]]; then
+        complete_flag="--complete=false"
+      fi
+
+      expect_flag=""
+      if [[ "$HIBOU_UPLOAD_EXPECT" != "0" && -n "$HIBOU_UPLOAD_EXPECT" ]]; then
+        expect_flag="--expect=$HIBOU_UPLOAD_EXPECT"
+      fi
+
+      hibou upload "${files[@]}" --org "$org" --repo "$repo" --ref "$ref" --sha "$sha" $complete_flag $expect_flag
+
+      # Run CI-side reachability analysis if requested
+      if [[ "$HIBOU_REACHABILITY" != "false" && -n "$HIBOU_REACHABILITY" ]]; then
+        reachability_args=(--org "$org" --repo "$repo" --ref "$ref" --sha "$sha")
+
+        IFS=',' read -ra langs <<< "$HIBOU_REACHABILITY"
+        lang_flags=()
+        for lang in "${langs[@]}"; do
+          lang="$(echo "$lang" | xargs)"
+          lang_flags+=(--lang "$lang")
+        done
+
+        bytecode_flags=""
+        if [[ -n "$HIBOU_BYTECODE_PATH" ]]; then
+          bytecode_flags="--bytecode $HIBOU_BYTECODE_PATH"
+        fi
+
+        hibou analyze reachability "${lang_flags[@]}" "${reachability_args[@]}" $bytecode_flags
+      fi

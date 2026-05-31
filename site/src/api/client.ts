@@ -656,7 +656,7 @@ class ApiClient {
     provider: string,
     slug: string,
     repoSlug: string,
-    params?: { ref?: string; severity?: string; tool?: string; status?: string; page?: number; per_page?: number },
+    params?: { ref?: string; severity?: string; tool?: string; status?: string; file?: string; page?: number; per_page?: number },
   ) {
     const query = new URLSearchParams()
 
@@ -671,6 +671,9 @@ class ApiClient {
     }
     if (params?.status) {
       query.set('status', params.status)
+    }
+    if (params?.file) {
+      query.set('file', params.file)
     }
     if (params?.page) {
       query.set('page', String(params.page))

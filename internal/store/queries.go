@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -98,6 +99,10 @@ func (q *Queries) ListAffectedRangesByPackage(ctx context.Context, arg dbgen.Lis
 
 func (q *Queries) GetAdvisoryByAlias(ctx context.Context, alias string) (dbgen.Advisory, error) {
 	return q.db.GetAdvisoryByAlias(ctx, alias)
+}
+
+func (q *Queries) GetAdvisoryByCanonicalID(ctx context.Context, canonicalID string) (dbgen.Advisory, error) {
+	return q.db.GetAdvisoryByCanonicalID(ctx, canonicalID)
 }
 
 func (q *Queries) CreateScan(ctx context.Context, arg dbgen.CreateScanParams) (dbgen.Scan, error) {
@@ -208,4 +213,132 @@ func (q *Queries) ListOrgWideQualityGates(ctx context.Context, orgID uuid.UUID) 
 
 func (q *Queries) ListQualityGatesByRepo(ctx context.Context, repoID uuid.NullUUID) ([]dbgen.QualityGate, error) {
 	return q.db.ListQualityGatesByRepo(ctx, repoID)
+}
+
+func (q *Queries) CountRepositoriesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountRepositoriesByOrg(ctx, orgID)
+}
+
+func (q *Queries) CreateVEXStatement(ctx context.Context, arg dbgen.CreateVEXStatementParams) (dbgen.VexStatement, error) {
+	return q.db.CreateVEXStatement(ctx, arg)
+}
+
+func (q *Queries) UpdateVEXStatement(ctx context.Context, arg dbgen.UpdateVEXStatementParams) (dbgen.VexStatement, error) {
+	return q.db.UpdateVEXStatement(ctx, arg)
+}
+
+func (q *Queries) GetVEXStatementByID(ctx context.Context, id uuid.UUID) (dbgen.VexStatement, error) {
+	return q.db.GetVEXStatementByID(ctx, id)
+}
+
+func (q *Queries) ListVEXStatementsByOrg(ctx context.Context, arg dbgen.ListVEXStatementsByOrgParams) ([]dbgen.VexStatement, error) {
+	return q.db.ListVEXStatementsByOrg(ctx, arg)
+}
+
+func (q *Queries) ListVEXStatementsByRepo(ctx context.Context, arg dbgen.ListVEXStatementsByRepoParams) ([]dbgen.VexStatement, error) {
+	return q.db.ListVEXStatementsByRepo(ctx, arg)
+}
+
+func (q *Queries) ListVEXStatementsByAdvisory(ctx context.Context, arg dbgen.ListVEXStatementsByAdvisoryParams) ([]dbgen.VexStatement, error) {
+	return q.db.ListVEXStatementsByAdvisory(ctx, arg)
+}
+
+func (q *Queries) DeleteVEXStatement(ctx context.Context, arg dbgen.DeleteVEXStatementParams) error {
+	return q.db.DeleteVEXStatement(ctx, arg)
+}
+
+func (q *Queries) GetEffectiveVEXStatus(ctx context.Context, arg dbgen.GetEffectiveVEXStatusParams) (dbgen.VexStatement, error) {
+	return q.db.GetEffectiveVEXStatus(ctx, arg)
+}
+
+func (q *Queries) ListExpiredVEXStatements(ctx context.Context) ([]dbgen.VexStatement, error) {
+	return q.db.ListExpiredVEXStatements(ctx)
+}
+
+func (q *Queries) CountVEXStatementsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountVEXStatementsByOrg(ctx, orgID)
+}
+
+func (q *Queries) ListAdvisoryProviderStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListAdvisoryProviderStatsRow, error) {
+	return q.db.ListAdvisoryProviderStats(ctx, orgID)
+}
+
+func (q *Queries) ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListFindingToolStatsRow, error) {
+	return q.db.ListFindingToolStats(ctx, orgID)
+}
+
+func (q *Queries) ListVEXSourceStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListVEXSourceStatsRow, error) {
+	return q.db.ListVEXSourceStats(ctx, orgID)
+}
+
+func (q *Queries) ListComponentEcosystemStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListComponentEcosystemStatsRow, error) {
+	return q.db.ListComponentEcosystemStats(ctx, orgID)
+}
+
+func (q *Queries) ListCoverageSnapshotStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListCoverageSnapshotStatsRow, error) {
+	return q.db.ListCoverageSnapshotStats(ctx, orgID)
+}
+
+func (q *Queries) CountVEXStatementsByRepo(ctx context.Context, arg dbgen.CountVEXStatementsByRepoParams) (int64, error) {
+	return q.db.CountVEXStatementsByRepo(ctx, arg)
+}
+
+func (q *Queries) ListAuditLogs(ctx context.Context, arg dbgen.ListAuditLogsParams) ([]dbgen.AuditLog, error) {
+	return q.db.ListAuditLogs(ctx, arg)
+}
+
+func (q *Queries) ListRecentAuditLogsByOrg(ctx context.Context, orgID uuid.UUID, since time.Time, limit int32) ([]dbgen.AuditLog, error) {
+	return q.db.ListRecentAuditLogsByOrg(ctx, dbgen.ListRecentAuditLogsByOrgParams{
+		OrgID:     uuid.NullUUID{UUID: orgID, Valid: true},
+		CreatedAt: since,
+		Limit:     limit,
+	})
+}
+
+func (q *Queries) ListAuditLogsByResource(ctx context.Context, resourceType, resourceID string, limit, offset int32) ([]dbgen.AuditLog, error) {
+	return q.db.ListAuditLogsByResource(ctx, dbgen.ListAuditLogsByResourceParams{
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Limit:        limit,
+		Offset:       offset,
+	})
+}
+
+func (q *Queries) CountAuditLogsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountAuditLogsByOrg(ctx, uuid.NullUUID{UUID: orgID, Valid: true})
+}
+
+func (q *Queries) CountVulnMatchesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountVulnMatchesByOrg(ctx, orgID)
+}
+
+func (q *Queries) CountFindingsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountFindingsByOrg(ctx, orgID)
+}
+
+func (q *Queries) CountScansByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountScansByOrg(ctx, orgID)
+}
+
+func (q *Queries) LatestScanCompletedAtByOrg(ctx context.Context, orgID uuid.UUID) (time.Time, error) {
+	const query = `
+		SELECT COALESCE(MAX(sc.completed_at), TIMESTAMPTZ '1970-01-01 00:00:00+00')
+		FROM scans sc
+		JOIN snapshots s ON s.id = sc.snapshot_id
+		JOIN refs r ON r.id = s.ref_id
+		JOIN repositories repo ON repo.id = r.repo_id
+		WHERE repo.org_id = $1
+		  AND sc.status = 'complete'
+	`
+	var latest time.Time
+	err := q.sqlDB.QueryRowContext(ctx, query, orgID).Scan(&latest)
+	return latest, err
+}
+
+func (q *Queries) CountMalwareAdvisoriesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountMalwareAdvisoriesByOrg(ctx, orgID)
+}
+
+func (q *Queries) CountComponentsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountDistinctComponentsByOrg(ctx, orgID)
 }

@@ -42,7 +42,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventType := webhookEventType(providerID, r)
+	eventType := webhookEventType(provider.ID(), r)
 	if eventType == "" {
 		api.JSONError(w, http.StatusBadRequest, "missing webhook event type")
 		return
@@ -61,7 +61,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case forge.PullRequestEvent:
-		if err := s.handlePullRequestWebhookEvent(r, providerID, typed); err != nil {
+		if err := s.handlePullRequestWebhookEvent(r, providerID, provider.ID(), typed); err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to process webhook")
 			return
 		}
@@ -95,7 +95,7 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 	return err
 }
 
-func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID string, event forge.PullRequestEvent) error {
+func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forgeType string, event forge.PullRequestEvent) error {
 	s.log.Info().
 		Str("provider", providerID).
 		Str("repository", event.Repo.FullName).
@@ -125,7 +125,7 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID strin
 		}
 	}
 
-	refName := pullRequestRefName(providerID, event.Number)
+	refName := pullRequestRefName(forgeType, event.Number)
 	ref, err := s.queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), nil, mergeTargetRefID, stringPtr(event.HeadSHA))
 	if err != nil {
 		return err
@@ -158,8 +158,8 @@ func pullRequestLifecycleState(action string, merged bool) (string, *time.Time, 
 	}
 }
 
-func webhookEventType(providerID string, r *http.Request) string {
-	switch providerID {
+func webhookEventType(forgeType string, r *http.Request) string {
+	switch forgeType {
 	case "github":
 		return strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	case "gitea", "forgejo":
@@ -171,8 +171,8 @@ func webhookEventType(providerID string, r *http.Request) string {
 	}
 }
 
-func pullRequestRefName(providerID string, number int) string {
-	if providerID == "gitlab" {
+func pullRequestRefName(forgeType string, number int) string {
+	if forgeType == "gitlab" {
 		return "refs/merge-requests/" + strconv.Itoa(number) + "/head"
 	}
 	return "refs/pull/" + strconv.Itoa(number) + "/head"

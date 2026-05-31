@@ -3,6 +3,7 @@
 /dist/
 tmp/
 lehibou
+coverage.out
 
 # Node
 node_modules/
@@ -40,3 +41,20 @@ test-results/
 docs/node_modules/
 docs/dist/
 docs/.astro/
+
+# apko SBOM artifacts
+sbom-*.spdx.json
+
+# Helm
+chart/hibou/charts/
+
+# Infrastructure
+infra/**/*.tfstate
+infra/**/*.tfstate.backup
+infra/**/.terraform/
+infra/**/terraform.tfvars
+infra/**/kubeconfig.yaml
+
+
+.agents/skills/cave*
+.claude/skills/cave*

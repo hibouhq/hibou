@@ -1,59 +1,16 @@
 <template>
   <div class="space-y-5">
-    <div class="flex flex-wrap items-end gap-2">
-      <label class="space-y-2 text-sm text-gray-300">
-        <span class="block text-[11px] uppercase tracking-[0.12em] text-gray-500">Severity</span>
-        <select
-          v-model="severityFilter"
-          class="w-full rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-100"
-        >
-          <option value="">All severities</option>
-          <option
-            v-for="option in severityOptions"
-            :key="option"
-            :value="option"
-          >{{ option }}</option>
-        </select>
-      </label>
-
-      <label class="space-y-2 text-sm text-gray-300">
-        <span class="block text-[11px] uppercase tracking-[0.12em] text-gray-500">Tool</span>
-        <select
-          v-model="toolFilter"
-          class="w-full rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-100"
-        >
-          <option value="">All tools</option>
-          <option
-            v-for="option in toolOptions"
-            :key="option"
-            :value="option"
-          >{{ option }}</option>
-        </select>
-      </label>
-
-      <label class="space-y-2 text-sm text-gray-300">
-        <span class="block text-[11px] uppercase tracking-[0.12em] text-gray-500">Status</span>
-        <select
-          v-model="statusFilter"
-          class="w-full rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-100"
-        >
-          <option value="">All statuses</option>
-          <option
-            v-for="option in statusOptions"
-            :key="option"
-            :value="option"
-          >{{ option }}</option>
-        </select>
-      </label>
-
-      <button
-        class="text-xs text-gray-400 transition hover:text-white"
-        type="button"
-        @click="resetFilters"
-      >
-        Reset
-      </button>
-    </div>
+    <FilterBar
+      v-model="activeFilters"
+      v-model:sort-value="currentSort"
+      v-model:sort-direction="currentSortDirection"
+      :filters="filterDefs"
+      :sort-options="sortOptions"
+      :sort-direction-options="sortDirectionOptions"
+      :total-count="pagination.total"
+      :filtered-count="hasActiveFilters ? pagination.total : undefined"
+      placeholder="Filter findings..."
+    />
 
     <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
       <div
@@ -154,33 +111,141 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
 import { api, type Finding } from '@/api/client'
+import FilterBar from '@/components/FilterBar.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 
-const findings = ref<Finding[]>([])
+const findingsResponse = ref<Finding[]>([])
 const loading = ref(true)
-const severityFilter = ref('')
-const toolFilter = ref('')
-const statusFilter = ref('')
+const activeFilters = ref<Record<string, string>>({})
+const currentSort = ref('created_on')
+const currentSortDirection = ref('desc')
 const pagination = ref({ page: 1, per_page: 50, total: 0 })
 
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
-const toolOptions = computed(() => Array.from(new Set(findings.value.map((finding) => finding.tool))).sort())
-const statusOptions = computed(() => Array.from(new Set(findings.value.map((finding) => finding.status))).sort())
+const toolOptions = computed(() => Array.from(new Set(findingsResponse.value.map((finding) => finding.tool))).sort())
+const statusOptions = computed(() => Array.from(new Set(findingsResponse.value.map((finding) => finding.status))).sort())
+const fileOptions = computed(() => {
+  const filePaths = Array.from(new Set(findingsResponse.value.map((finding) => finding.file_path))).sort()
+  const fileLines = findingsResponse.value
+    .filter((finding) => finding.start_line)
+    .map((finding) => `${finding.file_path}:${finding.start_line}`)
+  const uniqueFileLines = Array.from(new Set(fileLines)).sort()
+  return [...filePaths, ...uniqueFileLines]
+})
+const filterDefs = computed(() => [
+  { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
+  { key: 'tool', label: 'Tool', options: toolOptions.value, multi: true },
+  { key: 'status', label: 'Status', options: statusOptions.value, multi: true },
+  { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
+])
+const sortOptions = [
+  { key: 'severity', label: 'Severity' },
+  { key: 'created_on', label: 'Created on', ascLabel: 'Oldest', descLabel: 'Newest' },
+  { key: 'tool', label: 'Tool' },
+  { key: 'file', label: 'File' },
+  { key: 'status', label: 'Status' },
+]
+const sortDirectionOptions = [
+  { key: 'asc', label: '↑ Oldest' },
+  { key: 'desc', label: '↓ Newest' },
+]
+const filterKeys = ['severity', 'tool', 'status', 'file'] as const
+const managedQueryKeys = [...filterKeys, 'sort', 'order', 'page'] as const
+const sortKeys = new Set(sortOptions.map((option) => option.key))
+const sortDirectionKeys = new Set(sortDirectionOptions.map((option) => option.key))
+const syncingFromRoute = ref(false)
+const hasActiveFilters = computed(() => Object.values(activeFilters.value).some(Boolean))
+// NOTE: Sort is client-side on the current page only. The findings API
+// does not support a sort parameter yet. This is acceptable because the
+// default page size (50) covers most result sets.
+const findings = computed(() => {
+  if (!currentSort.value) {
+    return findingsResponse.value
+  }
+
+  const direction = currentSortDirection.value === 'asc' ? -1 : 1
+
+  return [...findingsResponse.value].sort((left, right) => direction * compareFindings(left, right, currentSort.value))
+})
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
 watch(
-  [provider, slug, repoSlug, () => route.query.ref, severityFilter, toolFilter, statusFilter, () => pagination.value.page],
+  () => route.query,
+  () => {
+    const nextState = readQueryState()
+
+    syncingFromRoute.value = true
+    try {
+      if (!sameFilters(activeFilters.value, nextState.filters)) {
+        activeFilters.value = nextState.filters
+      }
+
+      if (currentSort.value !== nextState.sort) {
+        currentSort.value = nextState.sort
+      }
+
+      if (currentSortDirection.value !== nextState.order) {
+        currentSortDirection.value = nextState.order
+      }
+
+      if (pagination.value.page !== nextState.page) {
+        pagination.value = { ...pagination.value, page: nextState.page }
+      }
+    } finally {
+      syncingFromRoute.value = false
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  [activeFilters, currentSort, currentSortDirection],
+  () => {
+    if (syncingFromRoute.value) {
+      return
+    }
+
+    if (pagination.value.page !== 1) {
+      pagination.value = { ...pagination.value, page: 1 }
+      return
+    }
+
+    void syncQueryFromState()
+  },
+  { deep: true },
+)
+
+watch(currentSort, (sort) => {
+  if (!sort && currentSortDirection.value !== 'desc') {
+    currentSortDirection.value = 'desc'
+  }
+})
+
+watch(
+  () => pagination.value.page,
+  () => {
+    if (syncingFromRoute.value) {
+      return
+    }
+
+    void syncQueryFromState()
+  },
+)
+
+watch(
+  [provider, slug, repoSlug, () => route.query.ref, activeFilters, () => pagination.value.page],
   async () => {
     if (!provider.value || !slug.value || !repoSlug.value) {
-      findings.value = []
+      findingsResponse.value = []
       return
     }
 
@@ -188,17 +253,17 @@ watch(
     try {
       const res = await api.listRefFindings(provider.value, slug.value, repoSlug.value, {
         ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
-        severity: severityFilter.value || undefined,
-        tool: toolFilter.value || undefined,
-        status: statusFilter.value || undefined,
+        severity: activeFilters.value.severity || undefined,
+        tool: activeFilters.value.tool || undefined,
+        status: activeFilters.value.status || undefined,
         page: pagination.value.page,
         per_page: pagination.value.per_page,
       })
 
-      findings.value = res.data
+      findingsResponse.value = res.data
       pagination.value = res.pagination
     } catch {
-      findings.value = []
+      findingsResponse.value = []
       pagination.value = { ...pagination.value, total: 0 }
     } finally {
       loading.value = false
@@ -207,19 +272,140 @@ watch(
   { immediate: true },
 )
 
-watch([severityFilter, toolFilter, statusFilter, () => route.query.ref], () => {
-  pagination.value.page = 1
-})
-
-function resetFilters() {
-  severityFilter.value = ''
-  toolFilter.value = ''
-  statusFilter.value = ''
-  pagination.value.page = 1
-}
-
 function changePage(page: number) {
   pagination.value.page = page
+}
+
+function readQueryState() {
+  const filters: Record<string, string> = {}
+
+  for (const key of filterKeys) {
+    const value = route.query[key]
+    if (typeof value === 'string' && value.length > 0) {
+      filters[key] = value
+    }
+  }
+
+  const sortValue = route.query.sort
+  const sort = typeof sortValue === 'string' && sortKeys.has(sortValue) ? sortValue : 'created_on'
+  const orderValue = route.query.order
+  const order = sort && typeof orderValue === 'string' && sortDirectionKeys.has(orderValue) ? orderValue : 'desc'
+  const pageValue = Number(typeof route.query.page === 'string' ? route.query.page : '1')
+  const page = Number.isInteger(pageValue) && pageValue > 0 ? pageValue : 1
+
+  return { filters, sort, order, page }
+}
+
+function syncQueryFromState() {
+  const nextState = {
+    filters: normalizeFilters(activeFilters.value),
+    sort: currentSort.value,
+    order: currentSort.value ? (currentSortDirection.value || 'desc') : 'desc',
+    page: pagination.value.page,
+  }
+
+  if (sameQueryState(nextState, readQueryState())) {
+    return
+  }
+
+  const nextQuery: LocationQueryRaw = { ...route.query }
+  const nextParams = buildQueryParams(nextState)
+
+  for (const key of managedQueryKeys) {
+    delete nextQuery[key]
+  }
+
+  Object.assign(nextQuery, nextParams)
+
+  return router.replace({ query: nextQuery })
+}
+
+function buildQueryParams(state: { filters: Record<string, string>; sort: string; order: string; page: number }) {
+  const params: Record<string, string> = {}
+
+  for (const key of filterKeys) {
+    const value = state.filters[key]
+    if (value) {
+      params[key] = value
+    }
+  }
+
+  if (state.sort && state.sort !== 'created_on') {
+    params.sort = state.sort
+  }
+
+  if (state.sort && state.sort !== 'created_on' && state.order && state.order !== 'desc') {
+    params.order = state.order
+  }
+
+  if (state.page > 1) {
+    params.page = String(state.page)
+  }
+
+  return params
+}
+
+function normalizeFilters(filters: Record<string, string>) {
+  const normalized: Record<string, string> = {}
+
+  for (const key of filterKeys) {
+    const value = filters[key]
+    if (value) {
+      normalized[key] = value
+    }
+  }
+
+  return normalized
+}
+
+function sameFilters(left: Record<string, string>, right: Record<string, string>) {
+  for (const key of filterKeys) {
+    if ((left[key] || '') !== (right[key] || '')) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function sameQueryState(
+  left: { filters: Record<string, string>; sort: string; order: string; page: number },
+  right: { filters: Record<string, string>; sort: string; order: string; page: number },
+) {
+  return sameFilters(left.filters, right.filters) && left.sort === right.sort && left.order === right.order && left.page === right.page
+}
+
+function compareFindings(left: Finding, right: Finding, sortKey: string) {
+  if (sortKey === 'severity') {
+    return compareSeverity(left.severity, right.severity)
+  }
+
+  if (sortKey === 'tool') {
+    return left.tool.localeCompare(right.tool)
+  }
+
+  if (sortKey === 'file') {
+    return formatLocation(left).localeCompare(formatLocation(right))
+  }
+
+  if (sortKey === 'status') {
+    return left.status.localeCompare(right.status)
+  }
+
+  if (sortKey === 'created_on') {
+    return left.created_at.localeCompare(right.created_at)
+  }
+
+  return 0
+}
+
+function compareSeverity(left: string, right: string) {
+  return severityRank(left) - severityRank(right)
+}
+
+function severityRank(level: string) {
+  const index = severityOptions.indexOf(level.toLowerCase())
+  return index === -1 ? severityOptions.length : index
 }
 
 function severityClass(level: string) {

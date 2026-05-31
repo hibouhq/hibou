@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
@@ -17,6 +18,11 @@ type mockStore struct {
 	advisories         map[uuid.UUID]dbgen.Advisory
 	repoGates          map[uuid.UUID][]dbgen.QualityGate
 	orgGates           map[uuid.UUID][]dbgen.QualityGate
+	vexByKey           map[string]dbgen.VexStatement
+	snapshots          map[uuid.UUID]*store.Snapshot
+	refs               map[uuid.UUID]*store.Ref
+	repos              map[uuid.UUID]*store.Repository
+	components         map[uuid.UUID]dbgen.Component
 }
 
 func newMockStore() *mockStore {
@@ -26,6 +32,11 @@ func newMockStore() *mockStore {
 		advisories:         map[uuid.UUID]dbgen.Advisory{},
 		repoGates:          map[uuid.UUID][]dbgen.QualityGate{},
 		orgGates:           map[uuid.UUID][]dbgen.QualityGate{},
+		vexByKey:           map[string]dbgen.VexStatement{},
+		snapshots:          map[uuid.UUID]*store.Snapshot{},
+		refs:               map[uuid.UUID]*store.Ref{},
+		repos:              map[uuid.UUID]*store.Repository{},
+		components:         map[uuid.UUID]dbgen.Component{},
 	}
 }
 
@@ -56,6 +67,45 @@ func (m *mockStore) ListQualityGatesByRepo(_ context.Context, repoID uuid.UUID) 
 
 func (m *mockStore) ListOrgWideQualityGates(_ context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error) {
 	return append([]dbgen.QualityGate(nil), m.orgGates[orgID]...), nil
+}
+
+func (m *mockStore) GetEffectiveVEXStatus(_ context.Context, arg dbgen.GetEffectiveVEXStatusParams) (dbgen.VexStatement, error) {
+	if statement, ok := m.vexByKey[m.vexLookupKey(arg)]; ok {
+		return statement, nil
+	}
+	return dbgen.VexStatement{}, sql.ErrNoRows
+}
+
+func (m *mockStore) GetSnapshotByID(_ context.Context, id uuid.UUID) (*store.Snapshot, error) {
+	return m.snapshots[id], nil
+}
+
+func (m *mockStore) GetRefByID(_ context.Context, id uuid.UUID) (*store.Ref, error) {
+	return m.refs[id], nil
+}
+
+func (m *mockStore) GetRepositoryByID(_ context.Context, id uuid.UUID) (*store.Repository, error) {
+	return m.repos[id], nil
+}
+
+func (m *mockStore) GetComponentByID(_ context.Context, id uuid.UUID) (dbgen.Component, error) {
+	component, ok := m.components[id]
+	if !ok {
+		return dbgen.Component{}, sql.ErrNoRows
+	}
+	return component, nil
+}
+
+func (m *mockStore) vexLookupKey(arg dbgen.GetEffectiveVEXStatusParams) string {
+	component := ""
+	if arg.ComponentPurl.Valid {
+		component = arg.ComponentPurl.String
+	}
+	repoID := ""
+	if arg.RepoID.Valid {
+		repoID = arg.RepoID.UUID.String()
+	}
+	return arg.OrgID.String() + ":" + arg.AdvisoryID.String() + ":" + repoID + ":" + component
 }
 
 func TestComputeDeltaEmptySnapshots(t *testing.T) {
@@ -113,6 +163,43 @@ func TestComputeDeltaDetectsFindingChanges(t *testing.T) {
 	}
 	if len(result.ResolvedFindings) != 1 || result.ResolvedFindings[0].Fingerprint != "fp-old" {
 		t.Fatalf("expected one resolved finding, got %#v", result.ResolvedFindings)
+	}
+}
+
+func TestComputeDeltaKeepsAdvisoryWhenOnlyOneComponentIsVEXed(t *testing.T) {
+	mock := newMockStore()
+	prSnapshotID := uuid.New()
+	targetSnapshotID := uuid.New()
+	refID := uuid.New()
+	repoID := uuid.New()
+	orgID := uuid.New()
+	advisoryID := uuid.New()
+	componentAID := uuid.New()
+	componentBID := uuid.New()
+	mock.snapshots[prSnapshotID] = &store.Snapshot{ID: prSnapshotID, RefID: refID}
+	mock.refs[refID] = &store.Ref{ID: refID, RepoID: repoID}
+	mock.repos[repoID] = &store.Repository{ID: repoID, OrgID: orgID}
+	mock.components[componentAID] = dbgen.Component{ID: componentAID, Purl: "pkg:golang/example/a@1.0.0"}
+	mock.components[componentBID] = dbgen.Component{ID: componentBID, Purl: "pkg:golang/example/b@1.0.0"}
+	mock.vulnsBySnapshot[prSnapshotID] = []dbgen.VulnMatch{
+		{AdvisoryID: advisoryID, ComponentID: componentAID},
+		{AdvisoryID: advisoryID, ComponentID: componentBID},
+	}
+	mock.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "CVE-2026-1000", Severity: dbgen.SeverityLevelHigh}
+	mock.vexByKey[mock.vexLookupKey(dbgen.GetEffectiveVEXStatusParams{
+		OrgID:         orgID,
+		AdvisoryID:    advisoryID,
+		RepoID:        uuid.NullUUID{UUID: repoID, Valid: true},
+		ComponentPurl: sql.NullString{String: "pkg:golang/example/a@1.0.0", Valid: true},
+	})] = dbgen.VexStatement{Status: dbgen.VexStatusNotAffected}
+
+	service := NewService(mock, zerolog.Nop(), mock)
+	result, err := service.ComputeDelta(context.Background(), prSnapshotID, targetSnapshotID)
+	if err != nil {
+		t.Fatalf("ComputeDelta returned error: %v", err)
+	}
+	if len(result.NewVulns) != 1 || result.NewVulns[0].CanonicalID != "CVE-2026-1000" {
+		t.Fatalf("expected advisory to remain because one component is still affected, got %#v", result.NewVulns)
 	}
 }
 

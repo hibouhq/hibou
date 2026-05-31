@@ -9,25 +9,34 @@ import (
 	"strings"
 	"time"
 
-	"github.com/caarlos0/env/v11"
+	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Host          string        `env:"HIBOU_HOST"            envDefault:"0.0.0.0"`
-	Port          int           `env:"HIBOU_PORT"            envDefault:"8080"`
-	MCPEnabled    bool          `env:"HIBOU_MCP_ENABLED"     envDefault:"true"`
-	MCPPort       int           `env:"HIBOU_MCP_PORT"        envDefault:"8081"`
-	BaseURL       string        `env:"HIBOU_BASE_URL"`
-	DatabaseURL   string        `env:"HIBOU_DATABASE_URL"    envDefault:"postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable"`
-	LogLevel      string        `env:"HIBOU_LOG_LEVEL"       envDefault:"info"`
-	LogFormat     string        `env:"HIBOU_LOG_FORMAT"      envDefault:"console"`
-	TriviURL      string        `env:"HIBOU_TRIVY_URL"       envDefault:"http://localhost:4954"`
-	OSVURL        string        `env:"HIBOU_OSV_URL"         envDefault:"https://api.osv.dev"`
-	CacheTTL      time.Duration `env:"HIBOU_CACHE_TTL"       envDefault:"6h"`
-	ArtifactPath  string        `env:"HIBOU_ARTIFACT_PATH"   envDefault:"/data/artifacts"`
-	SessionSecret string        `env:"HIBOU_SESSION_SECRET"  envDefault:"change-me-in-production"`
+	Host          string
+	Port          int
+	MCPEnabled    bool
+	MCPPort       int
+	BaseURL       string
+	DatabaseURL   string
+	LogLevel      string
+	LogFormat     string
+	TriviURL      string
+	OSVURL        string
+	CacheTTL      time.Duration
+	ArtifactPath  string
+	MaxUploadSize int64
+	SessionSecret string
+	SecretScan    SecretScanConfig
 
 	Forges []ForgeConfig
+}
+
+type SecretScanConfig struct {
+	Enabled   bool
+	Providers []string
+	TempDir   string
+	OnPush    bool
 }
 
 // ForgeConfig holds configuration for a single forge instance.
@@ -47,6 +56,19 @@ type ForgeConfig struct {
 	ClientSecret string
 	// WebhookSecret is the secret used to validate webhook payloads.
 	WebhookSecret string
+	// AppID is the GitHub App ID. When set with PrivateKey, enables GitHub App mode.
+	AppID int64
+	// PrivateKey is the PEM-encoded private key for the GitHub App.
+	PrivateKey string
+	// IPAllowlist enables source IP allowlisting on webhook routes for this forge.
+	// For GitHub forges, IPs are auto-refreshed from the /meta endpoint.
+	IPAllowlist bool
+	// RateLimitRPS is the per-IP rate limit in requests/second for this forge's webhook routes (0 = disabled).
+	RateLimitRPS float64
+	// AllowedCIDRs is a comma-separated list of CIDR ranges allowed on webhook routes.
+	// For static IP allowlisting (GitLab SaaS, self-hosted forges).
+	// For GitHub forges, IPs are auto-fetched; this field provides additional static ranges.
+	AllowedCIDRs string
 }
 
 func (c Config) ListenAddr() string {
@@ -84,9 +106,69 @@ func (c Config) CookieSecure() bool {
 }
 
 func Load() (Config, error) {
-	var cfg Config
-	if err := env.Parse(&cfg); err != nil {
-		return cfg, fmt.Errorf("parsing config: %w", err)
+	v := viper.New()
+
+	v.SetEnvPrefix("HIBOU")
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	v.SetDefault("host", "0.0.0.0")
+	v.SetDefault("port", 8585)
+	v.SetDefault("mcp.enabled", true)
+	v.SetDefault("mcp.port", 8081)
+	v.SetDefault("base.url", "")
+	v.SetDefault("database.url", "postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable")
+	v.SetDefault("log.level", "info")
+	v.SetDefault("log.format", "console")
+	v.SetDefault("trivy.url", "http://localhost:4954")
+	v.SetDefault("osv.url", "https://api.osv.dev")
+	v.SetDefault("cache.ttl", "6h")
+	v.SetDefault("artifact.path", "/data/artifacts")
+	v.SetDefault("max.upload.size", int64(104857600))
+	v.SetDefault("session.secret", "change-me-in-production")
+	v.SetDefault("secret_scan.enabled", false)
+	v.SetDefault("secret_scan.providers", []string{})
+	v.SetDefault("secret_scan.temp_dir", "")
+	v.SetDefault("secret_scan.on_push", false)
+
+	v.SetConfigName("hibou-server")
+	v.SetConfigType("yaml")
+	v.AddConfigPath(".")
+	v.AddConfigPath("/etc/hibou")
+	v.AddConfigPath(os.ExpandEnv("$HOME/.config/hibou"))
+
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return Config{}, fmt.Errorf("reading config file: %w", err)
+		}
+	}
+
+	cacheTTL, err := time.ParseDuration(v.GetString("cache.ttl"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing cache_ttl: %w", err)
+	}
+
+	cfg := Config{
+		Host:          v.GetString("host"),
+		Port:          v.GetInt("port"),
+		MCPEnabled:    v.GetBool("mcp.enabled"),
+		MCPPort:       v.GetInt("mcp.port"),
+		BaseURL:       v.GetString("base.url"),
+		DatabaseURL:   v.GetString("database.url"),
+		LogLevel:      v.GetString("log.level"),
+		LogFormat:     v.GetString("log.format"),
+		TriviURL:      v.GetString("trivy.url"),
+		OSVURL:        v.GetString("osv.url"),
+		CacheTTL:      cacheTTL,
+		ArtifactPath:  v.GetString("artifact.path"),
+		MaxUploadSize: v.GetInt64("max.upload.size"),
+		SessionSecret: v.GetString("session.secret"),
+		SecretScan: SecretScanConfig{
+			Enabled:   v.GetBool("secret_scan.enabled"),
+			Providers: normalizeList(v.GetStringSlice("secret_scan.providers")),
+			TempDir:   strings.TrimSpace(v.GetString("secret_scan.temp_dir")),
+			OnPush:    v.GetBool("secret_scan.on_push"),
+		},
 	}
 
 	cfg.Forges = loadForgeConfigs()
@@ -124,8 +206,47 @@ func loadForgeConfigs() []ForgeConfig {
 			ClientID:      strings.TrimSpace(os.Getenv(prefix + "CLIENT_ID")),
 			ClientSecret:  strings.TrimSpace(os.Getenv(prefix + "CLIENT_SECRET")),
 			WebhookSecret: strings.TrimSpace(os.Getenv(prefix + "WEBHOOK_SECRET")),
+			AppID:         parseForgeInt64(prefix + "APP_ID"),
+			PrivateKey:    strings.TrimSpace(os.Getenv(prefix + "PRIVATE_KEY")),
+			IPAllowlist:   strings.EqualFold(strings.TrimSpace(os.Getenv(prefix+"IP_ALLOWLIST")), "true"),
+			RateLimitRPS:  parseForgeFloat64(prefix + "RATE_LIMIT_RPS"),
+			AllowedCIDRs:  strings.TrimSpace(os.Getenv(prefix + "ALLOWED_CIDRS")),
 		})
 	}
 
 	return configs
+}
+
+func parseForgeInt64(envKey string) int64 {
+	value := strings.TrimSpace(os.Getenv(envKey))
+	if value == "" {
+		return 0
+	}
+
+	parsed, _ := strconv.ParseInt(value, 10, 64)
+	return parsed
+}
+
+func parseForgeFloat64(envKey string) float64 {
+	value := strings.TrimSpace(os.Getenv(envKey))
+	if value == "" {
+		return 0
+	}
+
+	parsed, _ := strconv.ParseFloat(value, 64)
+	return parsed
+}
+
+func normalizeList(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			normalized = append(normalized, trimmed)
+		}
+	}
+	return normalized
 }

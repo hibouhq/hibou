@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -12,13 +13,22 @@ import (
 const CurrentVersion = 1
 
 type RepoConfig struct {
-	Version      int           `yaml:"version" json:"version"`
-	QualityGates []QualityGate `yaml:"quality_gates,omitempty" json:"quality_gates,omitempty"`
+	Version      int             `yaml:"version" json:"version"`
+	QualityGates []QualityGate   `yaml:"quality_gates,omitempty" json:"quality_gates,omitempty"`
+	Coverage     *CoverageConfig `yaml:"coverage,omitempty" json:"coverage,omitempty"`
+	Upload       *UploadConfig   `yaml:"upload,omitempty" json:"upload,omitempty"`
 }
 
 type QualityGate struct {
 	Branches   []string            `yaml:"branches" json:"branches"`
 	Weaknesses *WeaknessThresholds `yaml:"weaknesses,omitempty" json:"weaknesses,omitempty"`
+	Coverage   *CoverageThresholds `yaml:"coverage,omitempty" json:"coverage,omitempty"`
+}
+
+type CoverageThresholds struct {
+	MinCoverage *float64 `yaml:"min_coverage,omitempty" json:"min_coverage,omitempty"`
+	Grace       *float64 `yaml:"grace,omitempty" json:"grace,omitempty"`
+	DiffMinimum *float64 `yaml:"diff_minimum,omitempty" json:"diff_minimum,omitempty"`
 }
 
 type WeaknessThresholds struct {
@@ -26,6 +36,14 @@ type WeaknessThresholds struct {
 	MaxCritical *int  `yaml:"max_critical,omitempty" json:"max_critical,omitempty"`
 	MaxHigh     *int  `yaml:"max_high,omitempty" json:"max_high,omitempty"`
 	MaxMedium   *int  `yaml:"max_medium,omitempty" json:"max_medium,omitempty"`
+}
+
+type CoverageConfig struct {
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
+}
+
+type UploadConfig struct {
+	Window string `yaml:"window,omitempty" json:"window,omitempty"`
 }
 
 func Parse(data []byte) (*RepoConfig, error) {
@@ -57,17 +75,33 @@ func Default() *RepoConfig {
 }
 
 func DefaultYAML() []byte {
-	return []byte(`# yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json
-version: 1
-
-# Configure branch-aware weakness quality gates for code findings.
-# Vulnerability (CVE) gates stay managed in Hibou itself.
-quality_gates:
-  - branches: ["main"]
-    weaknesses:
-      max_critical: 0
-      max_high: 0
-`)
+	return []byte(strings.Join([]string{
+		"# yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json",
+		"version: 1",
+		"",
+		"# Configure branch-aware weakness quality gates for code findings.",
+		"# Vulnerability (CVE) gates stay managed in Hibou itself.",
+		"quality_gates:",
+		"  - branches: [\"main\"]",
+		"    weaknesses:",
+		"      max_critical: 0",
+		"      max_high: 0",
+		"    # coverage:",
+		"    #   min_coverage: 60",
+		"    #   grace: 2",
+		"    #   diff_minimum: 80",
+		"",
+		"# Exclude files from coverage metrics:",
+		"# coverage:",
+		"#   exclude:",
+		"#     - \"*_test.go\"",
+		"#     - \"testutil/**\"",
+		"",
+		"# Safety-net timeout: force-close snapshot if --complete/--expect never triggers (default: 10m):",
+		"# upload:",
+		"#   window: 10m",
+		"",
+	}, "\n"))
 }
 
 func (c *RepoConfig) MatchGate(targetBranch string) *QualityGate {
@@ -150,6 +184,27 @@ func (c *RepoConfig) validate() error {
 					return fmt.Errorf("quality_gates[%d].weaknesses.%s must be >= 0", index, fieldName)
 				}
 			}
+		}
+		if gate.Coverage != nil {
+			for fieldName, value := range map[string]*float64{
+				"min_coverage": gate.Coverage.MinCoverage,
+				"grace":        gate.Coverage.Grace,
+				"diff_minimum": gate.Coverage.DiffMinimum,
+			} {
+				if value != nil && (*value < 0 || *value > 100) {
+					return fmt.Errorf("quality_gates[%d].coverage.%s must be between 0 and 100", index, fieldName)
+				}
+			}
+		}
+	}
+
+	if c.Upload != nil && strings.TrimSpace(c.Upload.Window) != "" {
+		d, err := time.ParseDuration(c.Upload.Window)
+		if err != nil {
+			return fmt.Errorf("upload.window must be a valid duration: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("upload.window must be a positive duration")
 		}
 	}
 

@@ -1,0 +1,57 @@
+# Hibou Server Configuration
+# Copy to hibou-server.yaml and customize.
+# Environment variables (HIBOU_*) override file values.
+
+# Server
+host: 0.0.0.0
+port: 8585
+
+# MCP server
+mcp:
+  enabled: true
+  port: 8081
+
+# Public URL (used for cookie domain, OAuth callbacks)
+# base:
+#   url: https://hibou.example.com
+
+# Database
+database:
+  url: postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable
+
+# Logging
+log:
+  level: info
+  format: console
+
+# Trivy server
+trivy:
+  url: http://localhost:4954
+
+# OSV API
+osv:
+  url: https://api.osv.dev
+
+# Advisory cache TTL
+cache:
+  ttl: 6h
+
+# Artifact storage path
+artifact:
+  path: /data/artifacts
+
+# Max upload size in bytes (default: 100 MiB)
+max:
+  upload:
+    size: 104857600
+
+# Session secret (change in production!)
+# session:
+#   secret: your-secure-secret-here
+
+# Forge configuration uses indexed environment variables:
+#   HIBOU_FORGE_0_TYPE=forgejo
+#   HIBOU_FORGE_0_URL=http://localhost:3030
+#   HIBOU_FORGE_0_CLIENT_ID=...
+#   HIBOU_FORGE_0_CLIENT_SECRET=...
+#   HIBOU_FORGE_0_WEBHOOK_SECRET=...

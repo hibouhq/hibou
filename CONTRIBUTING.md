@@ -14,26 +14,21 @@ The recommended way to develop is using the VS Code devcontainer. It includes al
 
 1. Open the project in VS Code
 2. Accept the prompt to reopen in the dev container
-3. Bootstrap the full stack (PostgreSQL, Forgejo, Trivy + OAuth setup):
+3. Start the full dev stack (PostgreSQL, Forgejo, Trivy + OAuth + dev servers):
    ```bash
    cp .env.example .env
-   make setup
+   make start
    ```
-   This starts Docker Compose services and creates a Forgejo admin user + OAuth2
-   application. Your `.env` is automatically updated with the OAuth credentials.
+   This starts all Docker Compose services, creates a Forgejo admin user + OAuth2
+   application, seeds data, and starts the dev servers.
 
-4. Run the dev servers:
-   ```bash
-   make dev
-   ```
-
-5. Open http://localhost:8080 and sign in via Forgejo (or use "Dev Login" if no
+4. Open http://localhost:3000 and sign in via Forgejo (or use "Dev Login" if no
    forge is configured).
 
 ### Forgejo local instance
 
 The Docker Compose stack includes a Forgejo instance at http://localhost:3030.
-Admin credentials (created by `make setup`):
+Admin credentials (created by `make start`):
 - Username: `hibou-admin`
 - Password: `hibou-admin`
 
@@ -71,7 +66,8 @@ Supported types: `github`, `forgejo`, `gitea`, `gitlab`.
 
 | Target | Description |
 |--------|-------------|
-| `make setup` | Start services + bootstrap Forgejo OAuth |
+| `make setup` | Start postgres + seed sample data for quick dev login |
+| `make start` | Start full stack, bootstrap Forgejo OAuth, seed data, run dev servers |
 | `make up` | Start Docker Compose services only |
 | `make down` | Stop Docker Compose services |
 | `make dev` | Run Go backend + Vite frontend (hot reload) |
@@ -137,7 +133,7 @@ Supported types: `github`, `forgejo`, `gitea`, `gitlab`.
 ### Frontend changes
 
 1. Work in `site/src/`
-2. The Vite dev server proxies `/api` to the Go backend on port 8080
+2. The Vite dev server proxies `/api` to the Go backend on port 8585
 
 ## sqlc Workflow
 

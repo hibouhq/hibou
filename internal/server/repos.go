@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -11,9 +12,44 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/lehibou/internal/audit"
 	"github.com/hibouhq/lehibou/internal/delta"
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
+
+type enrollRepoRequest struct {
+	Name          string     `json:"name"`
+	Slug          string     `json:"slug"`
+	ProviderID    string     `json:"provider_id"`
+	DefaultBranch string     `json:"default_branch,omitempty"`
+	TeamID        *uuid.UUID `json:"team_id,omitempty"`
+}
+
+type updateRepoRequest struct {
+	Name          *string    `json:"name,omitempty"`
+	DefaultBranch *string    `json:"default_branch,omitempty"`
+	TeamID        *uuid.UUID `json:"team_id,omitempty"`
+
+	teamIDSet bool
+}
+
+func (r *updateRepoRequest) UnmarshalJSON(data []byte) error {
+	type alias updateRepoRequest
+	var payload alias
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+
+	*r = updateRepoRequest(payload)
+	_, r.teamIDSet = probe["team_id"]
+	return nil
+}
 
 type prSummaryResponse struct {
 	Ref              store.EnhancedRef  `json:"ref"`
@@ -67,6 +103,116 @@ type trendPointResponse struct {
 	VulnsLow         int       `json:"vulns_low"`
 	VulnsInfo        int       `json:"vulns_info"`
 	ComponentsTotal  int       `json:"components_total"`
+}
+
+// @Summary      Enroll repository
+// @Description  Enroll a repository in an organization when the caller is an admin
+// @Tags         repositories
+// @Accept       json
+// @Produce      json
+// @Param        provider  path      string             true  "Forge provider"
+// @Param        slug      path      string             true  "Organization slug"
+// @Param        payload   body      enrollRepoRequest  true  "Repository details"
+// @Success      201       {object}  api.Response{data=store.Repository}
+// @Failure      400       {object}  api.Response
+// @Failure      401       {object}  api.Response
+// @Failure      403       {object}  api.Response
+// @Failure      404       {object}  api.Response
+// @Failure      500       {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos [post]
+func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	org, err := s.resolveOrg(r)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return
+	}
+	if org == nil {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return
+	}
+	if role != "admin" {
+		api.JSONError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	var input enrollRepoRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	input.Name = strings.TrimSpace(input.Name)
+	input.Slug = strings.TrimSpace(input.Slug)
+	input.ProviderID = strings.TrimSpace(input.ProviderID)
+	input.DefaultBranch = strings.TrimSpace(input.DefaultBranch)
+	if input.DefaultBranch == "" {
+		input.DefaultBranch = "main"
+	}
+
+	if input.Name == "" {
+		api.JSONError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if input.Slug == "" {
+		api.JSONError(w, http.StatusBadRequest, "slug is required")
+		return
+	}
+	if !api.IsValidSlug(input.Slug) {
+		api.JSONError(w, http.StatusBadRequest, "slug must be 2-63 characters of lowercase letters, numbers, or hyphens")
+		return
+	}
+	if input.ProviderID == "" {
+		api.JSONError(w, http.StatusBadRequest, "provider_id is required")
+		return
+	}
+
+	repo, err := s.queries.CreateRepository(
+		r.Context(),
+		org.ID,
+		input.TeamID,
+		input.Name,
+		input.Slug,
+		chi.URLParam(r, "provider"),
+		input.ProviderID,
+		input.DefaultBranch,
+		"enrolled",
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			if constraintName(err) == "repositories_provider_identity_key" {
+				api.JSONError(w, http.StatusBadRequest, "repository with this provider_id already exists in this organization")
+			} else {
+				api.JSONError(w, http.StatusBadRequest, "repository slug already exists in this organization")
+			}
+			return
+		}
+		if isForeignKeyViolation(err) {
+			api.JSONError(w, http.StatusBadRequest, "team_id references an unknown team")
+			return
+		}
+		api.JSONError(w, http.StatusInternalServerError, "failed to create repository")
+		return
+	}
+
+	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionRepoEnrolled, map[string]any{
+		"name": repo.Name,
+		"slug": repo.Slug,
+	})
+
+	api.JSON(w, http.StatusCreated, repo)
 }
 
 // @Summary      List repositories
@@ -165,6 +311,113 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, repo)
 }
 
+// @Summary      Update repository
+// @Description  Update a repository when the caller is an organization admin
+// @Tags         repositories
+// @Accept       json
+// @Produce      json
+// @Param        provider  path      string             true  "Forge provider"
+// @Param        slug      path      string             true  "Organization slug"
+// @Param        repoSlug  path      string             true  "Repository slug"
+// @Param        payload   body      updateRepoRequest  true  "Repository updates"
+// @Success      200       {object}  api.Response{data=store.Repository}
+// @Failure      400       {object}  api.Response
+// @Failure      401       {object}  api.Response
+// @Failure      403       {object}  api.Response
+// @Failure      404       {object}  api.Response
+// @Failure      500       {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug} [put]
+func (s *Server) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
+	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
+	if !ok {
+		return
+	}
+
+	var input updateRepoRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	name := repo.Name
+	if input.Name != nil {
+		name = strings.TrimSpace(*input.Name)
+		if name == "" {
+			api.JSONError(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+	}
+
+	defaultBranch := repo.DefaultBranch
+	if input.DefaultBranch != nil {
+		defaultBranch = strings.TrimSpace(*input.DefaultBranch)
+		if defaultBranch == "" {
+			api.JSONError(w, http.StatusBadRequest, "default_branch must not be empty")
+			return
+		}
+	}
+
+	teamID := repo.TeamID
+	if input.teamIDSet {
+		teamID = input.TeamID
+	}
+
+	updated, err := s.queries.UpdateRepository(r.Context(), repo.ID, teamID, name, repo.Slug, defaultBranch, repo.SyncState)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			api.JSONError(w, http.StatusBadRequest, "team_id references an unknown team")
+			return
+		}
+		api.JSONError(w, http.StatusInternalServerError, "failed to update repository")
+		return
+	}
+	if updated == nil {
+		api.JSONError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	s.writeRepositoryAuditLog(r, user, org.ID, updated.ID, audit.ActionRepoUpdated, map[string]any{
+		"name": updated.Name,
+		"slug": updated.Slug,
+	})
+
+	api.JSON(w, http.StatusOK, updated)
+}
+
+// @Summary      Remove repository
+// @Description  Remove a repository when the caller is an organization admin
+// @Tags         repositories
+// @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
+// @Param        slug      path  string  true  "Organization slug"
+// @Param        repoSlug  path  string  true  "Repository slug"
+// @Success      204       "No Content"
+// @Failure      401       {object}  api.Response
+// @Failure      403       {object}  api.Response
+// @Failure      404       {object}  api.Response
+// @Failure      500       {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug} [delete]
+func (s *Server) handleRemoveRepo(w http.ResponseWriter, r *http.Request) {
+	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
+	if !ok {
+		return
+	}
+
+	if err := s.queries.DeleteRepository(r.Context(), repo.ID); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to delete repository")
+		return
+	}
+
+	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionRepoRemoved, map[string]any{
+		"name": repo.Name,
+		"slug": repo.Slug,
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // @Summary      List repository refs
 // @Description  List refs for a repository when the caller belongs to the organization
 // @Tags         repositories
@@ -221,6 +474,27 @@ func (s *Server) handleListRefs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSONList(w, refs, pagination.Page, pagination.PerPage, total)
+}
+
+func (s *Server) writeRepositoryAuditLog(r *http.Request, user *store.User, orgID, repoID uuid.UUID, action string, context map[string]any) {
+	contextBody, err := json.Marshal(context)
+	if err != nil {
+		contextBody = json.RawMessage(`{"status":"marshal_error"}`)
+	}
+
+	ipAddress, userAgent := audit.RequestContext(r)
+	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
+		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
+		ActorType:    audit.ActorUser,
+		ActorDisplay: actorDisplay(user),
+		Action:       action,
+		ResourceType: "repository",
+		ResourceID:   repoID.String(),
+		OrgID:        uuid.NullUUID{UUID: orgID, Valid: true},
+		Context:      contextBody,
+		IpAddress:    ipAddress,
+		UserAgent:    userAgent,
+	})
 }
 
 func (s *Server) handleListRefsEnhanced(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +555,11 @@ func (s *Server) handleGetPRSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refName := pullRequestRefName(repo.Provider, number)
+	forgeType := repo.Provider
+	if provider, ok := s.forges[repo.Provider]; ok && provider != nil {
+		forgeType = provider.ID()
+	}
+	refName := pullRequestRefName(forgeType, number)
 	ref, err := s.queries.GetRefByRepoAndName(r.Context(), repo.ID, refName, store.RefTypePullRequest)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request reference")

@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 )
@@ -287,6 +288,65 @@ func (q *Queries) ListRepositoriesByTeam(ctx context.Context, arg ListRepositori
 			&i.SyncState,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleRepositories = `-- name: ListStaleRepositories :many
+SELECT
+	repo.id,
+	repo.org_id,
+	repo.team_id,
+	repo.name,
+	repo.slug,
+	repo.default_branch,
+	COALESCE(MAX(sc.completed_at), '1970-01-01T00:00:00Z'::timestamptz) AS last_scan_completed_at
+FROM repositories repo
+LEFT JOIN refs r ON r.repo_id = repo.id
+LEFT JOIN snapshots s ON s.ref_id = r.id
+LEFT JOIN scans sc ON sc.snapshot_id = s.id AND sc.status = 'complete'
+GROUP BY repo.id, repo.org_id, repo.team_id, repo.name, repo.slug, repo.default_branch
+HAVING COALESCE(MAX(sc.completed_at), '1970-01-01T00:00:00Z'::timestamptz) < $1
+ORDER BY last_scan_completed_at ASC, repo.name ASC
+`
+
+type ListStaleRepositoriesRow struct {
+	ID                  uuid.UUID     `json:"id"`
+	OrgID               uuid.UUID     `json:"org_id"`
+	TeamID              uuid.NullUUID `json:"team_id"`
+	Name                string        `json:"name"`
+	Slug                string        `json:"slug"`
+	DefaultBranch       string        `json:"default_branch"`
+	LastScanCompletedAt interface{}   `json:"last_scan_completed_at"`
+}
+
+func (q *Queries) ListStaleRepositories(ctx context.Context, completedAt sql.NullTime) ([]ListStaleRepositoriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStaleRepositories, completedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStaleRepositoriesRow{}
+	for rows.Next() {
+		var i ListStaleRepositoriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.TeamID,
+			&i.Name,
+			&i.Slug,
+			&i.DefaultBranch,
+			&i.LastScanCompletedAt,
 		); err != nil {
 			return nil, err
 		}

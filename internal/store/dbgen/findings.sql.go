@@ -78,7 +78,7 @@ func (q *Queries) CountFindingsBySnapshotAndTool(ctx context.Context, arg CountF
 const createFinding = `-- name: CreateFinding :one
 INSERT INTO findings (snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at
+RETURNING id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, labels, created_at
 `
 
 type CreateFindingParams struct {
@@ -126,13 +126,14 @@ func (q *Queries) CreateFinding(ctx context.Context, arg CreateFindingParams) (F
 		&i.Message,
 		&i.Fingerprint,
 		&i.Metadata,
+		&i.Labels,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getFindingByID = `-- name: GetFindingByID :one
-SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at FROM findings WHERE id = $1
+SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, labels, created_at FROM findings WHERE id = $1
 `
 
 func (q *Queries) GetFindingByID(ctx context.Context, id uuid.UUID) (Finding, error) {
@@ -152,13 +153,14 @@ func (q *Queries) GetFindingByID(ctx context.Context, id uuid.UUID) (Finding, er
 		&i.Message,
 		&i.Fingerprint,
 		&i.Metadata,
+		&i.Labels,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listAllFindingsBySnapshot = `-- name: ListAllFindingsBySnapshot :many
-SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC
+SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, labels, created_at FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC
 `
 
 func (q *Queries) ListAllFindingsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]Finding, error) {
@@ -184,6 +186,7 @@ func (q *Queries) ListAllFindingsBySnapshot(ctx context.Context, snapshotID uuid
 			&i.Message,
 			&i.Fingerprint,
 			&i.Metadata,
+			&i.Labels,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -235,7 +238,7 @@ func (q *Queries) ListFindingSummaryBySnapshot(ctx context.Context, snapshotID u
 }
 
 const listFindingsBySnapshot = `-- name: ListFindingsBySnapshot :many
-SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC LIMIT $2 OFFSET $3
+SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, labels, created_at FROM findings WHERE snapshot_id = $1 ORDER BY severity ASC, file_path ASC LIMIT $2 OFFSET $3
 `
 
 type ListFindingsBySnapshotParams struct {
@@ -267,6 +270,7 @@ func (q *Queries) ListFindingsBySnapshot(ctx context.Context, arg ListFindingsBy
 			&i.Message,
 			&i.Fingerprint,
 			&i.Metadata,
+			&i.Labels,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -283,7 +287,7 @@ func (q *Queries) ListFindingsBySnapshot(ctx context.Context, arg ListFindingsBy
 }
 
 const listFindingsBySnapshotAndTool = `-- name: ListFindingsBySnapshotAndTool :many
-SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, created_at FROM findings WHERE snapshot_id = $1 AND tool = $2 ORDER BY severity ASC, file_path ASC LIMIT $3 OFFSET $4
+SELECT id, snapshot_id, tool, rule_id, severity, status, file_path, start_line, end_line, location_hash, message, fingerprint, metadata, labels, created_at FROM findings WHERE snapshot_id = $1 AND tool = $2 ORDER BY severity ASC, file_path ASC LIMIT $3 OFFSET $4
 `
 
 type ListFindingsBySnapshotAndToolParams struct {
@@ -321,6 +325,7 @@ func (q *Queries) ListFindingsBySnapshotAndTool(ctx context.Context, arg ListFin
 			&i.Message,
 			&i.Fingerprint,
 			&i.Metadata,
+			&i.Labels,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

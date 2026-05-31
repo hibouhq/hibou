@@ -9,11 +9,20 @@ spec:
   selector:
     matchLabels:
       {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
   template:
     metadata:
       labels:
         {{- include "hibou.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: hibou
           image: {{ printf "%s:%s" .Values.hibou.image.repository .Values.hibou.image.tag | quote }}
@@ -27,12 +36,20 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "hibou.fullname" . }}
+            {{- if or .Values.hibou.sessionSecret .Values.hibou.sessionSecretExistingSecret }}
+            - secretRef:
+                name: {{ .Values.hibou.sessionSecretExistingSecret | default (printf "%s-session" (include "hibou.fullname" $)) }}
+            {{- end }}
+            {{- range $i, $forge := .Values.hibou.forges }}
+            - secretRef:
+                name: {{ $forge.existingSecret | default (printf "%s-forge-%d" (include "hibou.fullname" $) $i) }}
+            {{- end }}
           env:
             - name: HIBOU_DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "hibou.postgresqlSecretName" . }}
-                  key: url
+                  key: {{ include "hibou.postgresqlSecretKey" . }}
           livenessProbe:
             httpGet:
               path: /api/v1/health
@@ -47,3 +64,9 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.hibou.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

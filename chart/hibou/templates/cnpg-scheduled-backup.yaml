@@ -1,0 +1,14 @@
+{{- if and .Values.cnpg.cluster.enabled .Values.cnpg.cluster.backup.enabled .Values.cnpg.cluster.backup.schedule }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "hibou.fullname" . }}-pg-backup
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cnpg.cluster.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "hibou.fullname" . }}-pg
+  immediate: true
+{{- end }}

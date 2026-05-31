@@ -18,6 +18,11 @@ LIMIT $2 OFFSET $3;
 -- name: CountOrgMembers :one
 SELECT COUNT(*)::bigint FROM org_members WHERE org_id = $1;
 
+-- name: CountOrgAdmins :one
+SELECT COUNT(*)::bigint
+FROM org_members
+WHERE org_id = $1 AND role = 'admin';
+
 -- name: GetOrgMemberRole :one
 SELECT role
 FROM org_members

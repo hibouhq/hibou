@@ -1,15 +1,34 @@
 # hibou
 
-Open-source DevSecOps security platform. The goal is to unify dependency risk, code findings, PR analysis, and release impact into a single multi-tenant system.
+An Open Security Intelligence Platform for the Software Lifecycle. Unify dependency risk, code findings, PR analysis, and release impact into a single multi-tenant system.
 
 > **Status:** Early development. The core backend (API, auth, multi-tenant org management) and build pipeline are in place. Ingestion, findings, and the full UI are under active development — see [TODO.md](TODO.md) for the roadmap.
 
 ## Features
 
-- **Multi-tenant** — organization → team → repository hierarchy with API key auth
+- **Multi-tenant** — organization → team → repository hierarchy with RBAC (admin, developer, auditor, release_manager, viewer)
 - **Single binary** — Go backend embeds the Vue 3 SPA; one artifact to deploy
+- **SBOM ingestion** — CycloneDX (JSON/XML) and SPDX (JSON) with async processing and dedup
+- **Vulnerability scanning** — pluggable advisory providers (OSV.dev, NVD, GitHub Advisory, Trivy, Sonatype OSS Index) with canonical alias merging
+- **Secret scanning** — Using Gitleaks, trufflehog, betterleaks and GitHub secret scanning API.
+- **SARIF support** — ingest results from Semgrep, CodeQL, or any SARIF 2.1.0 producer
+- **VEX management** — create, import, and export VEX statements in OpenVEX, CSAF, and CycloneDX formats
+- **Automatic VEX generation** — auto-creates VEX statements on component upgrade/removal; supplier VEX propagation with expiry and re-evaluation
+- **Reachability analysis** — Go call graph analysis (server-side, RTA/VTA), Java bytecode analysis (CI-side), Rust source parsing (CI-side) to auto-VEX unreachable vulnerabilities
+- **Coverage integration** — multi-format ingestion (Cobertura, JaCoCo, Clover, LCOV, Go cover), PR coverage deltas, and configurable quality gates (min coverage, regression grace, diff minimum)
+- **Malware detection** — flags typosquat, dependency confusion, backdoor, and cryptominer packages from OSV and OpenSSF Package Analysis
+- **PR quality gates** — delta analysis (new/resolved vulns and findings) with configurable thresholds per branch pattern
+- **Forge integrations** — GitHub, Forgejo/Gitea, and GitLab with PR annotations, commit statuses, and webhook events
+- **Config-as-code** — `.hibou.yaml` per-repo configuration with JSON Schema and onboarding PR creation
+- **Compliance reporting** — point-in-time reports with ISO 27001 control mapping and SoA generation
+- **Release & client tracking** — releases, deployments, rollback history, and CVE impact analysis across clients
+- **Notifications** — Slack, Teams, Discord, webhook (HMAC-signed), and email with configurable rules per org
+- **Real-time updates** — WebSocket hub with per-user channels and topic subscriptions
+- **Audit logging** — immutable log of 30+ action types with actor, IP, and full context
+- **MCP server** — built-in Model Context Protocol server for AI assistant integration
+- **CLI** — `login`, `upload`, `repos`, `status` commands for CI pipeline integration
 - **API-first** — REST API with JSON envelopes, pagination, and error handling
-- **Cloud-native** — Helm chart for production, Docker Compose for development
+- **Cloud-native** — Helm chart Available
 - **sqlc** — type-safe database layer generated from plain SQL
 
 ## Architecture
@@ -40,7 +59,7 @@ Open-source DevSecOps security platform. The goal is to unify dependency risk, c
    ```bash
    make dev
    ```
-6. Open http://localhost:3000 (frontend) or http://localhost:8080 (API)
+6. Open http://localhost:8080 (frontend) or http://localhost:8585 (API)
 
 ### Manual setup
 
@@ -99,7 +118,7 @@ See [.env.example](.env.example) for all available options.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HIBOU_HOST` | `0.0.0.0` | Server bind address |
-| `HIBOU_PORT` | `8080` | Server port |
+| `HIBOU_PORT` | `8585` | Server port |
 | `HIBOU_DATABASE_URL` | — | PostgreSQL connection string |
 | `HIBOU_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `HIBOU_LOG_FORMAT` | `console` | Log format (console, json) |

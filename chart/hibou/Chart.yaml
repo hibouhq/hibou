@@ -4,3 +4,8 @@ description: Helm chart for deploying the hibou platform and its direct dependen
 type: application
 version: 0.1.0
 appVersion: 0.1.0
+dependencies:
+  - name: cloudnative-pg
+    version: "0.23.0"
+    repository: "https://cloudnative-pg.github.io/charts"
+    condition: cnpg.operator.enabled

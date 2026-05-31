@@ -67,3 +67,11 @@ ORDER BY c.name, c.version;
 
 -- name: CountComponentsBySnapshot :one
 SELECT COUNT(*)::bigint FROM snapshot_components WHERE snapshot_id = $1;
+
+-- name: CreateSnapshotWithLabels :one
+INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url, labels, image_digest)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- name: ListSnapshotsByRefWithLabels :many
+SELECT * FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4;

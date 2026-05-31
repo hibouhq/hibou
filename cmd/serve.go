@@ -74,7 +74,11 @@ var serveCmd = &cobra.Command{
 			}
 			switch fc.Type {
 			case "github":
-				forges[fc.ID] = forge.NewGitHub(fc.ClientID, fc.ClientSecret, fc.WebhookSecret)
+				var opts []forge.GitHubOption
+				if fc.AppID > 0 && fc.PrivateKey != "" {
+					opts = append(opts, forge.WithAppCredentials(fc.AppID, []byte(fc.PrivateKey)))
+				}
+				forges[fc.ID] = forge.NewGitHub(fc.ClientID, fc.ClientSecret, fc.WebhookSecret, opts...)
 			case "forgejo", "gitea":
 				forges[fc.ID] = forge.NewForgejo(fc.URL, fc.ClientID, fc.ClientSecret, fc.WebhookSecret)
 			case "gitlab":

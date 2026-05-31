@@ -8,7 +8,6 @@ package dbgen
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -41,25 +40,14 @@ type CreateOrganizationParams struct {
 	Provider    string `json:"provider"`
 }
 
-type CreateOrganizationRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	DisplayName string          `json:"display_name"`
-	Provider    string          `json:"provider"`
-	Settings    json.RawMessage `json:"settings"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-}
-
-func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganizationParams) (CreateOrganizationRow, error) {
+func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganizationParams) (Organization, error) {
 	row := q.db.QueryRowContext(ctx, createOrganization,
 		arg.Name,
 		arg.Slug,
 		arg.DisplayName,
 		arg.Provider,
 	)
-	var i CreateOrganizationRow
+	var i Organization
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -88,20 +76,9 @@ FROM organizations
 WHERE id = $1
 `
 
-type GetOrganizationByIDRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	DisplayName string          `json:"display_name"`
-	Provider    string          `json:"provider"`
-	Settings    json.RawMessage `json:"settings"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-}
-
-func (q *Queries) GetOrganizationByID(ctx context.Context, id uuid.UUID) (GetOrganizationByIDRow, error) {
+func (q *Queries) GetOrganizationByID(ctx context.Context, id uuid.UUID) (Organization, error) {
 	row := q.db.QueryRowContext(ctx, getOrganizationByID, id)
-	var i GetOrganizationByIDRow
+	var i Organization
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -126,20 +103,9 @@ type GetOrganizationByProviderAndSlugParams struct {
 	Slug     string `json:"slug"`
 }
 
-type GetOrganizationByProviderAndSlugRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	DisplayName string          `json:"display_name"`
-	Provider    string          `json:"provider"`
-	Settings    json.RawMessage `json:"settings"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-}
-
-func (q *Queries) GetOrganizationByProviderAndSlug(ctx context.Context, arg GetOrganizationByProviderAndSlugParams) (GetOrganizationByProviderAndSlugRow, error) {
+func (q *Queries) GetOrganizationByProviderAndSlug(ctx context.Context, arg GetOrganizationByProviderAndSlugParams) (Organization, error) {
 	row := q.db.QueryRowContext(ctx, getOrganizationByProviderAndSlug, arg.Provider, arg.Slug)
-	var i GetOrganizationByProviderAndSlugRow
+	var i Organization
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -151,6 +117,44 @@ func (q *Queries) GetOrganizationByProviderAndSlug(ctx context.Context, arg GetO
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listOrganizations = `-- name: ListOrganizations :many
+SELECT id, name, slug, display_name, provider, settings, created_at, updated_at
+FROM organizations
+ORDER BY name ASC
+`
+
+func (q *Queries) ListOrganizations(ctx context.Context) ([]Organization, error) {
+	rows, err := q.db.QueryContext(ctx, listOrganizations)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Organization{}
+	for rows.Next() {
+		var i Organization
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Slug,
+			&i.DisplayName,
+			&i.Provider,
+			&i.Settings,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOrganizationsByUser = `-- name: ListOrganizationsByUser :many
@@ -169,26 +173,15 @@ type ListOrganizationsByUserParams struct {
 	Offset int32     `json:"offset"`
 }
 
-type ListOrganizationsByUserRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	DisplayName string          `json:"display_name"`
-	Provider    string          `json:"provider"`
-	Settings    json.RawMessage `json:"settings"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-}
-
-func (q *Queries) ListOrganizationsByUser(ctx context.Context, arg ListOrganizationsByUserParams) ([]ListOrganizationsByUserRow, error) {
+func (q *Queries) ListOrganizationsByUser(ctx context.Context, arg ListOrganizationsByUserParams) ([]Organization, error) {
 	rows, err := q.db.QueryContext(ctx, listOrganizationsByUser, arg.UserID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListOrganizationsByUserRow{}
+	items := []Organization{}
 	for rows.Next() {
-		var i ListOrganizationsByUserRow
+		var i Organization
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
@@ -225,20 +218,37 @@ type UpdateOrganizationParams struct {
 	DisplayName string    `json:"display_name"`
 }
 
-type UpdateOrganizationRow struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	DisplayName string          `json:"display_name"`
-	Provider    string          `json:"provider"`
-	Settings    json.RawMessage `json:"settings"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+func (q *Queries) UpdateOrganization(ctx context.Context, arg UpdateOrganizationParams) (Organization, error) {
+	row := q.db.QueryRowContext(ctx, updateOrganization, arg.ID, arg.Name, arg.DisplayName)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.DisplayName,
+		&i.Provider,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
-func (q *Queries) UpdateOrganization(ctx context.Context, arg UpdateOrganizationParams) (UpdateOrganizationRow, error) {
-	row := q.db.QueryRowContext(ctx, updateOrganization, arg.ID, arg.Name, arg.DisplayName)
-	var i UpdateOrganizationRow
+const updateOrganizationSettings = `-- name: UpdateOrganizationSettings :one
+UPDATE organizations
+SET settings = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at
+`
+
+type UpdateOrganizationSettingsParams struct {
+	ID       uuid.UUID       `json:"id"`
+	Settings json.RawMessage `json:"settings"`
+}
+
+func (q *Queries) UpdateOrganizationSettings(ctx context.Context, arg UpdateOrganizationSettingsParams) (Organization, error) {
+	row := q.db.QueryRowContext(ctx, updateOrganizationSettings, arg.ID, arg.Settings)
+	var i Organization
 	err := row.Scan(
 		&i.ID,
 		&i.Name,

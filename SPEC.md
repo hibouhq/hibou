@@ -385,14 +385,8 @@ Comparisons are computed on demand from persisted snapshot data. The API accepts
 
 ### Representative endpoints
 
-- `POST /api/v1/upload/sbom`
-  - Upload an SBOM for a repository ref.
-
-- `POST /api/v1/upload/sarif`
-  - Upload a SARIF report for a repository ref.
-
-- `POST /api/v1/upload/findings`
-  - Upload generic findings for a repository ref.
+- `POST /api/v1/upload`
+  - Upload an SBOM, SARIF, or findings artifact. Type is auto-detected from content.
 
 - `GET /api/v1/uploads/{id}/status`
   - Return upload processing state, validation failures, and downstream job progress.

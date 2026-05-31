@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and fill in values.
+# NEVER commit terraform.tfvars to version control.
+
+hcloud_token = ""
+
+# server_name = "hibou"
+# server_type = "cax11"  # 2 ARM vCPU, 4 GiB RAM, 40 GB - EUR 3.79/mo
+# location    = "fsn1"   # Falkenstein, DE. Alternatives: nbg1, hel1, ash, hil
+# ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+# Restrict SSH access to your IP (recommended for production):
+# ssh_allowed_ips = ["203.0.113.0/32"]
+
+# Open K8s API port (6443) for remote kubectl:
+# enable_k8s_api_access = true

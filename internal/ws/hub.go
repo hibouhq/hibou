@@ -10,6 +10,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+
+	"github.com/hibouhq/lehibou/internal/metrics"
 )
 
 const writeTimeout = 10 * time.Second
@@ -60,6 +62,7 @@ func (h *Hub) Register(conn *websocket.Conn, userID uuid.UUID) *client {
 	}
 	h.byUser[userID][c] = true
 	h.mu.Unlock()
+	metrics.WebSocketConnections.Inc()
 
 	go h.writePump(c)
 	return c
@@ -71,6 +74,7 @@ func (h *Hub) Unregister(c *client) {
 	}
 
 	h.mu.Lock()
+	removed := h.clients[c]
 	delete(h.clients, c)
 	if clients := h.byUser[c.userID]; clients != nil {
 		delete(clients, c)
@@ -79,6 +83,9 @@ func (h *Hub) Unregister(c *client) {
 		}
 	}
 	h.mu.Unlock()
+	if removed {
+		metrics.WebSocketConnections.Dec()
+	}
 
 	c.once.Do(func() {
 		c.sendMu.Lock()

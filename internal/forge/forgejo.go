@@ -47,6 +47,10 @@ func (f *Forgejo) ID() string {
 	return "forgejo"
 }
 
+func (f *Forgejo) Installations(context.Context) ([]Installation, error) {
+	return nil, nil
+}
+
 func (f *Forgejo) ListRepositories(ctx context.Context, opts ListReposOptions) ([]Repository, error) {
 	path := "/api/v1/user/repos"
 	values := url.Values{}

@@ -8,6 +8,7 @@ package dbgen
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -192,6 +193,55 @@ func (q *Queries) ListAuditLogsByResource(ctx context.Context, arg ListAuditLogs
 		arg.Limit,
 		arg.Offset,
 	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditLog{}
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorID,
+			&i.ActorType,
+			&i.ActorDisplay,
+			&i.Action,
+			&i.ResourceType,
+			&i.ResourceID,
+			&i.OrgID,
+			&i.Context,
+			&i.IpAddress,
+			&i.UserAgent,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentAuditLogsByOrg = `-- name: ListRecentAuditLogsByOrg :many
+SELECT id, actor_id, actor_type, actor_display, action, resource_type, resource_id, org_id, context, ip_address, user_agent, created_at FROM audit_logs
+WHERE org_id = $1 AND created_at >= $2
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListRecentAuditLogsByOrgParams struct {
+	OrgID     uuid.NullUUID `json:"org_id"`
+	CreatedAt time.Time     `json:"created_at"`
+	Limit     int32         `json:"limit"`
+}
+
+func (q *Queries) ListRecentAuditLogsByOrg(ctx context.Context, arg ListRecentAuditLogsByOrgParams) ([]AuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentAuditLogsByOrg, arg.OrgID, arg.CreatedAt, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

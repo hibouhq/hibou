@@ -39,6 +39,9 @@ func (p *testForgeProvider) ID() string {
 	}
 	return "github"
 }
+func (p *testForgeProvider) Installations(context.Context) ([]forge.Installation, error) {
+	return nil, nil
+}
 func (p *testForgeProvider) ListRepositories(context.Context, forge.ListReposOptions) ([]forge.Repository, error) {
 	return nil, forge.ErrNotImplemented
 }

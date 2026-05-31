@@ -46,6 +46,7 @@ LIMIT $2 OFFSET $3;
 SELECT COUNT(*)::bigint FROM clients WHERE org_id = $1;
 
 -- name: ListClientImpactVulns :many
+-- VEX-based filtering is applied at the application layer via vex_statements.
 SELECT DISTINCT
     a.canonical_id,
     a.severity::text AS severity,
@@ -59,7 +60,6 @@ JOIN components c ON c.id = vm.component_id
 WHERE d.client_id = $1
   AND d.status = 'active'
   AND r.snapshot_id IS NOT NULL
-  AND vm.suppressed = FALSE
   AND vm.is_affected = TRUE;
 
 -- name: UpdateClient :one

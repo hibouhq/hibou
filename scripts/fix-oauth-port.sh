@@ -7,7 +7,7 @@ set -euo pipefail
 PORT="${1:-${PORT:-}}"
 if [ -z "$PORT" ]; then
   echo "Usage: $0 <VS_CODE_FORWARDED_PORT>"
-  echo "  Check the VS Code PORTS panel for the forwarded port of 3000 (Vite Dev Server)."
+  echo "  Check the VS Code PORTS panel for the forwarded port of 8080 (Hibou Frontend)."
   exit 1
 fi
 
@@ -16,8 +16,8 @@ FORGEJO_ADMIN_USER="${FORGEJO_ADMIN_USER:-hibou-admin}"
 FORGEJO_ADMIN_PASS="${FORGEJO_ADMIN_PASS:-hibou-admin}"
 
 REDIRECT_URIS="[
+  \"http://localhost:8585/api/v1/auth/callback?provider=forgejo\",
   \"http://localhost:8080/api/v1/auth/callback?provider=forgejo\",
-  \"http://localhost:3000/api/v1/auth/callback?provider=forgejo\",
   \"http://localhost:${PORT}/api/v1/auth/callback?provider=forgejo\"
 ]"
 

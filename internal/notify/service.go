@@ -53,6 +53,9 @@ func (s *Service) Subscribe() {
 	s.bus.Subscribe(events.ScanFailed, func(ctx context.Context, event events.Event) {
 		s.handleScanFailed(ctx, event.Payload)
 	})
+	s.bus.Subscribe(events.ScanStale, func(ctx context.Context, event events.Event) {
+		s.handleScanStale(ctx, event.Payload)
+	})
 	s.bus.Subscribe(events.VulnDiscovered, func(ctx context.Context, event events.Event) {
 		s.handleVulnDiscovered(ctx, event.Payload)
 	})
@@ -87,6 +90,24 @@ func (s *Service) handleScanFailed(ctx context.Context, payload any) {
 		Body:     body,
 		Link:     repoLink(repoID),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
+	})
+}
+
+func (s *Service) handleScanStale(ctx context.Context, payload any) {
+	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	if err != nil {
+		s.log.Debug().Err(err).Msg("resolve recipients for stale scan")
+		return
+	}
+	data, _ := payload.(map[string]any)
+	lastScanAt := stringValue(data, "last_scan_completed_at", "unknown")
+	body := fmt.Sprintf("Repo %s has no completed scan since %s", repoName, lastScanAt)
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.ScanStale),
+		Title:    "Repository scan stale",
+		Body:     body,
+		Link:     repoLink(repoID),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelMedium, Valid: true},
 	})
 }
 
@@ -140,6 +161,21 @@ func (s *Service) resolveRecipients(ctx context.Context, payload any) (string, u
 	data, _ := payload.(map[string]any)
 	if userIDs := userIDsFromPayload(data); len(userIDs) > 0 {
 		return stringValue(data, "repo_name", "repository"), uuidFromPayload(data, "repo_id"), userIDs, nil
+	}
+	if repoID := uuidFromPayload(data, "repo_id"); repoID != uuid.Nil {
+		repo, err := resolver.GetRepositoryByID(ctx, repoID)
+		if err != nil || repo == nil {
+			return "", uuid.Nil, nil, fmt.Errorf("load repository: %w", err)
+		}
+		members, _, err := resolver.ListOrgMembers(ctx, repo.OrgID, 1000, 0)
+		if err != nil {
+			return "", uuid.Nil, nil, fmt.Errorf("list org members: %w", err)
+		}
+		recipients := make([]uuid.UUID, 0, len(members))
+		for _, member := range members {
+			recipients = append(recipients, member.UserID)
+		}
+		return repo.Name, repo.ID, recipients, nil
 	}
 
 	snapshotID := uuidFromPayload(data, "snapshot_id")

@@ -30,12 +30,14 @@ type Report struct {
 }
 
 type VulnEntry struct {
-	CanonicalID      string    `json:"canonical_id"`
-	Severity         string    `json:"severity"`
-	ComponentName    string    `json:"component_name"`
-	ComponentVersion string    `json:"component_version"`
-	IsAffected       bool      `json:"is_affected"`
-	Suppressed       bool      `json:"suppressed"`
+	CanonicalID      string `json:"canonical_id"`
+	Severity         string `json:"severity"`
+	ComponentName    string `json:"component_name"`
+	ComponentVersion string `json:"component_version"`
+	IsAffected       bool   `json:"is_affected"`
+	VEXStatus        string    `json:"vex_status"`
+	VEXJustification string    `json:"vex_justification,omitempty"`
+	VEXSource        string    `json:"vex_source,omitempty"`
 	FirstSeenAt      time.Time `json:"first_seen_at"`
 }
 
@@ -49,11 +51,13 @@ type FindingEntry struct {
 }
 
 type Summary struct {
-	Critical int `json:"critical"`
-	High     int `json:"high"`
-	Medium   int `json:"medium"`
-	Low      int `json:"low"`
-	Info     int `json:"info"`
+	Critical       int `json:"critical"`
+	High           int `json:"high"`
+	Medium         int `json:"medium"`
+	Low            int `json:"low"`
+	Info           int `json:"info"`
+	VEXNotAffected int `json:"vex_not_affected"`
+	VEXFixed       int `json:"vex_fixed"`
 }
 
 type ExportStore interface {
@@ -64,16 +68,22 @@ type ExportStore interface {
 	ListFindingsBySnapshot(ctx context.Context, arg dbgen.ListFindingsBySnapshotParams) ([]dbgen.Finding, error)
 	GetAdvisoriesByIDs(ctx context.Context, ids []uuid.UUID) ([]dbgen.Advisory, error)
 	GetComponentsByIDs(ctx context.Context, ids []uuid.UUID) ([]dbgen.Component, error)
+	ListVEXStatementsByAdvisory(ctx context.Context, arg dbgen.ListVEXStatementsByAdvisoryParams) ([]dbgen.VexStatement, error)
 	GetRefByID(ctx context.Context, id uuid.UUID) (dbgen.Ref, error)
 }
 
 type Service struct {
 	store ExportStore
+	isoStore ISO27001Store
 	log   zerolog.Logger
 }
 
 func NewService(store ExportStore, log zerolog.Logger) *Service {
-	return &Service{store: store, log: log}
+	service := &Service{store: store, log: log}
+	if isoStore, ok := store.(ISO27001Store); ok {
+		service.isoStore = isoStore
+	}
+	return service
 }
 
 func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug string, asOfDate time.Time) (*Report, error) {
@@ -133,6 +143,10 @@ func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug 
 	if err != nil {
 		return nil, err
 	}
+	vexByAdvisory, err := s.loadVEXStatementsByAdvisory(ctx, orgID, vulnMatches)
+	if err != nil {
+		return nil, err
+	}
 
 	report := &Report{
 		RepoName:    repo.Name,
@@ -153,16 +167,30 @@ func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug 
 		if !ok {
 			return nil, fmt.Errorf("lookup component %s: %w", match.ComponentID, sql.ErrNoRows)
 		}
+		vexStatement := resolveVEXStatement(vexByAdvisory[match.AdvisoryID], repo.ID, component.Purl, asOfDate)
 		componentSeen[component.ID] = struct{}{}
-		report.Vulnerabilities = append(report.Vulnerabilities, VulnEntry{
+		entry := VulnEntry{
 			CanonicalID:      advisory.CanonicalID,
 			Severity:         string(advisory.Severity),
 			ComponentName:    component.Name,
 			ComponentVersion: component.Version,
 			IsAffected:       match.IsAffected,
-			Suppressed:       match.Suppressed,
 			FirstSeenAt:      match.FirstSeenAt,
-		})
+		}
+		if vexStatement != nil {
+			entry.VEXStatus = string(vexStatement.Status)
+			entry.VEXSource = string(vexStatement.Source)
+			if vexStatement.Justification.Valid {
+				entry.VEXJustification = string(vexStatement.Justification.VexJustification)
+			}
+			switch vexStatement.Status {
+			case dbgen.VexStatusNotAffected:
+				report.Summary.VEXNotAffected++
+			case dbgen.VexStatusFixed:
+				report.Summary.VEXFixed++
+			}
+		}
+		report.Vulnerabilities = append(report.Vulnerabilities, entry)
 		addSummary(&report.Summary, string(advisory.Severity))
 	}
 
@@ -230,6 +258,63 @@ func (s *Service) loadComponentsByID(ctx context.Context, matches []dbgen.VulnMa
 		items[component.ID] = component
 	}
 	return items, nil
+}
+
+func (s *Service) loadVEXStatementsByAdvisory(ctx context.Context, orgID uuid.UUID, matches []dbgen.VulnMatch) (map[uuid.UUID][]dbgen.VexStatement, error) {
+	ids := collectUniqueIDs(matches, func(match dbgen.VulnMatch) uuid.UUID {
+		return match.AdvisoryID
+	})
+	if len(ids) == 0 {
+		return map[uuid.UUID][]dbgen.VexStatement{}, nil
+	}
+	items := make(map[uuid.UUID][]dbgen.VexStatement, len(ids))
+	for _, advisoryID := range ids {
+		statements, err := s.store.ListVEXStatementsByAdvisory(ctx, dbgen.ListVEXStatementsByAdvisoryParams{
+			OrgID:      orgID,
+			AdvisoryID: advisoryID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		items[advisoryID] = statements
+	}
+	return items, nil
+}
+
+func resolveVEXStatement(statements []dbgen.VexStatement, repoID uuid.UUID, componentPURL string, now time.Time) *dbgen.VexStatement {
+	var best *dbgen.VexStatement
+	bestRank := -1
+	for i := range statements {
+		statement := &statements[i]
+		if statement.ExpiresAt.Valid && statement.ExpiresAt.Time.Before(now) {
+			continue
+		}
+		rank, ok := vexSpecificity(statement, repoID, componentPURL)
+		if !ok {
+			continue
+		}
+		if best == nil || rank > bestRank || (rank == bestRank && statement.UpdatedAt.After(best.UpdatedAt)) {
+			best = statement
+			bestRank = rank
+		}
+	}
+	return best
+}
+
+func vexSpecificity(statement *dbgen.VexStatement, repoID uuid.UUID, componentPURL string) (int, bool) {
+	if statement.ComponentPurl.Valid {
+		if !statement.RepoID.Valid || statement.RepoID.UUID != repoID || statement.ComponentPurl.String != componentPURL {
+			return 0, false
+		}
+		return 3, true
+	}
+	if statement.RepoID.Valid {
+		if statement.RepoID.UUID != repoID {
+			return 0, false
+		}
+		return 2, true
+	}
+	return 1, true
 }
 
 func collectUniqueIDs(matches []dbgen.VulnMatch, getID func(dbgen.VulnMatch) uuid.UUID) []uuid.UUID {

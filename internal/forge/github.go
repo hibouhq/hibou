@@ -3,11 +3,15 @@ package forge
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -27,6 +32,8 @@ type GitHub struct {
 	clientID      string
 	clientSecret  string
 	webhookSecret string
+	appID         int64
+	privateKey    []byte
 }
 
 type GitHubOption func(*GitHub)
@@ -42,6 +49,13 @@ func WithHTTPClient(client *http.Client) GitHubOption {
 		if client != nil {
 			g.httpClient = client
 		}
+	}
+}
+
+func WithAppCredentials(appID int64, privateKey []byte) GitHubOption {
+	return func(g *GitHub) {
+		g.appID = appID
+		g.privateKey = append([]byte(nil), privateKey...)
 	}
 }
 
@@ -65,7 +79,54 @@ func (g *GitHub) ID() string {
 	return "github"
 }
 
+func (g *GitHub) Installations(ctx context.Context) ([]Installation, error) {
+	if !g.isAppMode() {
+		return nil, nil
+	}
+
+	installations, err := g.listInstallations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]Installation, 0, len(installations))
+	for _, installation := range installations {
+		result = append(result, Installation{
+			ID:          installation.ID,
+			AccountName: installation.Account.Login,
+			AccountType: installation.Account.Type,
+		})
+	}
+
+	return result, nil
+}
+
 func (g *GitHub) ListRepositories(ctx context.Context, opts ListReposOptions) ([]Repository, error) {
+	if g.isAppMode() {
+		installations, err := g.listInstallations(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		repositories := make([]Repository, 0)
+		seen := make(map[string]struct{})
+		for _, installation := range installations {
+			installationRepos, err := g.ListInstallationRepositories(ctx, installation.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, repo := range installationRepos {
+				if _, ok := seen[repo.FullName]; ok {
+					continue
+				}
+				seen[repo.FullName] = struct{}{}
+				repositories = append(repositories, repo)
+			}
+		}
+
+		return paginateRepositories(repositories, opts), nil
+	}
+
 	path := "/user/repos"
 	values := url.Values{}
 	if opts.Page > 0 {
@@ -322,6 +383,141 @@ func (g *GitHub) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 	return &user, nil
 }
 
+func (g *GitHub) isAppMode() bool {
+	return g.appID > 0 && len(g.privateKey) > 0
+}
+
+// generateAppJWT creates a JWT signed with the App's private key.
+// GitHub requires: iat (issued at), exp (max 10 min), iss (app ID).
+func (g *GitHub) generateAppJWT() (string, error) {
+	block, _ := pem.Decode(g.privateKey)
+	if block == nil {
+		return "", errors.New("failed to decode PEM block from private key")
+	}
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		parsed, errPKCS8 := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if errPKCS8 != nil {
+			return "", fmt.Errorf("parse private key: %w", err)
+		}
+
+		rsaKey, ok := parsed.(*rsa.PrivateKey)
+		if !ok {
+			return "", errors.New("private key is not RSA")
+		}
+		key = rsaKey
+	}
+
+	now := time.Now().Add(-30 * time.Second)
+	expiresAt := now.Add(10 * time.Minute)
+	header := base64URLEncode([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64URLEncode([]byte(fmt.Sprintf(
+		`{"iat":%d,"exp":%d,"iss":%d}`,
+		now.Unix(),
+		expiresAt.Unix(),
+		g.appID,
+	)))
+
+	signingInput := header + "." + payload
+	hash := crypto.SHA256.New()
+	_, _ = hash.Write([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(nil, key, crypto.SHA256, hash.Sum(nil))
+	if err != nil {
+		return "", fmt.Errorf("sign jwt: %w", err)
+	}
+
+	return signingInput + "." + base64URLEncode(signature), nil
+}
+
+func base64URLEncode(data []byte) string {
+	return strings.TrimRight(base64.URLEncoding.EncodeToString(data), "=")
+}
+
+// listInstallations returns all installations of this GitHub App.
+// Paginates through all pages to handle Apps installed on many orgs.
+func (g *GitHub) listInstallations(ctx context.Context) ([]githubInstallation, error) {
+	jwt, err := g.generateAppJWT()
+	if err != nil {
+		return nil, err
+	}
+
+	var all []githubInstallation
+	path := "/app/installations?per_page=100"
+	for path != "" {
+		req, err := g.newRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+jwt)
+
+		var page []githubInstallation
+		resp, err := g.doWithResponse(req, &page)
+		if err != nil {
+			return nil, fmt.Errorf("list github app installations: %w", err)
+		}
+		all = append(all, page...)
+		path = nextPagePath(resp)
+	}
+
+	return all, nil
+}
+
+// createInstallationToken creates an access token for an installation.
+func (g *GitHub) createInstallationToken(ctx context.Context, installationID int64) (*githubInstallationToken, error) {
+	jwt, err := g.generateAppJWT()
+	if err != nil {
+		return nil, err
+	}
+
+	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
+	req, err := g.newRequest(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+
+	var token githubInstallationToken
+	if err := g.do(req, &token); err != nil {
+		return nil, fmt.Errorf("create installation token for %d: %w", installationID, err)
+	}
+
+	return &token, nil
+}
+
+// ListInstallationRepositories lists all repos accessible to an App installation.
+// Paginates through all pages.
+func (g *GitHub) ListInstallationRepositories(ctx context.Context, installationID int64) ([]Repository, error) {
+	token, err := g.createInstallationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+
+	var repositories []Repository
+	path := "/installation/repositories?per_page=100"
+	for path != "" {
+		req, err := g.newRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token.Token)
+
+		var payload struct {
+			Repositories []githubRepository `json:"repositories"`
+		}
+		resp, err := g.doWithResponse(req, &payload)
+		if err != nil {
+			return nil, fmt.Errorf("list installation repositories: %w", err)
+		}
+		for _, repo := range payload.Repositories {
+			repositories = append(repositories, repo.toRepository(g.ID()))
+		}
+		path = nextPagePath(resp)
+	}
+
+	return repositories, nil
+}
+
 func (g *GitHub) newRequest(ctx context.Context, method, path string, body any) (*http.Request, error) {
 	endpoint := g.apiURL + path
 
@@ -358,6 +554,69 @@ func (g *GitHub) doJSON(ctx context.Context, method, path string, body any, out 
 func (g *GitHub) do(request *http.Request, out any) error {
 	_, err := g.doWithStatus(request, out)
 	return err
+}
+
+// doWithResponse performs a request and returns the raw HTTP response (for pagination headers).
+func (g *GitHub) doWithResponse(request *http.Request, out any) (*http.Response, error) {
+	response, err := g.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("perform github request: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = response.Status
+		}
+		return nil, fmt.Errorf("github api %s: %s", request.URL.Path, message)
+	}
+
+	if out != nil {
+		if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+			return nil, fmt.Errorf("decode github response: %w", err)
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, response.Body)
+	}
+
+	return response, nil
+}
+
+// nextPagePath extracts the "next" page path from the Link header.
+// Returns "" if there is no next page.
+func nextPagePath(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+	link := resp.Header.Get("Link")
+	if link == "" {
+		return ""
+	}
+	for _, part := range strings.Split(link, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.Index(part, "<")
+		end := strings.Index(part, ">")
+		if start < 0 || end < 0 || end <= start {
+			continue
+		}
+		fullURL := part[start+1 : end]
+		// Extract path+query from full URL
+		parsed, err := url.Parse(fullURL)
+		if err != nil {
+			continue
+		}
+		path := parsed.Path
+		if parsed.RawQuery != "" {
+			path += "?" + parsed.RawQuery
+		}
+		return path
+	}
+	return ""
 }
 
 func (g *GitHub) doWithStatus(request *http.Request, out any) (int, error) {
@@ -419,6 +678,29 @@ func decodeBase64Content(content string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(cleaned)
 }
 
+func paginateRepositories(repositories []Repository, opts ListReposOptions) []Repository {
+	if opts.PerPage <= 0 {
+		return repositories
+	}
+
+	page := opts.Page
+	if page <= 0 {
+		page = 1
+	}
+
+	start := (page - 1) * opts.PerPage
+	if start >= len(repositories) {
+		return nil
+	}
+
+	end := start + opts.PerPage
+	if end > len(repositories) {
+		end = len(repositories)
+	}
+
+	return repositories[start:end]
+}
+
 type githubRepository struct {
 	Name          string `json:"name"`
 	FullName      string `json:"full_name"`
@@ -435,6 +717,19 @@ type githubContentFile struct {
 	SHA      string `json:"sha"`
 	Content  string `json:"content"`
 	Encoding string `json:"encoding"`
+}
+
+type githubInstallation struct {
+	ID      int64 `json:"id"`
+	Account struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"account"`
+}
+
+type githubInstallationToken struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type githubPullRequestResource struct {

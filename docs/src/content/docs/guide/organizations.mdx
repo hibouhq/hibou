@@ -8,7 +8,7 @@ Organizations are the primary unit of tenancy in Hibou. Each organization has it
 ## Creating an Organization
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/orgs \
+curl -X POST http://localhost:8585/api/v1/orgs \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-org", "display_name": "My Organization"}'

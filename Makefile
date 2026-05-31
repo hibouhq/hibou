@@ -4,12 +4,12 @@ FRONTEND  := site
 
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-DATE      := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+DATE      := $(shell git log -1 --format=%cI 2>/dev/null || echo 1970-01-01T00:00:00Z)
 
 LDFLAGS   := -X github.com/hibouhq/lehibou/internal/version.Version=$(VERSION) \
              -X github.com/hibouhq/lehibou/internal/version.Commit=$(COMMIT) \
              -X github.com/hibouhq/lehibou/internal/version.Date=$(DATE)
-GO_BUILD_FLAGS := -buildvcs=false
+GO_BUILD_FLAGS := -buildvcs=false -trimpath
 
 # Build targets: linux/amd64, linux/arm64, windows/amd64, windows/arm64, darwin/arm64
 PLATFORMS := linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64
@@ -49,17 +49,13 @@ setup: up ## Quick dev setup: start postgres + seed sample data
 setup-full: up-all ## Full setup with Forgejo OAuth (for OAuth testing)
 	@./scripts/setup-dev.sh
 
-.PHONY: fix-auth
-fix-auth: ## Fix OAuth redirect for VS Code port forwarding (PORT=<forwarded_port>)
-	@./scripts/fix-oauth-port.sh $(PORT)
-
 .PHONY: start
-start: setup-full ## One command: full setup with real data + start the app
+start: setup-full build-frontend ## One command: full setup with real data + start the app
 	@./scripts/seed-real.sh
 	@$(MAKE) dev
 
 .PHONY: start-quick
-start-quick: setup ## Quick start with fake seed data
+start-quick: setup build-frontend ## Quick start with fake seed data
 	@$(MAKE) dev
 
 .PHONY: seed
@@ -83,6 +79,12 @@ test: ## Run Go and frontend tests
 	go test -race -count=1 ./...
 	cd $(FRONTEND) && npx vitest run
 
+.PHONY: coverage
+coverage: ## Run Go tests with coverage report
+	go test -race -count=1 -coverprofile=coverage.out ./internal/...
+	go tool cover -func=coverage.out | tail -1
+	@echo "HTML report: go tool cover -html=coverage.out"
+
 .PHONY: build-frontend
 build-frontend: ## Build the Vue SPA
 	cd $(FRONTEND) && npm run build
@@ -91,7 +93,74 @@ build-frontend: ## Build the Vue SPA
 .PHONY: build
 build: build-frontend ## Build the hibou binary for the current platform
 	mkdir -p $(DIST)
-	go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) .
+	CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) .
+
+.PHONY: check-reproducible
+check-reproducible: ## Verify build reproducibility (rebuilds frontend + Go binary, compares with dist/)
+	@if [ ! -f $(DIST)/$(BINARY) ]; then echo "==> FAIL: run 'make build' first"; exit 1; fi
+	@echo "==> Rebuilding frontend..."
+	@cd $(FRONTEND) && npm run build > /dev/null 2>&1
+	@echo "==> Rebuilding Go binary..."
+	@CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o /tmp/hibou-repro .
+	@hash1=$$(sha256sum $(DIST)/$(BINARY) | cut -d' ' -f1); \
+	 hash2=$$(sha256sum /tmp/hibou-repro | cut -d' ' -f1); \
+	 rm -f /tmp/hibou-repro; \
+	 if [ "$$hash1" = "$$hash2" ]; then \
+	   echo "==> Reproducible: $$hash1"; \
+	 else \
+	   echo "==> FAIL: original: $$hash1"; \
+	   echo "==>       rebuild:  $$hash2"; \
+	   exit 1; \
+	 fi
+
+SOURCE_DATE_EPOCH := $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+
+.PHONY: base-image
+base-image: ## Build Wolfi base image from apko.yaml (locked)
+	@echo "==> Building Wolfi base image from apko.yaml..."
+	apko build $(if $(wildcard apko.lock.json),--lockfile apko.lock.json )apko.yaml hibou-base:latest /tmp/hibou-base.tar
+	docker load < /tmp/hibou-base.tar
+	@echo "==> Base image ready: hibou-base:latest-{amd64,arm64}"
+
+.PHONY: base-image-lock
+base-image-lock: ## Resolve and lock Wolfi package versions
+	apko lock apko.yaml
+	@echo "==> Lock file written: apko.lock.json"
+
+.PHONY: docker-build
+docker-build: base-image ## Build reproducible Docker image
+	docker build \
+		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg DATE=$(DATE) \
+		-t ghcr.io/hibouhq/lehibou:$(VERSION) .
+
+.PHONY: check-reproducible-image
+check-reproducible-image: ## Verify Docker image reproducibility (builds twice without cache, compares digests)
+	@echo "==> Building image twice (no cache) to verify reproducibility..."
+	@docker build --no-cache -q \
+		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg DATE=$(DATE) \
+		-t hibou-repro-1 . > /dev/null
+	@docker build --no-cache -q \
+		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg DATE=$(DATE) \
+		-t hibou-repro-2 . > /dev/null
+	@id1=$$(docker inspect --format='{{.Id}}' hibou-repro-1); \
+	 id2=$$(docker inspect --format='{{.Id}}' hibou-repro-2); \
+	 docker rmi hibou-repro-1 hibou-repro-2 > /dev/null 2>&1; \
+	 if [ "$$id1" = "$$id2" ]; then \
+	   echo "==> Reproducible image: $$id1"; \
+	 else \
+	   echo "==> FAIL: build 1: $$id1"; \
+	   echo "==>       build 2: $$id2"; \
+	   exit 1; \
+	 fi
 
 .PHONY: install
 install: build ## Install hibou binary and create hibou-server symlink
@@ -138,3 +207,11 @@ docs: ## Build the documentation site
 .PHONY: docs-dev
 docs-dev: ## Run documentation dev server
 	cd docs && DOCS_VERSION=latest DOCS_BASE=/ npm run dev
+
+.PHONY: k8s-dev
+k8s-dev: ## Deploy Hibou to a local kind cluster (with CNPG)
+	@bash scripts/k8s-dev.sh
+
+.PHONY: k8s-dev-clean
+k8s-dev-clean: ## Tear down the local kind cluster
+	@bash scripts/k8s-dev-cleanup.sh

@@ -10,40 +10,12 @@ import (
 
 	"github.com/hibouhq/lehibou/internal/api"
 	"github.com/hibouhq/lehibou/internal/compliance"
+	"github.com/hibouhq/lehibou/internal/store"
 )
 
 func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	if s.complianceSvc == nil {
-		api.JSONError(w, http.StatusServiceUnavailable, "compliance export unavailable")
-		return
-	}
-
-	org, err := s.resolveOrg(r)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
-		return
-	}
-	if org == nil {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
-		return
-	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
-	if err != nil || role == "" {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
-		return
-	}
-	allowed, err := s.enforcer.CheckPermission(user.ID.String(), fmt.Sprintf("org:%s/compliance", org.ID), "export")
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to authorize compliance export")
-		return
-	}
-	if !allowed {
-		api.JSONError(w, http.StatusForbidden, "insufficient permissions")
+	org, ok := s.requireComplianceAccess(w, r)
+	if !ok {
 		return
 	}
 
@@ -71,6 +43,86 @@ func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) 
 	api.JSON(w, http.StatusOK, report)
 }
 
+func (s *Server) handleISO27001Export(w http.ResponseWriter, r *http.Request) {
+	org, ok := s.requireComplianceAccess(w, r)
+	if !ok {
+		return
+	}
+	asOfDate, err := parseOptionalComplianceDate(strings.TrimSpace(r.URL.Query().Get("date")))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "date must be RFC3339 or YYYY-MM-DD")
+		return
+	}
+	report, err := s.complianceSvc.GenerateISO27001Report(r.Context(), org.ID, asOfDate)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, compliance.ErrReportNotFound) {
+		api.JSONError(w, http.StatusNotFound, "compliance evidence not found")
+		return
+	}
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to generate ISO 27001 report")
+		return
+	}
+	api.JSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleSoAExport(w http.ResponseWriter, r *http.Request) {
+	org, ok := s.requireComplianceAccess(w, r)
+	if !ok {
+		return
+	}
+	asOfDate, err := parseOptionalComplianceDate(strings.TrimSpace(r.URL.Query().Get("date")))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "date must be RFC3339 or YYYY-MM-DD")
+		return
+	}
+	report, err := s.complianceSvc.GenerateStatementOfApplicability(r.Context(), org.ID, asOfDate)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, compliance.ErrReportNotFound) {
+		api.JSONError(w, http.StatusNotFound, "statement of applicability not found")
+		return
+	}
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to generate statement of applicability")
+		return
+	}
+	api.JSON(w, http.StatusOK, report)
+}
+
+func (s *Server) requireComplianceAccess(w http.ResponseWriter, r *http.Request) (*store.Organization, bool) {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return nil, false
+	}
+	if s.complianceSvc == nil {
+		api.JSONError(w, http.StatusServiceUnavailable, "compliance export unavailable")
+		return nil, false
+	}
+	org, err := s.resolveOrg(r)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return nil, false
+	}
+	if org == nil {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return nil, false
+	}
+	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	if err != nil || role == "" {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return nil, false
+	}
+	allowed, err := s.enforcer.CheckPermission(user.ID.String(), fmt.Sprintf("org:%s/compliance", org.ID), "export")
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to authorize compliance export")
+		return nil, false
+	}
+	if !allowed {
+		api.JSONError(w, http.StatusForbidden, "insufficient permissions")
+		return nil, false
+	}
+	return org, true
+}
+
 func parseComplianceDate(raw string) (time.Time, error) {
 	if raw == "" {
 		return time.Time{}, errors.New("missing date")
@@ -83,4 +135,11 @@ func parseComplianceDate(raw string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return parsed.Add(23*time.Hour + 59*time.Minute + 59*time.Second), nil
+}
+
+func parseOptionalComplianceDate(raw string) (time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Now().UTC(), nil
+	}
+	return parseComplianceDate(raw)
 }

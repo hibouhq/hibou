@@ -140,6 +140,10 @@ func (q *Queries) ListRepositoriesByOrg(ctx context.Context, orgID uuid.UUID, li
 	return repositories, int(total), nil
 }
 
+func (q *Queries) ListStaleRepositories(ctx context.Context, before time.Time) ([]dbgen.ListStaleRepositoriesRow, error) {
+	return q.db.ListStaleRepositories(ctx, sql.NullTime{Time: before, Valid: true})
+}
+
 func (q *Queries) ListRepositoriesByTeam(ctx context.Context, teamID uuid.UUID, limit, offset int) ([]Repository, int, error) {
 	rows, err := q.db.ListRepositoriesByTeam(ctx, dbgen.ListRepositoriesByTeamParams{
 		TeamID: nullUUIDFromPtr(&teamID),

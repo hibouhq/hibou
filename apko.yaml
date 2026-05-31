@@ -1,0 +1,32 @@
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - ca-certificates-bundle
+    - tzdata
+    - wolfi-baselayout
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+archs:
+  - amd64
+  - arm64
+
+# Minimal entrypoint — overridden by Dockerfile ENTRYPOINT anyway.
+entrypoint:
+  command: /usr/local/bin/hibou-server
+
+annotations:
+  org.opencontainers.image.title: "hibou-base"
+  org.opencontainers.image.description: "Minimal Wolfi base for Hibou static Go binary"
+  org.opencontainers.image.source: "https://github.com/hibouhq/lehibou"

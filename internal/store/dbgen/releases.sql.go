@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const countReleasesByOrg = `-- name: CountReleasesByOrg :one
@@ -40,7 +41,7 @@ func (q *Queries) CountReleasesByRepo(ctx context.Context, repoID uuid.UUID) (in
 const createRelease = `-- name: CreateRelease :one
 INSERT INTO releases (repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, published_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, published_at, created_at, updated_at
+RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at
 `
 
 type CreateReleaseParams struct {
@@ -75,6 +76,7 @@ func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (R
 		&i.BuildMetadata,
 		&i.ArtifactIds,
 		&i.Provenance,
+		pq.Array(&i.ImageDigests),
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -92,7 +94,7 @@ func (q *Queries) DeleteRelease(ctx context.Context, id uuid.UUID) error {
 }
 
 const getReleaseByID = `-- name: GetReleaseByID :one
-SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, published_at, created_at, updated_at FROM releases WHERE id = $1
+SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at FROM releases WHERE id = $1
 `
 
 func (q *Queries) GetReleaseByID(ctx context.Context, id uuid.UUID) (Release, error) {
@@ -107,6 +109,7 @@ func (q *Queries) GetReleaseByID(ctx context.Context, id uuid.UUID) (Release, er
 		&i.BuildMetadata,
 		&i.ArtifactIds,
 		&i.Provenance,
+		pq.Array(&i.ImageDigests),
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -115,7 +118,7 @@ func (q *Queries) GetReleaseByID(ctx context.Context, id uuid.UUID) (Release, er
 }
 
 const listReleasesByOrg = `-- name: ListReleasesByOrg :many
-SELECT r.id, r.repo_id, r.ref_id, r.snapshot_id, r.version, r.build_metadata, r.artifact_ids, r.provenance, r.published_at, r.created_at, r.updated_at FROM releases r
+SELECT r.id, r.repo_id, r.ref_id, r.snapshot_id, r.version, r.build_metadata, r.artifact_ids, r.provenance, r.image_digests, r.published_at, r.created_at, r.updated_at FROM releases r
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
 ORDER BY r.created_at DESC
@@ -146,6 +149,7 @@ func (q *Queries) ListReleasesByOrg(ctx context.Context, arg ListReleasesByOrgPa
 			&i.BuildMetadata,
 			&i.ArtifactIds,
 			&i.Provenance,
+			pq.Array(&i.ImageDigests),
 			&i.PublishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -164,7 +168,7 @@ func (q *Queries) ListReleasesByOrg(ctx context.Context, arg ListReleasesByOrgPa
 }
 
 const listReleasesByRepo = `-- name: ListReleasesByRepo :many
-SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, published_at, created_at, updated_at FROM releases WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at FROM releases WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListReleasesByRepoParams struct {
@@ -191,6 +195,7 @@ func (q *Queries) ListReleasesByRepo(ctx context.Context, arg ListReleasesByRepo
 			&i.BuildMetadata,
 			&i.ArtifactIds,
 			&i.Provenance,
+			pq.Array(&i.ImageDigests),
 			&i.PublishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,

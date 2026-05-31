@@ -1,21 +1,22 @@
 package server
 
 import (
-	"crypto/sha256"
+	"bytes"
+	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/lehibou/internal/metrics"
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/vex"
 )
 
 type uploadRequest struct {
@@ -27,38 +28,18 @@ type uploadRequest struct {
 	SnapshotLabel string `json:"snapshot_label,omitempty"`
 }
 
-type sbomUploadRequest struct {
+type autoUploadRequest struct {
 	uploadRequest
-	Format   string         `json:"format"`
-	Artifact uploadArtifact `json:"artifact"`
-}
-
-type sarifUploadRequest struct {
-	uploadRequest
-	Tool     string         `json:"tool"`
-	Artifact uploadArtifact `json:"artifact"`
-}
-
-type findingsUploadRequest struct {
-	uploadRequest
-	Tool     string         `json:"tool"`
-	Findings []findingInput `json:"findings"`
+	Tool     string          `json:"tool,omitempty"`
+	Artifact *uploadArtifact `json:"artifact,omitempty"`
+	Complete *bool           `json:"complete,omitempty"`
+	Expect   *int            `json:"expect,omitempty"`
 }
 
 type uploadArtifact struct {
 	Filename      string `json:"filename"`
 	SHA256        string `json:"sha256,omitempty"`
 	ContentBase64 string `json:"content_base64"`
-}
-
-type findingInput struct {
-	RuleID    string         `json:"rule_id"`
-	Severity  string         `json:"severity"`
-	FilePath  string         `json:"file_path"`
-	StartLine *int           `json:"start_line,omitempty"`
-	EndLine   *int           `json:"end_line,omitempty"`
-	Message   string         `json:"message"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 type uploadResponse struct {
@@ -76,270 +57,232 @@ type uploadStatusResponse struct {
 	CreatedAt  string `json:"created_at"`
 }
 
-// @Summary      Upload SBOM
-// @Description  Creates a pending snapshot for an SBOM upload. Artifact parsing is deferred.
-// @Tags         uploads
-// @Accept       json
-// @Produce      json
-// @Param        payload  body      server.sbomUploadRequest  true  "SBOM upload payload"
-// @Success      202   {object}  api.Response{data=server.uploadResponse}
-// @Failure      400   {object}  api.Response
-// @Failure      401   {object}  api.Response
-// @Failure      404   {object}  api.Response
-// @Failure      500   {object}  api.Response
-// @Security     BearerAuth
-// @Router       /upload/sbom [post]
-func (s *Server) handleUploadSBOM(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
+// detectArtifactType inspects the decoded content to determine the upload type and format.
+// Returns (uploadType, format, toolName, error).
+func detectArtifactType(content []byte) (string, string, string, error) {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return "", "", "", errors.New("empty artifact content")
 	}
 
-	var input sbomUploadRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
+	if trimmed[0] == '{' {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &probe); err == nil {
+			if raw, ok := probe["@context"]; ok {
+				var ctx string
+				if json.Unmarshal(raw, &ctx) == nil && strings.Contains(ctx, "openvex.dev") {
+					return "vex", "openvex", "", nil
+				}
+			}
+			if raw, ok := probe["document"]; ok {
+				var doc struct {
+					Category string `json:"category"`
+				}
+				if json.Unmarshal(raw, &doc) == nil && doc.Category == "csaf_vex" {
+					return "vex", "csaf", "", nil
+				}
+			}
+			if _, ok := probe["bomFormat"]; ok {
+				return "sbom", "cyclonedx-json", "", nil
+			}
+			if _, ok := probe["spdxVersion"]; ok {
+				return "sbom", "spdx-json", "", nil
+			}
+			if _, ok := probe["runs"]; ok {
+				return "sarif", "", extractSARIFToolName(trimmed), nil
+			}
+			if raw, ok := probe["$schema"]; ok {
+				var schema string
+				if json.Unmarshal(raw, &schema) == nil && strings.Contains(strings.ToLower(schema), "sarif") {
+					return "sarif", "", extractSARIFToolName(trimmed), nil
+				}
+			}
+		}
 	}
 
-	normalizeUploadRequest(&input.uploadRequest)
-	input.Format = strings.TrimSpace(input.Format)
-	input.Artifact.ContentBase64 = strings.TrimSpace(input.Artifact.ContentBase64)
-
-	if err := validateUploadRequest(input.uploadRequest); err != nil {
-		api.JSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if input.Format != "cyclonedx-json" && input.Format != "cyclonedx-xml" && input.Format != "spdx-json" && input.Format != "spdx-tv" {
-		api.JSONError(w, http.StatusBadRequest, "format must be one of cyclonedx-json, cyclonedx-xml, spdx-json, spdx-tv")
-		return
-	}
-	if input.Artifact.ContentBase64 == "" {
-		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 is required")
-		return
-	}
-	if _, err := base64.StdEncoding.DecodeString(input.Artifact.ContentBase64); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 must be valid base64")
-		return
-	}
-
-	snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, input.SnapshotLabel)
-	if err != nil {
-		s.writeUploadError(w, err)
-		return
+	if trimmed[0] == '<' {
+		prefix := trimmed
+		if len(prefix) > 1024 {
+			prefix = prefix[:1024]
+		}
+		if bytes.Contains(prefix, []byte("cyclonedx.org/schema/bom")) {
+			return "sbom", "cyclonedx-xml", "", nil
+		}
+		if bytes.Contains(prefix, []byte("spdx:Document")) || bytes.Contains(prefix, []byte("http://spdx.org/rdf")) {
+			return "sbom", "spdx-xml", "", nil
+		}
+		if bytes.Contains(prefix, []byte("<coverage")) && (bytes.Contains(prefix, []byte("line-rate")) || bytes.Contains(prefix, []byte("branch-rate"))) {
+			return "coverage", "cobertura", "", nil
+		}
+		if bytes.Contains(prefix, []byte("<report")) && bytes.Contains(prefix, []byte("jacoco")) {
+			return "coverage", "jacoco", "", nil
+		}
+		if bytes.Contains(prefix, []byte("<coverage")) && bytes.Contains(prefix, []byte("clover")) {
+			return "coverage", "clover", "", nil
+		}
 	}
 
-	api.JSON(w, http.StatusAccepted, uploadResponse{
-		UploadID:   snapshot.ID.String(),
-		SnapshotID: snapshot.ID.String(),
-		Status:     string(snapshot.Status),
-	})
+	if bytes.HasPrefix(trimmed, []byte("SPDXVersion:")) {
+		return "sbom", "spdx-tv", "", nil
+	}
+	if bytes.HasPrefix(trimmed, []byte("TN:")) || bytes.HasPrefix(trimmed, []byte("SF:")) {
+		return "coverage", "lcov", "", nil
+	}
+	if bytes.HasPrefix(trimmed, []byte("mode:")) {
+		return "coverage", "gocover", "", nil
+	}
+
+	return "", "", "", errors.New("could not detect artifact type from content")
 }
 
-// @Summary      Upload SARIF
-// @Description  Creates a pending snapshot for a SARIF upload. Artifact parsing is deferred.
-// @Tags         uploads
-// @Accept       json
-// @Produce      json
-// @Param        payload  body      server.sarifUploadRequest  true  "SARIF upload payload"
-// @Success      202   {object}  api.Response{data=server.uploadResponse}
-// @Failure      400   {object}  api.Response
-// @Failure      401   {object}  api.Response
-// @Failure      404   {object}  api.Response
-// @Failure      500   {object}  api.Response
-// @Security     BearerAuth
-// @Router       /upload/sarif [post]
-func (s *Server) handleUploadSARIF(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
+func extractSARIFToolName(content []byte) string {
+	var sarif struct {
+		Runs []struct {
+			Tool struct {
+				Driver struct {
+					Name string `json:"name"`
+				} `json:"driver"`
+			} `json:"tool"`
+		} `json:"runs"`
 	}
-
-	var input sarifUploadRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
+	if json.Unmarshal(content, &sarif) == nil && len(sarif.Runs) > 0 {
+		return sarif.Runs[0].Tool.Driver.Name
 	}
-
-	normalizeUploadRequest(&input.uploadRequest)
-	input.Tool = strings.TrimSpace(input.Tool)
-	input.Artifact.ContentBase64 = strings.TrimSpace(input.Artifact.ContentBase64)
-
-	if err := validateUploadRequest(input.uploadRequest); err != nil {
-		api.JSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if input.Tool == "" {
-		api.JSONError(w, http.StatusBadRequest, "tool is required")
-		return
-	}
-	if input.Artifact.ContentBase64 == "" {
-		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 is required")
-		return
-	}
-	if _, err := base64.StdEncoding.DecodeString(input.Artifact.ContentBase64); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 must be valid base64")
-		return
-	}
-
-	label := input.Tool
-	snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
-	if err != nil {
-		s.writeUploadError(w, err)
-		return
-	}
-
-	api.JSON(w, http.StatusAccepted, uploadResponse{
-		UploadID:   snapshot.ID.String(),
-		SnapshotID: snapshot.ID.String(),
-		Status:     string(snapshot.Status),
-	})
+	return ""
 }
 
-// @Summary      Upload findings
-// @Description  Creates a snapshot and stores the provided findings immediately.
+// @Summary      Upload artifact (auto-detect)
+// @Description  Creates a pending snapshot. Artifact type (SBOM, SARIF, coverage report, or VEX document) is auto-detected from content.
 // @Tags         uploads
 // @Accept       json
 // @Produce      json
-// @Param        payload  body      server.findingsUploadRequest  true  "Findings upload payload"
+// @Param        payload  body      server.autoUploadRequest  true  "Upload payload"
 // @Success      202   {object}  api.Response{data=server.uploadResponse}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
 // @Failure      404   {object}  api.Response
 // @Failure      500   {object}  api.Response
 // @Security     BearerAuth
-// @Router       /upload/findings [post]
-func (s *Server) handleUploadFindings(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-
-	var input findingsUploadRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	normalizeUploadRequest(&input.uploadRequest)
-	input.Tool = strings.TrimSpace(input.Tool)
-
-	if err := validateUploadRequest(input.uploadRequest); err != nil {
-		api.JSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if input.Tool == "" {
-		api.JSONError(w, http.StatusBadRequest, "tool is required")
-		return
-	}
-
-	tx, err := s.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to create upload")
-		return
-	}
+// @Router       /upload [post]
+func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
+	uploadType := "auto"
+	status := "rejected"
 	defer func() {
-		_ = tx.Rollback()
+		metrics.UploadsTotal.WithLabelValues(uploadType, status).Inc()
 	}()
 
-	queries := s.queries.WithTx(tx)
-	repo, err := s.resolveUploadTarget(r, queries, user.ID, input.uploadRequest)
-	if err != nil {
-		s.writeUploadError(w, err)
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
-	refType := refTypeFromName(input.Ref)
-	refName := normalizeStoredRefName(input.Ref)
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, nil, nil, &input.CommitSHA)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to create upload")
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadSize)
+	var input autoUploadRequest
+	if !decodeUploadJSONBody(w, r, &input) {
 		return
 	}
 
-	label := input.SnapshotLabel
-	if label == "" {
-		label = input.Tool
-	}
-	var snapshotLabel *string
-	if label != "" {
-		snapshotLabel = &label
-	}
+	normalizeUploadRequest(&input.uploadRequest)
+	input.Tool = strings.TrimSpace(input.Tool)
 
-	snapshot, err := queries.CreateSnapshot(r.Context(), ref.ID, input.CommitSHA, snapshotLabel, store.SnapshotStatusPending, nil)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to create upload")
+	if err := validateUploadRequest(input.uploadRequest); err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	for _, finding := range input.Findings {
-		severity, err := severityFromString(finding.Severity)
+	if input.Artifact == nil {
+		api.JSONError(w, http.StatusBadRequest, "artifact is required")
+		return
+	}
+	input.Artifact.ContentBase64 = strings.TrimSpace(input.Artifact.ContentBase64)
+	if input.Artifact.ContentBase64 == "" {
+		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 is required")
+		return
+	}
+
+	content, err := base64.StdEncoding.DecodeString(input.Artifact.ContentBase64)
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 must be valid base64")
+		return
+	}
+
+	detectedType, format, detectedTool, err := detectArtifactType(content)
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uploadType = detectedType
+
+	tool := input.Tool
+	if tool == "" {
+		tool = detectedTool
+	}
+
+	switch detectedType {
+	case "sbom":
+		if format == "" {
+			api.JSONError(w, http.StatusBadRequest, "could not determine SBOM format")
+			return
+		}
+		label := input.SnapshotLabel
+		if label == "" {
+			label = format
+		}
+		snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
 		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, err.Error())
+			s.writeUploadError(w, err)
 			return
 		}
-		if strings.TrimSpace(finding.RuleID) == "" {
-			api.JSONError(w, http.StatusBadRequest, "finding.rule_id is required")
+		status = "accepted"
+		api.JSON(w, http.StatusAccepted, uploadResponse{
+			UploadID:   snapshot.ID.String(),
+			SnapshotID: snapshot.ID.String(),
+			Status:     string(snapshot.Status),
+		})
+	case "sarif":
+		if tool == "" {
+			api.JSONError(w, http.StatusBadRequest, "tool could not be detected from SARIF content; provide 'tool' in the request")
 			return
 		}
-		if strings.TrimSpace(finding.FilePath) == "" {
-			api.JSONError(w, http.StatusBadRequest, "finding.file_path is required")
-			return
-		}
-		if strings.TrimSpace(finding.Message) == "" {
-			api.JSONError(w, http.StatusBadRequest, "finding.message is required")
-			return
-		}
-
-		metadata, err := json.Marshal(finding.Metadata)
+		label := tool
+		snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
 		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, "finding.metadata must be valid JSON")
+			s.writeUploadError(w, err)
 			return
 		}
-
-		startLine := int32PtrFromInt(finding.StartLine)
-		endLine := int32PtrFromInt(finding.EndLine)
-		locationHash := findingLocationHash(input.Tool, strings.TrimSpace(finding.RuleID), strings.TrimSpace(finding.FilePath), startLine, endLine)
-		fingerprint := optionalMetadataString(finding.Metadata, "fingerprint")
-
-		if _, err := queries.CreateFinding(
-			r.Context(),
-			snapshot.ID,
-			input.Tool,
-			strings.TrimSpace(finding.RuleID),
-			severity,
-			"open",
-			strings.TrimSpace(finding.FilePath),
-			startLine,
-			endLine,
-			locationHash,
-			strings.TrimSpace(finding.Message),
-			fingerprint,
-			metadata,
-		); err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to create finding")
+		status = "accepted"
+		api.JSON(w, http.StatusAccepted, uploadResponse{
+			UploadID:   snapshot.ID.String(),
+			SnapshotID: snapshot.ID.String(),
+			Status:     string(snapshot.Status),
+		})
+	case "coverage":
+		label := input.SnapshotLabel
+		if label == "" {
+			label = format
+		}
+		snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
+		if err != nil {
+			s.writeUploadError(w, err)
 			return
 		}
+		status = "accepted"
+		api.JSON(w, http.StatusAccepted, uploadResponse{
+			UploadID:   snapshot.ID.String(),
+			SnapshotID: snapshot.ID.String(),
+			Status:     string(snapshot.Status),
+		})
+	case "vex":
+		if err := s.importUploadedVEX(r, user.ID, input.uploadRequest, input.Artifact, format, content); err != nil {
+			s.writeUploadError(w, err)
+			return
+		}
+		status = "accepted"
+		api.JSON(w, http.StatusAccepted, uploadResponse{Status: "accepted"})
+	default:
+		api.JSONError(w, http.StatusBadRequest, "could not detect artifact type from content")
 	}
-
-	snapshot, err = queries.UpdateSnapshotStatus(r.Context(), snapshot.ID, store.SnapshotStatusComplete)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to finalize upload")
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to finalize upload")
-		return
-	}
-
-	api.JSON(w, http.StatusAccepted, uploadResponse{
-		UploadID:   snapshot.ID.String(),
-		SnapshotID: snapshot.ID.String(),
-		Status:     string(snapshot.Status),
-	})
 }
 
 // @Summary      Get upload status
@@ -427,7 +370,7 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 	}()
 
 	queries := s.queries.WithTx(tx)
-	repo, err := s.resolveUploadTarget(r, queries, userID, input)
+	_, repo, err := s.resolveUploadScope(r, queries, userID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -460,32 +403,109 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 	return snapshot, nil
 }
 
-func (s *Server) resolveUploadTarget(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Repository, error) {
+func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
 	org, err := queries.GetOrganizationByProviderAndSlug(r.Context(), input.Provider, input.Org)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if org == nil {
-		return nil, errNotFound("organization not found")
+		return nil, nil, errNotFound("organization not found")
 	}
 
 	role, err := queries.GetOrgMemberRole(r.Context(), org.ID, userID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if role == "" {
-		return nil, errNotFound("organization not found")
+		return nil, nil, errNotFound("organization not found")
 	}
 
 	repo, err := queries.GetRepositoryBySlug(r.Context(), org.ID, input.Repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if repo == nil {
-		return nil, errNotFound("repository not found")
+		return nil, nil, errNotFound("repository not found")
 	}
 
-	return repo, nil
+	return org, repo, nil
+}
+
+func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uploadRequest, artifact *uploadArtifact, format string, content []byte) error {
+	parsed, err := parseUploadedVEXDocument(format, content)
+	if err != nil {
+		return errBadRequest(err.Error())
+	}
+	if len(parsed.Statements) == 0 {
+		return errBadRequest("VEX document did not contain any statements")
+	}
+
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	queries := s.queries.WithTx(tx)
+	org, repo, err := s.resolveUploadScope(r, queries, userID, input)
+	if err != nil {
+		return err
+	}
+
+	sourceDocumentURL := ""
+	if artifact != nil {
+		sourceDocumentURL = strings.TrimSpace(artifact.Filename)
+	}
+
+	for index, statement := range parsed.Statements {
+		advisory, advisoryErr := resolveVEXAdvisoryWithQueries(r.Context(), queries, statement.VulnerabilityID)
+		if advisoryErr != nil {
+			if errors.Is(advisoryErr, sql.ErrNoRows) {
+				return errNotFound(fmt.Sprintf("advisory not found for vulnerability %q", strings.TrimSpace(statement.VulnerabilityID)))
+			}
+			if advisoryErr.Error() == "vulnerability_id is required" {
+				return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, advisoryErr.Error()))
+			}
+			return advisoryErr
+		}
+
+		params, paramsErr := buildCreateVEXParams(org.ID, repo.ID, userID, advisory.ID, createVEXStatementRequest{
+			VulnerabilityID:   statement.VulnerabilityID,
+			Status:            statement.Status,
+			Justification:     statement.Justification,
+			ImpactStatement:   statement.ImpactStatement,
+			ActionStatement:   statement.ActionStatement,
+			ComponentPURL:     statement.ComponentPURL,
+			Source:            vex.SourceImported,
+			SourceDocumentURL: sourceDocumentURL,
+			Supplier:          statement.Supplier,
+		})
+		if paramsErr != nil {
+			return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, paramsErr.Error()))
+		}
+
+		if _, err := queries.CreateVEXStatement(r.Context(), params); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseUploadedVEXDocument(format string, content []byte) (*vex.ParseResult, error) {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case vex.FormatOpenVEX:
+		return vex.ParseOpenVEX(content)
+	case vex.FormatCSAF:
+		return vex.ParseCSAF(content)
+	default:
+		return nil, fmt.Errorf("unsupported VEX format %q", format)
+	}
 }
 
 func normalizeUploadRequest(input *uploadRequest) {
@@ -538,57 +558,16 @@ func normalizeStoredRefName(name string) string {
 	return name
 }
 
-func severityFromString(value string) (store.SeverityLevel, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "critical":
-		return store.SeverityLevelCritical, nil
-	case "high":
-		return store.SeverityLevelHigh, nil
-	case "medium":
-		return store.SeverityLevelMedium, nil
-	case "low":
-		return store.SeverityLevelLow, nil
-	case "info", "informational":
-		return store.SeverityLevelInfo, nil
-	default:
-		return "", errors.New("finding.severity must be one of critical, high, medium, low, info")
-	}
+type badRequestError struct {
+	message string
 }
 
-func findingLocationHash(tool, ruleID, filePath string, startLine, endLine *int32) string {
-	start := ""
-	if startLine != nil {
-		start = strconv.Itoa(int(*startLine))
-	}
-	end := ""
-	if endLine != nil {
-		end = strconv.Itoa(int(*endLine))
-	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{tool, ruleID, filePath, start, end}, ":")))
-	return hex.EncodeToString(sum[:])
+func (e badRequestError) Error() string {
+	return e.message
 }
 
-func int32PtrFromInt(value *int) *int32 {
-	if value == nil {
-		return nil
-	}
-	converted := int32(*value)
-	return &converted
-}
-
-func optionalMetadataString(metadata map[string]any, key string) *string {
-	if metadata == nil {
-		return nil
-	}
-	value, ok := metadata[key]
-	if !ok {
-		return nil
-	}
-	text := strings.TrimSpace(fmt.Sprint(value))
-	if text == "" || text == "<nil>" {
-		return nil
-	}
-	return &text
+func errBadRequest(message string) error {
+	return badRequestError{message: message}
 }
 
 type notFoundError struct {
@@ -609,7 +588,12 @@ func (s *Server) writeUploadError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	var badRequest badRequestError
 	var notFound notFoundError
+	if ok := errorAsBadRequest(err, &badRequest); ok {
+		api.JSONError(w, http.StatusBadRequest, badRequest.message)
+		return
+	}
 	if ok := strings.Contains(err.Error(), "required"); ok {
 		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -624,6 +608,23 @@ func (s *Server) writeUploadError(w http.ResponseWriter, err error) {
 	}
 
 	api.JSONError(w, http.StatusInternalServerError, "failed to process upload")
+}
+
+func decodeUploadJSONBody(w http.ResponseWriter, r *http.Request, target any) bool {
+	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			api.JSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
+}
+
+func errorAsBadRequest(err error, target *badRequestError) bool {
+	return errors.As(err, target)
 }
 
 func errorAsNotFound(err error, target *notFoundError) bool {

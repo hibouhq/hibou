@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/lehibou/internal/metrics"
 	"github.com/hibouhq/lehibou/internal/provider"
 	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
@@ -64,6 +65,7 @@ func (s *Service) QueryWithCache(ctx context.Context, prov provider.AdvisoryProv
 		return nil, nil
 	}
 
+	providerName := prov.Name()
 	uniqueQueries := dedupeQueries(queries)
 	hitResults := make([]provider.AdvisoryResult, 0)
 	missQueries := make([]provider.PackageQuery, 0)
@@ -72,19 +74,21 @@ func (s *Service) QueryWithCache(ctx context.Context, prov provider.AdvisoryProv
 		cached, err := s.cache.GetAdvisoryCache(ctx, dbgen.GetAdvisoryCacheParams{
 			Ecosystem:   query.Ecosystem,
 			PackageName: query.Name,
-			Provider:    prov.Name(),
+			Provider:    providerName,
 		})
 		if err == nil {
 			var cachedResults []provider.AdvisoryResult
 			if err := json.Unmarshal(cached.ResponseData, &cachedResults); err != nil {
 				return nil, fmt.Errorf("cache: unmarshal advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
 			}
+			metrics.CacheHits.WithLabelValues(providerName).Inc()
 			hitResults = append(hitResults, cachedResults...)
 			continue
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("cache: get advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
 		}
+		metrics.CacheMisses.WithLabelValues(providerName).Inc()
 		missQueries = append(missQueries, query)
 	}
 
@@ -92,7 +96,7 @@ func (s *Service) QueryWithCache(ctx context.Context, prov provider.AdvisoryProv
 	for _, chunk := range chunkQueries(missQueries, prov.BatchSize()) {
 		batchResults, err := prov.QueryPackages(ctx, chunk)
 		if err != nil {
-			return nil, fmt.Errorf("cache: query provider %s: %w", prov.Name(), err)
+			return nil, fmt.Errorf("cache: query provider %s: %w", providerName, err)
 		}
 
 		for _, query := range chunk {
@@ -105,11 +109,11 @@ func (s *Service) QueryWithCache(ctx context.Context, prov provider.AdvisoryProv
 			if err := s.cache.UpsertAdvisoryCache(ctx, dbgen.UpsertAdvisoryCacheParams{
 				Ecosystem:     query.Ecosystem,
 				PackageName:   query.Name,
-				Provider:      prov.Name(),
+				Provider:      providerName,
 				ResponseData:  payload,
 				AdvisoryCount: int32(len(matched)),
 				FetchedAt:     fetchedAt,
-				ExpiresAt:     fetchedAt.Add(s.ttlForProvider(prov.Name())),
+				ExpiresAt:     fetchedAt.Add(s.ttlForProvider(providerName)),
 			}); err != nil {
 				return nil, fmt.Errorf("cache: upsert advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
 			}

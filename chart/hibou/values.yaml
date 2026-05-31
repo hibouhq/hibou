@@ -25,6 +25,29 @@ hibou:
       url: "https://api.osv.dev"
   # -- Override the base URL. Auto-derived from ingress.hostname when ingress is enabled.
   baseURL: ""
+  # -- Maximum upload size in bytes (default 100 MiB).
+  maxUploadSize: "104857600"
+  # -- Session secret for cookie encryption (required in production).
+  # Prefer sessionSecretExistingSecret in production to avoid storing the value in Helm release metadata.
+  sessionSecret: ""
+  # -- Existing Secret containing HIBOU_SESSION_SECRET key. Takes precedence over sessionSecret.
+  sessionSecretExistingSecret: ""
+  # -- Forge providers. Each entry maps to HIBOU_FORGE_<index>_* env vars.
+  # Secrets (clientId, clientSecret, webhookSecret) can be provided inline
+  # or via an existing Kubernetes Secret referenced by existingSecret.
+  forges: []
+  # - type: github        # available types: github, gitlab, forgejo
+  #   id: github          # optional, defaults to type
+  #   url: ""             # optional, defaults to provider's public URL
+  #   clientId: ""        # OAuth2 client ID (for user login)
+  #   clientSecret: ""    # OAuth2 client secret (for user login)
+  #   webhookSecret: ""
+  #   appId: ""           # GitHub App ID (enables org-wide mode)
+  #   privateKey: ""      # PEM private key (multiline, use existingSecret)
+  #   existingSecret: ""  # if set, Secret must expose HIBOU_FORGE_<index>_* env-style keys
+  #   ipAllowlist: false  # enable source IP allowlisting (GitHub: auto /meta, GitLab SaaS: built-in defaults)
+  #   rateLimitRPS: 0     # per-IP rate limit (req/s) on webhooks. 0 = disabled
+  #   allowedCIDRs: ""    # override default CIDRs (e.g., for self-hosted forges)
 
 postgresql:
   enabled: true
@@ -53,6 +76,53 @@ postgresql:
     limits:
       cpu: "1"
       memory: 1Gi
+
+# -- CloudNativePG operator and managed PostgreSQL cluster.
+# Mutually exclusive with postgresql.enabled.
+cnpg:
+  # -- Deploy the CNPG operator via subchart.
+  operator:
+    enabled: false
+  # -- Deploy a CNPG PostgreSQL Cluster.
+  cluster:
+    enabled: false
+    # -- Number of PostgreSQL instances (1 = single, 2+ = HA with streaming replication).
+    instances: 1
+    image:
+      repository: ghcr.io/cloudnative-pg/postgresql
+      tag: "18.0"
+    storage:
+      size: 10Gi
+      # -- StorageClass name. Leave empty for default.
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    # -- Database name.
+    database: hibou
+    # -- Database owner.
+    owner: hibou
+    # -- Enable TLS for PostgreSQL connections.
+    tls: true
+    # -- Pod anti-affinity preset: "soft" or "hard". Use "hard" for multi-node HA.
+    antiAffinity: "soft"
+    # -- Backup configuration for continuous WAL archiving.
+    backup:
+      enabled: false
+      # -- S3-compatible destination (e.g., s3://bucket/path/).
+      destinationPath: ""
+      # -- Existing Secret with S3 credentials (keys: ACCESS_KEY_ID, ACCESS_SECRET_KEY).
+      s3CredentialsSecret: ""
+      # -- S3 endpoint URL (e.g., https://fsn1.your-objectstorage.com).
+      endpointURL: ""
+      # -- Scheduled backup cron expression (default: daily at 02:00 UTC).
+      schedule: "0 0 2 * * *"
+      # -- Retention policy for scheduled backups.
+      retentionPolicy: "30d"
 
 trivy:
   enabled: true
@@ -86,3 +156,20 @@ ingress:
     # -- Name of an existing TLS Secret. If empty and tls.enabled=true,
     # a secret name is auto-generated as "<fullname>-tls".
     existingSecret: ""
+
+# -- Grafana dashboards deployed as GrafanaDashboard CRDs (requires Grafana Operator).
+grafanaDashboards:
+  enabled: false
+  # -- Labels to select the target Grafana instance.
+  instanceSelector:
+    matchLabels:
+      dashboards: "grafana"
+  # -- Allow importing dashboards across namespaces.
+  allowCrossNamespaceImport: false
+  # -- Grafana folder to organize dashboards in.
+  folder: "Hibou"
+  # -- Built-in CNPG dashboard from the official cloudnative-pg project.
+  cnpg:
+    enabled: true
+    # -- URL to the CNPG dashboard JSON. Override to pin a specific version.
+    url: "https://raw.githubusercontent.com/cloudnative-pg/grafana-dashboards/main/charts/cluster/grafana-dashboard.json"

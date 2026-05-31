@@ -13,6 +13,9 @@ type Provider interface {
 	// ID returns the provider identifier ("github", "gitea", "gitlab").
 	ID() string
 
+	// Installations returns App installations when supported by the provider.
+	Installations(ctx context.Context) ([]Installation, error)
+
 	// ListRepositories lists repositories accessible via the given installation/token.
 	ListRepositories(ctx context.Context, opts ListReposOptions) ([]Repository, error)
 
@@ -62,6 +65,12 @@ type Repository struct {
 	Private       bool
 	CloneURL      string
 	HTMLURL       string
+}
+
+type Installation struct {
+	ID          int64
+	AccountName string
+	AccountType string
 }
 
 type Branch struct {

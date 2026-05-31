@@ -75,6 +75,15 @@ func (q *Queries) CreateQualityGate(ctx context.Context, arg CreateQualityGatePa
 	return i, err
 }
 
+const deleteQualityGate = `-- name: DeleteQualityGate :exec
+DELETE FROM quality_gates WHERE id = $1
+`
+
+func (q *Queries) DeleteQualityGate(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, deleteQualityGate, id)
+	return err
+}
+
 const getQualityGateByID = `-- name: GetQualityGateByID :one
 SELECT id, org_id, repo_id, name, description, max_critical, max_high, max_medium, max_new_findings, finding_severities, enabled, created_at, updated_at
 FROM quality_gates
@@ -232,4 +241,52 @@ func (q *Queries) ListQualityGatesByRepo(ctx context.Context, repoID uuid.NullUU
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateQualityGate = `-- name: UpdateQualityGate :one
+UPDATE quality_gates SET name = $2, description = $3, max_critical = $4, max_high = $5, max_medium = $6, max_new_findings = $7, finding_severities = $8, enabled = $9, updated_at = NOW()
+WHERE id = $1 RETURNING id, org_id, repo_id, name, description, max_critical, max_high, max_medium, max_new_findings, finding_severities, enabled, created_at, updated_at
+`
+
+type UpdateQualityGateParams struct {
+	ID                uuid.UUID     `json:"id"`
+	Name              string        `json:"name"`
+	Description       string        `json:"description"`
+	MaxCritical       int32         `json:"max_critical"`
+	MaxHigh           int32         `json:"max_high"`
+	MaxMedium         sql.NullInt32 `json:"max_medium"`
+	MaxNewFindings    sql.NullInt32 `json:"max_new_findings"`
+	FindingSeverities []string      `json:"finding_severities"`
+	Enabled           bool          `json:"enabled"`
+}
+
+func (q *Queries) UpdateQualityGate(ctx context.Context, arg UpdateQualityGateParams) (QualityGate, error) {
+	row := q.db.QueryRowContext(ctx, updateQualityGate,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.MaxCritical,
+		arg.MaxHigh,
+		arg.MaxMedium,
+		arg.MaxNewFindings,
+		pq.Array(arg.FindingSeverities),
+		arg.Enabled,
+	)
+	var i QualityGate
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.RepoID,
+		&i.Name,
+		&i.Description,
+		&i.MaxCritical,
+		&i.MaxHigh,
+		&i.MaxMedium,
+		&i.MaxNewFindings,
+		pq.Array(&i.FindingSeverities),
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

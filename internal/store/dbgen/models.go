@@ -244,6 +244,7 @@ const (
 	NotificationDestinationTypeSlack   NotificationDestinationType = "slack"
 	NotificationDestinationTypeTeams   NotificationDestinationType = "teams"
 	NotificationDestinationTypeEmail   NotificationDestinationType = "email"
+	NotificationDestinationTypeDiscord NotificationDestinationType = "discord"
 )
 
 func (e *NotificationDestinationType) Scan(src interface{}) error {
@@ -412,6 +413,50 @@ func (ns NullScanStatus) Value() (driver.Value, error) {
 	return string(ns.ScanStatus), nil
 }
 
+type SecretStatus string
+
+const (
+	SecretStatusOpen          SecretStatus = "open"
+	SecretStatusRevoked       SecretStatus = "revoked"
+	SecretStatusFalsePositive SecretStatus = "false_positive"
+	SecretStatusRotating      SecretStatus = "rotating"
+)
+
+func (e *SecretStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = SecretStatus(s)
+	case string:
+		*e = SecretStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for SecretStatus: %T", src)
+	}
+	return nil
+}
+
+type NullSecretStatus struct {
+	SecretStatus SecretStatus `json:"secret_status"`
+	Valid        bool         `json:"valid"` // Valid is true if SecretStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullSecretStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.SecretStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.SecretStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullSecretStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.SecretStatus), nil
+}
+
 type SeverityLevel string
 
 const (
@@ -504,6 +549,139 @@ func (ns NullSnapshotStatus) Value() (driver.Value, error) {
 	return string(ns.SnapshotStatus), nil
 }
 
+type VexJustification string
+
+const (
+	VexJustificationComponentNotPresent                         VexJustification = "component_not_present"
+	VexJustificationVulnerableCodeNotPresent                    VexJustification = "vulnerable_code_not_present"
+	VexJustificationVulnerableCodeNotInExecutePath              VexJustification = "vulnerable_code_not_in_execute_path"
+	VexJustificationVulnerableCodeCannotBeControlledByAdversary VexJustification = "vulnerable_code_cannot_be_controlled_by_adversary"
+	VexJustificationInlineMitigationsAlreadyExist               VexJustification = "inline_mitigations_already_exist"
+)
+
+func (e *VexJustification) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = VexJustification(s)
+	case string:
+		*e = VexJustification(s)
+	default:
+		return fmt.Errorf("unsupported scan type for VexJustification: %T", src)
+	}
+	return nil
+}
+
+type NullVexJustification struct {
+	VexJustification VexJustification `json:"vex_justification"`
+	Valid            bool             `json:"valid"` // Valid is true if VexJustification is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullVexJustification) Scan(value interface{}) error {
+	if value == nil {
+		ns.VexJustification, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.VexJustification.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullVexJustification) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.VexJustification), nil
+}
+
+type VexSource string
+
+const (
+	VexSourceManual     VexSource = "manual"
+	VexSourceImported   VexSource = "imported"
+	VexSourcePropagated VexSource = "propagated"
+	VexSourceAutomated  VexSource = "automated"
+)
+
+func (e *VexSource) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = VexSource(s)
+	case string:
+		*e = VexSource(s)
+	default:
+		return fmt.Errorf("unsupported scan type for VexSource: %T", src)
+	}
+	return nil
+}
+
+type NullVexSource struct {
+	VexSource VexSource `json:"vex_source"`
+	Valid     bool      `json:"valid"` // Valid is true if VexSource is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullVexSource) Scan(value interface{}) error {
+	if value == nil {
+		ns.VexSource, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.VexSource.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullVexSource) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.VexSource), nil
+}
+
+type VexStatus string
+
+const (
+	VexStatusNotAffected        VexStatus = "not_affected"
+	VexStatusAffected           VexStatus = "affected"
+	VexStatusFixed              VexStatus = "fixed"
+	VexStatusUnderInvestigation VexStatus = "under_investigation"
+)
+
+func (e *VexStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = VexStatus(s)
+	case string:
+		*e = VexStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for VexStatus: %T", src)
+	}
+	return nil
+}
+
+type NullVexStatus struct {
+	VexStatus VexStatus `json:"vex_status"`
+	Valid     bool      `json:"valid"` // Valid is true if VexStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullVexStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.VexStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.VexStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullVexStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.VexStatus), nil
+}
+
 type Advisory struct {
 	ID          uuid.UUID       `json:"id"`
 	CanonicalID string          `json:"canonical_id"`
@@ -584,7 +762,7 @@ type AuditLog struct {
 	// user, api_key, system, webhook
 	ActorType    string `json:"actor_type"`
 	ActorDisplay string `json:"actor_display"`
-	// e.g. scan.trigger, vuln.suppress, vuln.unsuppress, release.create, release.update, release.delete, client.create, gate.override, integration.create, setting.update
+	// e.g. scan.trigger, vex.create, vex.update, vex.revoke, release.create, release.update, release.delete, client.create, gate.override, integration.create, setting.update
 	Action string `json:"action"`
 	// e.g. scan, advisory, vuln_match, release, client, repository, quality_gate, integration, notification_rule
 	ResourceType string        `json:"resource_type"`
@@ -613,14 +791,14 @@ type Client struct {
 	OrgID             uuid.UUID       `json:"org_id"`
 	Name              string          `json:"name"`
 	Slug              string          `json:"slug"`
+	ClientType        string          `json:"client_type"`
 	ContactEmail      sql.NullString  `json:"contact_email"`
 	ContactName       sql.NullString  `json:"contact_name"`
 	NotificationPrefs json.RawMessage `json:"notification_prefs"`
+	Labels            json.RawMessage `json:"labels"`
 	Metadata          json.RawMessage `json:"metadata"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
-	ClientType        string          `json:"client_type"`
-	Labels            json.RawMessage `json:"labels"`
 }
 
 type Component struct {
@@ -660,6 +838,7 @@ type Finding struct {
 	Message      string          `json:"message"`
 	Fingerprint  sql.NullString  `json:"fingerprint"`
 	Metadata     json.RawMessage `json:"metadata"`
+	Labels       json.RawMessage `json:"labels"`
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
@@ -675,6 +854,28 @@ type Integration struct {
 	FailureCount    int32           `json:"failure_count"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+}
+
+type LicenseException struct {
+	ID            uuid.UUID     `json:"id"`
+	PolicyID      uuid.UUID     `json:"policy_id"`
+	ComponentPurl string        `json:"component_purl"`
+	LicenseID     string        `json:"license_id"`
+	Justification string        `json:"justification"`
+	ExpiresAt     sql.NullTime  `json:"expires_at"`
+	CreatedBy     uuid.NullUUID `json:"created_by"`
+	CreatedAt     time.Time     `json:"created_at"`
+}
+
+type LicensePolicy struct {
+	ID              uuid.UUID `json:"id"`
+	OrgID           uuid.UUID `json:"org_id"`
+	Name            string    `json:"name"`
+	AllowedLicenses []string  `json:"allowed_licenses"`
+	DeniedLicenses  []string  `json:"denied_licenses"`
+	Enabled         bool      `json:"enabled"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type Notification struct {
@@ -714,10 +915,10 @@ type Organization struct {
 	Name        string          `json:"name"`
 	Slug        string          `json:"slug"`
 	DisplayName string          `json:"display_name"`
+	Provider    string          `json:"provider"`
 	Settings    json.RawMessage `json:"settings"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
-	Provider    string          `json:"provider"`
 }
 
 type QualityGate struct {
@@ -744,13 +945,13 @@ type Ref struct {
 	ProviderID       sql.NullString `json:"provider_id"`
 	MergeTargetRefID uuid.NullUUID  `json:"merge_target_ref_id"`
 	LatestCommitSha  sql.NullString `json:"latest_commit_sha"`
-	CreatedAt        time.Time      `json:"created_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
 	PrState          sql.NullString `json:"pr_state"`
 	PrTitle          string         `json:"pr_title"`
 	PrSourceBranch   string         `json:"pr_source_branch"`
 	PrMergedAt       sql.NullTime   `json:"pr_merged_at"`
 	PrClosedAt       sql.NullTime   `json:"pr_closed_at"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 type Release struct {
@@ -763,6 +964,7 @@ type Release struct {
 	BuildMetadata json.RawMessage `json:"build_metadata"`
 	ArtifactIds   json.RawMessage `json:"artifact_ids"`
 	Provenance    json.RawMessage `json:"provenance"`
+	ImageDigests  []string        `json:"image_digests"`
 	PublishedAt   sql.NullTime    `json:"published_at"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
@@ -809,20 +1011,56 @@ type ScanProvider struct {
 	CompletedAt     sql.NullTime  `json:"completed_at"`
 }
 
+type SecretFinding struct {
+	ID               uuid.UUID       `json:"id"`
+	SnapshotID       uuid.UUID       `json:"snapshot_id"`
+	Tool             string          `json:"tool"`
+	RuleID           string          `json:"rule_id"`
+	Severity         SeverityLevel   `json:"severity"`
+	Status           string          `json:"status"`
+	StatusNote       string          `json:"status_note"`
+	DiscoveryContext string          `json:"discovery_context"`
+	FilePath         string          `json:"file_path"`
+	StartLine        sql.NullInt32   `json:"start_line"`
+	EndLine          sql.NullInt32   `json:"end_line"`
+	SecretType       string          `json:"secret_type"`
+	SecretHash       string          `json:"secret_hash"`
+	CommitSha        string          `json:"commit_sha"`
+	AuthorEmail      string          `json:"author_email"`
+	Verified         bool            `json:"verified"`
+	Metadata         json.RawMessage `json:"metadata"`
+	Fingerprint      string          `json:"fingerprint"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
+type SecretFindingSource struct {
+	ID          uuid.UUID       `json:"id"`
+	FindingID   uuid.UUID       `json:"finding_id"`
+	Tool        string          `json:"tool"`
+	RuleID      string          `json:"rule_id"`
+	FirstSeenAt time.Time       `json:"first_seen_at"`
+	LastSeenAt  time.Time       `json:"last_seen_at"`
+	ScanCount   int32           `json:"scan_count"`
+	Metadata    json.RawMessage `json:"metadata"`
+}
+
 type Snapshot struct {
-	ID             uuid.UUID      `json:"id"`
-	RefID          uuid.UUID      `json:"ref_id"`
-	CommitSha      string         `json:"commit_sha"`
-	Label          sql.NullString `json:"label"`
-	Status         SnapshotStatus `json:"status"`
-	RawArtifactUrl sql.NullString `json:"raw_artifact_url"`
-	CreatedAt      time.Time      `json:"created_at"`
-	ArtifactKey    string         `json:"artifact_key"`
+	ID             uuid.UUID       `json:"id"`
+	RefID          uuid.UUID       `json:"ref_id"`
+	CommitSha      string          `json:"commit_sha"`
+	Label          sql.NullString  `json:"label"`
+	Status         SnapshotStatus  `json:"status"`
+	RawArtifactUrl sql.NullString  `json:"raw_artifact_url"`
+	ArtifactKey    string          `json:"artifact_key"`
+	Labels         json.RawMessage `json:"labels"`
+	ImageDigest    sql.NullString  `json:"image_digest"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 type SnapshotComponent struct {
-	SnapshotID  uuid.UUID `json:"snapshot_id"`
-	ComponentID uuid.UUID `json:"component_id"`
+	SnapshotID  uuid.UUID       `json:"snapshot_id"`
+	ComponentID uuid.UUID       `json:"component_id"`
+	Labels      json.RawMessage `json:"labels"`
 }
 
 type Team struct {
@@ -852,15 +1090,33 @@ type User struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
+// VEX statements. When repo_id is set, it must belong to org_id. The store layer validates this lineage on writes.
+type VexStatement struct {
+	ID                uuid.UUID            `json:"id"`
+	OrgID             uuid.UUID            `json:"org_id"`
+	AdvisoryID        uuid.UUID            `json:"advisory_id"`
+	RepoID            uuid.NullUUID        `json:"repo_id"`
+	ComponentPurl     sql.NullString       `json:"component_purl"`
+	Status            VexStatus            `json:"status"`
+	Justification     NullVexJustification `json:"justification"`
+	ImpactStatement   string               `json:"impact_statement"`
+	ActionStatement   string               `json:"action_statement"`
+	Source            VexSource            `json:"source"`
+	SourceDocumentUrl string               `json:"source_document_url"`
+	Supplier          string               `json:"supplier"`
+	CreatedBy         uuid.NullUUID        `json:"created_by"`
+	ExpiresAt         sql.NullTime         `json:"expires_at"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
+}
+
 type VulnMatch struct {
-	ID               uuid.UUID     `json:"id"`
-	SnapshotID       uuid.UUID     `json:"snapshot_id"`
-	ComponentID      uuid.UUID     `json:"component_id"`
-	AdvisoryID       uuid.UUID     `json:"advisory_id"`
-	AffectedRangeID  uuid.NullUUID `json:"affected_range_id"`
-	IsAffected       bool          `json:"is_affected"`
-	Suppressed       bool          `json:"suppressed"`
-	SuppressedReason string        `json:"suppressed_reason"`
-	FirstSeenAt      time.Time     `json:"first_seen_at"`
-	LastSeenAt       time.Time     `json:"last_seen_at"`
+	ID              uuid.UUID     `json:"id"`
+	SnapshotID      uuid.UUID     `json:"snapshot_id"`
+	ComponentID     uuid.UUID     `json:"component_id"`
+	AdvisoryID      uuid.UUID     `json:"advisory_id"`
+	AffectedRangeID uuid.NullUUID `json:"affected_range_id"`
+	IsAffected      bool          `json:"is_affected"`
+	FirstSeenAt     time.Time     `json:"first_seen_at"`
+	LastSeenAt      time.Time     `json:"last_seen_at"`
 }

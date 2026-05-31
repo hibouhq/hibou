@@ -39,6 +39,9 @@ type commitStatusCall struct {
 }
 
 func (m *mockForgeProvider) ID() string { return "github" }
+func (m *mockForgeProvider) Installations(context.Context) ([]Installation, error) {
+	return nil, nil
+}
 func (m *mockForgeProvider) ListRepositories(context.Context, ListReposOptions) ([]Repository, error) {
 	return nil, ErrNotImplemented
 }

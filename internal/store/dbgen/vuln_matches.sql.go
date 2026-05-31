@@ -13,9 +13,10 @@ import (
 )
 
 const countVulnMatchesBySnapshot = `-- name: CountVulnMatchesBySnapshot :one
-SELECT COUNT(*)::bigint FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE AND suppressed = FALSE
+SELECT COUNT(*)::bigint FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE
 `
 
+// VEX-based filtering is applied at the application layer via vex_statements.
 func (q *Queries) CountVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countVulnMatchesBySnapshot, snapshotID)
 	var column_1 int64
@@ -27,7 +28,7 @@ const countVulnsBySeverity = `-- name: CountVulnsBySeverity :many
 SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
 FROM advisories a
 JOIN vuln_matches vm ON vm.advisory_id = a.id
-WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE AND vm.suppressed = FALSE
+WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE
 GROUP BY a.severity
 `
 
@@ -60,7 +61,7 @@ func (q *Queries) CountVulnsBySeverity(ctx context.Context, snapshotID uuid.UUID
 }
 
 const listVulnMatchesBySnapshot = `-- name: ListVulnMatchesBySnapshot :many
-SELECT id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, suppressed, suppressed_reason, first_seen_at, last_seen_at FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE ORDER BY first_seen_at DESC
+SELECT id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, first_seen_at, last_seen_at FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE ORDER BY first_seen_at DESC
 `
 
 func (q *Queries) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]VulnMatch, error) {
@@ -79,8 +80,6 @@ func (q *Queries) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid
 			&i.AdvisoryID,
 			&i.AffectedRangeID,
 			&i.IsAffected,
-			&i.Suppressed,
-			&i.SuppressedReason,
 			&i.FirstSeenAt,
 			&i.LastSeenAt,
 		); err != nil {
@@ -149,55 +148,6 @@ func (q *Queries) MarkStaleVulnMatches(ctx context.Context, arg MarkStaleVulnMat
 	return err
 }
 
-const suppressVulnMatch = `-- name: SuppressVulnMatch :one
-UPDATE vuln_matches SET suppressed = TRUE, suppressed_reason = $2 WHERE id = $1 RETURNING id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, suppressed, suppressed_reason, first_seen_at, last_seen_at
-`
-
-type SuppressVulnMatchParams struct {
-	ID               uuid.UUID `json:"id"`
-	SuppressedReason string    `json:"suppressed_reason"`
-}
-
-func (q *Queries) SuppressVulnMatch(ctx context.Context, arg SuppressVulnMatchParams) (VulnMatch, error) {
-	row := q.db.QueryRowContext(ctx, suppressVulnMatch, arg.ID, arg.SuppressedReason)
-	var i VulnMatch
-	err := row.Scan(
-		&i.ID,
-		&i.SnapshotID,
-		&i.ComponentID,
-		&i.AdvisoryID,
-		&i.AffectedRangeID,
-		&i.IsAffected,
-		&i.Suppressed,
-		&i.SuppressedReason,
-		&i.FirstSeenAt,
-		&i.LastSeenAt,
-	)
-	return i, err
-}
-
-const unsuppressVulnMatch = `-- name: UnsuppressVulnMatch :one
-UPDATE vuln_matches SET suppressed = FALSE, suppressed_reason = '' WHERE id = $1 RETURNING id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, suppressed, suppressed_reason, first_seen_at, last_seen_at
-`
-
-func (q *Queries) UnsuppressVulnMatch(ctx context.Context, id uuid.UUID) (VulnMatch, error) {
-	row := q.db.QueryRowContext(ctx, unsuppressVulnMatch, id)
-	var i VulnMatch
-	err := row.Scan(
-		&i.ID,
-		&i.SnapshotID,
-		&i.ComponentID,
-		&i.AdvisoryID,
-		&i.AffectedRangeID,
-		&i.IsAffected,
-		&i.Suppressed,
-		&i.SuppressedReason,
-		&i.FirstSeenAt,
-		&i.LastSeenAt,
-	)
-	return i, err
-}
-
 const upsertVulnMatch = `-- name: UpsertVulnMatch :one
 INSERT INTO vuln_matches (snapshot_id, component_id, advisory_id, affected_range_id, is_affected)
 VALUES ($1, $2, $3, $4, $5)
@@ -205,7 +155,7 @@ ON CONFLICT (snapshot_id, component_id, advisory_id) DO UPDATE SET
     affected_range_id = EXCLUDED.affected_range_id,
     is_affected = EXCLUDED.is_affected,
     last_seen_at = NOW()
-RETURNING id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, suppressed, suppressed_reason, first_seen_at, last_seen_at
+RETURNING id, snapshot_id, component_id, advisory_id, affected_range_id, is_affected, first_seen_at, last_seen_at
 `
 
 type UpsertVulnMatchParams struct {
@@ -232,8 +182,6 @@ func (q *Queries) UpsertVulnMatch(ctx context.Context, arg UpsertVulnMatchParams
 		&i.AdvisoryID,
 		&i.AffectedRangeID,
 		&i.IsAffected,
-		&i.Suppressed,
-		&i.SuppressedReason,
 		&i.FirstSeenAt,
 		&i.LastSeenAt,
 	)

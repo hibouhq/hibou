@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,14 +15,16 @@ import (
 )
 
 var (
-	uploadProvider  string
-	uploadOrg       string
-	uploadRepo      string
-	uploadRef       string
-	uploadCommitSHA string
-	uploadTool      string
-	uploadServer    string
-	uploadToken     string
+	uploadProvider   string
+	uploadOrg        string
+	uploadRepo       string
+	uploadRef        string
+	uploadCommitSHA  string
+	uploadComplete   bool = true
+	uploadNoComplete bool
+	uploadExpect     int
+	uploadServer     string
+	uploadToken      string
 )
 
 type uploadBase struct {
@@ -32,45 +33,53 @@ type uploadBase struct {
 }
 
 var uploadCmd = &cobra.Command{
-	Use:   "upload",
+	Use:   "upload <file> [file...]",
 	Short: "Upload security artifacts to Hibou",
-}
+	Long: `Upload SBOM, SARIF, or coverage artifacts to Hibou. The artifact type is auto-detected from file content.
+Accepts multiple files — each is uploaded separately.
 
-var uploadSBOMCmd = &cobra.Command{
-	Use:   "sbom <file>",
-	Short: "Upload an SBOM file (CycloneDX or SPDX)",
-	Long: `Upload a Software Bill of Materials to Hibou for analysis.
+With no files and --complete, closes the current snapshot for the given ref/sha and triggers gate evaluation.
 
 Examples:
-  hibou upload sbom sbom.json --org forgejo/devtools --repo myapp --ref refs/heads/main --sha abc123
-
-  # With format auto-detection from file content
-  hibou upload sbom sbom.cdx.json --org forgejo/devtools --repo myapp --ref refs/heads/main --sha abc123
-
-Environment variables (for CI):
-  HIBOU_SERVER     Server URL
-  HIBOU_TOKEN      API token`,
-	Args: cobra.ExactArgs(1),
+  hibou upload sbom.cdx.json
+  hibou upload coverage.xml
+  hibou upload results.sarif sbom.cdx.json
+  hibou upload *.sarif --org forgejo/devtools --repo myapp --ref refs/heads/main --sha abc123
+  hibou upload --no-complete coverage-unit.xml   # parallel job, don't close yet
+  hibou upload --complete --org ... --ref ... --sha ...  # close snapshot, no files
+  hibou upload --expect 3 --no-complete cov.xml  # expect 3 distinct upload API calls`,
+	Args: cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUploadSBOM(args[0])
-	},
-}
+		if uploadNoComplete {
+			uploadComplete = false
+		}
 
-var uploadSARIFCmd = &cobra.Command{
-	Use:   "sarif <file>",
-	Short: "Upload a SARIF file",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUploadSARIF(args[0])
-	},
-}
+		// Zero files + --complete = close snapshot without uploading
+		if len(args) == 0 {
+			if !uploadComplete {
+				return errors.New("no files provided and --complete is not set; nothing to do")
+			}
+			return runUploadComplete()
+		}
 
-var uploadFindingsCmd = &cobra.Command{
-	Use:   "findings <file>",
-	Short: "Upload generic findings",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUploadFindings(args[0])
+		failed := 0
+		for i, file := range args {
+			fmt.Printf("--- Uploading: %s\n", file)
+			isLast := i == len(args)-1
+			complete := uploadComplete && isLast
+			expect := 0
+			if i == 0 {
+				expect = uploadExpect
+			}
+			if err := runUploadAuto(file, complete, expect); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %s: %v\n", file, err)
+				failed++
+			}
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d upload(s) failed", failed)
+		}
+		return nil
 	},
 }
 
@@ -130,7 +139,7 @@ func submitUpload(client *cliclient.Client, endpoint string, payload any) error 
 	return nil
 }
 
-func runUploadSBOM(file string) error {
+func runUploadAuto(file string, complete bool, expect int) error {
 	client, err := resolveUploadClient()
 	if err != nil {
 		return err
@@ -152,35 +161,28 @@ func runUploadSBOM(file string) error {
 		"repo":       uploadRepo,
 		"ref":        uploadRef,
 		"commit_sha": uploadCommitSHA,
-		"format":     detectSBOMFormat(file),
+		"complete":   complete,
 		"artifact": map[string]string{
 			"filename":       filepath.Base(file),
 			"content_base64": base64.StdEncoding.EncodeToString(data),
 		},
 	}
+	if expect > 0 {
+		payload["expect"] = expect
+	}
 
-	return submitUpload(client, "/upload/sbom", payload)
+	return submitUpload(client, "/upload", payload)
 }
 
-func runUploadSARIF(file string) error {
+func runUploadComplete() error {
 	client, err := resolveUploadClient()
 	if err != nil {
 		return err
 	}
 
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return fmt.Errorf("read file: %w", err)
-	}
-
 	base, err := resolveUploadBase()
 	if err != nil {
 		return err
-	}
-
-	toolName := strings.TrimSpace(uploadTool)
-	if toolName == "" {
-		toolName = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
 	}
 
 	payload := map[string]any{
@@ -189,72 +191,15 @@ func runUploadSARIF(file string) error {
 		"repo":       uploadRepo,
 		"ref":        uploadRef,
 		"commit_sha": uploadCommitSHA,
-		"tool":       toolName,
-		"artifact": map[string]string{
-			"filename":       filepath.Base(file),
-			"content_base64": base64.StdEncoding.EncodeToString(data),
-		},
+		"complete":   true,
 	}
 
-	return submitUpload(client, "/upload/sarif", payload)
-}
-
-func runUploadFindings(file string) error {
-	client, err := resolveUploadClient()
-	if err != nil {
-		return err
-	}
-
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return fmt.Errorf("read file: %w", err)
-	}
-
-	base, err := resolveUploadBase()
-	if err != nil {
-		return err
-	}
-
-	toolName := strings.TrimSpace(uploadTool)
-	if toolName == "" {
-		return errors.New("--tool is required for findings upload")
-	}
-
-	var findings []json.RawMessage
-	if err := json.Unmarshal(data, &findings); err != nil {
-		return fmt.Errorf("findings file must be a valid JSON array: %w", err)
-	}
-
-	payload := map[string]any{
-		"provider":   base.provider,
-		"org":        base.org,
-		"repo":       uploadRepo,
-		"ref":        uploadRef,
-		"commit_sha": uploadCommitSHA,
-		"tool":       toolName,
-		"findings":   findings,
-	}
-
-	return submitUpload(client, "/upload/findings", payload)
-}
-
-func detectSBOMFormat(file string) string {
-	lower := strings.ToLower(filepath.Base(file))
-	switch {
-	case strings.Contains(lower, "cdx") || strings.Contains(lower, "cyclonedx"):
-		if strings.HasSuffix(lower, ".xml") {
-			return "cyclonedx-xml"
-		}
-		return "cyclonedx-json"
-	case strings.HasSuffix(lower, ".xml"):
-		return "cyclonedx-xml"
-	default:
-		return "spdx-json"
-	}
+	fmt.Println("--- Completing snapshot")
+	return submitUpload(client, "/upload", payload)
 }
 
 func init() {
-	for _, command := range []*cobra.Command{uploadSBOMCmd, uploadSARIFCmd, uploadFindingsCmd} {
+	for _, command := range []*cobra.Command{uploadCmd} {
 		command.Flags().StringVar(&uploadOrg, "org", "", "Organization (provider/slug, e.g., 'forgejo/devtools')")
 		command.Flags().StringVar(&uploadRepo, "repo", "", "Repository slug")
 		command.Flags().StringVar(&uploadRef, "ref", "", "Git ref (e.g., refs/heads/main)")
@@ -262,9 +207,8 @@ func init() {
 		command.Flags().StringVar(&uploadProvider, "provider", "", "Forge provider (deprecated, use --org)")
 		command.Flags().StringVar(&uploadServer, "server", "", "Hibou server URL (overrides config and HIBOU_SERVER)")
 		command.Flags().StringVar(&uploadToken, "token", "", "API token (overrides config and HIBOU_TOKEN)")
+		command.Flags().BoolVar(&uploadComplete, "complete", true, "Complete the snapshot after uploading (set --complete=false for multi-job pipelines)")
+		command.Flags().BoolVar(&uploadNoComplete, "no-complete", false, "Do not complete the snapshot after uploading")
+		command.Flags().IntVar(&uploadExpect, "expect", 0, "Expected number of upload calls for auto-completion (0 = disabled)")
 	}
-	uploadSARIFCmd.Flags().StringVar(&uploadTool, "tool", "", "Tool name (e.g., semgrep, codeql)")
-	uploadFindingsCmd.Flags().StringVar(&uploadTool, "tool", "", "Tool name (required)")
-
-	uploadCmd.AddCommand(uploadSBOMCmd, uploadSARIFCmd, uploadFindingsCmd)
 }

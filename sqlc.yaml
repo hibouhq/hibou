@@ -32,3 +32,5 @@ sql:
             go_type: "string"
           - db_type: "integration_type"
             go_type: "string"
+          - db_type: "secret_status"
+            go_type: "string"

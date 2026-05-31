@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -18,9 +19,11 @@ import (
 type mockDispatcherStore struct {
 	mu                  sync.Mutex
 	integrations        []dbgen.Integration
+	rules               []dbgen.NotificationRule
 	healthUpdates       []dbgen.UpdateIntegrationHealthParams
 	auditLogs           []dbgen.CreateAuditLogParams
 	listIntegrationsErr error
+	listRulesErr        error
 }
 
 func (m *mockDispatcherStore) ListIntegrationsByOrg(_ context.Context, orgID uuid.UUID) ([]dbgen.Integration, error) {
@@ -30,6 +33,19 @@ func (m *mockDispatcherStore) ListIntegrationsByOrg(_ context.Context, orgID uui
 	items := make([]dbgen.Integration, 0, len(m.integrations))
 	for _, item := range m.integrations {
 		if item.OrgID == orgID {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (m *mockDispatcherStore) ListEnabledRulesByOrgAndEventType(_ context.Context, orgID uuid.UUID, eventType string) ([]dbgen.NotificationRule, error) {
+	if m.listRulesErr != nil {
+		return nil, m.listRulesErr
+	}
+	items := make([]dbgen.NotificationRule, 0, len(m.rules))
+	for _, item := range m.rules {
+		if item.OrgID == orgID && item.EventType == eventType && item.Enabled {
 			items = append(items, item)
 		}
 	}
@@ -63,6 +79,20 @@ func (m *mockSender) Send(_ context.Context, payload Payload) error {
 		m.calledCh <- payload
 	}
 	return m.err
+}
+
+type contextCheckingSender struct {
+	typ   string
+	errCh chan error
+}
+
+func (m *contextCheckingSender) Type() string { return m.typ }
+
+func (m *contextCheckingSender) Send(ctx context.Context, _ Payload) error {
+	if m.errCh != nil {
+		m.errCh <- ctx.Err()
+	}
+	return nil
 }
 
 func TestDispatcherFansOutToMultipleSenders(t *testing.T) {
@@ -159,6 +189,201 @@ func TestDispatcherSubscribeHandlesPublishedEvents(t *testing.T) {
 	}
 	if payload.Severity != "critical" {
 		t.Fatalf("expected critical severity, got %q", payload.Severity)
+	}
+}
+
+func TestDispatcherRulesFilterIntegrationsBySeverityAndRepo(t *testing.T) {
+	orgID := uuid.New()
+	repoID := uuid.New()
+	allowed := dbgen.Integration{ID: uuid.New(), OrgID: orgID, Name: "slack-prod", IntegrationType: "slack", Enabled: true, Config: mustJSON(t, map[string]any{"channel": "prod"})}
+	blocked := dbgen.Integration{ID: uuid.New(), OrgID: orgID, Name: "slack-dev", IntegrationType: "slack", Enabled: true, Config: mustJSON(t, map[string]any{"channel": "dev"})}
+	store := &mockDispatcherStore{
+		integrations: []dbgen.Integration{allowed, blocked},
+		rules: []dbgen.NotificationRule{{
+			ID:                uuid.New(),
+			OrgID:             orgID,
+			Name:              "high prod only",
+			EventType:         string(events.VulnDiscovered),
+			Conditions:        mustJSON(t, map[string]any{"min_severity": "high", "repo_ids": []string{repoID.String()}}),
+			DestinationType:   dbgen.NotificationDestinationTypeSlack,
+			DestinationConfig: mustJSON(t, map[string]any{"channel": "prod"}),
+			Enabled:           true,
+		}},
+	}
+	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 2)}
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+
+	dispatcher.handleEvent(context.Background(), events.VulnDiscovered, map[string]any{
+		"org_id":    orgID.String(),
+		"repo_id":   repoID.String(),
+		"repo_name": "api",
+		"severity":  "critical",
+	})
+
+	awaitPayload(t, sender.calledCh)
+	select {
+	case <-sender.calledCh:
+		t.Fatal("expected only one integration dispatch")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestDispatcherSkipsOpenCircuitWithoutProbe(t *testing.T) {
+	orgID := uuid.New()
+	integration := dbgen.Integration{
+		ID:              uuid.New(),
+		OrgID:           orgID,
+		Name:            "slack",
+		IntegrationType: "slack",
+		Enabled:         true,
+		FailureCount:    notificationCircuitBreakerThreshold,
+		LastFailureAt:   sqlNullTime(time.Now().UTC()),
+	}
+	store := &mockDispatcherStore{integrations: []dbgen.Integration{integration}}
+	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+
+	dispatcher.handleEvent(context.Background(), events.ScanFailed, map[string]any{"org_id": orgID.String(), "repo_name": "api"})
+
+	select {
+	case <-sender.calledCh:
+		t.Fatal("expected open circuit to skip dispatch")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestDispatcherAllowsProbeAfterCircuitResetWindow(t *testing.T) {
+	orgID := uuid.New()
+	integration := dbgen.Integration{
+		ID:              uuid.New(),
+		OrgID:           orgID,
+		Name:            "slack",
+		IntegrationType: "slack",
+		Enabled:         true,
+		FailureCount:    notificationCircuitBreakerThreshold,
+		LastFailureAt:   sqlNullTime(time.Now().UTC().Add(-notificationCircuitBreakerReset - time.Minute)),
+	}
+	store := &mockDispatcherStore{integrations: []dbgen.Integration{integration}}
+	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+
+	dispatcher.handleEvent(context.Background(), events.ScanFailed, map[string]any{"org_id": orgID.String(), "repo_name": "api"})
+
+	awaitPayload(t, sender.calledCh)
+}
+
+func TestDispatcherSkipsWhenRateLimitExceeded(t *testing.T) {
+	orgID := uuid.New()
+	integration := dbgen.Integration{ID: uuid.New(), OrgID: orgID, Name: "slack", IntegrationType: "slack", Enabled: true}
+	store := &mockDispatcherStore{integrations: []dbgen.Integration{integration}}
+	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	recent := make([]time.Time, notificationRateLimitPerMinute)
+	for i := range recent {
+		recent[i] = time.Now().UTC()
+	}
+	dispatcher.limiter.windows[integration.ID] = recent
+
+	dispatcher.handleEvent(context.Background(), events.ScanCompleted, map[string]any{"org_id": orgID.String(), "repo_name": "api"})
+
+	select {
+	case <-sender.calledCh:
+		t.Fatal("expected rate limit to skip dispatch")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestDispatchIntegrationAsyncDetachesFromCanceledContext(t *testing.T) {
+	orgID := uuid.New()
+	integration := dbgen.Integration{ID: uuid.New(), OrgID: orgID, Name: "webhook", IntegrationType: "webhook", Enabled: true}
+	sender := &contextCheckingSender{typ: "webhook", errCh: make(chan error, 1)}
+	dispatcher := NewDispatcher(&mockDispatcherStore{}, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := dispatcher.dispatchIntegration(ctx, integration, sender, Payload{EventType: "test"}, dispatchOptions{async: true}); err != nil {
+		t.Fatalf("dispatchIntegration returned error: %v", err)
+	}
+
+	select {
+	case sendErr := <-sender.errCh:
+		if sendErr != nil {
+			t.Fatalf("expected detached async context, got %v", sendErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for async send")
+	}
+}
+
+func TestHandleEventDetachesFromCanceledContext(t *testing.T) {
+	orgID := uuid.New()
+	sender := &mockSender{typ: "webhook", calledCh: make(chan Payload, 1)}
+	store := &mockDispatcherStore{integrations: []dbgen.Integration{{
+		ID:              uuid.New(),
+		OrgID:           orgID,
+		Name:            "webhook",
+		IntegrationType: "webhook",
+		Enabled:         true,
+		Config:          mustJSON(t, map[string]any{"url": "https://example.com/webhook"}),
+	}}}
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dispatcher.handleEvent(ctx, events.ScanCompleted, map[string]any{"org_id": orgID.String(), "repo_name": "api"})
+
+	awaitPayload(t, sender.calledCh)
+}
+
+func TestHTTPClientWithDefaultDisablesProxy(t *testing.T) {
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport.Proxy = http.ProxyFromEnvironment
+	client := httpClientWithDefault(&http.Client{Transport: baseTransport})
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("expected notification client proxy support to be disabled")
+	}
+}
+
+func TestValidateNotificationAddressRejectsPrivateIPs(t *testing.T) {
+	t.Setenv("HIBOU_ALLOW_PRIVATE_NOTIFICATION_URLS", "false")
+	if err := validateNotificationAddress(context.Background(), "127.0.0.1:443"); err == nil {
+		t.Fatal("expected loopback address to be rejected")
+	}
+	if err := validateNotificationAddress(context.Background(), "[::1]:443"); err == nil {
+		t.Fatal("expected ipv6 loopback address to be rejected")
+	}
+	if err := validateNotificationAddress(context.Background(), "169.254.169.254:80"); err == nil {
+		t.Fatal("expected metadata address to be rejected")
+	}
+	if err := validateNotificationAddress(context.Background(), "93.184.216.34:443"); err != nil {
+		t.Fatalf("expected public address to be allowed, got %v", err)
+	}
+}
+
+func TestValidateNotificationAddressAllowsPrivateIPsWhenOverridden(t *testing.T) {
+	t.Setenv("HIBOU_ALLOW_PRIVATE_NOTIFICATION_URLS", "true")
+	if err := validateNotificationAddress(context.Background(), "127.0.0.1:443"); err != nil {
+		t.Fatalf("expected override to allow private address, got %v", err)
+	}
+}
+
+func TestRuleConditionsMatchTeamAndRefPatterns(t *testing.T) {
+	payload := Payload{Metadata: map[string]any{"team_id": uuid.New().String(), "ref_name": "release/2026.05"}}
+	conditions := mustJSON(t, map[string]any{
+		"team_ids":     []string{payload.Metadata["team_id"].(string)},
+		"ref_patterns": []string{"main", "release/*"},
+	})
+	if !ruleConditionsMatch(conditions, payload) {
+		t.Fatal("expected team and ref conditions to match")
+	}
+	conditions = mustJSON(t, map[string]any{"ref_patterns": []string{"main"}})
+	if ruleConditionsMatch(conditions, payload) {
+		t.Fatal("expected ref pattern mismatch")
 	}
 }
 

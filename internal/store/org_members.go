@@ -86,3 +86,12 @@ func (q *Queries) GetOrgMemberRole(ctx context.Context, orgID, userID uuid.UUID)
 
 	return role, nil
 }
+
+func (q *Queries) CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int, error) {
+	total, err := q.db.CountOrgAdmins(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(total), nil
+}

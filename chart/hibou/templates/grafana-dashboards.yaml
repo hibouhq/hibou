@@ -1,0 +1,41 @@
+{{- if .Values.grafanaDashboards.enabled }}
+{{- if and .Values.grafanaDashboards.cnpg.enabled .Values.cnpg.cluster.enabled }}
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ include "hibou.fullname" . }}-cnpg
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  instanceSelector:
+    {{- toYaml .Values.grafanaDashboards.instanceSelector | nindent 4 }}
+  {{- if .Values.grafanaDashboards.allowCrossNamespaceImport }}
+  allowCrossNamespaceImport: true
+  {{- end }}
+  {{- if .Values.grafanaDashboards.folder }}
+  folder: {{ .Values.grafanaDashboards.folder | quote }}
+  {{- end }}
+  url: {{ .Values.grafanaDashboards.cnpg.url | quote }}
+{{- end }}
+{{- $files := .Files.Glob "dashboards/*.json" }}
+{{- range $path, $_ := $files }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ include "hibou.fullname" $ }}-{{ $path | base | trimSuffix ".json" | lower | replace "_" "-" | replace " " "-" }}
+  labels:
+    {{- include "hibou.labels" $ | nindent 4 }}
+spec:
+  instanceSelector:
+    {{- toYaml $.Values.grafanaDashboards.instanceSelector | nindent 4 }}
+  {{- if $.Values.grafanaDashboards.allowCrossNamespaceImport }}
+  allowCrossNamespaceImport: true
+  {{- end }}
+  {{- if $.Values.grafanaDashboards.folder }}
+  folder: {{ $.Values.grafanaDashboards.folder | quote }}
+  {{- end }}
+  json: |
+    {{ $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}

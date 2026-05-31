@@ -70,7 +70,8 @@ func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, provide
 		Expires:  time.Now().Add(oauthStateMaxAge),
 	})
 
-	redirectURL := provider.OAuth2Config(m.callbackURL(r, providerID)).AuthCodeURL(state)
+	callbackURL := m.callbackURL(r, providerID)
+	redirectURL := provider.OAuth2Config(callbackURL).AuthCodeURL(state)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 	return nil
 }

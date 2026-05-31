@@ -1,2 +1,0 @@
-ALTER TABLE clients DROP COLUMN IF EXISTS endpoint;
-ALTER TABLE clients DROP COLUMN IF EXISTS client_type;

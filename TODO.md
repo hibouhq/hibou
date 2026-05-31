@@ -361,16 +361,19 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Document prompt-safe response shapes and pagination behavior for large result sets.
 	- Acceptance criteria hint: an MCP-compatible assistant can query live platform data without bespoke integration code.
 
-- [ ] Deliver the notifications subsystem
+- [x] Deliver the notifications subsystem
 	- Extend the Phase 2 notification dispatcher with advanced features: template customization per integration, delivery analytics dashboard, webhook replay for debugging, and bulk notification management.
 	- Add per-integration health monitoring: last successful delivery, failure rate, circuit breaker state.
 	- Support rate control and suppression rules for noisy repositories or transient scan churn.
+	- **Done**: Dispatcher evaluates notification rules when routing events. Circuit breaker (5 consecutive failures, 30min probe window). Per-integration rate limiting (30/min sliding window). Integration health API (`GET /integrations/{id}/health`). Webhook replay (`POST /integrations/{id}/replay`). SSRF protection on outbound senders (private IP blocking, proxy disabled). Async dispatch uses detached background context.
+	- **Remaining**: template customization, delivery analytics dashboard.
 	- Acceptance criteria hint: orgs can route actionable alerts to their preferred channels with auditable delivery state and operational visibility.
 
-- [ ] Add an alert rules engine
+- [x] Add an alert rules engine
 	- Support configurable triggers such as new critical vulnerability, quality gate failure, release branch regression, and stale scan data.
 	- Add rule scoping by org, team, repo, ref pattern, severity, and tool source.
 	- Surface a dry-run or preview mode so administrators can validate rules before enabling them.
+	- **Done**: Notification rules CRUD API (5 endpoints). Rules stored per org with event_type, conditions JSONB (severity/repo scope), destination_type+config. Dry-run preview (`POST /notification-rules/dry-run`). Team ID + ref pattern glob scoping in rule conditions. Stale scan detection (48h threshold, hourly check, publishes `scan.stale` events). Validated event types and destination types including Discord.
 	- Acceptance criteria hint: alerts are configurable enough to be useful without requiring code changes.
 
 - [x] Implement multi-personality binary
@@ -414,54 +417,115 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Future: `vulns`, `deps`, `clients`, `releases` commands will be added as APIs stabilize.
 	- Acceptance criteria hint: `hibou login && hibou repos list && hibou upload sbom sbom.json --org forgejo/devtools --repo myapp --ref refs/heads/main --sha abc123` works end-to-end.
 
-- [ ] Publish an official GitHub Action
+- [x] Publish an official GitHub Action
 	- Create a maintained action that uploads SBOM, SARIF, and generic findings from CI pipelines.
 	- Support API-key auth, PR/ref auto-detection, retries, and clear failure messages.
 	- Provide reference workflows for common build systems.
 	- Acceptance criteria hint: a GitHub repository can adopt the platform from CI in minutes.
+	- **Done**: Composite action for GitHub/Forgejo, GitLab CI component, unified upload endpoint with auto-detection, binary download from server, multi-file support. Coverage upload supported.
 
-- [ ] Expand the REST API to full platform coverage
+- [x] Expand the REST API to full platform coverage
 	- Add CRUD for tenants, repos, client mappings, notification rules, API keys, and administrative settings.
 	- Ensure every UI workflow has a public API equivalent.
 	- Tighten consistency around pagination, filtering, partial updates, and idempotency.
+	- **Done**: Integrations CRUD (5 endpoints), Notification Rules CRUD (5 endpoints), Quality Gates CRUD (5 endpoints), Org Members CRUD (4 endpoints: list/add/remove/update-role with last-admin protection), Team Members CRUD (4 endpoints), Suppression management (suppress/unsuppress with audit logging), Repository CRUD coverage for enrollment/update/removal (3 endpoints), Settings API (GET/PUT with partial-update merge preserving unknown JSONB keys, TLP validation) — 30 new endpoints total. Cross-org authz enforced. FK violation handling. Integration config redacted for non-admin reads.
 	- Acceptance criteria hint: automation clients are not forced to rely on private or UI-only behavior.
 
-- [ ] Deliver compliance-oriented reporting
+- [x] Deliver compliance-oriented reporting
 	- Add exportable HTML and PDF reporting aimed at auditors and regulated environments.
 	- Provide evidence views for findings history, vulnerability posture, policy status, and release impact.
 	- Record report generation metadata for traceability.
-	- Acceptance criteria hint: auditors can consume platform outputs without needing direct DB or admin access.
+	- **ISO 27001:2022 compliance evidence**: generate per-control evidence exports mapping platform data to Annex A.8 technological controls. The platform can produce auditor-ready evidence for:
+	  - **A.8.8 Management of technical vulnerabilities**: vulnerability inventory per repo/org, scan freshness per provider, remediation timeline (first_seen → fixed), VEX statements with justification and provenance, quality gate history
+	  - **A.8.25 Secure development lifecycle**: quality gate pass/fail history per branch, PR analysis results, config-as-code audit trail
+	  - **A.8.28 Secure Coding**: SAST findings inventory, remediation trends, tool coverage per repo
+	  - **A.8.29 Security Testing in Dev & Acceptance**: test coverage metrics, SAST/SCA gate results per release, PR annotation delivery proof
+	  - **A.8.4 Access to source code** (partial): audit log of platform actions (who accessed what, who changed what), RBAC policy export
+	  - **A.8.7 Protection against malware** (partial): malware detection results from SBOM analysis, secret scanning results (when implemented)
+	  - **A.8.19 Installation of software** (partial): SBOM inventory per deployment/release, component version tracking, EOL status
+	  - **A.8.30 Outsourced Development** (partial): supply chain visibility via SBOM, supplier VEX import history, license compliance status
+	- **Statement of Applicability (SoA) export**: generate a pre-filled SoA document mapping which Annex A controls the platform covers, with links to the relevant evidence reports. This helps organizations document their ISMS control selection.
+	- **Point-in-time compliance snapshot**: "give me the full vulnerability and compliance posture of repo X as of date Y" — requires the existing retention and advisory history infrastructure.
+	- **Done**: JSON API for compliance export (`GET /compliance/export`), ISO 27001 evidence report (`GET /compliance/iso27001`) with 9 Annex A.8 controls (A.8.4, A.8.7, A.8.8, A.8.19, A.8.25, A.8.26, A.8.28, A.8.29, A.8.30), Statement of Applicability (`GET /compliance/soa`). Point-in-time snapshots via `?date=` parameter. VEX-aware compliance reports (VEXStatus, VEXJustification, VEXSource fields, expiry anchored to asOfDate).
+	- **Remaining**: HTML/PDF rendering for auditor-facing export (JSON API complete).
+	- Acceptance criteria hint: auditors can consume platform outputs without needing direct DB or admin access. An ISO 27001 auditor can pull evidence for A.8.8 and A.8.28 directly from the platform.
 
-- [ ] Add a connected tool catalog
+- [x] Add a connected tool catalog
 	- Track installed integrations, source health, last successful sync, and credential state.
 	- Provide visibility into which tools are feeding data into each tenant.
 	- Support operational diagnostics so broken integrations are quickly identifiable.
+	- **Done**: `GET /orgs/{p}/{s}/tool-catalog` derives tool health from existing data — advisory providers (from `scan_providers`), SAST tools (from `findings`), VEX sources (from `vex_statements`), SBOM ecosystems (from `components`), coverage formats (from snapshots). Health status: healthy/degraded/unhealthy/inactive based on recency and error state. No new tables — pure aggregation.
 	- Acceptance criteria hint: administrators can tell whether the platform is healthy as an integration hub.
 
 ## Phase 5 - Ecosystem Expansion
 
-- [ ] Add additional git provider support
+- [x] Add additional git provider support
 	- Extend provider abstractions for Forgejo/Gitea and GitLab onboarding, webhook handling, and PR/MR decoration.
 	- Reuse the GitHub-first data model without forcing provider-specific leaks through the whole system.
+	- GitLab provider fully implemented: all 13 `forge.Provider` methods using raw `net/http` against GitLab REST API v4. Webhook validation via `X-Gitlab-Token` (constant-time compare). Push Hook and Merge Request Hook event parsing. File create vs update detection. Separate webhook project type for namespace string vs object mismatch. Forgejo/Gitea provider was already complete.
 	- Acceptance criteria hint: a non-GitHub tenant can onboard repositories with feature parity for core ingestion flows.
 
 
 - [ ] Deliver secret scanning tracking
-	- Integrate with GitHub secret scanning and third-party tools such as truffleHog or gitleaks or betterleaks. (should be tool agnostic)
-	- WHen new repo detected, a full scan must be done on the repo, once we should have some kind of hook on github api to intercept push and analyse pushed changes.
+	- Integrate with GitHub secret scanning and third-party tools such as truffleHog or gitleaks or betterleaks. (should be tool agnostic thus extensible, we should be able to select one or many providers)
+	- WHen new repo detected, a full scan must be done on the repo, then we should have some kind of hook on github api to intercept push and analyse pushed changes.
 	- ideally we should stop the push, and if possible get a message to the user that git pushed it. (to avoid exposition) take example on gitgardian and github secrets detection feature. update this current task then with the plan. Maybe create an adr file too.
 	- Normalize secret finding metadata and connect it to repository, ref, and remediation workflows.
 	- Acceptance criteria hint: leaked secret visibility is available in the same platform workflow as SBOM and SARIF analysis.
 
 - [ ] Add container image scanning flows
 	- Support image-origin SBOM ingestion, image metadata tracking, and vulnerability reporting tied to containers.
+	- Store **image digest** (`sha256:...`) as an additional identifier on snapshot records alongside commit SHA. This provides immutable, content-addressed artifact identity for compliance audits.
+	- Support **multiple SBOMs per release** using the label system (see below) — a source-code SBOM and a container-image SBOM may coexist for the same release, distinguished by labels like `artifact=source` vs `artifact=container`.
 	- Connect image analysis to repository and release entities where provenance is known.
-	- Acceptance criteria hint: teams can analyze application dependencies whether they originate from source builds or shipped images.
+	- Acceptance criteria hint: teams can analyze application dependencies whether they originate from source builds or shipped images, with each artifact uniquely identified by its digest.
+
+- [ ] Add generic label system for snapshots, components, and findings
+	- Implement key/value labels (`map[string]string`) on snapshots, components, and findings — same pattern as Kubernetes labels or GitHub issue labels but with `key=value` semantics.
+	- Built-in label keys with well-known semantics: `scope` (prod/dev/test), `artifact` (source/container/infra), `environment` (staging/prod), `team`. Custom keys are unrestricted.
+	- Labels are settable via upload API (`--label scope=prod --label team=platform`), `.hibou.yaml` defaults, and UI/API post-hoc editing.
+	- All list/search/filter APIs support label selectors (Kubernetes-style): `?labels=scope=prod,team=platform`. Quality gates can scope by label: "only gate on `scope=prod` components."
+	- UI: labels shown as colored badges on snapshots/components, filterable in all table views.
+	- Auto-populated labels where possible: parse CycloneDX `scope` field → `scope=prod`/`scope=dev`, SARIF tool name → `tool=semgrep`, upload source → `source=ci`/`source=manual`.
+	- Acceptance criteria hint: `hibou upload sbom sbom.json --label scope=prod --label artifact=container --label team=payments` tags the snapshot, and filtering by `scope=prod` in the UI shows only production dependencies.
 
 - [ ] Add license compliance support
-	- Extract license data from SBOMs, define policy rules, and surface violations in dependency views and reports.
-	- Support allowlists, deny lists, and policy exceptions with audit history.
-	- Acceptance criteria hint: legal and engineering teams can answer license risk questions without a separate platform.
+	- Extract license data from SBOMs (CycloneDX and SPDX both carry per-component license fields), store normalized SPDX license identifiers per component.
+	- Define **license policies** per org: allowed list (e.g., MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC) and denied list (e.g., GPL-3.0, AGPL-3.0, SSPL, EUPL). Policies are RBAC-gated — only admins and auditors can modify them.
+	- **PR quality gate integration**: when a PR introduces a new dependency with a denied license, the quality gate fails. Delta computation compares new components' licenses against the org policy. Same pattern as vulnerability gating — license violations appear in the PR summary comment and forge annotations.
+	- License overview dashboard: component count by license, license distribution chart, policy violation list, and drill-down to affected repos/components.
+	- Support policy exceptions with justification, expiry, and audit trail (same pattern as VEX suppressions).
+	- Take inspiration from SonarQube license compliance, FOSSA, and Snyk License for UX patterns.
+	- Acceptance criteria hint: a PR that adds a GPL-3.0 dependency to a project with a deny-GPL policy fails the quality gate with a clear explanation.
+
+- [x] Add VEX (Vulnerability Exploitability eXchange) support
+	- Replace the boolean suppression model with standards-compliant VEX statements. Store status (not_affected, affected, fixed, under_investigation), justification, impact/action statements, source tracking, supplier attribution, and expiry per advisory+scope.
+	- Support three scoping levels for VEX statements: org-wide (applies to all repos), repo-level, and component-level (purl-specific). Most specific scope wins during evaluation.
+	- Implement VEX document ingestion via the unified upload endpoint with auto-detection:
+	  - **OpenVEX** (OpenSSF standard): parse JSON-LD documents, map statements to internal model. Component-centric, PURL-based.
+	  - **CSAF VEX** (OASIS CSAF 2.0 Profile 5, `csaf_vex`): parse full document structure. Product-centric (vendor → product → version tree, not PURL). Mandatory: `product_tree`, `vulnerabilities` with `product_status` buckets. `known_not_affected` MUST have impact via `flags` (machine-readable VEX justification labels) or `threats` (human-readable). `known_affected` MUST have `remediations`. Extract `flags.label` as primary justification source, `remediations` as action statements, `threats` as impact statements, TLP distribution labels as metadata.
+	  - **CycloneDX VEX**: extract `vulnerabilities[].analysis` fields during SBOM ingestion. Component-centric, PURL-based.
+	- Implement VEX document export/generation in OpenVEX and CSAF 2.0 formats. Export per repo+ref, per org, or per advisory. Generated CSAF documents satisfy Profile 5: `document` metadata (Hibou as publisher, category `tool`, TLP label, revision history), `product_tree` from platform data, `vulnerabilities` with `flags` for `known_not_affected` and `remediations` for `known_affected`.
+	- **Done**: VEX core complete — OpenVEX/CSAF/CycloneDX parsers with multi-product fan-out, OpenVEX+CSAF export (Profile 5 compliant), full CRUD API (`/vex` with create/list/get/update/delete + export), VEX upload auto-detection, VEX-aware delta/gate filtering (per advisory+component pair), VEX status in compliance reports, scope precedence (component > repo > org), expired statement detection. CSAF parser uses `product_identification_helper.purl`. Non-CVE IDs handled correctly in export.
+	- **CSAF Provider Infrastructure** (future, post-dogfooding): act as a CSAF provider by serving `/.well-known/csaf/provider-metadata.json`, ROLIE feeds (RFC 8322, Atom-based JSON per TLP level for automated discovery), directory-based distribution (year folders, `index.txt`, `changes.csv` for delta sync, SHA-256/SHA-512 hash files), and `/.well-known/security.txt` reference. Same pattern as Red Hat's production infrastructure (`csaf_trusted_provider` role, separate `/advisories/` and `/vex/` directories, PGP signing).
+	- **CSAF Consumer / Upstream Sync** (future): configure upstream supplier CSAF provider URLs → poll their ROLIE feed or `changes.csv` → auto-import relevant VEX statements for components present in the org's repos → supplier propagation closes the supply chain loop (Red Hat publishes `known_not_affected` → platform imports → all repos using that component get the statement automatically).
+	- **Remaining** (advanced VEX features):
+	  - **Auto-fixed**: detect when a component is upgraded past an advisory's fixed version and auto-create `status=fixed` with provenance.
+	  - **Auto-not-present**: detect when a component disappears from SBOM between snapshots and auto-create `status=not_affected, justification=component_not_present`.
+	  - **Supplier propagation**: when VEX is imported from a supplier, auto-apply to all repos consuming that component. Configurable auto-accept or review-required per org.
+	  - **Expiry and re-evaluation**: statements with `expires_at` automatically revert to `under_investigation` and trigger notifications.
+	  - **Source code reachability analysis**: prove `vulnerable_code_not_in_execute_path` with machine evidence.
+	    - **Go (server-side, fully automated)**: platform clones repo via forge credentials (works on GitHub/GitLab/Forgejo), builds static call graph with `golang.org/x/tools/go/callgraph` (RTA/VTA), matches against OSV affected symbols. Shallow clone, analyze, delete. No new permissions needed. Opt-in per org.
+	    - **Java (CI-side, opt-in)**: `hibou analyze reachability --lang java` CLI command runs in CI after compilation. Auto-discovers `target/classes` and `build/classes`; explicit `--bytecode` overrides for complex multi-module builds (hundreds of Maven modules, Ant). Builds call graph from bytecode (ASM-based CHA), uploads reachability report.
+	    - **Rust (CI-side, opt-in, best-effort)**: `hibou analyze reachability --lang rust` runs in CI. Uses `cargo metadata` + tree-sitter source parsing to match against RustSec/OSV affected symbols (~13% of advisories have function data). Two-tier confidence: high-confidence results auto-generate VEX, low-confidence results surface as triage hints. Honest about limitations — no false `not_affected`.
+	    - **Multi-language**: repos with multiple languages use `--lang java,rust` (comma-separated). Go runs server-side automatically. Each analyzer runs independently per ecosystem.
+	    - **Out of scope**: Python/JS/TS (dynamic dispatch too imprecise), C/C++ (function pointers, macros), OS packages (binary, no source).
+	    - **Large repo performance** (2M+ LOC): dependency-scoped analysis (only analyze modules transitively importing the vulnerable package), incremental call graph caching per commit, hard timeout with graceful degradation, bounded worker pool for server-side Go analysis (SSA ≈ 2-4GB RAM for large repos).
+	    - **Call graph visualization** (low priority, post-dogfooding): render the proof subgraph ("why is this CVE reachable/unreachable") in the UI — filtered to entry points → transitive path → vulnerable symbol. DOT export for CLI. Not the full repo call graph. **Deferred until core VEX + reachability are working and dogfooded on our own GitHub repos.**
+	- Integrate VEX status into quality gate evaluation: `not_affected` and `fixed` excluded from counts, `affected` counted, `under_investigation` configurable per gate.
+	- Provide full CRUD API for manual VEX statements, bulk org-wide statements, and VEX document import/export endpoints.
+	- ADR: `docs/adr/009-vex-integration.md`.
+	- Acceptance criteria hint: a supplier-published CSAF VEX document can be imported, auto-propagated to affected repos, and immediately reduce noise in quality gates — without manual per-repo triage.
 
 - [ ] Design a plugin and extension model
 	- Define extension points for new ingestion adapters, enrichers, notification sinks, and UI modules.
@@ -501,15 +565,34 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- Threat-model ingestion endpoints, notification hooks, MCP interfaces, and tenant boundaries.
 	- Acceptance criteria hint: the platform demonstrates credible security posture while marketing itself as a security product.
 
+- [ ] ISO 27001:2022 Annex A compliance mapping
+	- The platform naturally covers a subset of Annex A.8 (Technological Controls) for monitored applications. This workstream tracks explicit coverage and gaps.
+	- **Controls the platform fully covers (✅)**:
+	  - **A.8.8 Management of technical vulnerabilities**: SBOM ingestion, SCA, advisory matching, severity normalization, VEX exploitability tracking, quality gates, remediation guidance, scan freshness monitoring. Core platform capability.
+	  - **A.8.25 Secure development lifecycle**: quality gates per branch, PR analysis, config-as-code (`.hibou.yaml`), onboarding PR, audit trail. SDL is enforced via the gate model.
+	  - **A.8.28 Secure Coding**: SARIF ingestion from any SAST tool (Semgrep, CodeQL, ESLint, commercial), findings deduplication, PR annotations on new issues, weakness quality gates.
+	  - **A.8.29 Security Testing in Dev & Acceptance**: coverage tracking (upload done, metrics pending), SAST/SCA gates as acceptance criteria, PR-level delta analysis.
+	- **Controls the platform partially covers (🔵)**:
+	  - **A.8.4 Access to source code**: RBAC (Casbin) for platform access, audit log for all actions, forge credentials management. Does not manage git-level permissions (that's the forge's job).
+	  - **A.8.7 Protection against malware**: malware detection in SBOMs (OSV MALWARE advisories), malicious package flagging. Gap: secret scanning not yet implemented.
+	  - **A.8.19 Installation of software on operational systems**: SBOM inventory per release, component tracking, container image digest tracking (planned). Gap: no runtime agent — platform tracks what's built, not what's deployed (K8s operator planned).
+	  - **A.8.26 Application security requirements**: quality gates enforce security requirements on PRs. Gap: no formal security requirements template or threat modeling integration.
+	  - **A.8.30 Outsourced Development**: supply chain visibility via SBOM, supplier VEX import, license compliance (planned). Gap: no contractual requirement tracking.
+	- **Controls outside platform scope**: A.8.1-A.8.3 (user devices), A.8.5-A.8.6 (authentication — platform uses forge OAuth), A.8.9-A.8.18 (network, physical, infra), A.8.20-A.8.24 (network security, web filtering), A.8.27 (secure architecture — organizational process), A.8.31-A.8.34 (environment separation, change management, testing environments, audit independence).
+	- Acceptance criteria hint: the platform documentation includes an ISO 27001 Annex A.8 mapping table that auditors can reference. Compliance reports generate evidence per control.
+
 - [ ] Operational readiness and observability
 	- Add structured logging, tracing, metrics, health probes, background job visibility, and audit logs.
-	- Define backup, restore, migration rollback, and incident response expectations.
+	- Define backup, restore, and incident response expectations. But no migration rollback, user must do backup before any upgrades.
 	- Acceptance criteria hint: operators can run the system in production without flying blind.
 
 - [ ] Add coverage tracking
 	- Model line and branch coverage as a first-class signal alongside vulnerabilities and findings.
 	- Support trend views, PR delta coverage, and simple quality gates.
 	- Acceptance criteria hint: teams can correlate security posture with code health signals in one product.
+	- **Upload support done**: Unified upload endpoint auto-detects Cobertura, JaCoCo, Clover, LCOV, and Go cover profile formats. ADR-008 accepted.
+	- **Remaining**: coverage parsing/metric extraction, snapshot grouping implementation, coverage gate evaluation in delta service, PR coverage comparison, line coverage UI, diff coverage.
+	- **Config ready**: `.hibou.yaml` supports coverage thresholds (min_coverage, grace, diff_minimum), exclude patterns, and upload window. `--complete` flag designed for instant gate feedback.
 
 ## Milestone map
 
@@ -530,4 +613,47 @@ The result should feel like a GitHub-native security tool — users familiar wit
 
 ## Side quest
 
-- [ ] replace current config by go-viper.
+- [x] Replace current config by go-viper.
+
+- [ ] Add dev vs prod dependency classification
+	- Uses the generic label system: components carry `scope=prod`, `scope=dev`, or `scope=test` labels.
+	- Auto-detect from SBOM data when available: CycloneDX `scope` field (`required` → `scope=prod`, `optional` → `scope=dev`), npm devDependencies, Maven `scope:test`, Go build tags.
+	- Allow manual override via `.hibou.yaml`: `dev_patterns: ["@types/*", "*-test-*"]` for cases where SBOM tooling doesn't preserve scope.
+	- Quality gates can filter by scope label: "only gate on `scope=prod` dependencies" to avoid blocking PRs on dev-only vulnerability churn.
+	- UI: dependency table shows scope badge, filterable by scope.
+	- Acceptance criteria hint: a critical CVE in a devDependency does not fail the prod quality gate when scope filtering is enabled.
+
+- [ ] Add outdated dependency and EOL tracking
+	- **EOL tracking via endoflife.date** (primary): use the free public API (`https://endoflife.date/api/{product}.json`) to detect end-of-life runtimes, frameworks, and major dependencies. Covers 300+ products (Node.js, Python, Java, Go, PostgreSQL, .NET, etc.) with EOL dates, latest versions, LTS status. No auth required.
+	- Auto-detect products from SBOM data: map component ecosystem/name to endoflife.date product slugs. Surface EOL warnings prominently — an EOL runtime is a security risk even without specific CVEs.
+	- Cache endoflife.date responses with TTL (data changes infrequently). Store EOL status as a component-level signal.
+	- **Outdated detection via direct registry queries**: query each ecosystem's public registry API to resolve latest versions. Same pattern as Renovate — go to the source of truth. Supported registries:
+	  - npm: `registry.npmjs.org/{pkg}` → `dist-tags.latest`
+	  - PyPI: `pypi.org/pypi/{pkg}/json` → `info.version`
+	  - Go: `proxy.golang.org/{mod}/@latest`
+	  - Maven Central: `search.maven.org/solrsearch/select?q=g:{g}+AND+a:{a}&rows=1&wt=json`
+	  - crates.io: `crates.io/api/v1/crates/{crate}` → `crate.max_stable_version`
+	  - NuGet: `api.nuget.org/v3-flatcontainer/{pkg}/index.json` → last entry
+	  - RubyGems: `rubygems.org/api/v1/gems/{gem}.json` → `version`
+	- **Deduplication**: extract unique `(ecosystem, name)` tuples across the entire instance — not per-repo or per-snapshot. If 50 repos use `lodash`, query npm once. Same global dedup pattern as the advisory cache.
+	- **Caching**: cache latest-version responses with configurable TTL per ecosystem (default: 24h — releases don't happen every hour). Background refresh for popular packages. Cache key: `{ecosystem}:{package_name}`.
+	- **Batch where possible**: npm bulk endpoint, Go module proxy list mode. For registries without batch APIs, use bounded concurrency with rate limiting.
+	- UI: Dependencies tab shows EOL badge (red for EOL, amber for approaching EOL), outdated version badge (current vs latest), filterable.
+	- Quality gate option: fail if PR introduces or retains an EOL runtime/framework.
+	- Acceptance criteria hint: the dependency table shows Node.js 18 as "EOL since 2025-04-30" with a red badge, and lodash 4.17.15 as "latest: 4.17.21 (6 versions behind)". Processing 10 repos that share 80% of their deps produces far fewer registry calls than 10× the unique package count.
+
+- [ ] Add EPSS-based quality gate thresholds
+	- Allow quality gate rules to include EPSS (Exploit Prediction Scoring System) thresholds: e.g., "block if any new vulnerability has EPSS > 0.7".
+	- EPSS scores are already stored on advisories via NVD enrichment. Extend gate evaluation to check EPSS alongside severity.
+	- Combine with CISA KEV (Known Exploited Vulnerabilities) catalog: vulns on KEV list are always critical regardless of CVSS.
+	- Acceptance criteria hint: a high-EPSS vulnerability blocks a PR even if its CVSS severity is only "medium".
+
+- [x] Add Prometheus metrics endpoint
+	- Expose `/metrics` endpoint with key operational metrics: scan counts, scan duration histograms, cache hit rates per provider, advisory counts, component counts, active WebSocket connections, notification delivery success/failure rates.
+	- Provide pre-built Grafana dashboard JSON so operators don't need to query the DB directly (addressing the DependencyTrack pattern of wiring Grafana to Postgres).
+	- Acceptance criteria hint: operators can monitor platform health via standard Prometheus/Grafana stack without direct DB access.
+
+- [ ] Add suppression-as-code workflow
+	- Support a `.hibou-suppressions.yaml` file in repositories for developer-owned weakness/SAST finding suppressions, gated behind PR approval.
+	- Security team VEX suppressions remain platform-only (UI/API, RBAC-gated) — never in code.
+	- Acceptance criteria hint: developers can suppress false-positive SAST findings via code review workflow, with full audit trail.

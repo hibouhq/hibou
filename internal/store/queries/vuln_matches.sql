@@ -15,14 +15,9 @@ AND id NOT IN (SELECT unnest(sqlc.arg(fresh_match_ids)::uuid[]));
 -- name: ListVulnMatchesBySnapshot :many
 SELECT * FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE ORDER BY first_seen_at DESC;
 
+-- VEX-based filtering is applied at the application layer via vex_statements.
 -- name: CountVulnMatchesBySnapshot :one
-SELECT COUNT(*)::bigint FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE AND suppressed = FALSE;
-
--- name: SuppressVulnMatch :one
-UPDATE vuln_matches SET suppressed = TRUE, suppressed_reason = $2 WHERE id = $1 RETURNING *;
-
--- name: UnsuppressVulnMatch :one
-UPDATE vuln_matches SET suppressed = FALSE, suppressed_reason = '' WHERE id = $1 RETURNING *;
+SELECT COUNT(*)::bigint FROM vuln_matches WHERE snapshot_id = $1 AND is_affected = TRUE;
 
 -- name: ListVulnSummaryBySnapshot :many
 SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
@@ -35,5 +30,5 @@ GROUP BY a.severity;
 SELECT a.severity::text AS severity, COUNT(DISTINCT a.id)::bigint AS count
 FROM advisories a
 JOIN vuln_matches vm ON vm.advisory_id = a.id
-WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE AND vm.suppressed = FALSE
+WHERE vm.snapshot_id = $1 AND vm.is_affected = TRUE
 GROUP BY a.severity;

@@ -35,8 +35,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "hibou.postgresqlSecretName" -}}
 {{- if .Values.postgresql.auth.existingSecret -}}
 {{- .Values.postgresql.auth.existingSecret -}}
+{{- else if .Values.cnpg.cluster.enabled -}}
+{{- printf "%s-pg-app" (include "hibou.fullname" .) -}}
 {{- else -}}
 {{- printf "%s-postgresql" (include "hibou.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.postgresqlSecretKey" -}}
+{{- if .Values.cnpg.cluster.enabled -}}
+uri
+{{- else -}}
+url
 {{- end -}}
 {{- end -}}
 
@@ -47,6 +57,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "hibou.databaseURL" -}}
 {{- if .Values.hibou.database.url -}}
 {{- .Values.hibou.database.url -}}
+{{- else if .Values.cnpg.cluster.enabled -}}
+{{/* CNPG: connection details from the generated app secret */}}
 {{- else -}}
 {{/* Database URL is read from the secret at runtime, not baked into templates */}}
 {{- end -}}
@@ -72,4 +84,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "http://%s" .Values.ingress.hostname -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "hibou.cnpgClusterName" -}}
+{{- printf "%s-pg" (include "hibou.fullname" .) -}}
+{{- end -}}
+
+{{- define "hibou.cnpgServiceName" -}}
+{{- printf "%s-pg-rw" (include "hibou.fullname" .) -}}
 {{- end -}}

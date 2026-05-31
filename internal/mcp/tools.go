@@ -75,6 +75,7 @@ type vulnerabilityItem struct {
 	IsMalware     bool      `json:"is_malware"`
 	MalwareType   *string   `json:"malware_type,omitempty"`
 	AffectedCount int       `json:"affected_count"`
+	// TODO(vex): Populate from vex_statements once effective VEX state is wired in.
 	Suppressed    int       `json:"suppressed_count"`
 	PublishedAt   *string   `json:"published_at,omitempty"`
 	WithdrawnAt   *string   `json:"withdrawn_at,omitempty"`
@@ -418,16 +419,13 @@ func (s *service) loadAdvisories(ctx context.Context, matches []dbgen.VulnMatch)
 
 func buildVulnerabilityResponse(matches []dbgen.VulnMatch, advisories map[uuid.UUID]dbgen.Advisory, severityFilter string) ([]vulnerabilityItem, []vulnerabilitySummary) {
 	type counts struct {
-		affected   int
-		suppressed int
+		affected int
 	}
 
 	byAdvisory := make(map[uuid.UUID]counts, len(matches))
 	for _, match := range matches {
 		entry := byAdvisory[match.AdvisoryID]
-		if match.Suppressed {
-			entry.suppressed++
-		} else {
+		if match.IsAffected {
 			entry.affected++
 		}
 		byAdvisory[match.AdvisoryID] = entry
@@ -456,7 +454,7 @@ func buildVulnerabilityResponse(matches []dbgen.VulnMatch, advisories map[uuid.U
 			IsMalware:     advisory.IsMalware,
 			MalwareType:   nullEnumString(string(advisory.MalwareType.MalwareType), advisory.MalwareType.Valid),
 			AffectedCount: count.affected,
-			Suppressed:    count.suppressed,
+			Suppressed:    0,
 			PublishedAt:   nullTimeString(advisory.PublishedAt),
 			WithdrawnAt:   nullTimeString(advisory.WithdrawnAt),
 			UpdatedAt:     advisory.UpdatedAt.UTC().Format(timeLayout),

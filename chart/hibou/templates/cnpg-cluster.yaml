@@ -1,0 +1,63 @@
+{{- if .Values.cnpg.cluster.enabled }}
+{{- if .Values.postgresql.enabled }}
+{{- fail "cnpg.cluster.enabled and postgresql.enabled are mutually exclusive. Disable one." }}
+{{- end }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "hibou.fullname" . }}-pg
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.cnpg.cluster.instances }}
+  imageName: {{ printf "%s:%s" .Values.cnpg.cluster.image.repository .Values.cnpg.cluster.image.tag }}
+
+  bootstrap:
+    initdb:
+      database: {{ .Values.cnpg.cluster.database }}
+      owner: {{ .Values.cnpg.cluster.owner }}
+
+  storage:
+    size: {{ .Values.cnpg.cluster.storage.size }}
+    {{- if .Values.cnpg.cluster.storage.storageClass }}
+    storageClass: {{ .Values.cnpg.cluster.storage.storageClass | quote }}
+    {{- end }}
+
+  resources:
+    requests:
+      cpu: {{ .Values.cnpg.cluster.resources.requests.cpu | quote }}
+      memory: {{ .Values.cnpg.cluster.resources.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.cnpg.cluster.resources.limits.cpu | quote }}
+      memory: {{ .Values.cnpg.cluster.resources.limits.memory | quote }}
+
+  {{- if .Values.cnpg.cluster.tls }}
+  enableSuperuserAccess: false
+  {{- end }}
+
+  {{- if and (gt (int .Values.cnpg.cluster.instances) 1) .Values.cnpg.cluster.antiAffinity }}
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: {{ .Values.cnpg.cluster.antiAffinity }}
+  {{- end }}
+
+  {{- if .Values.cnpg.cluster.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ required "cnpg.cluster.backup.destinationPath is required when backup is enabled" .Values.cnpg.cluster.backup.destinationPath | quote }}
+      {{- if .Values.cnpg.cluster.backup.endpointURL }}
+      endpointURL: {{ .Values.cnpg.cluster.backup.endpointURL | quote }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ required "cnpg.cluster.backup.s3CredentialsSecret is required" .Values.cnpg.cluster.backup.s3CredentialsSecret }}
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ .Values.cnpg.cluster.backup.s3CredentialsSecret }}
+          key: ACCESS_SECRET_KEY
+      wal:
+        compression: gzip
+    retentionPolicy: {{ .Values.cnpg.cluster.backup.retentionPolicy | quote }}
+  {{- end }}
+{{- end }}

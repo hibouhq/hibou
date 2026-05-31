@@ -29,6 +29,19 @@ func (q *Queries) AddOrgMember(ctx context.Context, arg AddOrgMemberParams) erro
 	return err
 }
 
+const countOrgAdmins = `-- name: CountOrgAdmins :one
+SELECT COUNT(*)::bigint
+FROM org_members
+WHERE org_id = $1 AND role = 'admin'
+`
+
+func (q *Queries) CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOrgAdmins, orgID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countOrgMembers = `-- name: CountOrgMembers :one
 SELECT COUNT(*)::bigint FROM org_members WHERE org_id = $1
 `
