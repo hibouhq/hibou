@@ -35,18 +35,11 @@
 
           <div class="flex flex-wrap gap-2 text-xs uppercase tracking-[0.18em] text-gray-500">
             <span
-              v-for="item in findingBadges"
-              :key="`findings-${item.key}`"
+              v-for="item in vulnerabilityBadges"
+              :key="`vulnerabilities-${item.key}`"
               :class="['rounded-full px-3 py-1 font-medium', severityClass(item.key)]"
             >
-              {{ item.key }} {{ item.value }} findings
-            </span>
-            <span
-              v-for="item in vulnBadges"
-              :key="`vulns-${item.key}`"
-              :class="['rounded-full px-3 py-1 font-medium', severityClass(item.key)]"
-            >
-              {{ item.key }} {{ item.value }} vulns
+              {{ item.key }} {{ item.value }} vulnerabilities
             </span>
           </div>
         </div>
@@ -62,18 +55,10 @@
           </article>
           <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
             <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              Findings
-            </div>
-            <div class="mt-3 text-3xl font-semibold text-white">
-              {{ totalFindings }}
-            </div>
-          </article>
-          <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
               Vulnerabilities
             </div>
             <div class="mt-3 text-3xl font-semibold text-white">
-              {{ totalVulns }}
+              {{ totalVulnerabilities }}
             </div>
           </article>
           <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
@@ -118,9 +103,6 @@
                 Repository
               </th>
               <th class="px-6 py-4 font-medium">
-                Findings
-              </th>
-              <th class="px-6 py-4 font-medium">
                 Vulnerabilities
               </th>
               <th class="px-6 py-4 font-medium">
@@ -160,19 +142,8 @@
               <td class="px-6 py-4">
                 <div class="flex flex-wrap gap-2">
                   <span
-                    v-for="item in toSeverityItems(entry.findings)"
-                    :key="`${entry.repo_id}-finding-${item.key}`"
-                    :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]"
-                  >
-                    {{ item.key }} {{ item.value }}
-                  </span>
-                </div>
-              </td>
-              <td class="px-6 py-4">
-                <div class="flex flex-wrap gap-2">
-                  <span
-                    v-for="item in toSeverityItems(entry.vulns)"
-                    :key="`${entry.repo_id}-vuln-${item.key}`"
+                    v-for="item in toSeverityItems(entry.vulnerabilities)"
+                    :key="`${entry.repo_id}-vulnerability-${item.key}`"
                     :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]"
                   >
                     {{ item.key }} {{ item.value }}
@@ -210,10 +181,8 @@ const error = ref('')
 
 const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'low', 'info']
 
-const findingBadges = computed(() => toSeverityItems(dashboard.value?.totals.findings))
-const vulnBadges = computed(() => toSeverityItems(dashboard.value?.totals.vulns))
-const totalFindings = computed(() => sumCounts(dashboard.value?.totals.findings))
-const totalVulns = computed(() => sumCounts(dashboard.value?.totals.vulns))
+const vulnerabilityBadges = computed(() => toSeverityItems(dashboard.value?.totals.vulnerabilities))
+const totalVulnerabilities = computed(() => sumCounts(dashboard.value?.totals.vulnerabilities))
 
 watch(
   [provider, slug],

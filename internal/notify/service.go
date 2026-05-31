@@ -59,6 +59,9 @@ func (s *Service) Subscribe() {
 	s.bus.Subscribe(events.VulnDiscovered, func(ctx context.Context, event events.Event) {
 		s.handleVulnDiscovered(ctx, event.Payload)
 	})
+	s.bus.Subscribe(events.VulnerabilityCreated, func(ctx context.Context, event events.Event) {
+		s.handleVulnerabilityCreated(ctx, event.Payload)
+	})
 }
 
 func (s *Service) handleScanCompleted(ctx context.Context, payload any) {
@@ -128,6 +131,29 @@ func (s *Service) handleVulnDiscovered(ctx context.Context, payload any) {
 	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
 		Type:     string(events.VulnDiscovered),
 		Title:    "New vulnerability discovered",
+		Body:     body,
+		Link:     repoLink(repoID),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
+	})
+}
+
+func (s *Service) handleVulnerabilityCreated(ctx context.Context, payload any) {
+	data, _ := payload.(map[string]any)
+	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	if err != nil {
+		s.log.Debug().Err(err).Msg("resolve recipients for vulnerability created")
+		return
+	}
+	severity := strings.ToLower(stringValue(data, "severity", "critical"))
+	severityLevel := dbgen.SeverityLevelCritical
+	if severity != "critical" {
+		severityLevel = dbgen.SeverityLevelHigh
+	}
+	vulnID := stringValue(data, "advisory_id", stringValue(data, "id", "unknown"))
+	body := fmt.Sprintf("New %s vulnerability %s found in repo %s", severity, vulnID, repoName)
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.VulnerabilityCreated),
+		Title:    "New vulnerability created",
 		Body:     body,
 		Link:     repoLink(repoID),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},

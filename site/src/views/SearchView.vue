@@ -7,7 +7,7 @@
             Search
           </h1>
           <p class="mt-2 text-sm text-gray-400">
-            Search across vulnerabilities, components, findings, and clients in this organization.
+            Search across vulnerabilities, components, and clients in this organization.
           </p>
         </div>
 
@@ -168,13 +168,12 @@ let debounceHandle: number | undefined
 
 const typeTabs = [
   { label: 'All', value: '' },
-  { label: 'Vulnerabilities', value: 'vuln' },
+  { label: 'Vulnerabilities', value: 'vulnerability' },
   { label: 'Components', value: 'component' },
-  { label: 'Findings', value: 'finding' },
   { label: 'Clients', value: 'client' },
 ]
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
-const showSeverityFilter = computed(() => selectedType.value === 'vuln' || selectedType.value === 'finding')
+const showSeverityFilter = computed(() => selectedType.value === 'vulnerability')
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
 watch(

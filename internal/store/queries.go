@@ -121,14 +121,6 @@ func (q *Queries) UpdateScanProvider(ctx context.Context, arg dbgen.UpdateScanPr
 	return q.db.UpdateScanProvider(ctx, arg)
 }
 
-func (q *Queries) UpsertVulnMatch(ctx context.Context, arg dbgen.UpsertVulnMatchParams) (dbgen.VulnMatch, error) {
-	return q.db.UpsertVulnMatch(ctx, arg)
-}
-
-func (q *Queries) MarkStaleVulnMatches(ctx context.Context, arg dbgen.MarkStaleVulnMatchesParams) error {
-	return q.db.MarkStaleVulnMatches(ctx, arg)
-}
-
 func (q *Queries) CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error) {
 	return q.db.CreateAuditLog(ctx, arg)
 }
@@ -171,28 +163,8 @@ func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, ids []uuid.UUID) ([]db
 	return q.db.GetAdvisoriesByIDs(ctx, ids)
 }
 
-func (q *Queries) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.VulnMatch, error) {
-	return q.db.ListVulnMatchesBySnapshot(ctx, snapshotID)
-}
-
-func (q *Queries) ListAllFindingsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Finding, error) {
-	return q.db.ListAllFindingsBySnapshot(ctx, snapshotID)
-}
-
-func (q *Queries) ListFindingSummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListFindingSummaryBySnapshotRow, error) {
-	return q.db.ListFindingSummaryBySnapshot(ctx, snapshotID)
-}
-
-func (q *Queries) CountFindingsBySeverity(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.CountFindingsBySeverityRow, error) {
-	return q.db.CountFindingsBySeverity(ctx, snapshotID)
-}
-
-func (q *Queries) ListVulnSummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListVulnSummaryBySnapshotRow, error) {
-	return q.db.ListVulnSummaryBySnapshot(ctx, snapshotID)
-}
-
-func (q *Queries) CountVulnsBySeverity(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.CountVulnsBySeverityRow, error) {
-	return q.db.CountVulnsBySeverity(ctx, snapshotID)
+func (q *Queries) ListVulnerabilitySummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListVulnerabilitySummaryBySnapshotRow, error) {
+	return q.db.ListVulnerabilitySummaryBySnapshot(ctx, snapshotID)
 }
 
 func (q *Queries) ListIntegrationsByOrg(ctx context.Context, orgID uuid.UUID) ([]dbgen.Integration, error) {
@@ -267,6 +239,10 @@ func (q *Queries) ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]
 	return q.db.ListFindingToolStats(ctx, orgID)
 }
 
+func (q *Queries) ListVulnerabilityToolStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListVulnerabilityToolStatsRow, error) {
+	return q.db.ListVulnerabilityToolStats(ctx, orgID)
+}
+
 func (q *Queries) ListVEXSourceStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListVEXSourceStatsRow, error) {
 	return q.db.ListVEXSourceStats(ctx, orgID)
 }
@@ -308,12 +284,8 @@ func (q *Queries) CountAuditLogsByOrg(ctx context.Context, orgID uuid.UUID) (int
 	return q.db.CountAuditLogsByOrg(ctx, uuid.NullUUID{UUID: orgID, Valid: true})
 }
 
-func (q *Queries) CountVulnMatchesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
-	return q.db.CountVulnMatchesByOrg(ctx, orgID)
-}
-
-func (q *Queries) CountFindingsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
-	return q.db.CountFindingsByOrg(ctx, orgID)
+func (q *Queries) CountVulnerabilitiesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return q.db.CountVulnerabilitiesByOrg(ctx, orgID)
 }
 
 func (q *Queries) CountScansByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {

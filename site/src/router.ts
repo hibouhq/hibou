@@ -45,9 +45,9 @@ const router = createRouter({
               component: () => import('@/views/repo/OverviewTab.vue'),
             },
             {
-              path: 'weaknesses',
-              name: 'repo-weaknesses',
-              component: () => import('@/views/repo/WeaknessesTab.vue'),
+              path: 'vulnerabilities',
+              name: 'repo-vulnerabilities',
+              component: () => import('@/views/repo/VulnerabilitiesTab.vue'),
             },
             {
               path: 'dependencies',
@@ -55,24 +55,9 @@ const router = createRouter({
               component: () => import('@/views/repo/DependenciesTab.vue'),
             },
             {
-              path: 'trends',
-              name: 'repo-trends',
-              component: () => import('@/views/repo/TrendsTab.vue'),
-            },
-            {
-              path: 'malware',
-              name: 'repo-malware',
-              component: () => import('@/views/repo/MalwareTab.vue'),
-            },
-            {
-              path: 'runtime',
-              name: 'repo-runtime',
-              component: () => import('@/views/repo/RuntimeTab.vue'),
-            },
-            {
-              path: 'secrets',
-              name: 'repo-secrets',
-              component: () => import('@/views/repo/SecretsTab.vue'),
+              path: 'coverage',
+              name: 'repo-coverage',
+              component: () => import('@/views/repo/CoverageTab.vue'),
             },
           ],
         },

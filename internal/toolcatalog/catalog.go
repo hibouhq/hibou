@@ -52,7 +52,7 @@ type Service struct {
 
 type Store interface {
 	ListAdvisoryProviderStats(ctx context.Context, orgID uuid.UUID) ([]AdvisoryProviderStat, error)
-	ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error)
+	ListVulnerabilityToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error)
 	ListVEXSourceStats(ctx context.Context, orgID uuid.UUID) ([]VEXSourceStat, error)
 	ListComponentEcosystemStats(ctx context.Context, orgID uuid.UUID) ([]ComponentEcosystemStat, error)
 	ListCoverageSnapshotStats(ctx context.Context, orgID uuid.UUID) ([]CoverageSnapshotStat, error)
@@ -111,7 +111,7 @@ func (s *Service) Catalog(ctx context.Context, orgID uuid.UUID, orgName string) 
 		tools = append(tools, advisoryEntry(stat, generatedAt))
 	}
 
-	findingStats, err := s.store.ListFindingToolStats(ctx, orgID)
+	findingStats, err := s.store.ListVulnerabilityToolStats(ctx, orgID)
 	if err != nil {
 		return Catalog{}, err
 	}

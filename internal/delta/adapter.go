@@ -2,7 +2,6 @@ package delta
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/google/uuid"
 
@@ -18,35 +17,8 @@ func NewStoreAdapter(queries *store.Queries) *StoreAdapter {
 	return &StoreAdapter{queries: queries}
 }
 
-func (a *StoreAdapter) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.VulnMatch, error) {
-	return a.queries.ListVulnMatchesBySnapshot(ctx, snapshotID)
-}
-
-func (a *StoreAdapter) ListFindingsBySnapshot(ctx context.Context, arg dbgen.ListFindingsBySnapshotParams) ([]dbgen.Finding, error) {
-	findings, _, err := a.queries.ListFindingsBySnapshot(ctx, arg.SnapshotID, int(arg.Limit), int(arg.Offset))
-	if err != nil {
-		return nil, err
-	}
-	rows := make([]dbgen.Finding, 0, len(findings))
-	for _, finding := range findings {
-		rows = append(rows, dbgen.Finding{
-			ID:           finding.ID,
-			SnapshotID:   finding.SnapshotID,
-			Tool:         finding.Tool,
-			RuleID:       finding.RuleID,
-			Severity:     finding.Severity,
-			Status:       finding.Status,
-			FilePath:     finding.FilePath,
-			StartLine:    int32ToNull(finding.StartLine),
-			EndLine:      int32ToNull(finding.EndLine),
-			LocationHash: finding.LocationHash,
-			Message:      finding.Message,
-			Fingerprint:  stringToNull(finding.Fingerprint),
-			Metadata:     finding.Metadata,
-			CreatedAt:    finding.CreatedAt,
-		})
-	}
-	return rows, nil
+func (a *StoreAdapter) ListAllVulnerabilitiesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]store.Vulnerability, error) {
+	return a.queries.ListAllVulnerabilitiesBySnapshot(ctx, snapshotID)
 }
 
 func (a *StoreAdapter) GetAdvisoryByID(ctx context.Context, id uuid.UUID) (dbgen.Advisory, error) {
@@ -81,16 +53,3 @@ func (a *StoreAdapter) ListOrgWideQualityGates(ctx context.Context, orgID uuid.U
 	return a.queries.ListOrgWideQualityGates(ctx, orgID)
 }
 
-func int32ToNull(value *int32) sql.NullInt32 {
-	if value == nil {
-		return sql.NullInt32{}
-	}
-	return sql.NullInt32{Int32: *value, Valid: true}
-}
-
-func stringToNull(value *string) sql.NullString {
-	if value == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: *value, Valid: true}
-}

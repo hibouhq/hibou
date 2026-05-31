@@ -179,53 +179,38 @@
               </div>
 
               <div class="max-h-80 overflow-y-auto px-3 py-3">
-                <div
-                  v-if="selectedOptionsFor(filter).length > 0"
-                  class="space-y-2"
-                >
-                  <div class="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-                    Selected
-                  </div>
-                  <button
-                    v-for="option in selectedOptionsFor(filter)"
-                    :key="`selected-${filter.key}-${option}`"
-                    role="option"
-                    aria-selected="true"
-                    class="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm text-gray-100 transition hover:bg-surface-overlay"
-                    type="button"
-                    @click="toggleFilterOption(filter, option)"
-                  >
-                    <span class="flex h-4 w-4 items-center justify-center rounded border border-accent bg-accent text-[10px] font-bold text-surface">✓</span>
-                    <span class="min-w-0 truncate">{{ option }}</span>
-                  </button>
-                </div>
-
-                <div
-                  v-if="selectedOptionsFor(filter).length > 0 && suggestionOptionsFor(filter).length > 0"
-                  class="my-3 border-t border-surface-border-subtle"
-                />
-
                 <div class="space-y-2">
-                  <div class="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">
-                    Suggestions
-                  </div>
                   <div
-                    v-if="suggestionOptionsFor(filter).length === 0"
+                    v-if="filteredOptionsFor(filter).length === 0"
                     class="rounded-md border border-dashed border-surface-border-subtle px-3 py-4 text-sm text-gray-500"
                   >
                     No matching options.
                   </div>
                   <button
-                    v-for="option in suggestionOptionsFor(filter)"
-                    :key="`suggestion-${filter.key}-${option}`"
+                    v-for="option in visibleSuggestionsFor(filter)"
+                    :key="`option-${filter.key}-${option}`"
                     role="option"
-                    aria-selected="false"
-                    class="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm text-gray-300 transition hover:bg-surface-overlay hover:text-gray-100"
+                    :aria-selected="getSelectedValues(filter).includes(option)"
+                    class="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-overlay"
+                    :class="getSelectedValues(filter).includes(option) ? 'text-gray-100' : 'text-gray-300 hover:text-gray-100'"
                     type="button"
                     @click="toggleFilterOption(filter, option)"
                   >
-                    <span class="flex h-4 w-4 items-center justify-center rounded border border-surface-border text-transparent">✓</span>
+                    <span
+                      class="flex h-4 w-4 items-center justify-center rounded border text-[10px] font-bold"
+                      :class="getSelectedValues(filter).includes(option)
+                        ? 'border-accent bg-accent text-surface'
+                        : 'border-surface-border text-transparent'"
+                    >✓</span>
                     <span class="min-w-0 truncate">{{ option }}</span>
+                  </button>
+                  <button
+                    v-if="hasMoreSuggestions(filter)"
+                    class="mt-2 w-full rounded-md px-2 py-1.5 text-center text-xs text-gray-400 transition hover:bg-surface-overlay hover:text-gray-200"
+                    type="button"
+                    @click="showMoreSuggestions(filter.key)"
+                  >
+                    Show {{ showMoreCount(filter) }} more...
                   </button>
                 </div>
               </div>
@@ -423,6 +408,7 @@ const cursorPosition = ref(0)
 const inputFocused = ref(false)
 const openMenu = ref<OpenMenu>(null)
 const dropdownSearch = ref<Record<string, string>>({})
+const visibleSuggestionCounts = ref<Record<string, number>>({})
 const validationIssues = ref<ValidationIssue[]>([])
 const activeAutocompleteIndex = ref(0)
 const syncingFromBar = ref(false)
@@ -569,6 +555,10 @@ watch(barQuery, () => {
   syncModelsFromBar()
   scheduleValidation()
 })
+
+watch(dropdownSearch, () => {
+  visibleSuggestionCounts.value = {}
+}, { deep: true })
 
 watch(autocompleteItems, (items) => {
   if (items.length === 0) {
@@ -727,6 +717,7 @@ function toggleFilterMenu(key: string) {
     openMenu.value = null
     return
   }
+  visibleSuggestionCounts.value = {}
   openMenu.value = { type: 'filter', key }
 }
 
@@ -746,29 +737,53 @@ function selectedOptionsFor(filter: FilterDef) {
   return getSelectedValues(filter)
 }
 
-function suggestionOptionsFor(filter: FilterDef) {
+function filteredOptionsFor(filter: FilterDef) {
   const search = (dropdownSearch.value[filter.key] ?? '').trim().toLowerCase()
-  const selected = new Set(getSelectedValues(filter).map((value) => value.toLowerCase()))
+  const selected = new Set(getSelectedValues(filter).map((v) => v.toLowerCase()))
   const matching = filter.options.filter((option) => {
-    if (selected.has(option.toLowerCase())) {
-      return false
-    }
     if (search.length === 0) {
       return true
     }
     return option.toLowerCase().includes(search)
   })
 
+  // Sort selected items first so they're never pushed below the pagination cut
+  const selectedItems = matching.filter((o) => selected.has(o.toLowerCase()))
+  const unselectedItems = matching.filter((o) => !selected.has(o.toLowerCase()))
+
   if (!filter.freeform) {
-    return matching
+    return [...selectedItems, ...unselectedItems]
   }
 
-  const coarse = matching.filter((o) => !o.includes(':'))
-  const fine = matching.filter((o) => o.includes(':'))
-  if (coarse.length > 3 || (coarse.length > 0 && search.length === 0)) {
-    return coarse
+  const unselectedCoarse = unselectedItems.filter((o) => !o.includes(':'))
+  const unselectedFine = unselectedItems.filter((o) => o.includes(':'))
+  if (unselectedCoarse.length > 3 || (unselectedCoarse.length > 0 && search.length === 0)) {
+    return [...selectedItems, ...unselectedCoarse]
   }
-  return [...coarse, ...fine]
+  return [...selectedItems, ...unselectedCoarse, ...unselectedFine]
+}
+
+function visibleSuggestionsFor(filter: FilterDef) {
+  const limit = visibleSuggestionCounts.value[filter.key] ?? 20
+  return filteredOptionsFor(filter).slice(0, limit)
+}
+
+function hasMoreSuggestions(filter: FilterDef) {
+  const limit = visibleSuggestionCounts.value[filter.key] ?? 20
+  return filteredOptionsFor(filter).length > limit
+}
+
+function showMoreSuggestions(filterKey: string) {
+  const current = visibleSuggestionCounts.value[filterKey] ?? 20
+  visibleSuggestionCounts.value = {
+    ...visibleSuggestionCounts.value,
+    [filterKey]: current + 20,
+  }
+}
+
+function showMoreCount(filter: FilterDef) {
+  const limit = visibleSuggestionCounts.value[filter.key] ?? 20
+  return Math.min(20, filteredOptionsFor(filter).length - limit)
 }
 
 function getSelectedValues(filter: FilterDef) {
@@ -835,6 +850,8 @@ function clearAll() {
     sortDirection.value = ''
   }
   barQuery.value = ''
+  dropdownSearch.value = {}
+  visibleSuggestionCounts.value = {}
   validationIssues.value = []
   activeAutocompleteIndex.value = 0
   inputFocused.value = false

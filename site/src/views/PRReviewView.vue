@@ -16,7 +16,7 @@
           <div>
             <RouterLink
               class="inline-flex items-center rounded-full border border-surface-border px-3 py-1 text-xs uppercase tracking-[0.18em] text-gray-400 transition hover:text-white"
-              :to="{ name: 'repo-weaknesses', params: route.params, query: { ref: summary.ref.name } }"
+              :to="{ name: 'repo-vulnerabilities', params: route.params, query: { ref: summary.ref.name } }"
             >
               Back to repository detail
             </RouterLink>
@@ -47,34 +47,18 @@
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
             <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              New findings
+              New vulnerabilities
             </p>
             <p class="mt-3 text-3xl font-semibold text-white">
-              {{ newFindingsCount }}
+              {{ newVulnerabilitiesCount }}
             </p>
           </article>
           <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
             <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              Resolved findings
+              Resolved vulnerabilities
             </p>
             <p class="mt-3 text-3xl font-semibold text-white">
-              {{ resolvedFindingsCount }}
-            </p>
-          </article>
-          <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              New vulns
-            </p>
-            <p class="mt-3 text-3xl font-semibold text-white">
-              {{ newVulnsCount }}
-            </p>
-          </article>
-          <article class="rounded-2xl border border-surface-border bg-surface-overlay p-4">
-            <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              Resolved vulns
-            </p>
-            <p class="mt-3 text-3xl font-semibold text-white">
-              {{ resolvedVulnsCount }}
+              {{ resolvedVulnerabilitiesCount }}
             </p>
           </article>
         </div>
@@ -115,19 +99,19 @@
     <section class="rounded-3xl border border-surface-border bg-surface-raised p-6">
       <div>
         <h2 class="text-xl font-semibold text-white">
-          New findings
+          New vulnerabilities
         </h2>
         <p class="mt-2 text-sm text-gray-400">
-          Only findings introduced by this pull request are listed here.
+          Only vulnerabilities introduced by this pull request are listed here.
         </p>
       </div>
 
       <div class="mt-6 overflow-hidden rounded-2xl border border-surface-border-subtle">
         <div
-          v-if="!summary?.delta?.new_findings?.length"
+          v-if="!summary?.delta?.new_vulnerabilities?.length"
           class="px-4 py-10 text-sm text-gray-500"
         >
-          No newly introduced findings were detected.
+          No newly introduced vulnerabilities were detected.
         </div>
 
         <div
@@ -141,41 +125,41 @@
                   Severity
                 </th>
                 <th class="px-4 py-3 font-medium">
-                  Tool
+                  Type
                 </th>
                 <th class="px-4 py-3 font-medium">
-                  Rule
+                  Identifier
                 </th>
                 <th class="px-4 py-3 font-medium">
-                  File
+                  Location
                 </th>
                 <th class="px-4 py-3 font-medium">
-                  Message
+                  Title
                 </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
               <tr
-                v-for="finding in summary.delta.new_findings"
-                :key="finding.fingerprint"
+                v-for="vulnerability in summary.delta.new_vulnerabilities"
+                :key="vulnerability.id"
                 class="transition hover:bg-white/5"
               >
                 <td class="px-4 py-4">
-                  <span :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(finding.severity)]">
-                    {{ finding.severity }}
+                  <span :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(vulnerability.severity)]">
+                    {{ vulnerability.severity }}
                   </span>
                 </td>
                 <td class="px-4 py-4 text-gray-300">
-                  {{ finding.tool }}
+                  {{ vulnerability.type }}
                 </td>
                 <td class="px-4 py-4 font-mono text-xs text-accent">
-                  {{ finding.rule_id }}
+                  {{ vulnerability.primary_identifier?.value || vulnerability.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-4 py-4 text-gray-400">
-                  {{ finding.file_path }}
+                  {{ vulnerabilityLocation(vulnerability) }}
                 </td>
                 <td class="px-4 py-4 text-gray-300">
-                  {{ finding.message }}
+                  {{ vulnerability.title }}
                 </td>
               </tr>
             </tbody>
@@ -190,7 +174,7 @@
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type PRSummary } from '@/api/client'
+import { api, type PRSummary, type Vulnerability } from '@/api/client'
 
 const route = useRoute()
 
@@ -211,10 +195,8 @@ const summarySubtitle = computed(() => {
   const target = summary.value.ref.merge_target_ref_name || 'target'
   return `#${number.value} · ${source} → ${target}`
 })
-const newFindingsCount = computed(() => summary.value?.delta?.new_findings?.length || 0)
-const resolvedFindingsCount = computed(() => summary.value?.delta?.resolved_findings?.length || 0)
-const newVulnsCount = computed(() => summary.value?.delta?.new_vulns?.length || 0)
-const resolvedVulnsCount = computed(() => summary.value?.delta?.resolved_vulns?.length || 0)
+const newVulnerabilitiesCount = computed(() => summary.value?.delta?.new_vulnerabilities?.length || 0)
+const resolvedVulnerabilitiesCount = computed(() => summary.value?.delta?.resolved_vulnerabilities?.length || 0)
 const showNoAnalysisData = computed(() => {
   if (!summary.value) {
     return false
@@ -269,5 +251,19 @@ watch(
 
 function severityClass(level: string) {
   return `sev-${level.toLowerCase()}`
+}
+
+function vulnerabilityLocation(vulnerability: Vulnerability) {
+  if (vulnerability.file_path) {
+    return vulnerability.start_line ? `${vulnerability.file_path}:${vulnerability.start_line}` : vulnerability.file_path
+  }
+
+  if (vulnerability.component_name) {
+    return vulnerability.component_version
+      ? `${vulnerability.component_name}@${vulnerability.component_version}`
+      : vulnerability.component_name
+  }
+
+  return 'n/a'
 }
 </script>

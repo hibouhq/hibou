@@ -147,12 +147,9 @@ const tabs = computed(() => {
 
   return [
     { label: 'Overview', name: 'repo-overview', to: { name: 'repo-overview', params: route.params, query } },
-    { label: 'Weaknesses', name: 'repo-weaknesses', to: { name: 'repo-weaknesses', params: route.params, query } },
+    { label: 'Vulnerabilities', name: 'repo-vulnerabilities', to: { name: 'repo-vulnerabilities', params: route.params, query } },
+    { label: 'Coverage', name: 'repo-coverage', to: { name: 'repo-coverage', params: route.params, query } },
     { label: 'Dependencies', name: 'repo-dependencies', to: { name: 'repo-dependencies', params: route.params, query } },
-    { label: 'Trends', name: 'repo-trends', to: { name: 'repo-trends', params: route.params, query } },
-    { label: 'Malware', name: 'repo-malware', to: { name: 'repo-malware', params: route.params, query } },
-    { label: 'Runtime', name: 'repo-runtime', to: { name: 'repo-runtime', params: route.params, query } },
-    { label: 'Secrets', name: 'repo-secrets', to: { name: 'repo-secrets', params: route.params, query } },
   ]
 })
 
@@ -275,9 +272,9 @@ function totalSeverity(counts?: { critical: number; high: number; medium: number
 
 function tabCount(name: string): number | null {
   const counts: Record<string, number | null> = {
-    'repo-weaknesses': summary.value ? totalSeverity(summary.value.findings) : null,
+    'repo-vulnerabilities': summary.value ? totalSeverity(summary.value.vulnerabilities) : null,
+    'repo-coverage': null,
     'repo-dependencies': summary.value ? summary.value.components_total : null,
-    'repo-malware': summary.value ? 0 : null,
   }
 
   return counts[name] ?? null

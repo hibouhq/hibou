@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
@@ -53,7 +54,7 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 		}
 	}
 
-	critical, high, medium := countNewVulnSeverities(delta.NewVulns)
+	critical, high, medium := countNewVulnerabilitySeverities(delta.New)
 	reasons := make([]string, 0)
 	for _, gate := range gates {
 		if !gate.Enabled {
@@ -75,27 +76,27 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 			if !gate.Enabled || !gate.MaxNewFindings.Valid {
 				continue
 			}
-			newFindings := countFindingsBySeverity(delta.NewFindings, gate.FindingSeverities)
-			if int32(newFindings) > gate.MaxNewFindings.Int32 {
-				reasons = append(reasons, fmt.Sprintf("gate %q exceeded max new findings: %d > %d", gate.Name, newFindings, gate.MaxNewFindings.Int32))
+			newVulnerabilities := countVulnerabilitiesBySeverity(delta.New, gate.FindingSeverities)
+			if int32(newVulnerabilities) > gate.MaxNewFindings.Int32 {
+				reasons = append(reasons, fmt.Sprintf("gate %q exceeded max new vulnerabilities: %d > %d", gate.Name, newVulnerabilities, gate.MaxNewFindings.Int32))
 			}
 		}
 		return &GateResult{Passed: len(reasons) == 0, Reasons: reasons}, nil
 	}
 
 	if weaknessGate.EnabledValue() {
-		reasons = append(reasons, evaluateRepoWeaknessThresholds(delta.NewFindings, weaknessGate)...)
+		reasons = append(reasons, evaluateRepoWeaknessThresholds(delta.New, weaknessGate)...)
 	}
 
 	return &GateResult{Passed: len(reasons) == 0, Reasons: reasons}, nil
 }
 
-func evaluateRepoWeaknessThresholds(findings []FindingDelta, thresholds *WeaknessGate) []string {
+func evaluateRepoWeaknessThresholds(vulns []store.Vulnerability, thresholds *WeaknessGate) []string {
 	if thresholds == nil {
 		return nil
 	}
 
-	critical, high, medium := countFindingSeverities(findings)
+	critical, high, medium := countNewVulnerabilitySeverities(vulns)
 	reasons := make([]string, 0, 3)
 	if thresholds.MaxCritical != nil && critical > *thresholds.MaxCritical {
 		reasons = append(reasons, fmt.Sprintf("repo config exceeded max critical weaknesses: %d > %d", critical, *thresholds.MaxCritical))
@@ -116,9 +117,9 @@ func (w *WeaknessGate) EnabledValue() bool {
 	return *w.Enabled
 }
 
-func countNewVulnSeverities(vulns []VulnDelta) (critical, high, medium int) {
+func countNewVulnerabilitySeverities(vulns []store.Vulnerability) (critical, high, medium int) {
 	for _, vuln := range vulns {
-		switch strings.ToLower(strings.TrimSpace(vuln.Severity)) {
+		switch strings.ToLower(strings.TrimSpace(string(vuln.Severity))) {
 		case "critical":
 			critical++
 		case "high":
@@ -130,33 +131,19 @@ func countNewVulnSeverities(vulns []VulnDelta) (critical, high, medium int) {
 	return critical, high, medium
 }
 
-func countFindingsBySeverity(findings []FindingDelta, allowed []string) int {
+func countVulnerabilitiesBySeverity(vulns []store.Vulnerability, allowed []string) int {
 	if len(allowed) == 0 {
-		return len(findings)
+		return len(vulns)
 	}
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, severity := range allowed {
 		allowedSet[strings.ToLower(strings.TrimSpace(severity))] = struct{}{}
 	}
 	count := 0
-	for _, finding := range findings {
-		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(finding.Severity))]; ok {
+	for _, vuln := range vulns {
+		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(string(vuln.Severity)))]; ok {
 			count++
 		}
 	}
 	return count
-}
-
-func countFindingSeverities(findings []FindingDelta) (critical, high, medium int) {
-	for _, finding := range findings {
-		switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
-		case "critical":
-			critical++
-		case "high":
-			high++
-		case "medium":
-			medium++
-		}
-	}
-	return critical, high, medium
 }

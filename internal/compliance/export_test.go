@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
@@ -19,8 +20,7 @@ type stubExportStore struct {
 	repo                dbgen.Repository
 	snapshot            dbgen.Snapshot
 	ref                 dbgen.Ref
-	vulns               []dbgen.VulnMatch
-	findings            []dbgen.Finding
+	vulnerabilities     []store.Vulnerability
 	advisories          []dbgen.Advisory
 	components          []dbgen.Component
 	vexStatements       map[uuid.UUID][]dbgen.VexStatement
@@ -42,12 +42,8 @@ func (s *stubExportStore) GetSnapshotAtDate(context.Context, dbgen.GetSnapshotAt
 	return s.snapshot, s.shotErr
 }
 
-func (s *stubExportStore) ListVulnMatchesBySnapshot(context.Context, uuid.UUID) ([]dbgen.VulnMatch, error) {
-	return s.vulns, nil
-}
-
-func (s *stubExportStore) ListFindingsBySnapshot(context.Context, dbgen.ListFindingsBySnapshotParams) ([]dbgen.Finding, error) {
-	return s.findings, nil
+func (s *stubExportStore) ListAllVulnerabilitiesBySnapshot(_ context.Context, _ uuid.UUID) ([]store.Vulnerability, error) {
+	return append([]store.Vulnerability(nil), s.vulnerabilities...), nil
 }
 
 func (s *stubExportStore) GetAdvisoriesByIDs(context.Context, []uuid.UUID) ([]dbgen.Advisory, error) {
@@ -77,12 +73,14 @@ func TestGenerateReport(t *testing.T) {
 	advisoryID := uuid.New()
 	componentID := uuid.New()
 	store := &stubExportStore{
-		org:        dbgen.Organization{ID: uuid.New(), Name: "Acme Corp"},
-		repo:       dbgen.Repository{ID: repoID, Name: "service", Slug: "service", DefaultBranch: "main"},
-		snapshot:   dbgen.Snapshot{ID: snapshotID, RefID: uuid.New()},
-		ref:        dbgen.Ref{Name: "main"},
-		vulns:      []dbgen.VulnMatch{{SnapshotID: snapshotID, AdvisoryID: advisoryID, ComponentID: componentID, IsAffected: true, FirstSeenAt: time.Unix(1700000000, 0)}},
-		findings:   []dbgen.Finding{{Tool: "semgrep", RuleID: "G101", Severity: dbgen.SeverityLevelHigh, FilePath: "main.go", Message: "issue", Status: "open"}},
+		org:      dbgen.Organization{ID: uuid.New(), Name: "Acme Corp"},
+		repo:     dbgen.Repository{ID: repoID, Name: "service", Slug: "service", DefaultBranch: "main"},
+		snapshot: dbgen.Snapshot{ID: snapshotID, RefID: uuid.New()},
+		ref:      dbgen.Ref{Name: "main"},
+		vulnerabilities: []store.Vulnerability{
+			{ID: uuid.New(), SnapshotID: snapshotID, Type: "dependency", Title: "CVE-2026-0001", Severity: "critical", Status: "detected", Fingerprint: "dep-fp-1", AdvisoryID: &advisoryID, ComponentID: &componentID, ComponentPurl: strPtr("pkg:golang/github.com/acme/lib@1.2.3"), FirstSeenAt: time.Unix(1700000000, 0)},
+			{ID: uuid.New(), SnapshotID: snapshotID, Type: "sast", Title: "G101", Severity: "high", Status: "detected", Fingerprint: "sast-fp-1", ScannerName: "semgrep", FilePath: strPtr("main.go"), FirstSeenAt: time.Unix(1700000000, 0)},
+		},
 		advisories: []dbgen.Advisory{{ID: advisoryID, CanonicalID: "CVE-2026-0001", Severity: dbgen.SeverityLevelCritical}},
 		components: []dbgen.Component{{ID: componentID, Name: "github.com/acme/lib", Version: "1.2.3", Purl: "pkg:golang/github.com/acme/lib@1.2.3"}},
 		vexStatements: map[uuid.UUID][]dbgen.VexStatement{
@@ -120,14 +118,25 @@ func TestGenerateReport(t *testing.T) {
 	if report.Summary.VEXNotAffected != 1 || report.Summary.VEXFixed != 0 {
 		t.Fatalf("VEX summary = %+v, want not_affected=1 fixed=0", report.Summary)
 	}
-	if len(report.Vulnerabilities) != 1 || len(report.Findings) != 1 {
-		t.Fatalf("unexpected report sizes: vulns=%d findings=%d", len(report.Vulnerabilities), len(report.Findings))
+	if len(report.Vulnerabilities) != 2 {
+		t.Fatalf("unexpected report size: vulns=%d, want 2", len(report.Vulnerabilities))
 	}
-	if report.Vulnerabilities[0].VEXStatus != string(dbgen.VexStatusNotAffected) {
-		t.Fatalf("VEXStatus = %q, want %q", report.Vulnerabilities[0].VEXStatus, dbgen.VexStatusNotAffected)
+	// Find the dependency vuln entry (has advisory/VEX)
+	var depEntry *VulnEntry
+	for i := range report.Vulnerabilities {
+		if report.Vulnerabilities[i].Type == "dependency" {
+			depEntry = &report.Vulnerabilities[i]
+			break
+		}
 	}
-	if report.Vulnerabilities[0].VEXSource != string(dbgen.VexSourceImported) {
-		t.Fatalf("VEXSource = %q, want %q", report.Vulnerabilities[0].VEXSource, dbgen.VexSourceImported)
+	if depEntry == nil {
+		t.Fatal("expected dependency vulnerability entry")
+	}
+	if depEntry.VEXStatus != string(dbgen.VexStatusNotAffected) {
+		t.Fatalf("VEXStatus = %q, want %q", depEntry.VEXStatus, dbgen.VexStatusNotAffected)
+	}
+	if depEntry.VEXSource != string(dbgen.VexSourceImported) {
+		t.Fatalf("VEXSource = %q, want %q", depEntry.VEXSource, dbgen.VexSourceImported)
 	}
 	if store.advisoryBatchCalls != 1 || store.componentBatchCalls != 1 {
 		t.Fatalf("batch lookup calls = (%d, %d), want (1, 1)", store.advisoryBatchCalls, store.componentBatchCalls)
@@ -143,3 +152,5 @@ func TestGenerateReportNotFound(t *testing.T) {
 		t.Fatalf("GenerateReport() error = %v, want ErrReportNotFound", err)
 	}
 }
+
+func strPtr(s string) *string { return &s }

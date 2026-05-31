@@ -2,7 +2,6 @@ package server
 
 import (
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/lehibou/internal/filterquery"
 	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
@@ -23,21 +23,6 @@ type severityCounts struct {
 	Medium   int `json:"medium"`
 	Low      int `json:"low"`
 	Info     int `json:"info"`
-}
-
-type findingResponse struct {
-	ID         uuid.UUID `json:"id"`
-	SnapshotID uuid.UUID `json:"snapshot_id"`
-	Tool       string    `json:"tool"`
-	RuleID     string    `json:"rule_id"`
-	Severity   string    `json:"severity"`
-	Status     string    `json:"status"`
-	FilePath   string    `json:"file_path"`
-	StartLine  *int32    `json:"start_line,omitempty"`
-	EndLine    *int32    `json:"end_line,omitempty"`
-	Message    string    `json:"message"`
-	Metadata   any       `json:"metadata,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
 }
 
 type advisoryResponse struct {
@@ -62,8 +47,7 @@ type componentWithVulnsResponse struct {
 }
 
 type refSummaryResponse struct {
-	Findings        severityCounts `json:"findings"`
-	Vulns           severityCounts `json:"vulns"`
+	Vulnerabilities severityCounts `json:"vulnerabilities"`
 	ComponentsTotal int            `json:"components_total"`
 	SnapshotDate    *time.Time     `json:"snapshot_date,omitempty"`
 	SnapshotStatus  *string        `json:"snapshot_status,omitempty"`
@@ -74,15 +58,13 @@ type repoDashboardEntryResponse struct {
 	RepoName        string         `json:"repo_name"`
 	RepoSlug        string         `json:"repo_slug"`
 	Provider        string         `json:"provider"`
-	Findings        severityCounts `json:"findings"`
-	Vulns           severityCounts `json:"vulns"`
+	Vulnerabilities severityCounts `json:"vulnerabilities"`
 	ComponentsTotal int            `json:"components_total"`
 	LastScan        *time.Time     `json:"last_scan,omitempty"`
 }
 
 type orgDashboardTotalsResponse struct {
-	Findings        severityCounts `json:"findings"`
-	Vulns           severityCounts `json:"vulns"`
+	Vulnerabilities severityCounts `json:"vulnerabilities"`
 	ComponentsTotal int            `json:"components_total"`
 }
 
@@ -103,54 +85,60 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	if snapshot == nil {
 		pagination := api.ParsePagination(r)
-		api.JSONList(w, []findingResponse{}, pagination.Page, pagination.PerPage, 0)
+		api.JSONList(w, []store.Vulnerability{}, pagination.Page, pagination.PerPage, 0)
 		return
 	}
 
-	severityFilter := parseCSVQueryFilter(r.URL.Query().Get("severity"))
-	toolFilter := parseCSVQueryFilter(r.URL.Query().Get("tool"))
-	statusFilter := parseCSVQueryFilter(r.URL.Query().Get("status"))
-	fileFilter := parseCSVQueryFilter(r.URL.Query().Get("file"))
 	pagination := api.ParsePagination(r)
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		node, err := filterquery.Parse(q)
+		if err != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
 
-	rows, err := s.queries.ListAllFindingsBySnapshot(r.Context(), snapshot.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to list findings")
+		sqlResult, err := filterquery.ToSQL(node, 2)
+		if err != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
+
+		vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshotDynamic(
+			r.Context(),
+			snapshot.ID,
+			sqlResult.Where,
+			sqlResult.Params,
+			strings.TrimSpace(r.URL.Query().Get("sort")),
+			pagination.PerPage,
+			pagination.Offset,
+		)
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerabilities")
+			return
+		}
+
+		api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 		return
 	}
 
-	filtered := make([]findingResponse, 0, len(rows))
-	for _, row := range rows {
-		if !matchesCSVQueryFilter(severityFilter, string(row.Severity)) {
-			continue
-		}
-		if !matchesCSVQueryFilter(toolFilter, row.Tool) {
-			continue
-		}
-		if !matchesCSVQueryFilter(statusFilter, row.Status) {
-			continue
-		}
-		if !matchesFileFilter(fileFilter, row.FilePath) {
-			continue
-		}
-		filtered = append(filtered, findingResponse{
-			ID:         row.ID,
-			SnapshotID: row.SnapshotID,
-			Tool:       row.Tool,
-			RuleID:     row.RuleID,
-			Severity:   string(row.Severity),
-			Status:     row.Status,
-			FilePath:   row.FilePath,
-			StartLine:  nullInt32Ptr(row.StartLine),
-			EndLine:    nullInt32Ptr(row.EndLine),
-			Message:    row.Message,
-			Metadata:   jsonValueOrNil(row.Metadata),
-			CreatedAt:  row.CreatedAt,
-		})
+	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, store.VulnerabilityListOptions{
+		Types:      csvQueryFilterValues(r.URL.Query().Get("type")),
+		Severities: csvQueryFilterValues(r.URL.Query().Get("severity")),
+		Statuses:   csvQueryFilterValues(r.URL.Query().Get("status")),
+		Scanners:   mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
+		Languages:  csvQueryFilterValues(r.URL.Query().Get("language")),
+		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
+		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
+		Limit:      pagination.PerPage,
+		Offset:     pagination.Offset,
+	})
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerabilities")
+		return
 	}
 
-	paged := paginateSlice(filtered, pagination.Offset, pagination.PerPage)
-	api.JSONList(w, paged, pagination.Page, pagination.PerPage, len(filtered))
+	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 
 func parseCSVQueryFilter(raw string) map[string]struct{} {
@@ -168,6 +156,47 @@ func parseCSVQueryFilter(raw string) map[string]struct{} {
 		return nil
 	}
 
+	return values
+}
+
+func csvQueryFilterValues(raw string) []string {
+	filter := parseCSVQueryFilter(raw)
+	if len(filter) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(filter))
+	for value := range filter {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+func mergeCSVFilters(filters ...[]string) []string {
+	if len(filters) == 0 {
+		return nil
+	}
+
+	merged := make(map[string]struct{})
+	for _, values := range filters {
+		for _, value := range values {
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			if normalized == "" {
+				continue
+			}
+			merged[normalized] = struct{}{}
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+
+	values := make([]string, 0, len(merged))
+	for value := range merged {
+		values = append(values, value)
+	}
+	sort.Strings(values)
 	return values
 }
 
@@ -214,13 +243,13 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		api.JSONError(w, http.StatusInternalServerError, "failed to list components")
 		return
 	}
-	vulnMatches, err := s.queries.ListVulnMatchesBySnapshot(r.Context(), snapshot.ID)
+	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerability matches")
 		return
 	}
 
-	responses, err := s.buildComponentResponses(r, components, vulnMatches)
+	responses, err := s.buildComponentResponses(r, components, vulnerabilities)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load advisories")
 		return
@@ -254,11 +283,7 @@ func (s *Server) handleGetRefSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildRefSummary(r *http.Request, snapshot *store.Snapshot) (refSummaryResponse, error) {
-	findings, err := s.queries.ListAllFindingsBySnapshot(r.Context(), snapshot.ID)
-	if err != nil {
-		return refSummaryResponse{}, err
-	}
-	vulnMatches, err := s.queries.ListVulnMatchesBySnapshot(r.Context(), snapshot.ID)
+	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 	if err != nil {
 		return refSummaryResponse{}, err
 	}
@@ -266,16 +291,11 @@ func (s *Server) buildRefSummary(r *http.Request, snapshot *store.Snapshot) (ref
 	if err != nil {
 		return refSummaryResponse{}, err
 	}
-	vulns, err := s.loadCountedVulns(r, vulnMatches)
-	if err != nil {
-		return refSummaryResponse{}, err
-	}
 
 	status := string(snapshot.Status)
 	createdAt := snapshot.CreatedAt
 	return refSummaryResponse{
-		Findings:        countFindingSeverities(findings),
-		Vulns:           countAdvisorySeverities(vulns),
+		Vulnerabilities: countVulnerabilitySeverities(vulnerabilities),
 		ComponentsTotal: len(components),
 		SnapshotDate:    &createdAt,
 		SnapshotStatus:  &status,
@@ -316,14 +336,9 @@ func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		findings, err := s.queries.ListAllFindingsBySnapshot(r.Context(), snapshot.ID)
+		vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard findings")
-			return
-		}
-		vulnMatches, err := s.queries.ListVulnMatchesBySnapshot(r.Context(), snapshot.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard vulnerability matches")
+			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard vulnerabilities")
 			return
 		}
 		components, err := s.queries.ListComponentsBySnapshot(r.Context(), snapshot.ID)
@@ -331,20 +346,13 @@ func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard components")
 			return
 		}
-		vulns, err := s.loadCountedVulns(r, vulnMatches)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard advisories")
-			return
-		}
 
-		entry.Findings = countFindingSeverities(findings)
-		entry.Vulns = countAdvisorySeverities(vulns)
+		entry.Vulnerabilities = countVulnerabilitySeverities(vulnerabilities)
 		entry.ComponentsTotal = len(components)
 		lastScan := snapshot.CreatedAt
 		entry.LastScan = &lastScan
 
-		addSeverityCounts(&response.Totals.Findings, entry.Findings)
-		addSeverityCounts(&response.Totals.Vulns, entry.Vulns)
+		addSeverityCounts(&response.Totals.Vulnerabilities, entry.Vulnerabilities)
 		response.Totals.ComponentsTotal += entry.ComponentsTotal
 		response.Repos = append(response.Repos, entry)
 	}
@@ -352,8 +360,8 @@ func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {
 	sort.SliceStable(response.Repos, func(i, j int) bool {
 		left := response.Repos[i]
 		right := response.Repos[j]
-		leftRisk := left.Findings.Critical + left.Findings.High
-		rightRisk := right.Findings.Critical + right.Findings.High
+		leftRisk := left.Vulnerabilities.Critical + left.Vulnerabilities.High
+		rightRisk := right.Vulnerabilities.Critical + right.Vulnerabilities.High
 		if leftRisk == rightRisk {
 			return left.RepoName < right.RepoName
 		}
@@ -523,8 +531,8 @@ func (s *Server) resolveRefForRepo(r *http.Request, repo *store.Repository, refN
 	}
 }
 
-func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Component, vulnMatches []dbgen.VulnMatch) ([]componentWithVulnsResponse, error) {
-	countedVulns, err := s.loadCountedVulns(r, vulnMatches)
+func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Component, vulnerabilities []store.Vulnerability) ([]componentWithVulnsResponse, error) {
+	countedVulns, err := s.loadCountedVulns(r, vulnerabilities)
 	if err != nil {
 		return nil, err
 	}
@@ -575,19 +583,25 @@ type countedVuln struct {
 	Advisory    dbgen.Advisory
 }
 
-func (s *Server) loadCountedVulns(r *http.Request, vulnMatches []dbgen.VulnMatch) ([]countedVuln, error) {
-	advisoryIDs := make([]uuid.UUID, 0, len(vulnMatches))
+func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulnerability) ([]countedVuln, error) {
+	advisoryIDs := make([]uuid.UUID, 0, len(vulnerabilities))
 	seenAdvisories := make(map[uuid.UUID]struct{})
-	for _, match := range vulnMatches {
+	for _, vulnerability := range vulnerabilities {
 		// TODO(vex): Query vex_statements for effective vulnerability status.
-		if !match.IsAffected {
+		if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
 			continue
 		}
-		if _, ok := seenAdvisories[match.AdvisoryID]; ok {
+		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
 			continue
 		}
-		seenAdvisories[match.AdvisoryID] = struct{}{}
-		advisoryIDs = append(advisoryIDs, match.AdvisoryID)
+		if vulnerability.ComponentID == nil || vulnerability.AdvisoryID == nil {
+			continue
+		}
+		if _, ok := seenAdvisories[*vulnerability.AdvisoryID]; ok {
+			continue
+		}
+		seenAdvisories[*vulnerability.AdvisoryID] = struct{}{}
+		advisoryIDs = append(advisoryIDs, *vulnerability.AdvisoryID)
 	}
 	if len(advisoryIDs) == 0 {
 		return nil, nil
@@ -602,23 +616,29 @@ func (s *Server) loadCountedVulns(r *http.Request, vulnMatches []dbgen.VulnMatch
 		advisoryByID[advisory.ID] = advisory
 	}
 
-	counted := make([]countedVuln, 0, len(vulnMatches))
+	counted := make([]countedVuln, 0, len(vulnerabilities))
 	seenPairs := make(map[string]struct{})
-	for _, match := range vulnMatches {
+	for _, vulnerability := range vulnerabilities {
 		// TODO(vex): Query vex_statements for effective vulnerability status.
-		if !match.IsAffected {
+		if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
 			continue
 		}
-		advisory, ok := advisoryByID[match.AdvisoryID]
+		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+			continue
+		}
+		if vulnerability.ComponentID == nil || vulnerability.AdvisoryID == nil {
+			continue
+		}
+		advisory, ok := advisoryByID[*vulnerability.AdvisoryID]
 		if !ok {
 			continue
 		}
-		key := match.ComponentID.String() + ":" + match.AdvisoryID.String()
+		key := vulnerability.ComponentID.String() + ":" + vulnerability.AdvisoryID.String()
 		if _, ok := seenPairs[key]; ok {
 			continue
 		}
 		seenPairs[key] = struct{}{}
-		counted = append(counted, countedVuln{ComponentID: match.ComponentID, Advisory: advisory})
+		counted = append(counted, countedVuln{ComponentID: *vulnerability.ComponentID, Advisory: advisory})
 	}
 
 	return counted, nil
@@ -664,17 +684,6 @@ func advisoryToResponse(advisory dbgen.Advisory) advisoryResponse {
 	}
 }
 
-func jsonValueOrNil(raw []byte) any {
-	if len(raw) == 0 || string(raw) == "null" || string(raw) == "{}" {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil
-	}
-	return value
-}
-
 func nullInt32Ptr(value sql.NullInt32) *int32 {
 	if !value.Valid {
 		return nil
@@ -694,18 +703,10 @@ func paginateSlice[T any](items []T, offset, limit int) []T {
 	return items[offset:end]
 }
 
-func countFindingSeverities(findings []dbgen.Finding) severityCounts {
+func countVulnerabilitySeverities(vulnerabilities []store.Vulnerability) severityCounts {
 	counts := severityCounts{}
-	for _, finding := range findings {
-		incrementSeverity(&counts, string(finding.Severity))
-	}
-	return counts
-}
-
-func countAdvisorySeverities(vulns []countedVuln) severityCounts {
-	counts := severityCounts{}
-	for _, vuln := range vulns {
-		incrementSeverity(&counts, string(vuln.Advisory.Severity))
+	for _, vulnerability := range vulnerabilities {
+		incrementSeverity(&counts, string(vulnerability.Severity))
 	}
 	return counts
 }
@@ -744,6 +745,13 @@ func incrementSeverity(counts *severityCounts, severity string) {
 	default:
 		counts.Info++
 	}
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func severityRank(severity string) int {

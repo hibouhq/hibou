@@ -12,18 +12,18 @@ import (
 type Type string
 
 const (
-	ScanRequested       Type = "scan.requested"
-	ScanCompleted       Type = "scan.completed"
-	ScanFailed          Type = "scan.failed"
-	ScanStale           Type = "scan.stale"
-	VulnDiscovered      Type = "vuln.discovered"
-	FindingCreated      Type = "finding.created"
-	SecretScanCompleted Type = "secret.scan.completed"
-	SecretScanFailed    Type = "secret.scan.failed"
-	SecretDiscovered    Type = "secret.discovered"
-	GatePassed          Type = "gate.passed"
-	GateFailed          Type = "gate.failed"
-	NotificationNew     Type = "notification.new"
+	ScanRequested        Type = "scan.requested"
+	ScanCompleted        Type = "scan.completed"
+	ScanFailed           Type = "scan.failed"
+	ScanStale            Type = "scan.stale"
+	VulnDiscovered       Type = "vuln.discovered"
+	VulnerabilityCreated Type = "vulnerability.created"
+	SecretScanCompleted  Type = "secret.scan.completed"
+	SecretScanFailed     Type = "secret.scan.failed"
+	SecretDiscovered     Type = "secret.discovered"
+	GatePassed           Type = "gate.passed"
+	GateFailed           Type = "gate.failed"
+	NotificationNew      Type = "notification.new"
 )
 
 type Event struct {

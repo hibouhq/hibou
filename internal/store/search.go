@@ -90,39 +90,33 @@ func (q *Queries) SearchComponents(ctx context.Context, orgID uuid.UUID, query s
 	return rows, int(total), nil
 }
 
-func (q *Queries) SearchFindings(ctx context.Context, orgID uuid.UUID, query, severity string, limit, offset int) ([]dbgen.Finding, int, error) {
+func (q *Queries) SearchVulnerabilities(ctx context.Context, orgID uuid.UUID, query, severity string, limit, offset int) ([]Vulnerability, int, error) {
 	pattern := searchPattern(query)
+	rows, err := q.db.SearchVulnerabilities(ctx, dbgen.SearchVulnerabilitiesParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)})
+	if err != nil {
+		return nil, 0, err
+	}
+	vulnerabilities := make([]Vulnerability, 0, len(rows))
+	for _, row := range rows {
+		if normalizedSeverity, ok := normalizeSeverity(severity); ok && row.Severity != normalizedSeverity {
+			continue
+		}
+		vulnerabilities = append(vulnerabilities, *vulnerabilityFromRow(row))
+	}
+	total, err := q.db.CountSearchVulnerabilities(ctx, dbgen.CountSearchVulnerabilitiesParams{OrgID: orgID, LikeEscape: []byte(pattern)})
+	if err != nil {
+		return nil, 0, err
+	}
 	if normalizedSeverity, ok := normalizeSeverity(severity); ok {
-		rows, err := q.db.SearchFindingsBySeverity(ctx, dbgen.SearchFindingsBySeverityParams{
-			OrgID:      orgID,
-			LikeEscape: []byte(pattern),
-			Severity:   normalizedSeverity,
-			Limit:      int32(limit),
-			Offset:     int32(offset),
-		})
-		if err != nil {
-			return nil, 0, err
+		filteredTotal := 0
+		for _, row := range rows {
+			if row.Severity == normalizedSeverity {
+				filteredTotal++
+			}
 		}
-		total, err := q.db.CountSearchFindingsBySeverity(ctx, dbgen.CountSearchFindingsBySeverityParams{
-			OrgID:      orgID,
-			LikeEscape: []byte(pattern),
-			Severity:   normalizedSeverity,
-		})
-		if err != nil {
-			return nil, 0, err
-		}
-		return rows, int(total), nil
+		return vulnerabilities, filteredTotal, nil
 	}
-
-	rows, err := q.db.SearchFindings(ctx, dbgen.SearchFindingsParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)})
-	if err != nil {
-		return nil, 0, err
-	}
-	total, err := q.db.CountSearchFindings(ctx, dbgen.CountSearchFindingsParams{OrgID: orgID, LikeEscape: []byte(pattern)})
-	if err != nil {
-		return nil, 0, err
-	}
-	return rows, int(total), nil
+	return vulnerabilities, int(total), nil
 }
 
 func (q *Queries) SearchClients(ctx context.Context, orgID uuid.UUID, query string, limit, offset int) ([]Client, int, error) {

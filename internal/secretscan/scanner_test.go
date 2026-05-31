@@ -11,25 +11,12 @@ import (
 
 	"github.com/hibouhq/lehibou/internal/audit"
 	"github.com/hibouhq/lehibou/internal/events"
-	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
 type scannerStoreStub struct {
 	ingestStoreStub
 	auditLogs []dbgen.CreateAuditLogParams
-}
-
-func (s *scannerStoreStub) ListSecretFindingsBySnapshot(_ context.Context, _ uuid.UUID, _, _ int) ([]store.SecretFinding, int, error) {
-	rows := make([]store.SecretFinding, 0, len(s.rows))
-	for _, row := range s.rows {
-		rows = append(rows, *row)
-	}
-	return rows, len(rows), nil
-}
-
-func (s *scannerStoreStub) CountSecretFindingsBySnapshot(_ context.Context, _ uuid.UUID) (int64, error) {
-	return int64(len(s.rows)), nil
 }
 
 func (s *scannerStoreStub) CreateAuditLog(_ context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error) {
@@ -96,10 +83,8 @@ func TestRunFullScanPersistsFindings(t *testing.T) {
 	if created != 1 {
 		t.Fatalf("created = %d, want 1", created)
 	}
-	for _, row := range storeStub.rows {
-		if row.DiscoveryContext != "full_scan" {
-			t.Fatalf("discovery_context = %q, want %q", row.DiscoveryContext, "full_scan")
-		}
+	if storeStub.created != 1 {
+		t.Fatalf("store created = %d, want 1", storeStub.created)
 	}
 	if len(bus.events) == 0 {
 		t.Fatal("expected events to be published")
@@ -129,6 +114,7 @@ func TestRunIncrementalScanPersistsFindings(t *testing.T) {
 			SecretType:  "slack-token",
 			SecretHash:  HashSecret("xoxb-123"),
 			Fingerprint: ComputeFingerprint("config.yml", 4, HashSecret("xoxb-123")),
+			Metadata:    map[string]any{},
 		}},
 	}
 
@@ -140,10 +126,8 @@ func TestRunIncrementalScanPersistsFindings(t *testing.T) {
 	if created != 1 {
 		t.Fatalf("created = %d, want 1", created)
 	}
-	for _, row := range storeStub.rows {
-		if row.DiscoveryContext != "incremental_scan" {
-			t.Fatalf("discovery_context = %q, want %q", row.DiscoveryContext, "incremental_scan")
-		}
+	if storeStub.created != 1 {
+		t.Fatalf("store created = %d, want 1", storeStub.created)
 	}
 	if len(storeStub.auditLogs) != 1 {
 		t.Fatalf("len(auditLogs) = %d, want 1", len(storeStub.auditLogs))
@@ -170,6 +154,7 @@ func TestCheckPushDoesNotPersist(t *testing.T) {
 			SecretType:  "github-pat",
 			SecretHash:  HashSecret("ghp_123"),
 			Fingerprint: ComputeFingerprint(".env", 4, HashSecret("ghp_123")),
+			Metadata:    map[string]any{},
 		}},
 	}
 
@@ -230,6 +215,7 @@ func TestRunIncrementalScanFallsBackToFullScanProvider(t *testing.T) {
 			SecretType:  "github-pat",
 			SecretHash:  HashSecret("ghp_123"),
 			Fingerprint: ComputeFingerprint(".env", 2, HashSecret("ghp_123")),
+			Metadata:    map[string]any{},
 		}},
 	}
 

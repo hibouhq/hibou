@@ -88,7 +88,7 @@ export interface ClientImpact {
 }
 
 export interface SearchResult {
-  type: 'vulnerability' | 'component' | 'finding' | 'client'
+  type: 'vulnerability' | 'component' | 'client'
   id: string
   title: string
   subtitle: string
@@ -99,27 +99,6 @@ export interface SearchResult {
 export interface SearchResponse {
   results: SearchResult[]
   pagination: { page: number; per_page: number; total: number }
-}
-
-export interface AuditLogEntry {
-  id: string
-  actor_id?: string
-  actor_type: string
-  actor_display: string
-  action: string
-  resource_type: string
-  resource_id: string
-  context?: Record<string, unknown>
-  ip_address: string
-  created_at: string
-}
-
-export interface Ref {
-  id: string
-  repo_id: string
-  name: string
-  ref_type: string
-  latest_commit_sha?: string
 }
 
 export interface EnhancedRef {
@@ -158,19 +137,58 @@ export interface SeverityCounts {
   info: number
 }
 
-export interface Finding {
+export interface AuditLogEntry {
   id: string
+  actor_id?: string
+  actor_type: string
+  actor_display: string
+  action: string
+  resource_type: string
+  resource_id: string
+  context?: Record<string, unknown>
+  ip_address: string
+  created_at: string
+}
+
+export interface Ref {
+  id: string
+  repo_id: string
+  name: string
+  ref_type: string
+  latest_commit_sha?: string
+}
+
+export interface Vulnerability {
+  id: string
+  type: string
   snapshot_id: string
-  tool: string
-  rule_id: string
+  title: string
+  description: string
+  primary_identifier?: { type: string; value: string }
   severity: string
+  original_severity?: string
   status: string
-  file_path: string
+  dismissal_reason?: string
+  state_comment?: string
+  detected_at: string
+  scanner_name?: string
+  scanner_vendor?: string
+  file_path?: string
   start_line?: number
   end_line?: number
-  message: string
+  fingerprint: string
+  component_name?: string
+  component_version?: string
+  component_purl?: string
+  ecosystem?: string
+  advisory_id?: string
+  language?: string
+  secret_type?: string
+  has_remediation?: boolean
+  solution?: string
   metadata?: Record<string, unknown>
   created_at: string
+  updated_at: string
 }
 
 export interface Advisory {
@@ -203,36 +221,16 @@ export interface ComponentEntry {
 }
 
 export interface RefSummary {
-  findings: SeverityCounts
-  vulns: SeverityCounts
+  vulnerabilities: SeverityCounts
   components_total: number
   snapshot_date?: string
   snapshot_status?: string
 }
 
-export interface DeltaVuln {
-  advisory_id: string
-  canonical_id: string
-  severity: string
-  component_name: string
-}
-
-export interface DeltaFinding {
-  fingerprint: string
-  tool: string
-  rule_id: string
-  severity: string
-  file_path: string
-  message: string
-}
-
 export interface DeltaResult {
-  new_vulns: DeltaVuln[]
-  resolved_vulns: DeltaVuln[]
-  unchanged_vulns: number
-  new_findings: DeltaFinding[]
-  resolved_findings: DeltaFinding[]
-  unchanged_findings: number
+  new_vulnerabilities: Vulnerability[]
+  resolved_vulnerabilities: Vulnerability[]
+  unchanged_vulnerabilities: number
 }
 
 export interface CompareResult {
@@ -260,16 +258,11 @@ export interface TrendPoint {
   snapshot_id: string
   date: string
   commit_sha: string
-  findings_critical: number
-  findings_high: number
-  findings_medium: number
-  findings_low: number
-  findings_info: number
-  vulns_critical: number
-  vulns_high: number
-  vulns_medium: number
-  vulns_low: number
-  vulns_info: number
+  vuln_critical: number
+  vuln_high: number
+  vuln_medium: number
+  vuln_low: number
+  vuln_info: number
   components_total: number
 }
 
@@ -290,8 +283,7 @@ export interface RepoDashboardEntry {
   repo_name: string
   repo_slug: string
   provider: string
-  findings: SeverityCounts
-  vulns: SeverityCounts
+  vulnerabilities: SeverityCounts
   components_total: number
   last_scan?: string
 }
@@ -299,8 +291,7 @@ export interface RepoDashboardEntry {
 export interface OrgDashboard {
   repos: RepoDashboardEntry[]
   totals: {
-    findings: SeverityCounts
-    vulns: SeverityCounts
+    vulnerabilities: SeverityCounts
     components_total: number
   }
 }
@@ -624,7 +615,7 @@ class ApiClient {
   ) {
     const query = new URLSearchParams({ base, head })
 
-    return this.request<CompareResult>(
+    return this.request<ApiResponse<CompareResult>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/compare?${query.toString()}`,
     )
   }
@@ -652,19 +643,38 @@ class ApiClient {
     )
   }
 
-  listRefFindings(
+  listRefVulnerabilities(
     provider: string,
     slug: string,
     repoSlug: string,
-    params?: { ref?: string; severity?: string; tool?: string; status?: string; file?: string; page?: number; per_page?: number },
+    params?: {
+      ref?: string
+      type?: string
+      severity?: string
+      status?: string
+      scanner?: string
+      tool?: string
+      language?: string
+      file?: string
+      search?: string
+      sort?: string
+      page?: number
+      per_page?: number
+    },
   ) {
     const query = new URLSearchParams()
 
     if (params?.ref) {
       query.set('ref', params.ref)
     }
+    if (params?.type) {
+      query.set('type', params.type)
+    }
     if (params?.severity) {
       query.set('severity', params.severity)
+    }
+    if (params?.scanner) {
+      query.set('scanner', params.scanner)
     }
     if (params?.tool) {
       query.set('tool', params.tool)
@@ -672,8 +682,17 @@ class ApiClient {
     if (params?.status) {
       query.set('status', params.status)
     }
+    if (params?.language) {
+      query.set('language', params.language)
+    }
     if (params?.file) {
       query.set('file', params.file)
+    }
+    if (params?.search) {
+      query.set('search', params.search)
+    }
+    if (params?.sort) {
+      query.set('sort', params.sort)
     }
     if (params?.page) {
       query.set('page', String(params.page))
@@ -683,8 +702,8 @@ class ApiClient {
     }
 
     const qs = query.toString()
-    return this.request<PaginatedResponse<Finding>>(
-      `/orgs/${provider}/${slug}/repos/${repoSlug}/findings${qs ? `?${qs}` : ''}`,
+    return this.request<PaginatedResponse<Vulnerability>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities${qs ? `?${qs}` : ''}`,
     )
   }
 

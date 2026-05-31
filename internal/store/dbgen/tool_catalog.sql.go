@@ -182,17 +182,19 @@ func (q *Queries) ListCoverageSnapshotStats(ctx context.Context, orgID uuid.UUID
 
 const listFindingToolStats = `-- name: ListFindingToolStats :many
 SELECT
-    f.tool,
-    MAX(f.created_at) AS last_seen_at,
+        v.scanner_name AS tool,
+        MAX(v.last_seen_at) AS last_seen_at,
     COUNT(*)::bigint AS finding_count,
     COUNT(DISTINCT repo.id)::bigint AS repo_count
-FROM findings f
-JOIN snapshots s ON s.id = f.snapshot_id
+FROM vulnerabilities v
+JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
-GROUP BY f.tool
-ORDER BY f.tool
+    AND v.type != 'dependency'
+    AND v.type != 'malware'
+GROUP BY v.scanner_name
+ORDER BY v.scanner_name
 `
 
 type ListFindingToolStatsRow struct {

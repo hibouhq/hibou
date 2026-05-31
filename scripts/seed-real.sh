@@ -7,8 +7,6 @@ FORGEJO_ADMIN_USER="${FORGEJO_ADMIN_USER:-hibou-admin}"
 FORGEJO_ADMIN_PASS="${FORGEJO_ADMIN_PASS:-hibou-admin}"
 FORGEJO_OWNER="${FORGEJO_OWNER:-$FORGEJO_ADMIN_USER}"
 TMPDIR_BASE="$(mktemp -d)"
-WEBHOOK_SECRET="${WEBHOOK_SECRET:-hibou-webhook-dev-secret}"
-WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8585/api/v1/webhooks/forgejo}"
 
 FORGEJO_TOKEN=""
 API_KEY=""
@@ -109,47 +107,6 @@ mirror_k9s_repo() {
   echo "    Migration complete"
 }
 
-setup_k9s_webhook() {
-  echo "==> Configuring Forgejo webhook for k9s..."
-
-  local hooks_json existing_hook
-  hooks_json=$(curl -sf "$FORGEJO_URL/api/v1/repos/$FORGEJO_OWNER/k9s/hooks?limit=100" \
-    -H "Authorization: token $FORGEJO_TOKEN")
-  existing_hook=$(printf '%s' "$hooks_json" | TARGET_URL="$WEBHOOK_URL" python3 -c '
-import json
-import os
-import sys
-
-target_url = os.environ["TARGET_URL"]
-for hook in json.load(sys.stdin):
-    config = hook.get("config") or {}
-    if config.get("url") == target_url:
-        print("found")
-        break
-')
-
-  if [[ "$existing_hook" == "found" ]]; then
-    echo "    k9s webhook already configured"
-    return
-  fi
-
-  curl -sf "$FORGEJO_URL/api/v1/repos/$FORGEJO_OWNER/k9s/hooks" \
-    -H "Authorization: token $FORGEJO_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"type\": \"forgejo\",
-      \"active\": true,
-      \"config\": {
-        \"url\": \"$WEBHOOK_URL\",
-        \"content_type\": \"json\",
-        \"secret\": \"$WEBHOOK_SECRET\"
-      },
-      \"events\": [\"push\", \"pull_request\", \"create\", \"delete\"]
-    }" >/dev/null
-
-  echo "    k9s webhook created"
-}
-
 download_release_sbom() {
   local tag=$1
   local output_file=$2
@@ -204,7 +161,6 @@ payload = {
     "repo": os.environ["REPO"],
     "ref": os.environ["REF_NAME"],
     "commit_sha": os.environ["COMMIT_SHA"],
-    "format": "spdx-json",
     "artifact": {
         "filename": "k9s_Linux_amd64.tar.gz.sbom.json",
         "content_base64": content_b64,
@@ -223,24 +179,18 @@ PY
 
 seed_hibou_data() {
   echo "==> Starting Hibou and seeding local data..."
-  go build -o "$TMPDIR_BASE/hibou" . 2>/dev/null
-  ln -sf hibou "$TMPDIR_BASE/hibou-server"
+  go build -o "$TMPDIR_BASE/hibou-server" .
 
-  # Use a dedicated port to avoid conflicts with any running hibou instance.
-  local seed_port=8586
-  HIBOU_URL="http://localhost:$seed_port"
-
-  # Kill anything already on the seed port.
-  local pid_on_port
-  pid_on_port=$(lsof -ti :$seed_port 2>/dev/null || true)
-  if [[ -n "$pid_on_port" ]]; then
-    kill $pid_on_port 2>/dev/null || true
+  # Kill any stale Hibou process on our port
+  local stale_pid
+  stale_pid=$(lsof -ti :${HIBOU_URL##*:} 2>/dev/null || true)
+  if [[ -n "$stale_pid" ]]; then
+    echo "    Killing stale process on port ${HIBOU_URL##*:} (PID $stale_pid)"
+    kill "$stale_pid" 2>/dev/null || true
     sleep 1
   fi
 
   env \
-    HIBOU_PORT=$seed_port \
-    HIBOU_MCP_ENABLED=false \
     HIBOU_ARTIFACT_PATH=tmp/artifacts \
     HIBOU_FORGE_0_TYPE= \
     HIBOU_FORGE_0_ID= \
@@ -251,13 +201,27 @@ seed_hibou_data() {
     "$TMPDIR_BASE/hibou-server" serve >/tmp/hibou-seed-real.log 2>&1 &
   HIBOU_PID=$!
 
+  # Give the server a moment to crash if port is still busy
+  sleep 1
+  if ! kill -0 "$HIBOU_PID" 2>/dev/null; then
+    echo "ERROR: Hibou failed to start. Log:" >&2
+    tail -5 /tmp/hibou-seed-real.log >&2
+    exit 1
+  fi
+
   wait_for_hibou
 
   echo "==> Running hibou seed command..."
   "$TMPDIR_BASE/hibou-server" seed >/dev/null
 
   # Fix provider for devtools org if seeded before the forgejo switch,
-  # ensure k9s repo exists, and fix default_branch if set to 'main'.
+  # ensure k9s repo exists, fix default_branch, pre-create the Forgejo admin
+  # user, and add all Forgejo users to orgs/teams so OAuth login sees them.
+  local forgejo_admin_id
+  forgejo_admin_id=$(curl -sf "$FORGEJO_URL/api/v1/user" \
+    -u "$FORGEJO_ADMIN_USER:$FORGEJO_ADMIN_PASS" | \
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
   docker compose exec -T postgres psql -U hibou -d hibou -tAc "
     UPDATE organizations SET provider = 'forgejo' WHERE slug = 'devtools' AND provider != 'forgejo';
     INSERT INTO repositories (org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state)
@@ -269,12 +233,28 @@ seed_hibou_data() {
     UPDATE repositories SET default_branch = 'master'
       WHERE slug = 'k9s' AND default_branch = 'main'
         AND org_id = (SELECT id FROM organizations WHERE slug = 'devtools');
-    -- Auto-add all forgejo users to the devtools org so OAuth login sees orgs.
-    INSERT INTO org_members (user_id, org_id, role)
-      SELECT u.id, o.id, 'admin'
-      FROM users u, organizations o
-      WHERE u.provider = 'forgejo' AND o.slug = 'devtools'
-      ON CONFLICT DO NOTHING;
+    -- Pre-create the Forgejo admin user so org membership works before first OAuth login
+    INSERT INTO users (email, display_name, provider, provider_id)
+      VALUES ('$FORGEJO_ADMIN_USER@hibou.local', '$FORGEJO_ADMIN_USER', 'forgejo', '$forgejo_admin_id')
+      ON CONFLICT (provider, provider_id) DO NOTHING;
+    -- Add all Forgejo users to every org as admin (for dev convenience)
+    INSERT INTO org_members (org_id, user_id, role)
+      SELECT o.id, u.id, 'admin'
+      FROM organizations o
+      CROSS JOIN users u
+      WHERE u.provider = 'forgejo'
+        AND NOT EXISTS (
+          SELECT 1 FROM org_members om WHERE om.org_id = o.id AND om.user_id = u.id
+        );
+    -- Add all Forgejo users to every team as admin
+    INSERT INTO team_members (team_id, user_id, role)
+      SELECT t.id, u.id, 'admin'
+      FROM teams t
+      CROSS JOIN users u
+      WHERE u.provider = 'forgejo'
+        AND NOT EXISTS (
+          SELECT 1 FROM team_members tm WHERE tm.team_id = t.id AND tm.user_id = u.id
+        );
   " >/dev/null 2>&1 || true
 
   echo "==> Authenticating with Hibou dev login..."
@@ -455,7 +435,6 @@ main() {
 
   echo "==> Mirroring k9s repository to Forgejo..."
   mirror_k9s_repo
-  setup_k9s_webhook
 
   seed_hibou_data
 

@@ -12,7 +12,6 @@ import (
 
 	"github.com/hibouhq/lehibou/internal/audit"
 	"github.com/hibouhq/lehibou/internal/events"
-	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
@@ -22,8 +21,6 @@ type eventPublisher interface {
 
 type ScanStore interface {
 	IngestStore
-	ListSecretFindingsBySnapshot(ctx context.Context, snapshotID uuid.UUID, limit, offset int) ([]store.SecretFinding, int, error)
-	CountSecretFindingsBySnapshot(ctx context.Context, snapshotID uuid.UUID) (int64, error)
 	CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error)
 }
 

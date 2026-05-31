@@ -152,7 +152,7 @@ func (a *Annotator) handleScanCompleted(ctx context.Context, payload any) {
 	eventType := events.GatePassed
 	if !gateResult.Passed {
 		state = "failure"
-		description = fmt.Sprintf("%d new vulnerabilities, %d new findings", len(deltaResult.NewVulns), len(deltaResult.NewFindings))
+		description = fmt.Sprintf("%d new vulnerabilities", len(deltaResult.New))
 		eventType = events.GateFailed
 	}
 	// Forge status APIs converge on sha+context, so retries rewrite the same

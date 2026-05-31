@@ -49,18 +49,19 @@ SELECT COUNT(*)::bigint FROM clients WHERE org_id = $1;
 -- VEX-based filtering is applied at the application layer via vex_statements.
 SELECT DISTINCT
     a.canonical_id,
-    a.severity::text AS severity,
-    c.name AS component_name,
+        v.severity::text AS severity,
+        COALESCE(v.component_name, c.name) AS component_name,
     r.version AS release_version
 FROM deployments d
 JOIN releases r ON r.id = d.release_id
-JOIN vuln_matches vm ON vm.snapshot_id = r.snapshot_id
-JOIN advisories a ON a.id = vm.advisory_id
-JOIN components c ON c.id = vm.component_id
+JOIN vulnerabilities v ON v.snapshot_id = r.snapshot_id
+JOIN advisories a ON a.id = v.advisory_id
+LEFT JOIN components c ON c.id = v.component_id
 WHERE d.client_id = $1
   AND d.status = 'active'
   AND r.snapshot_id IS NOT NULL
-  AND vm.is_affected = TRUE;
+    AND v.type IN ('dependency', 'malware')
+    AND v.status NOT IN ('resolved', 'dismissed');
 
 -- name: UpdateClient :one
 UPDATE clients

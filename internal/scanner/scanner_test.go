@@ -14,6 +14,7 @@ import (
 	"github.com/hibouhq/lehibou/internal/audit"
 	"github.com/hibouhq/lehibou/internal/events"
 	"github.com/hibouhq/lehibou/internal/provider"
+	"github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
@@ -22,12 +23,17 @@ type mockScannerStore struct {
 	affectedRanges   map[string][]dbgen.AffectedRange
 	scanStatuses     []dbgen.UpdateScanStatusParams
 	providerStatuses map[string]dbgen.UpdateScanProviderParams
-	vulnMatches      []dbgen.UpsertVulnMatchParams
-	markStaleCalls   []dbgen.MarkStaleVulnMatchesParams
-	upsertedMatchIDs []uuid.UUID
-	auditLogs        []dbgen.CreateAuditLogParams
-	createdScanID    uuid.UUID
-	providerIDs      map[string]uuid.UUID
+	vulnerabilities  []dbgen.CreateVulnerabilityParams
+	markStaleCalls   []struct {
+		SnapshotID uuid.UUID
+		VulnType   string
+		FreshIDs   []uuid.UUID
+	}
+	createdVulnIDs []uuid.UUID
+	auditLogs      []dbgen.CreateAuditLogParams
+	createdScanID  uuid.UUID
+	providerIDs    map[string]uuid.UUID
+	advisories     map[uuid.UUID]dbgen.Advisory
 }
 
 func newMockScannerStore() *mockScannerStore {
@@ -35,7 +41,21 @@ func newMockScannerStore() *mockScannerStore {
 		affectedRanges:   map[string][]dbgen.AffectedRange{},
 		providerStatuses: map[string]dbgen.UpdateScanProviderParams{},
 		providerIDs:      map[string]uuid.UUID{},
+		advisories:       map[uuid.UUID]dbgen.Advisory{},
 	}
+}
+
+func freshCountForType(calls []struct {
+	SnapshotID uuid.UUID
+	VulnType   string
+	FreshIDs   []uuid.UUID
+}, vulnType string) int {
+	for _, call := range calls {
+		if call.VulnType == vulnType {
+			return len(call.FreshIDs)
+		}
+	}
+	return -1
 }
 
 func (m *mockScannerStore) ListComponentsBySnapshot(context.Context, uuid.UUID) ([]dbgen.Component, error) {
@@ -74,15 +94,47 @@ func (m *mockScannerStore) ListAffectedRangesByPackage(_ context.Context, arg db
 	return append([]dbgen.AffectedRange(nil), m.affectedRanges[packageKey(arg.Ecosystem, arg.PackageName)]...), nil
 }
 
-func (m *mockScannerStore) UpsertVulnMatch(_ context.Context, arg dbgen.UpsertVulnMatchParams) (dbgen.VulnMatch, error) {
-	m.vulnMatches = append(m.vulnMatches, arg)
-	matchID := uuid.New()
-	m.upsertedMatchIDs = append(m.upsertedMatchIDs, matchID)
-	return dbgen.VulnMatch{ID: matchID, SnapshotID: arg.SnapshotID, ComponentID: arg.ComponentID, AdvisoryID: arg.AdvisoryID, AffectedRangeID: arg.AffectedRangeID, IsAffected: arg.IsAffected}, nil
+func (m *mockScannerStore) GetAdvisoryByID(_ context.Context, id uuid.UUID) (dbgen.Advisory, error) {
+	if advisory, ok := m.advisories[id]; ok {
+		return advisory, nil
+	}
+	return dbgen.Advisory{}, nil
 }
 
-func (m *mockScannerStore) MarkStaleVulnMatches(_ context.Context, arg dbgen.MarkStaleVulnMatchesParams) error {
-	m.markStaleCalls = append(m.markStaleCalls, arg)
+func (m *mockScannerStore) CreateVulnerability(_ context.Context, arg dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error) {
+	m.vulnerabilities = append(m.vulnerabilities, arg)
+	vulnID := uuid.New()
+	m.createdVulnIDs = append(m.createdVulnIDs, vulnID)
+	vulnerability := &store.Vulnerability{
+		ID:          vulnID,
+		Type:        arg.Type,
+		SnapshotID:  arg.SnapshotID,
+		Severity:    arg.Severity,
+		ScannerName: arg.ScannerName,
+		Fingerprint: arg.Fingerprint,
+	}
+	if arg.ComponentID.Valid {
+		vulnerability.ComponentID = &arg.ComponentID.UUID
+	}
+	if arg.AdvisoryID.Valid {
+		vulnerability.AdvisoryID = &arg.AdvisoryID.UUID
+	}
+	if arg.AffectedRangeID.Valid {
+		vulnerability.AffectedRangeID = &arg.AffectedRangeID.UUID
+	}
+	return vulnerability, nil
+}
+
+func (m *mockScannerStore) MarkStaleVulnerabilities(_ context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) error {
+	m.markStaleCalls = append(m.markStaleCalls, struct {
+		SnapshotID uuid.UUID
+		VulnType   string
+		FreshIDs   []uuid.UUID
+	}{
+		SnapshotID: snapshotID,
+		VulnType:   vulnType,
+		FreshIDs:   append([]uuid.UUID(nil), freshIDs...),
+	})
 	return nil
 }
 
@@ -172,6 +224,7 @@ func TestRunScanBasicFlow(t *testing.T) {
 		PackageName: "leftpad",
 		Fixed:       "2.0.0",
 	}}
+	store.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "OSV-1", Severity: dbgen.SeverityLevelHigh}
 	cache.results["osv"] = []provider.AdvisoryResult{{ProviderID: "OSV-1"}}
 	ingester.results["osv"] = map[string]uuid.UUID{"OSV-1": advisoryID}
 
@@ -183,20 +236,23 @@ func TestRunScanBasicFlow(t *testing.T) {
 	if scanID == uuid.Nil {
 		t.Fatalf("expected scan ID")
 	}
-	if len(store.vulnMatches) != 1 {
-		t.Fatalf("expected one vuln match, got %d", len(store.vulnMatches))
+	if len(store.vulnerabilities) != 1 {
+		t.Fatalf("expected one vulnerability, got %d", len(store.vulnerabilities))
 	}
-	if !store.vulnMatches[0].AffectedRangeID.Valid || store.vulnMatches[0].AffectedRangeID.UUID != rangeID {
-		t.Fatalf("expected affected range %s, got %#v", rangeID, store.vulnMatches[0].AffectedRangeID)
+	if !store.vulnerabilities[0].AffectedRangeID.Valid || store.vulnerabilities[0].AffectedRangeID.UUID != rangeID {
+		t.Fatalf("expected affected range %s, got %#v", rangeID, store.vulnerabilities[0].AffectedRangeID)
 	}
 	if got := store.providerStatuses["osv"].Status; got != "complete" {
 		t.Fatalf("expected provider status complete, got %q", got)
 	}
-	if len(store.markStaleCalls) != 1 {
-		t.Fatalf("expected one stale cleanup call, got %d", len(store.markStaleCalls))
+	if len(store.markStaleCalls) != 2 {
+		t.Fatalf("expected two stale cleanup calls, got %d", len(store.markStaleCalls))
 	}
-	if got := len(store.markStaleCalls[0].FreshMatchIds); got != 1 {
-		t.Fatalf("expected one fresh match ID, got %d", got)
+	if got := freshCountForType(store.markStaleCalls, "dependency"); got != 1 {
+		t.Fatalf("expected one fresh dependency vulnerability ID, got %d", got)
+	}
+	if got := freshCountForType(store.markStaleCalls, "malware"); got != 0 {
+		t.Fatalf("expected zero fresh malware vulnerability IDs, got %d", got)
 	}
 	if last := store.scanStatuses[len(store.scanStatuses)-1].Status; last != "complete" {
 		t.Fatalf("expected final scan status complete, got %q", last)
@@ -218,6 +274,7 @@ func TestRunScanPartialProviderFailure(t *testing.T) {
 
 	store.components = []dbgen.Component{{ID: componentID, Name: "leftpad", Version: "1.2.0", Ecosystem: "npm"}}
 	store.affectedRanges[packageKey("npm", "leftpad")] = []dbgen.AffectedRange{{ID: rangeID, AdvisoryID: advisoryID, Ecosystem: "npm", PackageName: "leftpad", Fixed: "2.0.0"}}
+	store.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "OSV-1", Severity: dbgen.SeverityLevelHigh}
 	cache.results["osv"] = []provider.AdvisoryResult{{ProviderID: "OSV-1"}}
 	cache.errs["nvd"] = errors.New("provider failed")
 	ingester.results["osv"] = map[string]uuid.UUID{"OSV-1": advisoryID}
@@ -236,11 +293,14 @@ func TestRunScanPartialProviderFailure(t *testing.T) {
 	if got := store.providerStatuses["nvd"].Status; got != "failed" {
 		t.Fatalf("expected nvd to fail, got %q", got)
 	}
-	if len(store.markStaleCalls) != 1 {
-		t.Fatalf("expected stale cleanup after partial success, got %d calls", len(store.markStaleCalls))
+	if len(store.markStaleCalls) != 2 {
+		t.Fatalf("expected stale cleanup for both vulnerability types after partial success, got %d calls", len(store.markStaleCalls))
 	}
-	if got := len(store.markStaleCalls[0].FreshMatchIds); got != 1 {
-		t.Fatalf("expected one fresh match ID after partial success, got %d", got)
+	if got := freshCountForType(store.markStaleCalls, "dependency"); got != 1 {
+		t.Fatalf("expected one fresh dependency vulnerability ID after partial success, got %d", got)
+	}
+	if got := freshCountForType(store.markStaleCalls, "malware"); got != 0 {
+		t.Fatalf("expected zero fresh malware vulnerability IDs after partial success, got %d", got)
 	}
 	if last := store.scanStatuses[len(store.scanStatuses)-1].Status; last != "complete" {
 		t.Fatalf("expected final scan status complete, got %q", last)
@@ -280,8 +340,8 @@ func TestRunScanEmptySnapshot(t *testing.T) {
 	if _, err := service.RunScan(context.Background(), uuid.New(), []string{"osv"}, "system"); err != nil {
 		t.Fatalf("RunScan returned error: %v", err)
 	}
-	if len(store.vulnMatches) != 0 {
-		t.Fatalf("expected no vuln matches, got %d", len(store.vulnMatches))
+	if len(store.vulnerabilities) != 0 {
+		t.Fatalf("expected no vulnerabilities, got %d", len(store.vulnerabilities))
 	}
 	if last := store.scanStatuses[len(store.scanStatuses)-1].Status; last != "complete" {
 		t.Fatalf("expected final scan status complete, got %q", last)
@@ -307,6 +367,7 @@ func TestRunScanSkipsNonMatchingVersion(t *testing.T) {
 		PackageName: "leftpad",
 		Fixed:       "2.0.0",
 	}}
+	store.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "OSV-1", Severity: dbgen.SeverityLevelHigh}
 	cache.results["osv"] = []provider.AdvisoryResult{{ProviderID: "OSV-1"}}
 	ingester.results["osv"] = map[string]uuid.UUID{"OSV-1": advisoryID}
 
@@ -314,14 +375,17 @@ func TestRunScanSkipsNonMatchingVersion(t *testing.T) {
 	if _, err := service.RunScan(context.Background(), snapshotID, []string{"osv"}, "user"); err != nil {
 		t.Fatalf("RunScan returned error: %v", err)
 	}
-	if len(store.vulnMatches) != 0 {
-		t.Fatalf("expected no vuln matches, got %d", len(store.vulnMatches))
+	if len(store.vulnerabilities) != 0 {
+		t.Fatalf("expected no vulnerabilities, got %d", len(store.vulnerabilities))
 	}
-	if len(store.markStaleCalls) != 1 {
-		t.Fatalf("expected one stale cleanup call, got %d", len(store.markStaleCalls))
+	if len(store.markStaleCalls) != 2 {
+		t.Fatalf("expected two stale cleanup calls, got %d", len(store.markStaleCalls))
 	}
-	if got := len(store.markStaleCalls[0].FreshMatchIds); got != 0 {
-		t.Fatalf("expected zero fresh match IDs, got %d", got)
+	if got := freshCountForType(store.markStaleCalls, "dependency"); got != 0 {
+		t.Fatalf("expected zero fresh dependency vulnerability IDs, got %d", got)
+	}
+	if got := freshCountForType(store.markStaleCalls, "malware"); got != 0 {
+		t.Fatalf("expected zero fresh malware vulnerability IDs, got %d", got)
 	}
 }
 

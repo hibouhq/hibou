@@ -800,12 +800,7 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 
 	points := make([]trendPointResponse, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		findingRows, err := s.queries.CountFindingsBySeverity(r.Context(), snapshot.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load finding trends")
-			return
-		}
-		vulnRows, err := s.queries.CountVulnsBySeverity(r.Context(), snapshot.ID)
+		vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load vulnerability trends")
 			return
@@ -817,13 +812,19 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		}
 
 		findings := severityCounts{}
-		for _, row := range findingRows {
-			applySeverityCount(&findings, row.Severity, row.Count)
-		}
-
 		vulns := severityCounts{}
-		for _, row := range vulnRows {
-			applySeverityCount(&vulns, row.Severity, row.Count)
+		for _, vulnerability := range vulnerabilities {
+			if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+				continue
+			}
+			if vulnerability.Type == "dependency" || vulnerability.Type == "malware" {
+				incrementSeverity(&vulns, string(vulnerability.Severity))
+				continue
+			}
+			if vulnerability.Type == "secret" || vulnerability.Type == "manual" {
+				continue
+			}
+			incrementSeverity(&findings, string(vulnerability.Severity))
 		}
 
 		points = append(points, trendPointResponse{

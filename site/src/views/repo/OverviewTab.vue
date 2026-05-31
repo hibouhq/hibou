@@ -26,12 +26,7 @@
         <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div class="flex flex-wrap items-end gap-3 text-sm">
             <div class="flex items-end gap-1.5">
-              <span class="text-lg font-semibold text-white">{{ findingsTotal }}</span>
-              <span class="text-xs text-gray-400">findings</span>
-            </div>
-            <span class="h-1 w-1 rounded-full bg-gray-600" />
-            <div class="flex items-end gap-1.5">
-              <span class="text-lg font-semibold text-white">{{ vulnsTotal }}</span>
+              <span class="text-lg font-semibold text-white">{{ vulnerabilitiesTotal }}</span>
               <span class="text-xs text-gray-400">vulnerabilities</span>
             </div>
             <span class="h-1 w-1 rounded-full bg-gray-600" />
@@ -47,8 +42,8 @@
         <div class="space-y-2">
           <div class="flex h-1.5 overflow-hidden rounded-full bg-surface-border-subtle">
             <div
-              v-for="segment in findingBarSegments"
-              :key="`findings-bar-${segment.key}`"
+              v-for="segment in vulnerabilityBarSegments"
+              :key="`vulnerabilities-bar-${String(segment.key)}`"
               :class="segment.barClass"
               :style="{ width: `${segment.width}%` }"
             />
@@ -56,8 +51,8 @@
 
           <div class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-medium">
             <span
-              v-for="item in findingCells"
-              :key="`finding-label-${item.key}`"
+              v-for="item in vulnerabilityCells"
+              :key="`vulnerability-label-${String(item.key)}`"
               :class="item.valueClass"
             >
               {{ item.value }} {{ item.label }}
@@ -66,15 +61,15 @@
         </div>
       </div>
 
-      <div class="grid gap-3 lg:grid-cols-3">
+      <div class="grid gap-3 lg:grid-cols-2">
         <section class="flex min-h-[148px] flex-col rounded-lg bg-surface-overlay/30 p-3">
           <div class="flex items-start justify-between gap-3">
             <div>
               <h2 class="text-[11px] font-medium uppercase tracking-[0.18em] text-gray-500">
-                Findings
+                Vulnerabilities
               </h2>
               <p class="mt-1 text-xl font-semibold text-white">
-                {{ findingsTotal }}
+                {{ vulnerabilitiesTotal }}
               </p>
             </div>
             <span class="rounded-md bg-sev-critical/10 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-sev-critical">
@@ -84,8 +79,8 @@
 
           <div class="mt-4 flex h-1 overflow-hidden rounded-full bg-surface-border-subtle">
             <div
-              v-for="segment in findingBarSegments"
-              :key="`finding-card-${segment.key}`"
+              v-for="segment in vulnerabilityBarSegments"
+              :key="`vulnerability-card-${String(segment.key)}`"
               :class="segment.barClass"
               :style="{ width: `${segment.width}%` }"
             />
@@ -93,8 +88,8 @@
 
           <div class="mt-3 grid grid-cols-5 gap-2 text-[11px]">
             <div
-              v-for="item in findingCells"
-              :key="`finding-${item.key}`"
+              v-for="item in vulnerabilityCells"
+              :key="`vulnerability-${String(item.key)}`"
               class="space-y-1"
             >
               <div
@@ -110,57 +105,7 @@
           </div>
 
           <RouterLink
-            :to="tabLink('repo-weaknesses')"
-            class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
-          >
-            View ->
-          </RouterLink>
-        </section>
-
-        <section class="flex min-h-[148px] flex-col rounded-lg bg-surface-overlay/30 p-3">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <h2 class="text-[11px] font-medium uppercase tracking-[0.18em] text-gray-500">
-                Vulnerabilities
-              </h2>
-              <p class="mt-1 text-xl font-semibold text-white">
-                {{ vulnsTotal }}
-              </p>
-            </div>
-            <span class="rounded-md bg-sev-high/10 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-sev-high">
-              advisories
-            </span>
-          </div>
-
-          <div class="mt-4 flex h-1 overflow-hidden rounded-full bg-surface-border-subtle">
-            <div
-              v-for="segment in vulnBarSegments"
-              :key="`vuln-card-${segment.key}`"
-              :class="segment.barClass"
-              :style="{ width: `${segment.width}%` }"
-            />
-          </div>
-
-          <div class="mt-3 grid grid-cols-5 gap-2 text-[11px]">
-            <div
-              v-for="item in vulnCells"
-              :key="`vuln-${item.key}`"
-              class="space-y-1"
-            >
-              <div
-                :class="item.valueClass"
-                class="font-semibold"
-              >
-                {{ item.value }}
-              </div>
-              <div class="uppercase tracking-[0.14em] text-gray-500">
-                {{ item.label }}
-              </div>
-            </div>
-          </div>
-
-          <RouterLink
-            :to="tabLink('repo-dependencies')"
+            :to="tabLink('repo-vulnerabilities')"
             class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
           >
             View ->
@@ -191,7 +136,7 @@
           </p>
 
           <RouterLink
-            :to="tabLink('repo-trends')"
+            :to="tabLink('repo-dependencies')"
             class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
           >
             View ->
@@ -206,9 +151,9 @@
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type RefSummary } from '@/api/client'
+import { api, type RefSummary, type SeverityCounts } from '@/api/client'
 
-type SeverityKey = keyof RefSummary['findings']
+type SeverityKey = keyof SeverityCounts
 
 type SeveritySegment = {
   key: SeverityKey | 'empty'
@@ -234,21 +179,14 @@ const severityMeta: Array<{ key: SeverityKey; label: string; valueClass: string;
   { key: 'info', label: 'info', valueClass: 'text-sev-info', barClass: 'bg-sev-info' },
 ]
 
-const findingsTotal = computed(() => totalCounts(summary.value?.findings))
-const vulnsTotal = computed(() => totalCounts(summary.value?.vulns))
+const vulnerabilitiesTotal = computed(() => totalCounts(summary.value?.vulnerabilities))
 
-const findingCells = computed(() => severityMeta.map((item) => ({
+const vulnerabilityCells = computed(() => severityMeta.map((item) => ({
   ...item,
-  value: summary.value?.findings[item.key] ?? 0,
+  value: summary.value?.vulnerabilities[item.key] ?? 0,
 })))
 
-const vulnCells = computed(() => severityMeta.map((item) => ({
-  ...item,
-  value: summary.value?.vulns[item.key] ?? 0,
-})))
-
-const findingBarSegments = computed(() => buildSeveritySegments(summary.value?.findings))
-const vulnBarSegments = computed(() => buildSeveritySegments(summary.value?.vulns))
+const vulnerabilityBarSegments = computed(() => buildSeveritySegments(summary.value?.vulnerabilities))
 
 watch(
   [provider, slug, repoSlug, () => route.query.ref],
@@ -280,7 +218,7 @@ async function loadSummary() {
   }
 }
 
-function totalCounts(counts?: RefSummary['findings']) {
+function totalCounts(counts?: SeverityCounts) {
   if (!counts) {
     return 0
   }
@@ -288,7 +226,7 @@ function totalCounts(counts?: RefSummary['findings']) {
   return counts.critical + counts.high + counts.medium + counts.low + counts.info
 }
 
-function buildSeveritySegments(counts?: RefSummary['findings']): SeveritySegment[] {
+function buildSeveritySegments(counts?: SeverityCounts): SeveritySegment[] {
   const total = totalCounts(counts)
 
   if (!counts || total === 0) {

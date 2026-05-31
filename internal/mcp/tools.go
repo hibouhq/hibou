@@ -76,10 +76,10 @@ type vulnerabilityItem struct {
 	MalwareType   *string   `json:"malware_type,omitempty"`
 	AffectedCount int       `json:"affected_count"`
 	// TODO(vex): Populate from vex_statements once effective VEX state is wired in.
-	Suppressed    int       `json:"suppressed_count"`
-	PublishedAt   *string   `json:"published_at,omitempty"`
-	WithdrawnAt   *string   `json:"withdrawn_at,omitempty"`
-	UpdatedAt     string    `json:"updated_at"`
+	Suppressed  int     `json:"suppressed_count"`
+	PublishedAt *string `json:"published_at,omitempty"`
+	WithdrawnAt *string `json:"withdrawn_at,omitempty"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 type componentItem struct {
@@ -115,19 +115,19 @@ func (s *service) handleListVulnerabilities(ctx context.Context, request mcp.Cal
 		return toolError(err.Error())
 	}
 
-	matches, err := s.store.ListVulnMatchesBySnapshot(ctx, snapshot.ID)
+	vulnerabilities, err := s.store.ListAllVulnerabilitiesBySnapshot(ctx, snapshot.ID)
 	if err != nil {
-		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("failed to list vulnerability matches for MCP")
-		return toolError("failed to load vulnerability matches")
+		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("failed to list vulnerabilities for MCP")
+		return toolError("failed to load vulnerabilities")
 	}
-	activeMatches := filterActiveMatches(matches)
-	advisories, err := s.loadAdvisories(ctx, activeMatches)
+	activeVulnerabilities := filterActiveVulnerabilities(vulnerabilities)
+	advisories, err := s.loadAdvisories(ctx, activeVulnerabilities)
 	if err != nil {
 		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("failed to load advisories for MCP vulnerability list")
 		return toolError("failed to load advisories")
 	}
 
-	items, summary := buildVulnerabilityResponse(activeMatches, advisories, severityFilter)
+	items, summary := buildVulnerabilityResponse(activeVulnerabilities, advisories, severityFilter)
 	response := map[string]any{
 		"organization":        orgArg,
 		"repository":          repo.Slug,
@@ -393,15 +393,18 @@ func (s *service) resolveRef(ctx context.Context, repoID uuid.UUID, refName stri
 	return nil, fmt.Errorf("ref not found: %s", refName)
 }
 
-func (s *service) loadAdvisories(ctx context.Context, matches []dbgen.VulnMatch) (map[uuid.UUID]dbgen.Advisory, error) {
-	ids := make([]uuid.UUID, 0, len(matches))
-	seen := make(map[uuid.UUID]struct{}, len(matches))
-	for _, match := range matches {
-		if _, ok := seen[match.AdvisoryID]; ok {
+func (s *service) loadAdvisories(ctx context.Context, vulnerabilities []store.Vulnerability) (map[uuid.UUID]dbgen.Advisory, error) {
+	ids := make([]uuid.UUID, 0, len(vulnerabilities))
+	seen := make(map[uuid.UUID]struct{}, len(vulnerabilities))
+	for _, vulnerability := range vulnerabilities {
+		if vulnerability.AdvisoryID == nil {
 			continue
 		}
-		seen[match.AdvisoryID] = struct{}{}
-		ids = append(ids, match.AdvisoryID)
+		if _, ok := seen[*vulnerability.AdvisoryID]; ok {
+			continue
+		}
+		seen[*vulnerability.AdvisoryID] = struct{}{}
+		ids = append(ids, *vulnerability.AdvisoryID)
 	}
 	if len(ids) == 0 {
 		return map[uuid.UUID]dbgen.Advisory{}, nil
@@ -417,18 +420,19 @@ func (s *service) loadAdvisories(ctx context.Context, matches []dbgen.VulnMatch)
 	return result, nil
 }
 
-func buildVulnerabilityResponse(matches []dbgen.VulnMatch, advisories map[uuid.UUID]dbgen.Advisory, severityFilter string) ([]vulnerabilityItem, []vulnerabilitySummary) {
+func buildVulnerabilityResponse(vulnerabilities []store.Vulnerability, advisories map[uuid.UUID]dbgen.Advisory, severityFilter string) ([]vulnerabilityItem, []vulnerabilitySummary) {
 	type counts struct {
 		affected int
 	}
 
-	byAdvisory := make(map[uuid.UUID]counts, len(matches))
-	for _, match := range matches {
-		entry := byAdvisory[match.AdvisoryID]
-		if match.IsAffected {
-			entry.affected++
+	byAdvisory := make(map[uuid.UUID]counts, len(vulnerabilities))
+	for _, vulnerability := range vulnerabilities {
+		if vulnerability.AdvisoryID == nil {
+			continue
 		}
-		byAdvisory[match.AdvisoryID] = entry
+		entry := byAdvisory[*vulnerability.AdvisoryID]
+		entry.affected++
+		byAdvisory[*vulnerability.AdvisoryID] = entry
 	}
 
 	items := make([]vulnerabilityItem, 0, len(byAdvisory))
@@ -471,13 +475,19 @@ func buildVulnerabilityResponse(matches []dbgen.VulnMatch, advisories map[uuid.U
 	return items, summaries
 }
 
-func filterActiveMatches(matches []dbgen.VulnMatch) []dbgen.VulnMatch {
-	filtered := make([]dbgen.VulnMatch, 0, len(matches))
-	for _, match := range matches {
-		if !match.IsAffected {
+func filterActiveVulnerabilities(vulnerabilities []store.Vulnerability) []store.Vulnerability {
+	filtered := make([]store.Vulnerability, 0, len(vulnerabilities))
+	for _, vulnerability := range vulnerabilities {
+		if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
 			continue
 		}
-		filtered = append(filtered, match)
+		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+			continue
+		}
+		if vulnerability.AdvisoryID == nil {
+			continue
+		}
+		filtered = append(filtered, vulnerability)
 	}
 	return filtered
 }

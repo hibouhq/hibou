@@ -101,6 +101,51 @@ func (ns NullDeploymentStatus) Value() (driver.Value, error) {
 	return string(ns.DeploymentStatus), nil
 }
 
+type DismissalReason string
+
+const (
+	DismissalReasonAcceptableRisk    DismissalReason = "acceptable_risk"
+	DismissalReasonFalsePositive     DismissalReason = "false_positive"
+	DismissalReasonMitigatingControl DismissalReason = "mitigating_control"
+	DismissalReasonNotApplicable     DismissalReason = "not_applicable"
+	DismissalReasonUsedInTests       DismissalReason = "used_in_tests"
+)
+
+func (e *DismissalReason) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = DismissalReason(s)
+	case string:
+		*e = DismissalReason(s)
+	default:
+		return fmt.Errorf("unsupported scan type for DismissalReason: %T", src)
+	}
+	return nil
+}
+
+type NullDismissalReason struct {
+	DismissalReason DismissalReason `json:"dismissal_reason"`
+	Valid           bool            `json:"valid"` // Valid is true if DismissalReason is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullDismissalReason) Scan(value interface{}) error {
+	if value == nil {
+		ns.DismissalReason, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.DismissalReason.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullDismissalReason) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.DismissalReason), nil
+}
+
 type IntegrationType string
 
 const (
@@ -325,6 +370,49 @@ func (ns NullNotificationStatus) Value() (driver.Value, error) {
 	return string(ns.NotificationStatus), nil
 }
 
+type Reachability string
+
+const (
+	ReachabilityReachable    Reachability = "reachable"
+	ReachabilityNotReachable Reachability = "not_reachable"
+	ReachabilityUnknown      Reachability = "unknown"
+)
+
+func (e *Reachability) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = Reachability(s)
+	case string:
+		*e = Reachability(s)
+	default:
+		return fmt.Errorf("unsupported scan type for Reachability: %T", src)
+	}
+	return nil
+}
+
+type NullReachability struct {
+	Reachability Reachability `json:"reachability"`
+	Valid        bool         `json:"valid"` // Valid is true if Reachability is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullReachability) Scan(value interface{}) error {
+	if value == nil {
+		ns.Reachability, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.Reachability.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullReachability) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.Reachability), nil
+}
+
 type RefType string
 
 const (
@@ -411,50 +499,6 @@ func (ns NullScanStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.ScanStatus), nil
-}
-
-type SecretStatus string
-
-const (
-	SecretStatusOpen          SecretStatus = "open"
-	SecretStatusRevoked       SecretStatus = "revoked"
-	SecretStatusFalsePositive SecretStatus = "false_positive"
-	SecretStatusRotating      SecretStatus = "rotating"
-)
-
-func (e *SecretStatus) Scan(src interface{}) error {
-	switch s := src.(type) {
-	case []byte:
-		*e = SecretStatus(s)
-	case string:
-		*e = SecretStatus(s)
-	default:
-		return fmt.Errorf("unsupported scan type for SecretStatus: %T", src)
-	}
-	return nil
-}
-
-type NullSecretStatus struct {
-	SecretStatus SecretStatus `json:"secret_status"`
-	Valid        bool         `json:"valid"` // Valid is true if SecretStatus is not NULL
-}
-
-// Scan implements the Scanner interface.
-func (ns *NullSecretStatus) Scan(value interface{}) error {
-	if value == nil {
-		ns.SecretStatus, ns.Valid = "", false
-		return nil
-	}
-	ns.Valid = true
-	return ns.SecretStatus.Scan(value)
-}
-
-// Value implements the driver Valuer interface.
-func (ns NullSecretStatus) Value() (driver.Value, error) {
-	if !ns.Valid {
-		return nil, nil
-	}
-	return string(ns.SecretStatus), nil
 }
 
 type SeverityLevel string
@@ -682,6 +726,99 @@ func (ns NullVexStatus) Value() (driver.Value, error) {
 	return string(ns.VexStatus), nil
 }
 
+type VulnerabilityStatus string
+
+const (
+	VulnerabilityStatusDetected  VulnerabilityStatus = "detected"
+	VulnerabilityStatusConfirmed VulnerabilityStatus = "confirmed"
+	VulnerabilityStatusDismissed VulnerabilityStatus = "dismissed"
+	VulnerabilityStatusResolved  VulnerabilityStatus = "resolved"
+)
+
+func (e *VulnerabilityStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = VulnerabilityStatus(s)
+	case string:
+		*e = VulnerabilityStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for VulnerabilityStatus: %T", src)
+	}
+	return nil
+}
+
+type NullVulnerabilityStatus struct {
+	VulnerabilityStatus VulnerabilityStatus `json:"vulnerability_status"`
+	Valid               bool                `json:"valid"` // Valid is true if VulnerabilityStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullVulnerabilityStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.VulnerabilityStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.VulnerabilityStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullVulnerabilityStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.VulnerabilityStatus), nil
+}
+
+type VulnerabilityType string
+
+const (
+	VulnerabilityTypeDependency VulnerabilityType = "dependency"
+	VulnerabilityTypeSast       VulnerabilityType = "sast"
+	VulnerabilityTypeSecret     VulnerabilityType = "secret"
+	VulnerabilityTypeMalware    VulnerabilityType = "malware"
+	VulnerabilityTypeDast       VulnerabilityType = "dast"
+	VulnerabilityTypeContainer  VulnerabilityType = "container"
+	VulnerabilityTypeFuzzing    VulnerabilityType = "fuzzing"
+	VulnerabilityTypeManual     VulnerabilityType = "manual"
+	VulnerabilityTypeGeneric    VulnerabilityType = "generic"
+)
+
+func (e *VulnerabilityType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = VulnerabilityType(s)
+	case string:
+		*e = VulnerabilityType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for VulnerabilityType: %T", src)
+	}
+	return nil
+}
+
+type NullVulnerabilityType struct {
+	VulnerabilityType VulnerabilityType `json:"vulnerability_type"`
+	Valid             bool              `json:"valid"` // Valid is true if VulnerabilityType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullVulnerabilityType) Scan(value interface{}) error {
+	if value == nil {
+		ns.VulnerabilityType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.VulnerabilityType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullVulnerabilityType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.VulnerabilityType), nil
+}
+
 type Advisory struct {
 	ID          uuid.UUID       `json:"id"`
 	CanonicalID string          `json:"canonical_id"`
@@ -822,24 +959,6 @@ type Deployment struct {
 	RollbackTargetID uuid.NullUUID    `json:"rollback_target_id"`
 	Notes            sql.NullString   `json:"notes"`
 	CreatedAt        time.Time        `json:"created_at"`
-}
-
-type Finding struct {
-	ID           uuid.UUID       `json:"id"`
-	SnapshotID   uuid.UUID       `json:"snapshot_id"`
-	Tool         string          `json:"tool"`
-	RuleID       string          `json:"rule_id"`
-	Severity     SeverityLevel   `json:"severity"`
-	Status       string          `json:"status"`
-	FilePath     string          `json:"file_path"`
-	StartLine    sql.NullInt32   `json:"start_line"`
-	EndLine      sql.NullInt32   `json:"end_line"`
-	LocationHash string          `json:"location_hash"`
-	Message      string          `json:"message"`
-	Fingerprint  sql.NullString  `json:"fingerprint"`
-	Metadata     json.RawMessage `json:"metadata"`
-	Labels       json.RawMessage `json:"labels"`
-	CreatedAt    time.Time       `json:"created_at"`
 }
 
 type Integration struct {
@@ -1011,39 +1130,6 @@ type ScanProvider struct {
 	CompletedAt     sql.NullTime  `json:"completed_at"`
 }
 
-type SecretFinding struct {
-	ID               uuid.UUID       `json:"id"`
-	SnapshotID       uuid.UUID       `json:"snapshot_id"`
-	Tool             string          `json:"tool"`
-	RuleID           string          `json:"rule_id"`
-	Severity         SeverityLevel   `json:"severity"`
-	Status           string          `json:"status"`
-	StatusNote       string          `json:"status_note"`
-	DiscoveryContext string          `json:"discovery_context"`
-	FilePath         string          `json:"file_path"`
-	StartLine        sql.NullInt32   `json:"start_line"`
-	EndLine          sql.NullInt32   `json:"end_line"`
-	SecretType       string          `json:"secret_type"`
-	SecretHash       string          `json:"secret_hash"`
-	CommitSha        string          `json:"commit_sha"`
-	AuthorEmail      string          `json:"author_email"`
-	Verified         bool            `json:"verified"`
-	Metadata         json.RawMessage `json:"metadata"`
-	Fingerprint      string          `json:"fingerprint"`
-	CreatedAt        time.Time       `json:"created_at"`
-}
-
-type SecretFindingSource struct {
-	ID          uuid.UUID       `json:"id"`
-	FindingID   uuid.UUID       `json:"finding_id"`
-	Tool        string          `json:"tool"`
-	RuleID      string          `json:"rule_id"`
-	FirstSeenAt time.Time       `json:"first_seen_at"`
-	LastSeenAt  time.Time       `json:"last_seen_at"`
-	ScanCount   int32           `json:"scan_count"`
-	Metadata    json.RawMessage `json:"metadata"`
-}
-
 type Snapshot struct {
 	ID             uuid.UUID       `json:"id"`
 	RefID          uuid.UUID       `json:"ref_id"`
@@ -1110,13 +1196,81 @@ type VexStatement struct {
 	UpdatedAt         time.Time            `json:"updated_at"`
 }
 
-type VulnMatch struct {
+type Vulnerability struct {
+	ID                      uuid.UUID           `json:"id"`
+	Type                    string              `json:"type"`
+	SnapshotID              uuid.UUID           `json:"snapshot_id"`
+	Title                   string              `json:"title"`
+	Description             string              `json:"description"`
+	PrimaryIdentifier       json.RawMessage     `json:"primary_identifier"`
+	Identifiers             json.RawMessage     `json:"identifiers"`
+	OriginalSeverity        SeverityLevel       `json:"original_severity"`
+	Severity                SeverityLevel       `json:"severity"`
+	SeverityOverrideReason  sql.NullString      `json:"severity_override_reason"`
+	SeverityOverrideBy      uuid.NullUUID       `json:"severity_override_by"`
+	Status                  string              `json:"status"`
+	DismissalReason         NullDismissalReason `json:"dismissal_reason"`
+	StateComment            sql.NullString      `json:"state_comment"`
+	DetectedAt              time.Time           `json:"detected_at"`
+	ConfirmedAt             sql.NullTime        `json:"confirmed_at"`
+	ConfirmedBy             uuid.NullUUID       `json:"confirmed_by"`
+	DismissedAt             sql.NullTime        `json:"dismissed_at"`
+	DismissedBy             uuid.NullUUID       `json:"dismissed_by"`
+	ResolvedAt              sql.NullTime        `json:"resolved_at"`
+	ResolvedBy              uuid.NullUUID       `json:"resolved_by"`
+	ScannerName             string              `json:"scanner_name"`
+	ScannerVendor           string              `json:"scanner_vendor"`
+	ScannerVersion          string              `json:"scanner_version"`
+	ScannerExternalID       string              `json:"scanner_external_id"`
+	FilePath                sql.NullString      `json:"file_path"`
+	StartLine               sql.NullInt32       `json:"start_line"`
+	EndLine                 sql.NullInt32       `json:"end_line"`
+	LocationHash            sql.NullString      `json:"location_hash"`
+	Fingerprint             string              `json:"fingerprint"`
+	ComponentID             uuid.NullUUID       `json:"component_id"`
+	ComponentName           sql.NullString      `json:"component_name"`
+	ComponentVersion        sql.NullString      `json:"component_version"`
+	ComponentPurl           sql.NullString      `json:"component_purl"`
+	Ecosystem               sql.NullString      `json:"ecosystem"`
+	AdvisoryID              uuid.NullUUID       `json:"advisory_id"`
+	AffectedRangeID         uuid.NullUUID       `json:"affected_range_id"`
+	Language                sql.NullString      `json:"language"`
+	Confidence              sql.NullString      `json:"confidence"`
+	Solution                sql.NullString      `json:"solution"`
+	HasRemediation          bool                `json:"has_remediation"`
+	RemediationLink         sql.NullString      `json:"remediation_link"`
+	Reachability            NullReachability    `json:"reachability"`
+	OwaspTop10              sql.NullString      `json:"owasp_top_10"`
+	DueDate                 sql.NullTime        `json:"due_date"`
+	PresentOnDefaultBranch  bool                `json:"present_on_default_branch"`
+	ResolvedOnDefaultBranch bool                `json:"resolved_on_default_branch"`
+	SecretType              sql.NullString      `json:"secret_type"`
+	SecretHash              sql.NullString      `json:"secret_hash"`
+	CommitSha               sql.NullString      `json:"commit_sha"`
+	AuthorEmail             sql.NullString      `json:"author_email"`
+	Verified                sql.NullBool        `json:"verified"`
+	CreatedBy               uuid.NullUUID       `json:"created_by"`
+	Metadata                json.RawMessage     `json:"metadata"`
+	CreatedAt               time.Time           `json:"created_at"`
+	UpdatedAt               time.Time           `json:"updated_at"`
+	FirstSeenAt             time.Time           `json:"first_seen_at"`
+	LastSeenAt              time.Time           `json:"last_seen_at"`
+}
+
+type VulnerabilityExternalIssue struct {
+	ID              uuid.UUID `json:"id"`
+	VulnerabilityID uuid.UUID `json:"vulnerability_id"`
+	TrackerType     string    `json:"tracker_type"`
+	ExternalID      string    `json:"external_id"`
+	Url             string    `json:"url"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type VulnerabilityStateTransition struct {
 	ID              uuid.UUID     `json:"id"`
-	SnapshotID      uuid.UUID     `json:"snapshot_id"`
-	ComponentID     uuid.UUID     `json:"component_id"`
-	AdvisoryID      uuid.UUID     `json:"advisory_id"`
-	AffectedRangeID uuid.NullUUID `json:"affected_range_id"`
-	IsAffected      bool          `json:"is_affected"`
-	FirstSeenAt     time.Time     `json:"first_seen_at"`
-	LastSeenAt      time.Time     `json:"last_seen_at"`
+	VulnerabilityID uuid.UUID     `json:"vulnerability_id"`
+	State           string        `json:"state"`
+	ChangedBy       uuid.NullUUID `json:"changed_by"`
+	ChangedAt       time.Time     `json:"changed_at"`
+	Comment         string        `json:"comment"`
 }

@@ -316,7 +316,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/compare", s.handleCompareRefs)
 						r.Get("/{repoSlug}/trends", s.handleGetTrends)
 						r.Get("/{repoSlug}/pr/{number}", s.handleGetPRSummary)
-						r.Get("/{repoSlug}/findings", s.handleGetRefFindings)
+						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)

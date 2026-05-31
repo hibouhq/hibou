@@ -2,7 +2,9 @@ package scanner
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/lehibou/internal/advisory"
@@ -30,8 +33,9 @@ type queryStore interface {
 	CreateScanProvider(ctx context.Context, arg dbgen.CreateScanProviderParams) (dbgen.ScanProvider, error)
 	UpdateScanProvider(ctx context.Context, arg dbgen.UpdateScanProviderParams) (dbgen.ScanProvider, error)
 	ListAffectedRangesByPackage(ctx context.Context, arg dbgen.ListAffectedRangesByPackageParams) ([]dbgen.AffectedRange, error)
-	UpsertVulnMatch(ctx context.Context, arg dbgen.UpsertVulnMatchParams) (dbgen.VulnMatch, error)
-	MarkStaleVulnMatches(ctx context.Context, arg dbgen.MarkStaleVulnMatchesParams) error
+	GetAdvisoryByID(ctx context.Context, id uuid.UUID) (dbgen.Advisory, error)
+	CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error)
+	MarkStaleVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) error
 	CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error)
 }
 
@@ -107,7 +111,10 @@ func (s *Service) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 	packageQueries := buildPackageQueries(components)
 	providerSucceeded := 0
 	providerFailed := 0
-	freshMatchIDs := make(map[uuid.UUID]struct{})
+	freshMatchIDsByType := map[string]map[uuid.UUID]struct{}{
+		"dependency": {},
+		"malware":    {},
+	}
 
 	for _, providerName := range resolvedProviders {
 		providerRecord, providerErr := s.queries.CreateScanProvider(ctx, dbgen.CreateScanProviderParams{
@@ -146,15 +153,22 @@ func (s *Service) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 			continue
 		}
 
-		providerMatchIDs, err := s.matchComponents(ctx, snapshotID, components, advisoryMap)
+		providerMatchIDsByType, err := s.matchComponents(ctx, snapshotID, providerName, components, advisoryMap)
 		if err != nil {
 			providerFailed++
 			s.log.Error().Err(err).Str("provider", providerName).Msg("match affected ranges")
 			s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "failed", err.Error())
 			continue
 		}
-		for _, matchID := range providerMatchIDs {
-			freshMatchIDs[matchID] = struct{}{}
+		for vulnType, ids := range providerMatchIDsByType {
+			bucket := freshMatchIDsByType[vulnType]
+			if bucket == nil {
+				bucket = make(map[uuid.UUID]struct{})
+				freshMatchIDsByType[vulnType] = bucket
+			}
+			for _, matchID := range ids {
+				bucket[matchID] = struct{}{}
+			}
 		}
 
 		providerSucceeded++
@@ -172,11 +186,10 @@ func (s *Service) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 	}
 
 	if providerSucceeded > 0 {
-		if err := s.queries.MarkStaleVulnMatches(ctx, dbgen.MarkStaleVulnMatchesParams{
-			SnapshotID:    snapshotID,
-			FreshMatchIds: uniqueMatchIDs(freshMatchIDs),
-		}); err != nil {
-			return scanRecord.ID, s.failScan(ctx, scanRecord.ID, snapshotID, fmt.Errorf("mark stale vuln matches: %w", err))
+		for vulnType, ids := range freshMatchIDsByType {
+			if err := s.queries.MarkStaleVulnerabilities(ctx, snapshotID, vulnType, uniqueMatchIDs(ids)); err != nil {
+				return scanRecord.ID, s.failScan(ctx, scanRecord.ID, snapshotID, fmt.Errorf("mark stale %s vulnerabilities: %w", vulnType, err))
+			}
 		}
 	}
 
@@ -246,7 +259,7 @@ func (s *Service) TriggerRescan(ctx context.Context, snapshotID uuid.UUID, provi
 	return scanID, nil
 }
 
-func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, components []dbgen.Component, advisoryMap map[string]uuid.UUID) ([]uuid.UUID, error) {
+func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, providerName string, components []dbgen.Component, advisoryMap map[string]uuid.UUID) (map[string][]uuid.UUID, error) {
 	if len(advisoryMap) == 0 || len(components) == 0 {
 		return nil, nil
 	}
@@ -257,7 +270,8 @@ func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, com
 	}
 
 	rangeCache := make(map[string][]dbgen.AffectedRange)
-	freshMatchIDs := make([]uuid.UUID, 0)
+	advisoryCache := make(map[uuid.UUID]dbgen.Advisory, len(advisorySet))
+	freshMatchIDs := map[string][]uuid.UUID{"dependency": {}, "malware": {}}
 	for _, component := range components {
 		cacheKey := packageKey(component.Ecosystem, component.Name)
 		ranges, ok := rangeCache[cacheKey]
@@ -290,18 +304,55 @@ func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, com
 				continue
 			}
 
-			rangeID := uuid.NullUUID{UUID: affectedRange.ID, Valid: true}
-			matchRecord, err := s.queries.UpsertVulnMatch(ctx, dbgen.UpsertVulnMatchParams{
-				SnapshotID:      snapshotID,
-				ComponentID:     component.ID,
-				AdvisoryID:      affectedRange.AdvisoryID,
-				AffectedRangeID: rangeID,
-				IsAffected:      true,
+			advisoryRecord, ok := advisoryCache[affectedRange.AdvisoryID]
+			if !ok {
+				loaded, err := s.queries.GetAdvisoryByID(ctx, affectedRange.AdvisoryID)
+				if err != nil {
+					return nil, fmt.Errorf("load advisory %s: %w", affectedRange.AdvisoryID, err)
+				}
+				advisoryRecord = loaded
+				advisoryCache[affectedRange.AdvisoryID] = advisoryRecord
+			}
+			vulnType := "dependency"
+			if advisoryRecord.IsMalware {
+				vulnType = "malware"
+			}
+			vulnerability, err := s.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+				Type:              vulnType,
+				SnapshotID:        snapshotID,
+				Title:             firstNonEmpty(strings.TrimSpace(advisoryRecord.Title), strings.TrimSpace(advisoryRecord.CanonicalID)),
+				Description:       strings.TrimSpace(advisoryRecord.Description),
+				PrimaryIdentifier: advisoryIdentifier(advisoryRecord.CanonicalID),
+				Identifiers:       json.RawMessage(`[]`),
+				OriginalSeverity:  advisoryRecord.Severity,
+				Severity:          advisoryRecord.Severity,
+				Status:            "detected",
+				ScannerName:       providerName,
+				Fingerprint:       dependencyFingerprint(affectedRange.AdvisoryID, component.ID),
+				ComponentID:       uuid.NullUUID{UUID: component.ID, Valid: true},
+				ComponentName:     sql.NullString{String: component.Name, Valid: strings.TrimSpace(component.Name) != ""},
+				ComponentVersion:  sql.NullString{String: component.Version, Valid: strings.TrimSpace(component.Version) != ""},
+				ComponentPurl:     sql.NullString{String: component.Purl, Valid: strings.TrimSpace(component.Purl) != ""},
+				Ecosystem:         sql.NullString{String: component.Ecosystem, Valid: strings.TrimSpace(component.Ecosystem) != ""},
+				AdvisoryID:        uuid.NullUUID{UUID: affectedRange.AdvisoryID, Valid: true},
+				AffectedRangeID:   uuid.NullUUID{UUID: affectedRange.ID, Valid: true},
 			})
 			if err != nil {
-				return nil, fmt.Errorf("upsert vuln match for component %s advisory %s: %w", component.ID, affectedRange.AdvisoryID, err)
+				if isUniqueViolation(err) {
+					// TODO(adr-012): merge multi-provider dependency sources into vulnerability metadata when duplicate fingerprints collide.
+					continue
+				}
+				return nil, fmt.Errorf("create vulnerability for component %s advisory %s: %w", component.ID, affectedRange.AdvisoryID, err)
 			}
-			freshMatchIDs = append(freshMatchIDs, matchRecord.ID)
+			freshMatchIDs[vulnType] = append(freshMatchIDs[vulnType], vulnerability.ID)
+			s.publish(ctx, events.VulnerabilityCreated, map[string]any{
+				"id":          vulnerability.ID.String(),
+				"org_id":      "",
+				"snapshot_id": snapshotID.String(),
+				"advisory_id": affectedRange.AdvisoryID.String(),
+				"severity":    strings.ToLower(string(vulnerability.Severity)),
+				"type":        vulnerability.Type,
+			})
 		}
 	}
 
@@ -445,4 +496,31 @@ func uniqueMatchIDs(values map[uuid.UUID]struct{}) []uuid.UUID {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+func dependencyFingerprint(advisoryID, componentID uuid.UUID) string {
+	sum := sha256.Sum256([]byte(advisoryID.String() + ":" + componentID.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func advisoryIdentifier(canonicalID string) json.RawMessage {
+	trimmed := strings.TrimSpace(canonicalID)
+	if trimmed == "" {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(fmt.Sprintf(`{"type":"advisory","value":%q}`, trimmed))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func isUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }

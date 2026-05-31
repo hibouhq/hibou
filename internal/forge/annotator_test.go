@@ -13,6 +13,7 @@ import (
 
 	"github.com/hibouhq/lehibou/internal/delta"
 	"github.com/hibouhq/lehibou/internal/events"
+	storepkg "github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
@@ -100,21 +101,17 @@ type annotatorStore struct {
 }
 
 type deltaTestStore struct {
-	vulnsBySnapshot    map[uuid.UUID][]dbgen.VulnMatch
-	findingsBySnapshot map[uuid.UUID][]dbgen.Finding
-	advisories         map[uuid.UUID]dbgen.Advisory
-	repoGates          map[uuid.UUID][]dbgen.QualityGate
-	orgGates           map[uuid.UUID][]dbgen.QualityGate
+	vulnsBySnapshot map[uuid.UUID][]storepkg.Vulnerability
+	repoGates       map[uuid.UUID][]dbgen.QualityGate
+	orgGates        map[uuid.UUID][]dbgen.QualityGate
 }
 
 func newAnnotatorStore() *annotatorStore {
 	return &annotatorStore{
 		deltaTestStore: &deltaTestStore{
-			vulnsBySnapshot:    map[uuid.UUID][]dbgen.VulnMatch{},
-			findingsBySnapshot: map[uuid.UUID][]dbgen.Finding{},
-			advisories:         map[uuid.UUID]dbgen.Advisory{},
-			repoGates:          map[uuid.UUID][]dbgen.QualityGate{},
-			orgGates:           map[uuid.UUID][]dbgen.QualityGate{},
+			vulnsBySnapshot: map[uuid.UUID][]storepkg.Vulnerability{},
+			repoGates:       map[uuid.UUID][]dbgen.QualityGate{},
+			orgGates:        map[uuid.UUID][]dbgen.QualityGate{},
 		},
 		repos:          map[uuid.UUID]dbgen.Repository{},
 		snapshots:      map[uuid.UUID]dbgen.Snapshot{},
@@ -123,25 +120,8 @@ func newAnnotatorStore() *annotatorStore {
 	}
 }
 
-func (m *deltaTestStore) ListVulnMatchesBySnapshot(_ context.Context, snapshotID uuid.UUID) ([]dbgen.VulnMatch, error) {
-	return append([]dbgen.VulnMatch(nil), m.vulnsBySnapshot[snapshotID]...), nil
-}
-
-func (m *deltaTestStore) ListFindingsBySnapshot(_ context.Context, arg dbgen.ListFindingsBySnapshotParams) ([]dbgen.Finding, error) {
-	rows := append([]dbgen.Finding(nil), m.findingsBySnapshot[arg.SnapshotID]...)
-	start := int(arg.Offset)
-	if start >= len(rows) {
-		return nil, nil
-	}
-	end := start + int(arg.Limit)
-	if end > len(rows) {
-		end = len(rows)
-	}
-	return rows[start:end], nil
-}
-
-func (m *deltaTestStore) GetAdvisoryByID(_ context.Context, id uuid.UUID) (dbgen.Advisory, error) {
-	return m.advisories[id], nil
+func (m *deltaTestStore) ListAllVulnerabilitiesBySnapshot(_ context.Context, snapshotID uuid.UUID) ([]storepkg.Vulnerability, error) {
+	return append([]storepkg.Vulnerability(nil), m.vulnsBySnapshot[snapshotID]...), nil
 }
 
 func (m *deltaTestStore) ListQualityGatesByRepo(_ context.Context, repoID uuid.UUID) ([]dbgen.QualityGate, error) {
@@ -177,15 +157,13 @@ func TestAnnotatorPostsFailureStatusForPRSnapshot(t *testing.T) {
 	targetRefID := uuid.New()
 	prSnapshotID := uuid.New()
 	targetSnapshotID := uuid.New()
-	advisoryID := uuid.New()
 
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
 	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
 	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
-	store.vulnsBySnapshot[prSnapshotID] = []dbgen.VulnMatch{{AdvisoryID: advisoryID}}
-	store.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "CVE-2026-1234", Severity: dbgen.SeverityLevelCritical}
+	store.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-1234", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-annotator"}}
 	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 0, MaxHigh: 0, MaxMedium: sql.NullInt32{Int32: 0, Valid: true}, Enabled: true}}
 
 	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
@@ -239,7 +217,7 @@ func TestAnnotatorUsesRepoConfigWeaknessGateWhenAvailable(t *testing.T) {
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "release/1.0", RefType: dbgen.RefTypeBranch}
 	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
 	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
-	store.findingsBySnapshot[prSnapshotID] = []dbgen.Finding{{Fingerprint: sql.NullString{String: "fp-1", Valid: true}, Tool: "semgrep", RuleID: "R1", Severity: dbgen.SeverityLevelCritical, FilePath: "main.go", Message: "new"}}
+	store.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "sast", Title: "new", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-1"}}
 	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 10, MaxHigh: 10, MaxMedium: sql.NullInt32{Int32: 10, Valid: true}, MaxNewFindings: sql.NullInt32{Int32: 0, Valid: true}, Enabled: true}}
 
 	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())

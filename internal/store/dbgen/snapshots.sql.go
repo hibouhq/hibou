@@ -289,10 +289,10 @@ func (q *Queries) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.
 }
 
 const listComponentsBySnapshotWithVulns = `-- name: ListComponentsBySnapshotWithVulns :many
-SELECT c.id, c.purl, c.name, c.version, c.ecosystem, c.licenses, c.created_at, COUNT(DISTINCT vm.advisory_id)::bigint AS vuln_count
+SELECT c.id, c.purl, c.name, c.version, c.ecosystem, c.licenses, c.created_at, COUNT(DISTINCT v.id)::bigint AS vuln_count
 FROM components c
 JOIN snapshot_components sc ON sc.component_id = c.id
-LEFT JOIN vuln_matches vm ON vm.snapshot_id = sc.snapshot_id AND vm.component_id = c.id AND vm.is_affected = TRUE
+LEFT JOIN vulnerabilities v ON v.snapshot_id = sc.snapshot_id AND v.component_id = c.id AND v.status NOT IN ('resolved', 'dismissed')
 WHERE sc.snapshot_id = $1
 GROUP BY c.id
 ORDER BY c.name, c.version

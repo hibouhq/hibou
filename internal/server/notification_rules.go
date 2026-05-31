@@ -401,7 +401,7 @@ func isValidNotificationEventType(value string) bool {
 		string(events.ScanFailed),
 		string(events.ScanStale),
 		string(events.VulnDiscovered),
-		string(events.FindingCreated),
+		string(events.VulnerabilityCreated),
 		string(events.GatePassed),
 		string(events.GateFailed),
 		string(events.NotificationNew):

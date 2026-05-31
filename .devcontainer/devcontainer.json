@@ -65,6 +65,7 @@
       "extensions": [
         "golang.Go",
         "Vue.volar",
+        "vitest.explorer",
         "bradlc.vscode-tailwindcss",
         "dbaeumer.vscode-eslint",
         "eamodio.gitlens",

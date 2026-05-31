@@ -8,57 +8,36 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/store"
+	storepkg "github.com/hibouhq/lehibou/internal/store"
 	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
 type mockStore struct {
-	vulnsBySnapshot    map[uuid.UUID][]dbgen.VulnMatch
-	findingsBySnapshot map[uuid.UUID][]dbgen.Finding
-	advisories         map[uuid.UUID]dbgen.Advisory
-	repoGates          map[uuid.UUID][]dbgen.QualityGate
-	orgGates           map[uuid.UUID][]dbgen.QualityGate
-	vexByKey           map[string]dbgen.VexStatement
-	snapshots          map[uuid.UUID]*store.Snapshot
-	refs               map[uuid.UUID]*store.Ref
-	repos              map[uuid.UUID]*store.Repository
-	components         map[uuid.UUID]dbgen.Component
+	vulnsBySnapshot map[uuid.UUID][]storepkg.Vulnerability
+	repoGates       map[uuid.UUID][]dbgen.QualityGate
+	orgGates        map[uuid.UUID][]dbgen.QualityGate
+	vexByKey        map[string]dbgen.VexStatement
+	snapshots       map[uuid.UUID]*storepkg.Snapshot
+	refs            map[uuid.UUID]*storepkg.Ref
+	repos           map[uuid.UUID]*storepkg.Repository
+	components      map[uuid.UUID]dbgen.Component
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		vulnsBySnapshot:    map[uuid.UUID][]dbgen.VulnMatch{},
-		findingsBySnapshot: map[uuid.UUID][]dbgen.Finding{},
-		advisories:         map[uuid.UUID]dbgen.Advisory{},
-		repoGates:          map[uuid.UUID][]dbgen.QualityGate{},
-		orgGates:           map[uuid.UUID][]dbgen.QualityGate{},
-		vexByKey:           map[string]dbgen.VexStatement{},
-		snapshots:          map[uuid.UUID]*store.Snapshot{},
-		refs:               map[uuid.UUID]*store.Ref{},
-		repos:              map[uuid.UUID]*store.Repository{},
-		components:         map[uuid.UUID]dbgen.Component{},
+		vulnsBySnapshot: map[uuid.UUID][]storepkg.Vulnerability{},
+		repoGates:       map[uuid.UUID][]dbgen.QualityGate{},
+		orgGates:        map[uuid.UUID][]dbgen.QualityGate{},
+		vexByKey:        map[string]dbgen.VexStatement{},
+		snapshots:       map[uuid.UUID]*storepkg.Snapshot{},
+		refs:            map[uuid.UUID]*storepkg.Ref{},
+		repos:           map[uuid.UUID]*storepkg.Repository{},
+		components:      map[uuid.UUID]dbgen.Component{},
 	}
 }
 
-func (m *mockStore) ListVulnMatchesBySnapshot(_ context.Context, snapshotID uuid.UUID) ([]dbgen.VulnMatch, error) {
-	return append([]dbgen.VulnMatch(nil), m.vulnsBySnapshot[snapshotID]...), nil
-}
-
-func (m *mockStore) ListFindingsBySnapshot(_ context.Context, arg dbgen.ListFindingsBySnapshotParams) ([]dbgen.Finding, error) {
-	rows := append([]dbgen.Finding(nil), m.findingsBySnapshot[arg.SnapshotID]...)
-	start := int(arg.Offset)
-	if start >= len(rows) {
-		return nil, nil
-	}
-	end := start + int(arg.Limit)
-	if end > len(rows) {
-		end = len(rows)
-	}
-	return rows[start:end], nil
-}
-
-func (m *mockStore) GetAdvisoryByID(_ context.Context, id uuid.UUID) (dbgen.Advisory, error) {
-	return m.advisories[id], nil
+func (m *mockStore) ListAllVulnerabilitiesBySnapshot(_ context.Context, snapshotID uuid.UUID) ([]storepkg.Vulnerability, error) {
+	return append([]storepkg.Vulnerability(nil), m.vulnsBySnapshot[snapshotID]...), nil
 }
 
 func (m *mockStore) ListQualityGatesByRepo(_ context.Context, repoID uuid.UUID) ([]dbgen.QualityGate, error) {
@@ -76,15 +55,15 @@ func (m *mockStore) GetEffectiveVEXStatus(_ context.Context, arg dbgen.GetEffect
 	return dbgen.VexStatement{}, sql.ErrNoRows
 }
 
-func (m *mockStore) GetSnapshotByID(_ context.Context, id uuid.UUID) (*store.Snapshot, error) {
+func (m *mockStore) GetSnapshotByID(_ context.Context, id uuid.UUID) (*storepkg.Snapshot, error) {
 	return m.snapshots[id], nil
 }
 
-func (m *mockStore) GetRefByID(_ context.Context, id uuid.UUID) (*store.Ref, error) {
+func (m *mockStore) GetRefByID(_ context.Context, id uuid.UUID) (*storepkg.Ref, error) {
 	return m.refs[id], nil
 }
 
-func (m *mockStore) GetRepositoryByID(_ context.Context, id uuid.UUID) (*store.Repository, error) {
+func (m *mockStore) GetRepositoryByID(_ context.Context, id uuid.UUID) (*storepkg.Repository, error) {
 	return m.repos[id], nil
 }
 
@@ -114,55 +93,51 @@ func TestComputeDeltaEmptySnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeDelta returned error: %v", err)
 	}
-	if len(result.NewVulns) != 0 || len(result.ResolvedVulns) != 0 || len(result.NewFindings) != 0 || len(result.ResolvedFindings) != 0 {
+	if len(result.New) != 0 || len(result.Resolved) != 0 {
 		t.Fatalf("expected empty delta, got %#v", result)
 	}
-	if result.UnchangedVulns != 0 || result.UnchangedFindings != 0 {
-		t.Fatalf("expected zero unchanged counts, got %#v", result)
+	if result.Unchanged != 0 {
+		t.Fatalf("expected zero unchanged count, got %#v", result)
 	}
 }
 
 func TestComputeDeltaDetectsNewAndResolvedVulns(t *testing.T) {
-	store := newMockStore()
+	mock := newMockStore()
 	prSnapshotID := uuid.New()
 	targetSnapshotID := uuid.New()
-	newAdvisoryID := uuid.New()
-	resolvedAdvisoryID := uuid.New()
-	store.vulnsBySnapshot[prSnapshotID] = []dbgen.VulnMatch{{AdvisoryID: newAdvisoryID}}
-	store.vulnsBySnapshot[targetSnapshotID] = []dbgen.VulnMatch{{AdvisoryID: resolvedAdvisoryID}}
-	store.advisories[newAdvisoryID] = dbgen.Advisory{ID: newAdvisoryID, CanonicalID: "CVE-2026-0001", Severity: dbgen.SeverityLevelCritical}
-	store.advisories[resolvedAdvisoryID] = dbgen.Advisory{ID: resolvedAdvisoryID, CanonicalID: "CVE-2026-0002", Severity: dbgen.SeverityLevelHigh}
-	service := NewService(store, zerolog.Nop())
+	mock.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-0001", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-new"}}
+	mock.vulnsBySnapshot[targetSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-0002", Severity: storepkg.SeverityLevelHigh, Fingerprint: "fp-old"}}
+	service := NewService(mock, zerolog.Nop())
 
 	result, err := service.ComputeDelta(context.Background(), prSnapshotID, targetSnapshotID)
 	if err != nil {
 		t.Fatalf("ComputeDelta returned error: %v", err)
 	}
-	if len(result.NewVulns) != 1 || result.NewVulns[0].CanonicalID != "CVE-2026-0001" {
-		t.Fatalf("expected one new vuln, got %#v", result.NewVulns)
+	if len(result.New) != 1 || result.New[0].Title != "CVE-2026-0001" {
+		t.Fatalf("expected one new vulnerability, got %#v", result.New)
 	}
-	if len(result.ResolvedVulns) != 1 || result.ResolvedVulns[0].CanonicalID != "CVE-2026-0002" {
-		t.Fatalf("expected one resolved vuln, got %#v", result.ResolvedVulns)
+	if len(result.Resolved) != 1 || result.Resolved[0].Title != "CVE-2026-0002" {
+		t.Fatalf("expected one resolved vulnerability, got %#v", result.Resolved)
 	}
 }
 
 func TestComputeDeltaDetectsFindingChanges(t *testing.T) {
-	store := newMockStore()
+	mock := newMockStore()
 	prSnapshotID := uuid.New()
 	targetSnapshotID := uuid.New()
-	store.findingsBySnapshot[prSnapshotID] = []dbgen.Finding{{Fingerprint: sql.NullString{String: "fp-new", Valid: true}, Tool: "semgrep", RuleID: "R1", Severity: dbgen.SeverityLevelHigh, FilePath: "main.go", Message: "new"}}
-	store.findingsBySnapshot[targetSnapshotID] = []dbgen.Finding{{Fingerprint: sql.NullString{String: "fp-old", Valid: true}, Tool: "semgrep", RuleID: "R2", Severity: dbgen.SeverityLevelLow, FilePath: "old.go", Message: "old"}}
-	service := NewService(store, zerolog.Nop())
+	mock.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "sast", Title: "new", Severity: storepkg.SeverityLevelHigh, Fingerprint: "fp-new"}}
+	mock.vulnsBySnapshot[targetSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "sast", Title: "old", Severity: storepkg.SeverityLevelLow, Fingerprint: "fp-old"}}
+	service := NewService(mock, zerolog.Nop())
 
 	result, err := service.ComputeDelta(context.Background(), prSnapshotID, targetSnapshotID)
 	if err != nil {
 		t.Fatalf("ComputeDelta returned error: %v", err)
 	}
-	if len(result.NewFindings) != 1 || result.NewFindings[0].Fingerprint != "fp-new" {
-		t.Fatalf("expected one new finding, got %#v", result.NewFindings)
+	if len(result.New) != 1 || result.New[0].Fingerprint != "fp-new" {
+		t.Fatalf("expected one new vulnerability, got %#v", result.New)
 	}
-	if len(result.ResolvedFindings) != 1 || result.ResolvedFindings[0].Fingerprint != "fp-old" {
-		t.Fatalf("expected one resolved finding, got %#v", result.ResolvedFindings)
+	if len(result.Resolved) != 1 || result.Resolved[0].Fingerprint != "fp-old" {
+		t.Fatalf("expected one resolved vulnerability, got %#v", result.Resolved)
 	}
 }
 
@@ -176,16 +151,15 @@ func TestComputeDeltaKeepsAdvisoryWhenOnlyOneComponentIsVEXed(t *testing.T) {
 	advisoryID := uuid.New()
 	componentAID := uuid.New()
 	componentBID := uuid.New()
-	mock.snapshots[prSnapshotID] = &store.Snapshot{ID: prSnapshotID, RefID: refID}
-	mock.refs[refID] = &store.Ref{ID: refID, RepoID: repoID}
-	mock.repos[repoID] = &store.Repository{ID: repoID, OrgID: orgID}
+	mock.snapshots[prSnapshotID] = &storepkg.Snapshot{ID: prSnapshotID, RefID: refID}
+	mock.refs[refID] = &storepkg.Ref{ID: refID, RepoID: repoID}
+	mock.repos[repoID] = &storepkg.Repository{ID: repoID, OrgID: orgID}
 	mock.components[componentAID] = dbgen.Component{ID: componentAID, Purl: "pkg:golang/example/a@1.0.0"}
 	mock.components[componentBID] = dbgen.Component{ID: componentBID, Purl: "pkg:golang/example/b@1.0.0"}
-	mock.vulnsBySnapshot[prSnapshotID] = []dbgen.VulnMatch{
-		{AdvisoryID: advisoryID, ComponentID: componentAID},
-		{AdvisoryID: advisoryID, ComponentID: componentBID},
+	mock.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{
+		{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-1000", Severity: storepkg.SeverityLevelHigh, Fingerprint: "fp-a", AdvisoryID: &advisoryID, ComponentID: &componentAID},
+		{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-1000", Severity: storepkg.SeverityLevelHigh, Fingerprint: "fp-b", AdvisoryID: &advisoryID, ComponentID: &componentBID},
 	}
-	mock.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "CVE-2026-1000", Severity: dbgen.SeverityLevelHigh}
 	mock.vexByKey[mock.vexLookupKey(dbgen.GetEffectiveVEXStatusParams{
 		OrgID:         orgID,
 		AdvisoryID:    advisoryID,
@@ -198,16 +172,16 @@ func TestComputeDeltaKeepsAdvisoryWhenOnlyOneComponentIsVEXed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeDelta returned error: %v", err)
 	}
-	if len(result.NewVulns) != 1 || result.NewVulns[0].CanonicalID != "CVE-2026-1000" {
-		t.Fatalf("expected advisory to remain because one component is still affected, got %#v", result.NewVulns)
+	if len(result.New) != 1 || result.New[0].Title != "CVE-2026-1000" {
+		t.Fatalf("expected vulnerability to remain because one component is still affected, got %#v", result.New)
 	}
 }
 
 func TestEvaluateGatesPassAndFail(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
-	store := newMockStore()
-	store.repoGates[repoID] = []dbgen.QualityGate{{
+	mock := newMockStore()
+	mock.repoGates[repoID] = []dbgen.QualityGate{{
 		ID:                uuid.New(),
 		OrgID:             orgID,
 		RepoID:            uuid.NullUUID{UUID: repoID, Valid: true},
@@ -219,9 +193,9 @@ func TestEvaluateGatesPassAndFail(t *testing.T) {
 		Enabled:           true,
 		FindingSeverities: []string{"high", "critical"},
 	}}
-	service := NewService(store, zerolog.Nop())
+	service := NewService(mock, zerolog.Nop())
 
-	pass, err := service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{NewVulns: []VulnDelta{{Severity: "high"}}, NewFindings: []FindingDelta{{Severity: "low"}}})
+	pass, err := service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelHigh}}})
 	if err != nil {
 		t.Fatalf("EvaluateGates returned error: %v", err)
 	}
@@ -229,7 +203,7 @@ func TestEvaluateGatesPassAndFail(t *testing.T) {
 		t.Fatalf("expected passing gate result, got %#v", pass)
 	}
 
-	fail, err := service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{NewVulns: []VulnDelta{{Severity: "critical"}}, NewFindings: []FindingDelta{{Severity: "high"}, {Severity: "critical"}}})
+	fail, err := service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelCritical}, {Severity: storepkg.SeverityLevelHigh}, {Severity: storepkg.SeverityLevelCritical}}})
 	if err != nil {
 		t.Fatalf("EvaluateGates returned error: %v", err)
 	}
@@ -241,8 +215,8 @@ func TestEvaluateGatesPassAndFail(t *testing.T) {
 func TestEvaluateGatesFallsBackToOrgWideGatesOnlyWhenRepoHasNone(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
-	store := newMockStore()
-	store.orgGates[orgID] = []dbgen.QualityGate{{
+	mock := newMockStore()
+	mock.orgGates[orgID] = []dbgen.QualityGate{{
 		ID:          uuid.New(),
 		OrgID:       orgID,
 		Name:        "org gate",
@@ -250,9 +224,9 @@ func TestEvaluateGatesFallsBackToOrgWideGatesOnlyWhenRepoHasNone(t *testing.T) {
 		MaxHigh:     0,
 		Enabled:     true,
 	}}
-	service := NewService(store, zerolog.Nop())
+	service := NewService(mock, zerolog.Nop())
 
-	result, err := service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{NewVulns: []VulnDelta{{Severity: "high"}}})
+	result, err := service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelHigh}}})
 	if err != nil {
 		t.Fatalf("EvaluateGates returned error: %v", err)
 	}
@@ -260,7 +234,7 @@ func TestEvaluateGatesFallsBackToOrgWideGatesOnlyWhenRepoHasNone(t *testing.T) {
 		t.Fatalf("expected org-wide gate fallback to fail, got %#v", result)
 	}
 
-	store.repoGates[repoID] = []dbgen.QualityGate{{
+	mock.repoGates[repoID] = []dbgen.QualityGate{{
 		ID:          uuid.New(),
 		OrgID:       orgID,
 		RepoID:      uuid.NullUUID{UUID: repoID, Valid: true},
@@ -270,7 +244,7 @@ func TestEvaluateGatesFallsBackToOrgWideGatesOnlyWhenRepoHasNone(t *testing.T) {
 		Enabled:     true,
 	}}
 
-	result, err = service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{NewVulns: []VulnDelta{{Severity: "high"}}})
+	result, err = service.EvaluateGates(context.Background(), repoID, orgID, &DeltaResult{New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelHigh}}})
 	if err != nil {
 		t.Fatalf("EvaluateGates returned error: %v", err)
 	}
@@ -282,8 +256,8 @@ func TestEvaluateGatesFallsBackToOrgWideGatesOnlyWhenRepoHasNone(t *testing.T) {
 func TestEvaluateGatesWithConfigOverridesDBWeaknessGates(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
-	store := newMockStore()
-	store.repoGates[repoID] = []dbgen.QualityGate{{
+	mock := newMockStore()
+	mock.repoGates[repoID] = []dbgen.QualityGate{{
 		ID:             uuid.New(),
 		OrgID:          orgID,
 		RepoID:         uuid.NullUUID{UUID: repoID, Valid: true},
@@ -293,11 +267,11 @@ func TestEvaluateGatesWithConfigOverridesDBWeaknessGates(t *testing.T) {
 		MaxNewFindings: sql.NullInt32{Int32: 0, Valid: true},
 		Enabled:        true,
 	}}
-	service := NewService(store, zerolog.Nop())
+	service := NewService(mock, zerolog.Nop())
 	weaknessGate := &WeaknessGate{MaxCritical: intPtr(1), MaxHigh: intPtr(1)}
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
-		NewFindings: []FindingDelta{{Severity: "high"}},
+		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelMedium}},
 	}, weaknessGate)
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
@@ -310,8 +284,8 @@ func TestEvaluateGatesWithConfigOverridesDBWeaknessGates(t *testing.T) {
 func TestEvaluateGatesWithConfigCanDisableWeaknessGates(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
-	store := newMockStore()
-	store.repoGates[repoID] = []dbgen.QualityGate{{
+	mock := newMockStore()
+	mock.repoGates[repoID] = []dbgen.QualityGate{{
 		ID:             uuid.New(),
 		OrgID:          orgID,
 		RepoID:         uuid.NullUUID{UUID: repoID, Valid: true},
@@ -321,12 +295,12 @@ func TestEvaluateGatesWithConfigCanDisableWeaknessGates(t *testing.T) {
 		MaxNewFindings: sql.NullInt32{Int32: 0, Valid: true},
 		Enabled:        true,
 	}}
-	service := NewService(store, zerolog.Nop())
+	service := NewService(mock, zerolog.Nop())
 	disabled := false
 	weaknessGate := &WeaknessGate{Enabled: &disabled}
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
-		NewFindings: []FindingDelta{{Severity: "critical"}},
+		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelMedium}},
 	}, weaknessGate)
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
@@ -339,8 +313,8 @@ func TestEvaluateGatesWithConfigCanDisableWeaknessGates(t *testing.T) {
 func TestEvaluateGatesWithConfigKeepsDBVulnerabilityGates(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
-	store := newMockStore()
-	store.repoGates[repoID] = []dbgen.QualityGate{{
+	mock := newMockStore()
+	mock.repoGates[repoID] = []dbgen.QualityGate{{
 		ID:          uuid.New(),
 		OrgID:       orgID,
 		RepoID:      uuid.NullUUID{UUID: repoID, Valid: true},
@@ -349,11 +323,11 @@ func TestEvaluateGatesWithConfigKeepsDBVulnerabilityGates(t *testing.T) {
 		MaxHigh:     0,
 		Enabled:     true,
 	}}
-	service := NewService(store, zerolog.Nop())
+	service := NewService(mock, zerolog.Nop())
 	weaknessGate := &WeaknessGate{MaxCritical: intPtr(10)}
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
-		NewVulns: []VulnDelta{{Severity: "critical"}},
+		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelCritical}},
 	}, weaknessGate)
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)

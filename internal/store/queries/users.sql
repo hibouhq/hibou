@@ -8,11 +8,6 @@ SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, u
 FROM users
 WHERE id = $1;
 
--- name: GetUserByEmail :one
-SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
-FROM users
-WHERE email = $1;
-
 -- name: GetUserByProviderID :one
 SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
 FROM users

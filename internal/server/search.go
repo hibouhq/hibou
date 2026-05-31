@@ -62,12 +62,10 @@ func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	switch resultType {
 	case "", "all":
 		results, total, err = s.searchAllTypes(r, org.ID, query, pagination)
-	case "vuln", "vulnerability", "vulnerabilities":
-		results, total, err = s.searchAdvisories(r, org.ID, query, severity, pagination.PerPage, pagination.Offset)
 	case "component", "components":
 		results, total, err = s.searchComponents(r, org.ID, query, pagination.PerPage, pagination.Offset)
-	case "finding", "findings":
-		results, total, err = s.searchFindings(r, org.ID, query, severity, pagination.PerPage, pagination.Offset)
+	case "finding", "findings", "vulnerability", "vulnerabilities":
+		results, total, err = s.searchVulnerabilities(r, org.ID, query, severity, pagination.PerPage, pagination.Offset)
 	case "client", "clients":
 		results, total, err = s.searchClients(r, org.ID, query, pagination.PerPage, pagination.Offset)
 	default:
@@ -99,7 +97,7 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 	if err != nil {
 		return nil, 0, err
 	}
-	findings, findingTotal, err := s.searchFindings(r, orgID, query, "", fetchLimit, 0)
+	vulnerabilities, vulnerabilityTotal, err := s.searchVulnerabilities(r, orgID, query, "", fetchLimit, 0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -109,7 +107,7 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 	}
 
 	results := append(advisories, components...)
-	results = append(results, findings...)
+	results = append(results, vulnerabilities...)
 	results = append(results, clients...)
 	sort.SliceStable(results, func(i, j int) bool {
 		left := results[i]
@@ -120,7 +118,7 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 		return left.Type < right.Type
 	})
 
-	return paginateSlice(results, pagination.Offset, pagination.PerPage), advisoryTotal + componentTotal + findingTotal + clientTotal, nil
+	return paginateSlice(results, pagination.Offset, pagination.PerPage), advisoryTotal + componentTotal + vulnerabilityTotal + clientTotal, nil
 }
 
 func (s *Server) searchAdvisories(r *http.Request, orgID uuid.UUID, query, severity string, limit, offset int) ([]searchResultResponse, int, error) {
@@ -178,21 +176,25 @@ func (s *Server) searchComponents(r *http.Request, orgID uuid.UUID, query string
 	return results, total, nil
 }
 
-func (s *Server) searchFindings(r *http.Request, orgID uuid.UUID, query, severity string, limit, offset int) ([]searchResultResponse, int, error) {
-	rows, total, err := s.queries.SearchFindings(r.Context(), orgID, query, severity, limit, offset)
+func (s *Server) searchVulnerabilities(r *http.Request, orgID uuid.UUID, query, severity string, limit, offset int) ([]searchResultResponse, int, error) {
+	rows, total, err := s.queries.SearchVulnerabilities(r.Context(), orgID, query, severity, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
 	results := make([]searchResultResponse, 0, len(rows))
-	for _, finding := range rows {
-		severityValue := string(finding.Severity)
+	for _, vulnerability := range rows {
+		severityValue := string(vulnerability.Severity)
+		title := strings.TrimSpace(vulnerability.Title)
+		if title == "" {
+			title = stringValueFromJSONMap(vulnerability.PrimaryIdentifier, "value")
+		}
 		results = append(results, searchResultResponse{
-			Type:     "finding",
-			ID:       finding.ID.String(),
-			Title:    finding.RuleID,
-			Subtitle: finding.Tool + " • " + finding.Message,
+			Type:     "vulnerability",
+			ID:       vulnerability.ID.String(),
+			Title:    title,
+			Subtitle: vulnerability.ScannerName + " • " + vulnerability.Description,
 			Severity: &severityValue,
-			Metadata: map[string]any{"snapshot_id": finding.SnapshotID.String(), "file_path": finding.FilePath, "tool": finding.Tool},
+			Metadata: map[string]any{"snapshot_id": vulnerability.SnapshotID.String(), "file_path": vulnerability.FilePath, "tool": vulnerability.ScannerName, "type": vulnerability.Type},
 		})
 	}
 	return results, total, nil

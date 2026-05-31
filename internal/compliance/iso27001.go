@@ -60,8 +60,7 @@ type ISO27001Store interface {
 	CountAuditLogsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
 	ListAuditLogs(ctx context.Context, arg dbgen.ListAuditLogsParams) ([]dbgen.AuditLog, error)
 	ListQualityGatesByOrg(ctx context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error)
-	CountVulnMatchesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
-	CountFindingsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
+	CountVulnerabilitiesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
 	CountScansByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
 	LatestScanByOrg(ctx context.Context, orgID uuid.UUID) (time.Time, error)
 	CountMalwareAdvisoriesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
@@ -104,11 +103,7 @@ func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, a
 	if err != nil {
 		return nil, err
 	}
-	vulnMatchCount, err := s.isoStore.CountVulnMatchesByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	findingCount, err := s.isoStore.CountFindingsByOrg(ctx, orgID)
+	vulnerabilityCount, err := s.isoStore.CountVulnerabilitiesByOrg(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +150,7 @@ func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, a
 				Coverage:    "full",
 				Evidence: []EvidenceItem{
 					evidenceItem("repositories", "Repositories in scope for vulnerability management", repoCount, "repositories"),
-					evidenceItem("vulnerability_scanning", "Affected vulnerability matches tracked across the organization", vulnMatchCount, "vuln_matches"),
+					evidenceItem("vulnerability_scanning", "Active vulnerabilities tracked across the organization", vulnerabilityCount, "vulnerabilities"),
 					evidenceItem("vex_statements", "VEX statements available to refine exploitability status", vexCount, "vex_statements"),
 					evidenceItem("scans", "Recorded scan executions across repository snapshots", scanCount, "scans"),
 					evidenceItem("scan_freshness_days", fmt.Sprintf("Days since most recent completed scan (%s)", latestScanAt.UTC().Format(time.RFC3339)), scanFreshnessDays, "scans"),
@@ -175,7 +170,7 @@ func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, a
 				ControlName: "Secure coding",
 				Coverage:    "full",
 				Evidence: []EvidenceItem{
-					evidenceItem("security_findings", "Security findings captured from static analysis and other application security tooling", findingCount, "findings"),
+					evidenceItem("security_vulnerabilities", "Application and supply-chain vulnerabilities captured from security tooling", vulnerabilityCount, "vulnerabilities"),
 				},
 			},
 			{

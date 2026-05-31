@@ -39,18 +39,16 @@ func (a *StoreAdapter) ListAdvisoryProviderStats(ctx context.Context, orgID uuid
 	return stats, nil
 }
 
-func (a *StoreAdapter) ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error) {
-	rows, err := a.queries.ListFindingToolStats(ctx, orgID)
+func (a *StoreAdapter) ListVulnerabilityToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error) {
+	rows, err := a.queries.ListVulnerabilityToolStats(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
 	stats := make([]FindingToolStat, 0, len(rows))
 	for _, row := range rows {
 		stats = append(stats, FindingToolStat{
-			Tool:         row.Tool,
-			LastSeenAt:   interfaceTimeValue(row.LastSeenAt),
-			FindingCount: row.FindingCount,
-			RepoCount:    row.RepoCount,
+			Tool:         row.ScannerName,
+			FindingCount: row.Count,
 		})
 	}
 	return stats, nil

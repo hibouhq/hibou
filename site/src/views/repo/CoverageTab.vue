@@ -1,17 +1,17 @@
 <template>
   <div class="rounded-xl border border-dashed border-surface-border-subtle py-8 text-center">
     <div class="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-surface-border bg-surface-overlay text-accent">
-      <KeyRound class="h-5 w-5" />
+      <BarChart3 class="h-5 w-5" />
     </div>
     <h2 class="mt-3 text-base font-semibold text-white">
-      Secrets
+      Coverage
     </h2>
     <p class="mt-1.5 text-sm text-gray-400">
-      Secret detection results are coming soon.
+      Code coverage reports are coming soon.
     </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { KeyRound } from 'lucide-vue-next'
+import { BarChart3 } from 'lucide-vue-next'
 </script>

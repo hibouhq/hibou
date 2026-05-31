@@ -9,7 +9,7 @@
           Compare: {{ baseLabel }} → {{ headLabel }}
         </h1>
         <p class="mt-2 text-sm text-gray-400">
-          Compare findings, vulnerabilities, and SBOM component changes across any two scanned refs.
+          Compare vulnerabilities and SBOM component changes across any two scanned refs.
         </p>
       </div>
     </div>
@@ -137,82 +137,6 @@
         class="overflow-hidden rounded-2xl border border-surface-border-subtle"
       >
         <summary class="cursor-pointer bg-surface-overlay px-4 py-3 text-sm font-medium text-white">
-          Findings Delta
-        </summary>
-
-        <div
-          v-if="findingRows.length === 0"
-          class="px-4 py-8 text-sm text-gray-500"
-        >
-          No finding changes between these refs.
-        </div>
-
-        <div
-          v-else
-          class="overflow-x-auto"
-        >
-          <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
-            <thead class="bg-surface-overlay/60 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
-              <tr>
-                <th class="px-4 py-3 font-medium">
-                  Change
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Severity
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Tool
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Rule
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  File
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Message
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-surface-border-subtle">
-              <tr
-                v-for="finding in findingRows"
-                :key="`${finding.change}-${finding.fingerprint}`"
-                class="transition hover:bg-white/5"
-              >
-                <td class="px-4 py-4">
-                  <span :class="changeBadgeClass(finding.change)">
-                    {{ finding.change }}
-                  </span>
-                </td>
-                <td class="px-4 py-4">
-                  <span :class="severityBadgeClass(finding.severity)">
-                    {{ finding.severity }}
-                  </span>
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ finding.tool }}
-                </td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">
-                  {{ finding.rule_id }}
-                </td>
-                <td class="px-4 py-4 text-gray-400">
-                  {{ finding.file_path }}
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ finding.message }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </details>
-
-      <details
-        open
-        class="overflow-hidden rounded-2xl border border-surface-border-subtle"
-      >
-        <summary class="cursor-pointer bg-surface-overlay px-4 py-3 text-sm font-medium text-white">
           Vulnerability Delta
         </summary>
 
@@ -237,10 +161,16 @@
                   Severity
                 </th>
                 <th class="px-4 py-3 font-medium">
-                  Canonical ID
+                  Type
                 </th>
                 <th class="px-4 py-3 font-medium">
-                  Component
+                  Identifier
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Title
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Location
                 </th>
               </tr>
             </thead>
@@ -260,11 +190,17 @@
                     {{ vuln.severity }}
                   </span>
                 </td>
+                <td class="px-4 py-4 text-gray-300">
+                  {{ vuln.type }}
+                </td>
                 <td class="px-4 py-4 font-mono text-xs text-accent">
-                  {{ vuln.canonical_id }}
+                  {{ vuln.primary_identifier?.value || vuln.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-4 py-4 text-gray-300">
-                  {{ vuln.component_name || 'Multiple components' }}
+                  {{ vuln.title }}
+                </td>
+                <td class="px-4 py-4 text-gray-400">
+                  {{ vulnerabilityLocation(vuln) }}
                 </td>
               </tr>
             </tbody>
@@ -354,11 +290,10 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, forgeCommitUrl, type CompareResult, type ComponentEntry, type DeltaFinding, type DeltaVuln, type EnhancedRef, type Repository } from '@/api/client'
+import { api, forgeCommitUrl, type CompareResult, type ComponentEntry, type EnhancedRef, type Repository, type Vulnerability } from '@/api/client'
 import { useOrgStore } from '@/stores/org'
 
-type FindingRow = DeltaFinding & { change: 'new' | 'resolved' }
-type VulnRow = DeltaVuln & { change: 'new' | 'resolved' }
+type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
 type ComponentRow = ComponentEntry & { change: 'added' | 'removed' }
 
 const route = useRoute()
@@ -389,23 +324,10 @@ const summaryCards = computed(() => {
   }
 
   return [
-    { label: 'New findings', value: comparison.value.delta.new_findings.length },
-    { label: 'Resolved findings', value: comparison.value.delta.resolved_findings.length },
-    { label: 'New vulns', value: comparison.value.delta.new_vulns.length },
-    { label: 'Resolved vulns', value: comparison.value.delta.resolved_vulns.length },
+    { label: 'New vulnerabilities', value: comparison.value.delta.new_vulnerabilities.length },
+    { label: 'Resolved vulnerabilities', value: comparison.value.delta.resolved_vulnerabilities.length },
     { label: 'Added components', value: comparison.value.component_diff.added.length },
     { label: 'Removed components', value: comparison.value.component_diff.removed.length },
-  ]
-})
-
-const findingRows = computed<FindingRow[]>(() => {
-  if (!comparison.value) {
-    return []
-  }
-
-  return [
-    ...comparison.value.delta.new_findings.map((finding) => ({ ...finding, change: 'new' as const })),
-    ...comparison.value.delta.resolved_findings.map((finding) => ({ ...finding, change: 'resolved' as const })),
   ]
 })
 
@@ -415,8 +337,8 @@ const vulnRows = computed<VulnRow[]>(() => {
   }
 
   return [
-    ...comparison.value.delta.new_vulns.map((vuln) => ({ ...vuln, change: 'new' as const })),
-    ...comparison.value.delta.resolved_vulns.map((vuln) => ({ ...vuln, change: 'resolved' as const })),
+    ...comparison.value.delta.new_vulnerabilities.map((vuln) => ({ ...vuln, change: 'new' as const })),
+    ...comparison.value.delta.resolved_vulnerabilities.map((vuln) => ({ ...vuln, change: 'resolved' as const })),
   ]
 })
 
@@ -517,13 +439,14 @@ async function loadComparison() {
   error.value = ''
 
   try {
-    comparison.value = await api.compareRefs(
+    const response = await api.compareRefs(
       provider.value,
       slug.value,
       repoSlug.value,
       baseRef.value,
       headRef.value,
     )
+    comparison.value = response.data
   } catch (err) {
     comparison.value = null
     error.value = err instanceof Error ? err.message : 'Failed to compare refs.'
@@ -560,5 +483,17 @@ function formatDateTime(value: string) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value))
+}
+
+function vulnerabilityLocation(vuln: Vulnerability) {
+  if (vuln.file_path) {
+    return vuln.start_line ? `${vuln.file_path}:${vuln.start_line}` : vuln.file_path
+  }
+
+  if (vuln.component_name) {
+    return vuln.component_version ? `${vuln.component_name}@${vuln.component_version}` : vuln.component_name
+  }
+
+  return 'n/a'
 }
 </script>

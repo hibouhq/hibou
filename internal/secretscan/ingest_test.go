@@ -2,81 +2,53 @@ package secretscan
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
 type ingestStoreStub struct {
-	rows    map[string]*store.SecretFinding
-	sources map[uuid.UUID]map[string]*store.SecretFindingSource
+	rows    map[string]*store.Vulnerability
 	created int
+	err     error
 }
 
-func (s *ingestStoreStub) CreateSecretFinding(_ context.Context, snapshotID uuid.UUID, tool, ruleID string, severity store.SeverityLevel, status store.SecretStatus, discoveryContext, filePath string, startLine, endLine *int32, secretType, secretHash, commitSHA, authorEmail string, verified bool, metadata json.RawMessage, fingerprint string) (*store.SecretFinding, error) {
-	if s.rows == nil {
-		s.rows = make(map[string]*store.SecretFinding)
-	}
-	row := &store.SecretFinding{
-		ID:               uuid.New(),
-		SnapshotID:       snapshotID,
-		Tool:             tool,
-		RuleID:           ruleID,
-		Severity:         severity,
-		Status:           status,
-		DiscoveryContext: discoveryContext,
-		FilePath:         filePath,
-		StartLine:        startLine,
-		EndLine:          endLine,
-		SecretType:       secretType,
-		SecretHash:       secretHash,
-		CommitSHA:        commitSHA,
-		AuthorEmail:      authorEmail,
-		Verified:         verified,
-		Fingerprint:      fingerprint,
-		Metadata:         metadata,
+func (s *ingestStoreStub) CreateVulnerability(_ context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error) {
+	if s.err != nil {
+		return nil, s.err
 	}
 	if s.rows == nil {
-		s.rows = make(map[string]*store.SecretFinding)
+		s.rows = make(map[string]*store.Vulnerability)
 	}
-	s.rows[fingerprint] = row
+	if existing, ok := s.rows[params.Fingerprint]; ok {
+		return existing, nil
+	}
+	vulnerability := &store.Vulnerability{
+		ID:          uuid.New(),
+		SnapshotID:  params.SnapshotID,
+		Type:        params.Type,
+		Title:       params.Title,
+		Severity:    params.Severity,
+		Status:      "detected",
+		Fingerprint: params.Fingerprint,
+		ScannerName: params.ScannerName,
+	}
+	if params.FilePath.Valid {
+		vulnerability.FilePath = &params.FilePath.String
+	}
+	if params.SecretType.Valid {
+		vulnerability.SecretType = &params.SecretType.String
+	}
+	if params.SecretHash.Valid {
+		vulnerability.SecretHash = &params.SecretHash.String
+	}
+	s.rows[params.Fingerprint] = vulnerability
 	s.created++
-	return row, nil
-}
-
-func (s *ingestStoreStub) GetSecretFindingByFingerprint(_ context.Context, _ uuid.UUID, fingerprint string) (*store.SecretFinding, error) {
-	if s.rows == nil {
-		return nil, nil
-	}
-	return s.rows[fingerprint], nil
-}
-
-func (s *ingestStoreStub) UpsertSecretFindingSource(_ context.Context, findingID uuid.UUID, tool, ruleID string, metadata json.RawMessage) error {
-	if s.sources == nil {
-		s.sources = make(map[uuid.UUID]map[string]*store.SecretFindingSource)
-	}
-	if s.sources[findingID] == nil {
-		s.sources[findingID] = make(map[string]*store.SecretFindingSource)
-	}
-	if source, ok := s.sources[findingID][tool]; ok {
-		source.ScanCount++
-		source.RuleID = ruleID
-		source.Metadata = metadata
-		return nil
-	}
-	s.sources[findingID][tool] = &store.SecretFindingSource{
-		ID:        uuid.New(),
-		FindingID: findingID,
-		Tool:      tool,
-		RuleID:    ruleID,
-		ScanCount: 1,
-		Metadata:  metadata,
-	}
-	return nil
+	return vulnerability, nil
 }
 
 func TestIngesterCreatesFindings(t *testing.T) {
@@ -105,13 +77,8 @@ func TestIngesterCreatesFindings(t *testing.T) {
 	if stub.created != 1 {
 		t.Fatalf("store created = %d, want 1", stub.created)
 	}
-	if len(stub.sources) != 1 {
-		t.Fatalf("len(sources) = %d, want 1", len(stub.sources))
-	}
-	for _, row := range stub.rows {
-		if row.DiscoveryContext != "full_scan" {
-			t.Fatalf("discovery_context = %q, want %q", row.DiscoveryContext, "full_scan")
-		}
+	if len(stub.rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(stub.rows))
 	}
 }
 
@@ -122,28 +89,19 @@ func TestIngesterDeduplicatesByFingerprint(t *testing.T) {
 	fingerprint := ComputeFingerprint("app.env", 4, HashSecret("AKIA123"))
 
 	findings := []SecretFinding{
-		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: HashSecret("AKIA123"), Fingerprint: fingerprint},
-		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: HashSecret("AKIA123"), Fingerprint: fingerprint},
+		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: HashSecret("AKIA123"), Fingerprint: fingerprint, Metadata: map[string]any{}},
+		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: HashSecret("AKIA123"), Fingerprint: fingerprint, Metadata: map[string]any{}},
 	}
 
-	created, err := ingester.Ingest(context.Background(), snapshotID, findings, "full_scan")
+	_, err := ingester.Ingest(context.Background(), snapshotID, findings, "full_scan")
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
 	}
-	if created != 1 {
-		t.Fatalf("created = %d, want 1", created)
+	if stub.created != 1 {
+		t.Fatalf("store created = %d, want 1", stub.created)
 	}
-	if len(stub.sources) != 1 {
-		t.Fatalf("len(sources) = %d, want 1", len(stub.sources))
-	}
-	for _, sourceMap := range stub.sources {
-		source := sourceMap["gitleaks"]
-		if source == nil {
-			t.Fatal("expected gitleaks source attribution")
-		}
-		if source.ScanCount != 2 {
-			t.Fatalf("scan_count = %d, want 2", source.ScanCount)
-		}
+	if len(stub.rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(stub.rows))
 	}
 }
 
@@ -155,30 +113,19 @@ func TestIngesterCrossProviderDedup(t *testing.T) {
 	fingerprint := ComputeFingerprint("app.env", 4, secretHash)
 
 	findings := []SecretFinding{
-		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: secretHash, Fingerprint: fingerprint},
-		{Tool: "github", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: secretHash, Fingerprint: fingerprint},
+		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: secretHash, Fingerprint: fingerprint, Metadata: map[string]any{}},
+		{Tool: "github", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", StartLine: 4, SecretType: "aws-access-key", SecretHash: secretHash, Fingerprint: fingerprint, Metadata: map[string]any{}},
 	}
 
-	created, err := ingester.Ingest(context.Background(), snapshotID, findings, "full_scan")
+	_, err := ingester.Ingest(context.Background(), snapshotID, findings, "full_scan")
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
-	}
-	if created != 1 {
-		t.Fatalf("created = %d, want 1", created)
 	}
 	if len(stub.rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(stub.rows))
 	}
-	if len(stub.sources) != 1 {
-		t.Fatalf("len(sources) = %d, want 1", len(stub.sources))
-	}
-	for _, sourceMap := range stub.sources {
-		if len(sourceMap) != 2 {
-			t.Fatalf("len(sourceMap) = %d, want 2", len(sourceMap))
-		}
-		if sourceMap["gitleaks"] == nil || sourceMap["github"] == nil {
-			t.Fatal("expected source attributions for both tools")
-		}
+	if stub.created != 1 {
+		t.Fatalf("store created = %d, want 1", stub.created)
 	}
 }
 
@@ -190,8 +137,8 @@ func TestIngesterLineZeroUsesSecretHashFingerprintFallback(t *testing.T) {
 	secondHash := HashSecret("ghp_456")
 
 	created, err := ingester.Ingest(context.Background(), snapshotID, []SecretFinding{
-		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", SecretType: "aws-access-key", SecretHash: firstHash, Fingerprint: ComputeFingerprint("app.env", 0, firstHash)},
-		{Tool: "gitleaks", RuleID: "github-pat", Severity: "critical", FilePath: "app.env", SecretType: "github-pat", SecretHash: secondHash, Fingerprint: ComputeFingerprint("app.env", 0, secondHash)},
+		{Tool: "gitleaks", RuleID: "aws-access-key", Severity: "critical", FilePath: "app.env", SecretType: "aws-access-key", SecretHash: firstHash, Fingerprint: ComputeFingerprint("app.env", 0, firstHash), Metadata: map[string]any{}},
+		{Tool: "gitleaks", RuleID: "github-pat", Severity: "critical", FilePath: "app.env", SecretType: "github-pat", SecretHash: secondHash, Fingerprint: ComputeFingerprint("app.env", 0, secondHash), Metadata: map[string]any{}},
 	}, "full_scan")
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
@@ -222,6 +169,7 @@ func TestIngesterUpsertSourceRefreshesMetadata(t *testing.T) {
 		SecretType:  "aws-access-key",
 		SecretHash:  secretHash,
 		Fingerprint: fingerprint,
+		Metadata:    map[string]any{},
 	}}, "full_scan")
 	if err != nil {
 		t.Fatalf("first Ingest returned error: %v", err)
@@ -238,35 +186,17 @@ func TestIngesterUpsertSourceRefreshesMetadata(t *testing.T) {
 		SecretType:  "aws-secret-key",
 		SecretHash:  secretHash,
 		Fingerprint: fingerprint,
+		Metadata:    map[string]any{},
 	}}, "full_scan")
 	if err != nil {
 		t.Fatalf("second Ingest returned error: %v", err)
 	}
 
-	if len(stub.sources) != 1 {
-		t.Fatalf("len(sources) = %d, want 1", len(stub.sources))
+	if stub.created != 1 {
+		t.Fatalf("store created = %d, want 1", stub.created)
 	}
-	for _, sourceMap := range stub.sources {
-		source := sourceMap["gitleaks"]
-		if source == nil {
-			t.Fatal("expected gitleaks source attribution")
-		}
-		if source.RuleID != "aws-secret-key" {
-			t.Fatalf("rule_id = %q, want %q", source.RuleID, "aws-secret-key")
-		}
-		var metadata map[string]any
-		if err := json.Unmarshal(source.Metadata, &metadata); err != nil {
-			t.Fatalf("unmarshal metadata: %v", err)
-		}
-		if metadata["description"] != "second" {
-			t.Fatalf("metadata description = %v, want %q", metadata["description"], "second")
-		}
-		if metadata["secret_type"] != "aws-secret-key" {
-			t.Fatalf("metadata secret_type = %v, want %q", metadata["secret_type"], "aws-secret-key")
-		}
-		if source.ScanCount != 2 {
-			t.Fatalf("scan_count = %d, want 2", source.ScanCount)
-		}
+	if len(stub.rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(stub.rows))
 	}
 }
 

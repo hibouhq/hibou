@@ -63,18 +63,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (*User, error) 
 	return userFromRow(row), nil
 }
 
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (*User, error) {
-	row, err := q.db.GetUserByEmail(ctx, email)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return userFromRow(row), nil
-}
-
 func (q *Queries) GetUserByProviderID(ctx context.Context, provider, providerID string) (*User, error) {
 	row, err := q.db.GetUserByProviderID(ctx, dbgen.GetUserByProviderIDParams{
 		Provider:   provider,

@@ -2,6 +2,7 @@ package secretscan
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +13,18 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
+)
+
+const (
+	secretStatusOpen          = "open"
+	secretStatusRevoked       = "revoked"
+	secretStatusFalsePositive = "false_positive"
+	secretStatusRotating      = "rotating"
 )
 
 type IngestStore interface {
-	CreateSecretFinding(ctx context.Context, snapshotID uuid.UUID, tool, ruleID string, severity store.SeverityLevel, status store.SecretStatus, discoveryContext, filePath string, startLine, endLine *int32, secretType, secretHash, commitSHA, authorEmail string, verified bool, metadata json.RawMessage, fingerprint string) (*store.SecretFinding, error)
-	GetSecretFindingByFingerprint(ctx context.Context, snapshotID uuid.UUID, fingerprint string) (*store.SecretFinding, error)
-	UpsertSecretFindingSource(ctx context.Context, findingID uuid.UUID, tool, ruleID string, metadata json.RawMessage) error
+	CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error)
 }
 
 type Ingester struct {
@@ -77,16 +84,6 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		if err != nil {
 			return created, fmt.Errorf("marshal secret finding source metadata: %w", err)
 		}
-		existing, err := i.store.GetSecretFindingByFingerprint(ctx, snapshotID, fingerprint)
-		if err != nil {
-			return created, err
-		}
-		if existing != nil {
-			if err := i.store.UpsertSecretFindingSource(ctx, existing.ID, tool, ruleID, sourceMetadata); err != nil {
-				return created, err
-			}
-			continue
-		}
 
 		var startLine *int32
 		var endLine *int32
@@ -97,41 +94,34 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 			endLine = &finding.EndLine
 		}
 
-		createdFinding, err := i.store.CreateSecretFinding(
-			ctx,
-			snapshotID,
-			tool,
-			ruleID,
-			severity,
-			store.SecretStatusOpen,
-			discoveryContext,
-			strings.TrimSpace(finding.FilePath),
-			startLine,
-			endLine,
-			strings.TrimSpace(finding.SecretType),
-			secretHash,
-			strings.TrimSpace(finding.CommitSHA),
-			strings.TrimSpace(finding.AuthorEmail),
-			finding.Verified,
-			metadata,
-			fingerprint,
-		)
+		metadata = mergeSecretMetadata(metadata, discoveryContext, sourceMetadata)
+		_, err = i.store.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+			Type:              "secret",
+			SnapshotID:        snapshotID,
+			Title:             truncateSecretTitle(strings.TrimSpace(finding.Description), strings.TrimSpace(finding.SecretType), 200),
+			Description:       strings.TrimSpace(finding.Description),
+			PrimaryIdentifier: json.RawMessage(fmt.Sprintf(`{"type":"rule","value":%q}`, ruleID)),
+			Identifiers:       json.RawMessage(`[]`),
+			OriginalSeverity:  severity,
+			Severity:          severity,
+			Status:            secretStatusToVulnerabilityStatus(secretStatusOpen),
+			ScannerName:       tool,
+			FilePath:          nullString(strings.TrimSpace(finding.FilePath)),
+			StartLine:         nullInt32(startLine),
+			EndLine:           nullInt32(endLine),
+			Fingerprint:       fingerprint,
+			SecretType:        nullString(strings.TrimSpace(finding.SecretType)),
+			SecretHash:        nullString(secretHash),
+			CommitSha:         nullString(strings.TrimSpace(finding.CommitSHA)),
+			AuthorEmail:       nullString(strings.TrimSpace(finding.AuthorEmail)),
+			Verified:          sql.NullBool{Bool: finding.Verified, Valid: true},
+			Metadata:          metadata,
+		})
 		if err != nil {
 			if isDuplicateSecretFinding(err) {
-				existing, lookupErr := i.store.GetSecretFindingByFingerprint(ctx, snapshotID, fingerprint)
-				if lookupErr != nil {
-					return created, lookupErr
-				}
-				if existing != nil {
-					if upsertErr := i.store.UpsertSecretFindingSource(ctx, existing.ID, tool, ruleID, sourceMetadata); upsertErr != nil {
-						return created, upsertErr
-					}
-				}
+				// TODO(adr-012): merge multi-tool secret sources into vulnerability metadata on duplicate fingerprints.
 				continue
 			}
-			return created, err
-		}
-		if err := i.store.UpsertSecretFindingSource(ctx, createdFinding.ID, tool, ruleID, sourceMetadata); err != nil {
 			return created, err
 		}
 		created++
@@ -160,4 +150,66 @@ func severityFromString(value string) (store.SeverityLevel, error) {
 func isDuplicateSecretFinding(err error) bool {
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+}
+
+func secretStatusToVulnerabilityStatus(status string) string {
+	switch status {
+	case secretStatusFalsePositive:
+		return "dismissed"
+	case secretStatusRevoked, secretStatusRotating:
+		return "resolved"
+	default:
+		return "detected"
+	}
+}
+
+func truncateSecretTitle(description, secretType string, limit int) string {
+	if description != "" {
+		return truncateText(description, limit)
+	}
+	return truncateText(secretType, limit)
+}
+
+func truncateText(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
+func mergeSecretMetadata(base json.RawMessage, discoveryContext string, sourceMetadata json.RawMessage) json.RawMessage {
+	payload := map[string]any{}
+	if len(base) > 0 {
+		_ = json.Unmarshal(base, &payload)
+	}
+	payload["discovery_context"] = discoveryContext
+	if len(sourceMetadata) > 0 {
+		var source any
+		if err := json.Unmarshal(sourceMetadata, &source); err == nil {
+			payload["source"] = source
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return base
+	}
+	return encoded
+}
+
+func nullString(value string) sql.NullString {
+	if strings.TrimSpace(value) == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: value, Valid: true}
+}
+
+func nullInt32(value *int32) sql.NullInt32 {
+	if value == nil {
+		return sql.NullInt32{}
+	}
+	return sql.NullInt32{Int32: *value, Valid: true}
 }

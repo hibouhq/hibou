@@ -1,20 +1,3 @@
--- name: CountVulnMatchesByOrg :one
-SELECT COUNT(*)::bigint
-FROM vuln_matches vm
-JOIN snapshots s ON s.id = vm.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1
-  AND vm.is_affected = TRUE;
-
--- name: CountFindingsByOrg :one
-SELECT COUNT(*)::bigint
-FROM findings f
-JOIN snapshots s ON s.id = f.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1;
-
 -- name: CountScansByOrg :one
 SELECT COUNT(*)::bigint
 FROM scans sc
@@ -35,11 +18,13 @@ WHERE repo.org_id = $1
 -- name: CountMalwareAdvisoriesByOrg :one
 SELECT COUNT(DISTINCT a.id)::bigint
 FROM advisories a
-JOIN vuln_matches vm ON vm.advisory_id = a.id
-JOIN snapshots s ON s.id = vm.snapshot_id
+JOIN vulnerabilities v ON v.advisory_id = a.id
+JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
+  AND v.type = 'malware'
+  AND v.status NOT IN ('resolved', 'dismissed')
   AND a.is_malware = TRUE;
 
 -- name: CountDistinctComponentsByOrg :one

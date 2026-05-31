@@ -15,11 +15,12 @@ import (
 const countSearchAdvisories = `-- name: CountSearchAdvisories :one
 SELECT COUNT(DISTINCT a.id)::bigint
 FROM advisories a
-JOIN vuln_matches vm ON vm.advisory_id = a.id
-JOIN snapshots s ON s.id = vm.snapshot_id
+JOIN vulnerabilities v ON v.advisory_id = a.id
+JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
+  AND v.type IN ('dependency', 'malware')
   AND (a.canonical_id ILIKE $2 ESCAPE '\\' OR a.title ILIKE $2 ESCAPE '\\')
 `
 
@@ -38,11 +39,12 @@ func (q *Queries) CountSearchAdvisories(ctx context.Context, arg CountSearchAdvi
 const countSearchAdvisoriesBySeverity = `-- name: CountSearchAdvisoriesBySeverity :one
 SELECT COUNT(DISTINCT a.id)::bigint
 FROM advisories a
-JOIN vuln_matches vm ON vm.advisory_id = a.id
-JOIN snapshots s ON s.id = vm.snapshot_id
+JOIN vulnerabilities v ON v.advisory_id = a.id
+JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
+  AND v.type IN ('dependency', 'malware')
   AND (a.canonical_id ILIKE $2 ESCAPE '\\' OR a.title ILIKE $2 ESCAPE '\\')
   AND a.severity::text = $3
 `
@@ -98,59 +100,15 @@ func (q *Queries) CountSearchComponents(ctx context.Context, arg CountSearchComp
 	return column_1, err
 }
 
-const countSearchFindings = `-- name: CountSearchFindings :one
-SELECT COUNT(*)::bigint
-FROM findings f
-JOIN snapshots s ON s.id = f.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1 AND (f.rule_id ILIKE $2 ESCAPE '\\' OR f.tool ILIKE $2 ESCAPE '\\' OR f.message ILIKE $2 ESCAPE '\\')
-`
-
-type CountSearchFindingsParams struct {
-	OrgID      uuid.UUID `json:"org_id"`
-	LikeEscape []byte    `json:"like_escape"`
-}
-
-func (q *Queries) CountSearchFindings(ctx context.Context, arg CountSearchFindingsParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSearchFindings, arg.OrgID, arg.LikeEscape)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const countSearchFindingsBySeverity = `-- name: CountSearchFindingsBySeverity :one
-SELECT COUNT(*)::bigint
-FROM findings f
-JOIN snapshots s ON s.id = f.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1
-  AND (f.rule_id ILIKE $2 ESCAPE '\\' OR f.tool ILIKE $2 ESCAPE '\\' OR f.message ILIKE $2 ESCAPE '\\')
-  AND f.severity::text = $3
-`
-
-type CountSearchFindingsBySeverityParams struct {
-	OrgID      uuid.UUID     `json:"org_id"`
-	LikeEscape []byte        `json:"like_escape"`
-	Severity   SeverityLevel `json:"severity"`
-}
-
-func (q *Queries) CountSearchFindingsBySeverity(ctx context.Context, arg CountSearchFindingsBySeverityParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSearchFindingsBySeverity, arg.OrgID, arg.LikeEscape, arg.Severity)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const searchAdvisories = `-- name: SearchAdvisories :many
 SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.cwe_ids, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at
 FROM advisories a
-JOIN vuln_matches vm ON vm.advisory_id = a.id
-JOIN snapshots s ON s.id = vm.snapshot_id
+JOIN vulnerabilities v ON v.advisory_id = a.id
+JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
+  AND v.type IN ('dependency', 'malware')
   AND (a.canonical_id ILIKE $2 ESCAPE '\\' OR a.title ILIKE $2 ESCAPE '\\')
 ORDER BY a.created_at DESC
 LIMIT $3 OFFSET $4
@@ -210,11 +168,12 @@ func (q *Queries) SearchAdvisories(ctx context.Context, arg SearchAdvisoriesPara
 const searchAdvisoriesBySeverity = `-- name: SearchAdvisoriesBySeverity :many
 SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.cwe_ids, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at
 FROM advisories a
-JOIN vuln_matches vm ON vm.advisory_id = a.id
-JOIN snapshots s ON s.id = vm.snapshot_id
+JOIN vulnerabilities v ON v.advisory_id = a.id
+JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
+  AND v.type IN ('dependency', 'malware')
   AND (a.canonical_id ILIKE $2 ESCAPE '\\' OR a.title ILIKE $2 ESCAPE '\\')
   AND a.severity::text = $3
 ORDER BY a.created_at DESC
@@ -275,6 +234,7 @@ func (q *Queries) SearchAdvisoriesBySeverity(ctx context.Context, arg SearchAdvi
 }
 
 const searchClients = `-- name: SearchClients :many
+
 SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at FROM clients WHERE org_id = $1 AND name ILIKE $2 ESCAPE '\\' ORDER BY name ASC LIMIT $3 OFFSET $4
 `
 
@@ -285,6 +245,10 @@ type SearchClientsParams struct {
 	Offset     int32     `json:"offset"`
 }
 
+// Moved to vulnerabilities.sql (ADR-012)
+// Moved to vulnerabilities.sql (ADR-012)
+// Moved to vulnerabilities.sql (ADR-012)
+// Moved to vulnerabilities.sql (ADR-012)
 func (q *Queries) SearchClients(ctx context.Context, arg SearchClientsParams) ([]Client, error) {
 	rows, err := q.db.QueryContext(ctx, searchClients,
 		arg.OrgID,
@@ -365,132 +329,6 @@ func (q *Queries) SearchComponents(ctx context.Context, arg SearchComponentsPara
 			&i.Version,
 			&i.Ecosystem,
 			&i.Licenses,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const searchFindings = `-- name: SearchFindings :many
-SELECT f.id, f.snapshot_id, f.tool, f.rule_id, f.severity, f.status, f.file_path, f.start_line, f.end_line, f.location_hash, f.message, f.fingerprint, f.metadata, f.labels, f.created_at
-FROM findings f
-JOIN snapshots s ON s.id = f.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1 AND (f.rule_id ILIKE $2 ESCAPE '\\' OR f.tool ILIKE $2 ESCAPE '\\' OR f.message ILIKE $2 ESCAPE '\\')
-ORDER BY f.created_at DESC LIMIT $3 OFFSET $4
-`
-
-type SearchFindingsParams struct {
-	OrgID      uuid.UUID `json:"org_id"`
-	LikeEscape []byte    `json:"like_escape"`
-	Limit      int32     `json:"limit"`
-	Offset     int32     `json:"offset"`
-}
-
-func (q *Queries) SearchFindings(ctx context.Context, arg SearchFindingsParams) ([]Finding, error) {
-	rows, err := q.db.QueryContext(ctx, searchFindings,
-		arg.OrgID,
-		arg.LikeEscape,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Finding{}
-	for rows.Next() {
-		var i Finding
-		if err := rows.Scan(
-			&i.ID,
-			&i.SnapshotID,
-			&i.Tool,
-			&i.RuleID,
-			&i.Severity,
-			&i.Status,
-			&i.FilePath,
-			&i.StartLine,
-			&i.EndLine,
-			&i.LocationHash,
-			&i.Message,
-			&i.Fingerprint,
-			&i.Metadata,
-			&i.Labels,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const searchFindingsBySeverity = `-- name: SearchFindingsBySeverity :many
-SELECT f.id, f.snapshot_id, f.tool, f.rule_id, f.severity, f.status, f.file_path, f.start_line, f.end_line, f.location_hash, f.message, f.fingerprint, f.metadata, f.labels, f.created_at
-FROM findings f
-JOIN snapshots s ON s.id = f.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1
-  AND (f.rule_id ILIKE $2 ESCAPE '\\' OR f.tool ILIKE $2 ESCAPE '\\' OR f.message ILIKE $2 ESCAPE '\\')
-  AND f.severity::text = $3
-ORDER BY f.created_at DESC LIMIT $4 OFFSET $5
-`
-
-type SearchFindingsBySeverityParams struct {
-	OrgID      uuid.UUID     `json:"org_id"`
-	LikeEscape []byte        `json:"like_escape"`
-	Severity   SeverityLevel `json:"severity"`
-	Limit      int32         `json:"limit"`
-	Offset     int32         `json:"offset"`
-}
-
-func (q *Queries) SearchFindingsBySeverity(ctx context.Context, arg SearchFindingsBySeverityParams) ([]Finding, error) {
-	rows, err := q.db.QueryContext(ctx, searchFindingsBySeverity,
-		arg.OrgID,
-		arg.LikeEscape,
-		arg.Severity,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Finding{}
-	for rows.Next() {
-		var i Finding
-		if err := rows.Scan(
-			&i.ID,
-			&i.SnapshotID,
-			&i.Tool,
-			&i.RuleID,
-			&i.Severity,
-			&i.Status,
-			&i.FilePath,
-			&i.StartLine,
-			&i.EndLine,
-			&i.LocationHash,
-			&i.Message,
-			&i.Fingerprint,
-			&i.Metadata,
-			&i.Labels,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

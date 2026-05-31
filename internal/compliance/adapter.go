@@ -72,12 +72,8 @@ func (a *StoreAdapter) GetSnapshotAtDate(ctx context.Context, arg dbgen.GetSnaps
 	}, nil
 }
 
-func (a *StoreAdapter) ListVulnMatchesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.VulnMatch, error) {
-	return a.queries.ListVulnMatchesBySnapshot(ctx, snapshotID)
-}
-
-func (a *StoreAdapter) ListFindingsBySnapshot(ctx context.Context, arg dbgen.ListFindingsBySnapshotParams) ([]dbgen.Finding, error) {
-	return a.queries.ListAllFindingsBySnapshot(ctx, arg.SnapshotID)
+func (a *StoreAdapter) ListAllVulnerabilitiesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]store.Vulnerability, error) {
+	return a.queries.ListAllVulnerabilitiesBySnapshot(ctx, snapshotID)
 }
 
 func (a *StoreAdapter) GetAdvisoriesByIDs(ctx context.Context, ids []uuid.UUID) ([]dbgen.Advisory, error) {
@@ -134,12 +130,8 @@ func (a *StoreAdapter) ListQualityGatesByOrg(ctx context.Context, orgID uuid.UUI
 	return a.queries.ListQualityGatesByOrg(ctx, orgID)
 }
 
-func (a *StoreAdapter) CountVulnMatchesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
-	return a.queries.CountVulnMatchesByOrg(ctx, orgID)
-}
-
-func (a *StoreAdapter) CountFindingsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
-	return a.queries.CountFindingsByOrg(ctx, orgID)
+func (a *StoreAdapter) CountVulnerabilitiesByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
+	return a.queries.CountVulnerabilitiesByOrg(ctx, orgID)
 }
 
 func (a *StoreAdapter) CountScansByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {

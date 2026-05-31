@@ -3,6 +3,7 @@ package findings
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
 type GenericFinding struct {
@@ -35,7 +37,7 @@ type Ingester struct {
 }
 
 type IngestStore interface {
-	CreateFinding(ctx context.Context, snapshotID uuid.UUID, tool, ruleID string, severity store.SeverityLevel, status, filePath string, startLine, endLine *int32, locationHash, message string, fingerprint *string, metadata json.RawMessage) (*store.Finding, error)
+	CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error)
 }
 
 func NewIngester(store IngestStore, log zerolog.Logger) *Ingester {
@@ -62,26 +64,32 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		startLine := finding.StartLine
 		endLine := finding.EndLine
 		locationHash := hashSegments(finding.Tool, finding.RuleID, finding.FilePath, strconv.Itoa(int(startLine)))
-		fingerprint := strings.TrimSpace(finding.Fingerprint)
-		if fingerprint == "" {
-			fingerprint = locationHash
+		identifier, err := json.Marshal(map[string]string{
+			"type":  "rule",
+			"value": strings.TrimSpace(finding.RuleID),
+		})
+		if err != nil {
+			return created, fmt.Errorf("marshal finding primary identifier: %w", err)
 		}
 
-		_, err = i.store.CreateFinding(
-			ctx,
-			snapshotID,
-			strings.TrimSpace(finding.Tool),
-			strings.TrimSpace(finding.RuleID),
-			severity,
-			"open",
-			strings.TrimSpace(finding.FilePath),
-			&startLine,
-			&endLine,
-			locationHash,
-			strings.TrimSpace(finding.Message),
-			&fingerprint,
-			metadata,
-		)
+		_, err = i.store.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+			Type:              "sast",
+			SnapshotID:        snapshotID,
+			Title:             truncateMessage(strings.TrimSpace(finding.Message), 200),
+			Description:       strings.TrimSpace(finding.Message),
+			PrimaryIdentifier: identifier,
+			Identifiers:       json.RawMessage(`[]`),
+			OriginalSeverity:  severity,
+			Severity:          severity,
+			Status:            "detected",
+			ScannerName:       strings.TrimSpace(finding.Tool),
+			FilePath:          nullString(strings.TrimSpace(finding.FilePath)),
+			StartLine:         sql.NullInt32{Int32: startLine, Valid: startLine > 0},
+			EndLine:           sql.NullInt32{Int32: endLine, Valid: endLine > 0},
+			LocationHash:      nullString(locationHash),
+			Fingerprint:       locationHash,
+			Metadata:          metadata,
+		})
 		if err != nil {
 			if isDuplicateFinding(err) {
 				continue
@@ -119,4 +127,22 @@ func isDuplicateFinding(err error) bool {
 func hashSegments(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "/")))
 	return hex.EncodeToString(sum[:])
+}
+
+func truncateMessage(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
+func nullString(value string) sql.NullString {
+	if strings.TrimSpace(value) == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: value, Valid: true}
 }

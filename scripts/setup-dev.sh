@@ -12,6 +12,52 @@ HIBOU_CALLBACK_URL_VITE="${HIBOU_CALLBACK_URL_VITE:-http://localhost:3000/api/v1
 WEBHOOK_SECRET="${WEBHOOK_SECRET:-hibou-webhook-dev-secret}"
 WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:8585/api/v1/webhooks/forgejo}"
 
+# When first startup, Forgejo will return an error page for the API endpoints until the initial setup is complete. During this time, we can detect that it's a fresh instance and trigger the setup flow automatically.
+install_forgejo_if_needed() {
+  local api_status app_url
+
+  echo "==> Waiting for Forgejo HTTP server..."
+  for i in $(seq 1 30); do
+    if curl -sSo /dev/null "$FORGEJO_URL/" 2>/dev/null; then
+      break
+    fi
+    sleep 2
+  done
+
+  if ! curl -sSo /dev/null "$FORGEJO_URL/" 2>/dev/null; then
+    echo "ERROR: Forgejo HTTP server did not become reachable in time"
+    exit 1
+  fi
+
+  api_status=$(curl -sS -o /dev/null -w "%{http_code}" "$FORGEJO_URL/api/v1/version" 2>/dev/null || true)
+  if [ "$api_status" != "404" ]; then
+    return
+  fi
+
+  echo "==> Forgejo in install mode. Bootstrapping fresh instance..."
+  app_url="${FORGEJO_URL%/}/"
+
+  curl -sS -o /dev/null -X POST "$FORGEJO_URL/" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data "db_type=sqlite3" \
+    --data "db_path=/data/gitea/gitea.db" \
+    --data "app_name=Forgejo" \
+    --data "repo_root_path=/data/git/repositories" \
+    --data "lfs_root_path=/data/git/lfs" \
+    --data "run_user=git" \
+    --data "domain=localhost" \
+    --data "ssh_port=22" \
+    --data "http_port=3000" \
+    --data-urlencode "app_url=$app_url" \
+    --data "log_root_path=/data/gitea/log" \
+    --data "admin_name=$FORGEJO_ADMIN_USER" \
+    --data "admin_passwd=$FORGEJO_ADMIN_PASS" \
+    --data "admin_confirm_passwd=$FORGEJO_ADMIN_PASS" \
+    --data "admin_email=$FORGEJO_ADMIN_EMAIL"
+
+  sleep 5
+}
+
 wait_for_forgejo() {
   echo "==> Waiting for Forgejo to be ready..."
   for i in $(seq 1 30); do
@@ -221,6 +267,7 @@ cleanup_token() {
 }
 
 main() {
+  install_forgejo_if_needed
   wait_for_forgejo
   create_admin_user
   generate_admin_token
