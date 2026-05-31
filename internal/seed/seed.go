@@ -2,7 +2,7 @@ package seed
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: SHA1 is used only for deterministic fake git hashes in seed data.
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -55,7 +55,7 @@ type seededFinding struct {
 }
 
 type seededSnapshotState struct {
-	snapshotID    uuid.UUID
+	snapshotID   uuid.UUID
 	componentIDs map[string]uuid.UUID
 }
 
@@ -100,18 +100,18 @@ var seedOrgs = []seededOrg{
 				components: []seededComponent{
 					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go"),
 					component("pkg:golang/github.com/gin-gonic/gin@1.9.1", "github.com/gin-gonic/gin", "1.9.1", "go"),
-						component("pkg:npm/jsonwebtoken@9.0.2", "jsonwebtoken", "9.0.2", "npm"),
-						component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
-						component("pkg:golang/github.com/jackc/pgx/v5@5.5.4", "github.com/jackc/pgx/v5", "5.5.4", "go"),
-						component("pkg:golang/github.com/spf13/cobra@1.8.0", "github.com/spf13/cobra", "1.8.0", "go"),
+					component("pkg:npm/jsonwebtoken@9.0.2", "jsonwebtoken", "9.0.2", "npm"),
+					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
+					component("pkg:golang/github.com/jackc/pgx/v5@5.5.4", "github.com/jackc/pgx/v5", "5.5.4", "go"),
+					component("pkg:golang/github.com/spf13/cobra@1.8.0", "github.com/spf13/cobra", "1.8.0", "go"),
 				},
 				findings: []seededFinding{
 					finding("gosec", "hardcoded-secret-in-source", store.SeverityLevelCritical, "open", "internal/handler/auth.go", 47, 47, "JWT signing secret is hardcoded in the authentication handler.", map[string]any{"confidence": "high", "category": "credentials"}),
-						finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelHigh, "open", "internal/repository/users.go", 83, 86, "SQL query concatenates user input into the WHERE clause.", map[string]any{"owasp": "A03:2021-Injection"}),
-						finding("codeql", "path-traversal", store.SeverityLevelHigh, "open", "internal/http/download.go", 66, 72, "Download handler joins user input into a filesystem path without normalization.", map[string]any{"cwe": "CWE-22"}),
-						finding("semgrep", "ssrf-via-user-input", store.SeverityLevelMedium, "ignored", "internal/http/proxy.go", 51, 57, "Webhook preview endpoint fetches arbitrary user-supplied URLs.", map[string]any{"reason": "test fixture only"}),
-						finding("gitleaks", "aws-access-key-exposed", store.SeverityLevelCritical, "fixed", "deploy/bootstrap.env", 12, 12, "Bootstrap environment file previously contained an AWS access key.", map[string]any{"ticket": "SEC-101"}),
-						finding("semgrep", "insecure-deserialization", store.SeverityLevelLow, "false_positive", "internal/cache/session.go", 28, 34, "Gob decode path was flagged as unsafe deserialization but only reads trusted cache entries.", map[string]any{"reviewed_by": "appsec"}),
+					finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelHigh, "open", "internal/repository/users.go", 83, 86, "SQL query concatenates user input into the WHERE clause.", map[string]any{"owasp": "A03:2021-Injection"}),
+					finding("codeql", "path-traversal", store.SeverityLevelHigh, "open", "internal/http/download.go", 66, 72, "Download handler joins user input into a filesystem path without normalization.", map[string]any{"cwe": "CWE-22"}),
+					finding("semgrep", "ssrf-via-user-input", store.SeverityLevelMedium, "ignored", "internal/http/proxy.go", 51, 57, "Webhook preview endpoint fetches arbitrary user-supplied URLs.", map[string]any{"reason": "test fixture only"}),
+					finding("gitleaks", "aws-access-key-exposed", store.SeverityLevelCritical, "fixed", "deploy/bootstrap.env", 12, 12, "Bootstrap environment file previously contained an AWS access key.", map[string]any{"ticket": "SEC-101"}),
+					finding("semgrep", "insecure-deserialization", store.SeverityLevelLow, "false_positive", "internal/cache/session.go", 28, 34, "Gob decode path was flagged as unsafe deserialization but only reads trusted cache entries.", map[string]any{"reviewed_by": "appsec"}),
 				},
 			},
 			{
@@ -124,17 +124,17 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/axios@1.6.0", "axios", "1.6.0", "npm"),
 					component("pkg:npm/lodash@4.17.21", "lodash", "4.17.21", "npm"),
 					component("pkg:npm/express@4.18.2", "express", "4.18.2", "npm"),
-						component("pkg:npm/event-stream@3.3.6", "event-stream", "3.3.6", "npm"),
-						component("pkg:npm/next@14.1.0", "next", "14.1.0", "npm"),
+					component("pkg:npm/event-stream@3.3.6", "event-stream", "3.3.6", "npm"),
+					component("pkg:npm/next@14.1.0", "next", "14.1.0", "npm"),
 				},
 				findings: []seededFinding{
-						finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelHigh, "open", "src/components/AdminPanel.tsx", 118, 121, "Dashboard renders raw HTML from markdown previews without sanitization.", map[string]any{"cwe": "CWE-79"}),
-						finding("trufflehog", "github-token-exposed", store.SeverityLevelCritical, "open", "src/api/client.ts", 14, 14, "Frontend bundle contains a GitHub token used for local API calls.", map[string]any{"exposure": "client-side"}),
-						finding("gitleaks", "private-key-detected", store.SeverityLevelCritical, "fixed", "certs/dev-dashboard.pem", 1, 27, "Development TLS key was committed to the repository.", map[string]any{"rotation": "completed"}),
-						finding("eslint-security", "prototype-pollution", store.SeverityLevelHigh, "open", "src/lib/mergeFilters.ts", 37, 45, "User-controlled filter objects are merged recursively into application state.", map[string]any{"package": "lodash.merge"}),
-						finding("eslint-security", "unsafe-eval-usage", store.SeverityLevelMedium, "open", "src/utils/featureFlags.ts", 22, 24, "Feature flag expressions are evaluated with eval during preview mode.", map[string]any{"surface": "preview"}),
-						finding("semgrep", "cors-misconfiguration", store.SeverityLevelLow, "false_positive", "server/dev-proxy.ts", 19, 25, "Wildcard CORS origin is enabled only in isolated local proxy mode.", map[string]any{"environment": "local"}),
-						finding("semgrep", "open-redirect", store.SeverityLevelInfo, "ignored", "src/routes/LoginCallback.tsx", 41, 49, "Login callback trusts a next parameter for redirection after auth.", map[string]any{"tracked": "WEB-220"}),
+					finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelHigh, "open", "src/components/AdminPanel.tsx", 118, 121, "Dashboard renders raw HTML from markdown previews without sanitization.", map[string]any{"cwe": "CWE-79"}),
+					finding("trufflehog", "github-token-exposed", store.SeverityLevelCritical, "open", "src/api/client.ts", 14, 14, "Frontend bundle contains a GitHub token used for local API calls.", map[string]any{"exposure": "client-side"}),
+					finding("gitleaks", "private-key-detected", store.SeverityLevelCritical, "fixed", "certs/dev-dashboard.pem", 1, 27, "Development TLS key was committed to the repository.", map[string]any{"rotation": "completed"}),
+					finding("eslint-security", "prototype-pollution", store.SeverityLevelHigh, "open", "src/lib/mergeFilters.ts", 37, 45, "User-controlled filter objects are merged recursively into application state.", map[string]any{"package": "lodash.merge"}),
+					finding("eslint-security", "unsafe-eval-usage", store.SeverityLevelMedium, "open", "src/utils/featureFlags.ts", 22, 24, "Feature flag expressions are evaluated with eval during preview mode.", map[string]any{"surface": "preview"}),
+					finding("semgrep", "cors-misconfiguration", store.SeverityLevelLow, "false_positive", "server/dev-proxy.ts", 19, 25, "Wildcard CORS origin is enabled only in isolated local proxy mode.", map[string]any{"environment": "local"}),
+					finding("semgrep", "open-redirect", store.SeverityLevelInfo, "ignored", "src/routes/LoginCallback.tsx", 41, 49, "Login callback trusts a next parameter for redirection after auth.", map[string]any{"tracked": "WEB-220"}),
 				},
 			},
 			{
@@ -146,17 +146,17 @@ var seedOrgs = []seededOrg{
 					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go"),
 					component("pkg:pypi/cryptography@41.0.4", "cryptography", "41.0.4", "pypi"),
 					component("pkg:npm/jsonwebtoken@9.0.2", "jsonwebtoken", "9.0.2", "npm"),
-						component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
-						component("pkg:pypi/PyJWT@2.8.0", "PyJWT", "2.8.0", "pypi"),
-						component("pkg:golang/golang.org/x/oauth2@0.18.0", "golang.org/x/oauth2", "0.18.0", "go"),
+					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
+					component("pkg:pypi/PyJWT@2.8.0", "PyJWT", "2.8.0", "pypi"),
+					component("pkg:golang/golang.org/x/oauth2@0.18.0", "golang.org/x/oauth2", "0.18.0", "go"),
 				},
 				findings: []seededFinding{
 					finding("gosec", "use-of-weak-hash-md5", store.SeverityLevelMedium, "open", "internal/token/digest.go", 31, 33, "Authentication digest fallback relies on MD5 for compatibility mode.", map[string]any{"algorithm": "md5"}),
 					finding("gosec", "insecure-tls-version", store.SeverityLevelHigh, "open", "internal/idp/client.go", 77, 84, "Identity provider client accepts TLS versions below 1.2.", map[string]any{"service": "oidc"}),
 					finding("semgrep", "hardcoded-secret-in-source", store.SeverityLevelCritical, "fixed", "cmd/bootstrap/main.go", 19, 19, "Bootstrap flow committed an emergency admin password into source control.", map[string]any{"rotation": "completed"}),
-						finding("codeql", "command-injection", store.SeverityLevelHigh, "open", "internal/provision/hooks.go", 58, 66, "Provisioning hook shells out using an unvalidated tenant identifier.", map[string]any{"sink": "exec.Command"}),
-						finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelHigh, "ignored", "internal/store/session_store.go", 102, 105, "Session lookup query is assembled with string concatenation.", map[string]any{"reason": "legacy migration path"}),
-						finding("trivy", "insecure-tls-version", store.SeverityLevelLow, "false_positive", "deploy/nginx.conf", 41, 48, "Ingress template flags deprecated ciphers even though this profile is not deployed.", map[string]any{"surface": "edge"}),
+					finding("codeql", "command-injection", store.SeverityLevelHigh, "open", "internal/provision/hooks.go", 58, 66, "Provisioning hook shells out using an unvalidated tenant identifier.", map[string]any{"sink": "exec.Command"}),
+					finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelHigh, "ignored", "internal/store/session_store.go", 102, 105, "Session lookup query is assembled with string concatenation.", map[string]any{"reason": "legacy migration path"}),
+					finding("trivy", "insecure-tls-version", store.SeverityLevelLow, "false_positive", "deploy/nginx.conf", 41, 48, "Ingress template flags deprecated ciphers even though this profile is not deployed.", map[string]any{"surface": "edge"}),
 				},
 			},
 			{
@@ -168,18 +168,18 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/react@18.2.0", "react", "18.2.0", "npm"),
 					component("pkg:npm/axios@1.6.0", "axios", "1.6.0", "npm"),
 					component("pkg:npm/lodash@4.17.21", "lodash", "4.17.21", "npm"),
-						component("pkg:npm/ua-parser-js@0.7.29", "ua-parser-js", "0.7.29", "npm"),
-						component("pkg:maven/com.squareup.okhttp3/okhttp@4.12.0", "com.squareup.okhttp3:okhttp", "4.12.0", "maven"),
-						component("pkg:maven/androidx.core/core-ktx@1.12.0", "androidx.core:core-ktx", "1.12.0", "maven"),
+					component("pkg:npm/ua-parser-js@0.7.29", "ua-parser-js", "0.7.29", "npm"),
+					component("pkg:maven/com.squareup.okhttp3/okhttp@4.12.0", "com.squareup.okhttp3:okhttp", "4.12.0", "maven"),
+					component("pkg:maven/androidx.core/core-ktx@1.12.0", "androidx.core:core-ktx", "1.12.0", "maven"),
 				},
 				findings: []seededFinding{
-						finding("trufflehog", "generic-api-token", store.SeverityLevelCritical, "open", "src/config/mobile.ts", 9, 9, "Mobile client embeds an API signing key in the application bundle.", map[string]any{"platform": "ios"}),
-						finding("semgrep", "open-redirect", store.SeverityLevelMedium, "open", "src/navigation/DeepLinkHandler.ts", 74, 81, "Deep link router accepts arbitrary fallback redirect targets.", map[string]any{"surface": "deep-link"}),
-						finding("semgrep", "hardcoded-secret-in-source", store.SeverityLevelHigh, "fixed", "src/native/Secrets.ts", 13, 13, "Android build helper previously embedded a push signing secret.", map[string]any{"platform": "android"}),
-						finding("eslint-security", "unsafe-eval-usage", store.SeverityLevelLow, "fixed", "src/debug/PreviewConsole.tsx", 32, 36, "Debug console used eval to replay captured actions.", map[string]any{"build": "debug"}),
+					finding("trufflehog", "generic-api-token", store.SeverityLevelCritical, "open", "src/config/mobile.ts", 9, 9, "Mobile client embeds an API signing key in the application bundle.", map[string]any{"platform": "ios"}),
+					finding("semgrep", "open-redirect", store.SeverityLevelMedium, "open", "src/navigation/DeepLinkHandler.ts", 74, 81, "Deep link router accepts arbitrary fallback redirect targets.", map[string]any{"surface": "deep-link"}),
+					finding("semgrep", "hardcoded-secret-in-source", store.SeverityLevelHigh, "fixed", "src/native/Secrets.ts", 13, 13, "Android build helper previously embedded a push signing secret.", map[string]any{"platform": "android"}),
+					finding("eslint-security", "unsafe-eval-usage", store.SeverityLevelLow, "fixed", "src/debug/PreviewConsole.tsx", 32, 36, "Debug console used eval to replay captured actions.", map[string]any{"build": "debug"}),
 					finding("trivy", "insecure-tls-version", store.SeverityLevelMedium, "open", "android/app/src/main/java/com/acme/network/TlsConfig.kt", 44, 48, "Android network stack allows TLS 1.1 for legacy endpoints.", map[string]any{"platform": "android"}),
-						finding("codeql", "path-traversal", store.SeverityLevelMedium, "false_positive", "android/app/src/main/java/com/acme/storage/ExportLogs.kt", 21, 29, "Log export path is derived from an intent extra but normalized before write.", map[string]any{"reviewed": true}),
-						finding("gosec", "use-of-weak-hash-md5", store.SeverityLevelInfo, "ignored", "scripts/release-notes/main.go", 17, 20, "Release notes generator uses MD5 only to derive non-security cache keys.", map[string]any{"usage": "cache-key"}),
+					finding("codeql", "path-traversal", store.SeverityLevelMedium, "false_positive", "android/app/src/main/java/com/acme/storage/ExportLogs.kt", 21, 29, "Log export path is derived from an intent extra but normalized before write.", map[string]any{"reviewed": true}),
+					finding("gosec", "use-of-weak-hash-md5", store.SeverityLevelInfo, "ignored", "scripts/release-notes/main.go", 17, 20, "Release notes generator uses MD5 only to derive non-security cache keys.", map[string]any{"usage": "cache-key"}),
 				},
 			},
 		},
@@ -199,16 +199,16 @@ var seedOrgs = []seededOrg{
 					component("pkg:golang/github.com/gin-gonic/gin@1.9.1", "github.com/gin-gonic/gin", "1.9.1", "go"),
 					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go"),
 					component("pkg:pypi/requests@2.31.0", "requests", "2.31.0", "pypi"),
-						component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
-						component("pkg:golang/github.com/opencontainers/runc@1.1.11", "github.com/opencontainers/runc", "1.1.11", "go"),
-						component("pkg:maven/io.fabric8/kubernetes-client@6.10.0", "io.fabric8:kubernetes-client", "6.10.0", "maven"),
+					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
+					component("pkg:golang/github.com/opencontainers/runc@1.1.11", "github.com/opencontainers/runc", "1.1.11", "go"),
+					component("pkg:maven/io.fabric8/kubernetes-client@6.10.0", "io.fabric8:kubernetes-client", "6.10.0", "maven"),
 				},
 				findings: []seededFinding{
-						finding("checkov", "privileged-container", store.SeverityLevelHigh, "open", "deploy/mesh/daemonset.yaml", 34, 47, "DaemonSet runs the proxy sidecar with privileged=true.", map[string]any{"resource": "DaemonSet/mesh-proxy"}),
-						finding("checkov", "missing-network-policy", store.SeverityLevelMedium, "open", "deploy/mesh/namespace.yaml", 1, 18, "Namespace ships without a default deny NetworkPolicy.", map[string]any{"namespace": "mesh-system"}),
-						finding("checkov", "container-writable-rootfs", store.SeverityLevelLow, "ignored", "deploy/mesh/daemonset.yaml", 59, 64, "Writable root filesystem retained for eBPF debug sidecar.", map[string]any{"approved_by": "platform"}),
+					finding("checkov", "privileged-container", store.SeverityLevelHigh, "open", "deploy/mesh/daemonset.yaml", 34, 47, "DaemonSet runs the proxy sidecar with privileged=true.", map[string]any{"resource": "DaemonSet/mesh-proxy"}),
+					finding("checkov", "missing-network-policy", store.SeverityLevelMedium, "open", "deploy/mesh/namespace.yaml", 1, 18, "Namespace ships without a default deny NetworkPolicy.", map[string]any{"namespace": "mesh-system"}),
+					finding("checkov", "container-writable-rootfs", store.SeverityLevelLow, "ignored", "deploy/mesh/daemonset.yaml", 59, 64, "Writable root filesystem retained for eBPF debug sidecar.", map[string]any{"approved_by": "platform"}),
 					finding("gosec", "insecure-tls-version", store.SeverityLevelHigh, "open", "cmd/proxy/main.go", 88, 95, "Proxy bootstrap leaves MinVersion unset on TLS listeners.", map[string]any{"cluster": "staging"}),
-						finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelMedium, "false_positive", "controlplane/store/filters.go", 52, 54, "Dynamic search filter is appended directly into the SQL statement.", map[string]any{"input": "label_selector"}),
+					finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelMedium, "false_positive", "controlplane/store/filters.go", 52, 54, "Dynamic search filter is appended directly into the SQL statement.", map[string]any{"input": "label_selector"}),
 					finding("trivy", "hardcoded-secret-in-source", store.SeverityLevelCritical, "fixed", "deploy/charts/mesh/values.yaml", 12, 12, "Helm chart committed a bootstrap token for control plane registration.", map[string]any{"rotation_ticket": "SEC-241"}),
 				},
 			},
@@ -222,16 +222,16 @@ var seedOrgs = []seededOrg{
 					component("pkg:pypi/flask@3.0.0", "flask", "3.0.0", "pypi"),
 					component("pkg:pypi/cryptography@41.0.4", "cryptography", "41.0.4", "pypi"),
 					component("pkg:npm/axios@1.6.0", "axios", "1.6.0", "npm"),
-						component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
-						component("pkg:golang/github.com/opencontainers/runc@1.1.11", "github.com/opencontainers/runc", "1.1.11", "go"),
+					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
+					component("pkg:golang/github.com/opencontainers/runc@1.1.11", "github.com/opencontainers/runc", "1.1.11", "go"),
 				},
 				findings: []seededFinding{
 					finding("gosec", "use-of-weak-hash-md5", store.SeverityLevelLow, "open", "pkg/cache/checksum.go", 23, 26, "Image layer checksum fallback uses MD5 for performance reasons.", map[string]any{"component": "cache"}),
 					finding("semgrep", "hardcoded-secret-in-source", store.SeverityLevelCritical, "open", "hack/dev-cluster.sh", 11, 11, "Cluster bootstrap script exposes a registry password in plain text.", map[string]any{"environment": "dev"}),
 					finding("trivy", "insecure-tls-version", store.SeverityLevelMedium, "fixed", "pkg/registry/client.go", 67, 72, "Registry client previously accepted TLS 1.1 for mirror endpoints.", map[string]any{"fix_version": "v1.3.0"}),
-						finding("codeql", "command-injection", store.SeverityLevelHigh, "open", "cmd/runtime/install.go", 44, 52, "Installer constructs a tar extraction command from unvalidated image metadata.", map[string]any{"surface": "runtime"}),
-						finding("checkov", "privileged-container", store.SeverityLevelCritical, "open", "deploy/runtime/daemonset.yaml", 48, 55, "Runtime daemon requires privileged access in the shipped manifest.", map[string]any{"resource": "DaemonSet/runtime"}),
-						finding("checkov", "container-writable-rootfs", store.SeverityLevelMedium, "ignored", "deploy/runtime/daemonset.yaml", 67, 71, "Root filesystem remains writable to support low-level checkpoint restore tests.", map[string]any{"exception": "checkpoint-restore"}),
+					finding("codeql", "command-injection", store.SeverityLevelHigh, "open", "cmd/runtime/install.go", 44, 52, "Installer constructs a tar extraction command from unvalidated image metadata.", map[string]any{"surface": "runtime"}),
+					finding("checkov", "privileged-container", store.SeverityLevelCritical, "open", "deploy/runtime/daemonset.yaml", 48, 55, "Runtime daemon requires privileged access in the shipped manifest.", map[string]any{"resource": "DaemonSet/runtime"}),
+					finding("checkov", "container-writable-rootfs", store.SeverityLevelMedium, "ignored", "deploy/runtime/daemonset.yaml", 67, 71, "Root filesystem remains writable to support low-level checkpoint restore tests.", map[string]any{"exception": "checkpoint-restore"}),
 				},
 			},
 			{
@@ -245,15 +245,15 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/express@4.18.2", "express", "4.18.2", "npm"),
 					component("pkg:npm/lodash@4.17.21", "lodash", "4.17.21", "npm"),
 					component("pkg:npm/react@18.2.0", "react", "18.2.0", "npm"),
-						component("pkg:maven/org.apache.logging.log4j/log4j-core@2.22.1", "org.apache.logging.log4j:log4j-core", "2.22.1", "maven"),
+					component("pkg:maven/org.apache.logging.log4j/log4j-core@2.22.1", "org.apache.logging.log4j:log4j-core", "2.22.1", "maven"),
 				},
 				findings: []seededFinding{
 					finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelMedium, "open", "ui/src/views/AlertDetail.tsx", 201, 206, "Alert detail page writes raw Markdown HTML into the DOM.", map[string]any{"surface": "dashboard"}),
 					finding("gosec", "hardcoded-secret-in-source", store.SeverityLevelHigh, "fixed", "collector/config/defaults.go", 34, 34, "Example SMTP credential shipped as the package default.", map[string]any{"status_reason": "rotated"}),
 					finding("trivy", "insecure-tls-version", store.SeverityLevelLow, "open", "deploy/grafana.ini", 8, 12, "Grafana sidecar TLS minimum version remains unset.", map[string]any{"service": "grafana"}),
-						finding("eslint-security", "prototype-pollution", store.SeverityLevelMedium, "ignored", "ui/src/lib/filterState.ts", 29, 37, "Filter state hydrator recursively merges URL parameters into existing config.", map[string]any{"surface": "dashboards"}),
-						finding("codeql", "path-traversal", store.SeverityLevelHigh, "open", "collector/export/archive.go", 57, 64, "Archive exporter joins metric labels into output paths without validation.", map[string]any{"sink": "os.Create"}),
-						finding("gitleaks", "private-key-detected", store.SeverityLevelCritical, "false_positive", "examples/certs/README.pem", 1, 22, "Documentation fixture contains a clearly marked example private key.", map[string]any{"fixture": true}),
+					finding("eslint-security", "prototype-pollution", store.SeverityLevelMedium, "ignored", "ui/src/lib/filterState.ts", 29, 37, "Filter state hydrator recursively merges URL parameters into existing config.", map[string]any{"surface": "dashboards"}),
+					finding("codeql", "path-traversal", store.SeverityLevelHigh, "open", "collector/export/archive.go", 57, 64, "Archive exporter joins metric labels into output paths without validation.", map[string]any{"sink": "os.Create"}),
+					finding("gitleaks", "private-key-detected", store.SeverityLevelCritical, "false_positive", "examples/certs/README.pem", 1, 22, "Documentation fixture contains a clearly marked example private key.", map[string]any{"fixture": true}),
 				},
 			},
 		},
@@ -273,17 +273,17 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/express@4.18.2", "express", "4.18.2", "npm"),
 					component("pkg:npm/axios@1.6.0", "axios", "1.6.0", "npm"),
 					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go"),
-						component("pkg:npm/node-ipc@10.1.0", "node-ipc", "10.1.0", "npm"),
-						component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
-						component("pkg:maven/org.yaml/snakeyaml@2.2", "org.yaml:snakeyaml", "2.2", "maven"),
+					component("pkg:npm/node-ipc@10.1.0", "node-ipc", "10.1.0", "npm"),
+					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
+					component("pkg:maven/org.yaml/snakeyaml@2.2", "org.yaml:snakeyaml", "2.2", "maven"),
 				},
 				findings: []seededFinding{
 					finding("semgrep", "hardcoded-secret-in-source", store.SeverityLevelCritical, "open", "pipelines/github/actions.ts", 41, 41, "Reusable CI action hardcodes a package signing token.", map[string]any{"surface": "github-actions"}),
 					finding("gosec", "insecure-tls-version", store.SeverityLevelMedium, "open", "cmd/runner/main.go", 56, 61, "Runner webhook client does not pin TLS 1.2 or newer.", map[string]any{"service": "webhook"}),
 					finding("trivy", "use-of-weak-hash-md5", store.SeverityLevelLow, "fixed", "internal/cache/artifacts.go", 17, 19, "Artifact cache key derivation used MD5 before the current release.", map[string]any{"fix_commit": "ab12cd3"}),
-						finding("codeql", "command-injection", store.SeverityLevelHigh, "open", "internal/runner/shell.go", 92, 103, "Pipeline runner shells out using an unvalidated matrix value.", map[string]any{"source": "workflow input"}),
-						finding("checkov", "missing-network-policy", store.SeverityLevelMedium, "ignored", "deploy/runner/namespace.yaml", 1, 14, "Runner namespace does not define a default deny policy in sandbox clusters.", map[string]any{"cluster": "sandbox"}),
-						finding("gitleaks", "aws-access-key-exposed", store.SeverityLevelCritical, "false_positive", "fixtures/sample.env", 8, 8, "Fixture env file contains fake credentials used in parser tests.", map[string]any{"fixture": true}),
+					finding("codeql", "command-injection", store.SeverityLevelHigh, "open", "internal/runner/shell.go", 92, 103, "Pipeline runner shells out using an unvalidated matrix value.", map[string]any{"source": "workflow input"}),
+					finding("checkov", "missing-network-policy", store.SeverityLevelMedium, "ignored", "deploy/runner/namespace.yaml", 1, 14, "Runner namespace does not define a default deny policy in sandbox clusters.", map[string]any{"cluster": "sandbox"}),
+					finding("gitleaks", "aws-access-key-exposed", store.SeverityLevelCritical, "false_positive", "fixtures/sample.env", 8, 8, "Fixture env file contains fake credentials used in parser tests.", map[string]any{"fixture": true}),
 				},
 			},
 			{
@@ -296,16 +296,16 @@ var seedOrgs = []seededOrg{
 					component("pkg:pypi/requests@2.31.0", "requests", "2.31.0", "pypi"),
 					component("pkg:pypi/cryptography@41.0.4", "cryptography", "41.0.4", "pypi"),
 					component("pkg:npm/lodash@4.17.21", "lodash", "4.17.21", "npm"),
-						component("pkg:pypi/colourama@0.4.6", "colourama", "0.4.6", "pypi"),
-						component("pkg:pypi/bandit@1.7.8", "bandit", "1.7.8", "pypi"),
+					component("pkg:pypi/colourama@0.4.6", "colourama", "0.4.6", "pypi"),
+					component("pkg:pypi/bandit@1.7.8", "bandit", "1.7.8", "pypi"),
 				},
 				findings: []seededFinding{
-						finding("bandit", "hardcoded-database-password", store.SeverityLevelHigh, "open", "analyzers/python/db.py", 17, 17, "Analyzer config falls back to a hardcoded PostgreSQL password.", map[string]any{"plugin": "B105"}),
-						finding("bandit", "shell-injection", store.SeverityLevelCritical, "open", "analyzers/python/git_wrapper.py", 48, 53, "Repository URL is interpolated into a shell command used for cloning.", map[string]any{"plugin": "B602"}),
-						finding("trufflehog", "github-token-exposed", store.SeverityLevelCritical, "fixed", "internal/scm/github.go", 26, 26, "GitHub integration token is committed into a local development helper.", map[string]any{"provider": "github"}),
-						finding("semgrep", "insecure-deserialization", store.SeverityLevelMedium, "open", "analyzers/python/cache_loader.py", 22, 28, "Cached analysis results are deserialized from pickle without integrity checks.", map[string]any{"format": "pickle"}),
+					finding("bandit", "hardcoded-database-password", store.SeverityLevelHigh, "open", "analyzers/python/db.py", 17, 17, "Analyzer config falls back to a hardcoded PostgreSQL password.", map[string]any{"plugin": "B105"}),
+					finding("bandit", "shell-injection", store.SeverityLevelCritical, "open", "analyzers/python/git_wrapper.py", 48, 53, "Repository URL is interpolated into a shell command used for cloning.", map[string]any{"plugin": "B602"}),
+					finding("trufflehog", "github-token-exposed", store.SeverityLevelCritical, "fixed", "internal/scm/github.go", 26, 26, "GitHub integration token is committed into a local development helper.", map[string]any{"provider": "github"}),
+					finding("semgrep", "insecure-deserialization", store.SeverityLevelMedium, "open", "analyzers/python/cache_loader.py", 22, 28, "Cached analysis results are deserialized from pickle without integrity checks.", map[string]any{"format": "pickle"}),
 					finding("trivy", "insecure-tls-version", store.SeverityLevelMedium, "fixed", "internal/transport/http.go", 48, 54, "HTTP client previously permitted TLS 1.0 for third-party plugins.", map[string]any{"fixed_in": "v1.6.0"}),
-						finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelLow, "ignored", "web/src/pages/report.tsx", 93, 97, "Static analysis report page injects HTML annotations that are already sanitized server-side.", map[string]any{"renderer": "markdown"}),
+					finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelLow, "ignored", "web/src/pages/report.tsx", 93, 97, "Static analysis report page injects HTML annotations that are already sanitized server-side.", map[string]any{"renderer": "markdown"}),
 				},
 			},
 			{
@@ -318,16 +318,16 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/jsonwebtoken@9.0.2", "jsonwebtoken", "9.0.2", "npm"),
 					component("pkg:pypi/django@4.2.7", "django", "4.2.7", "pypi"),
 					component("pkg:golang/github.com/gin-gonic/gin@1.9.1", "github.com/gin-gonic/gin", "1.9.1", "go"),
-						component("pkg:nuget/Zlib.Portable@1.11.0", "Zlib.Portable", "1.11.0", "nuget"),
-						component("pkg:maven/org.apache.maven/maven-artifact@3.9.6", "org.apache.maven:maven-artifact", "3.9.6", "maven"),
+					component("pkg:nuget/Zlib.Portable@1.11.0", "Zlib.Portable", "1.11.0", "nuget"),
+					component("pkg:maven/org.apache.maven/maven-artifact@3.9.6", "org.apache.maven:maven-artifact", "3.9.6", "maven"),
 				},
 				findings: []seededFinding{
 					finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelHigh, "open", "internal/search/packages.go", 112, 118, "Package search builds ORDER BY clauses from unvalidated request input.", map[string]any{"vector": "sort"}),
 					finding("trivy", "hardcoded-secret-in-source", store.SeverityLevelCritical, "open", "deploy/registry.env", 4, 4, "Registry signing passphrase is stored in a checked-in env file.", map[string]any{"scope": "release"}),
 					finding("gosec", "use-of-weak-hash-md5", store.SeverityLevelLow, "fixed", "internal/signing/legacy.go", 28, 32, "Legacy compatibility layer still references MD5 while verification is disabled.", map[string]any{"compatibility": true}),
 					finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelMedium, "open", "web/src/components/PackageReadme.tsx", 64, 70, "Rendered README content is inserted without HTML sanitization.", map[string]any{"content_source": "user-upload"}),
-						finding("grype", "CVE-2023-45853", store.SeverityLevelMedium, "ignored", "sbom/packages.json", 201, 201, "Known zlib advisory tracked for mirrored package metadata.", map[string]any{"package": "Zlib.Portable"}),
-						finding("codeql", "path-traversal", store.SeverityLevelHigh, "false_positive", "internal/uploads/extract.go", 33, 40, "Archive extraction joins entry names into target paths but canonicalization prevents traversal.", map[string]any{"reviewed_by": "platform"}),
+					finding("grype", "CVE-2023-45853", store.SeverityLevelMedium, "ignored", "sbom/packages.json", 201, 201, "Known zlib advisory tracked for mirrored package metadata.", map[string]any{"package": "Zlib.Portable"}),
+					finding("codeql", "path-traversal", store.SeverityLevelHigh, "false_positive", "internal/uploads/extract.go", 33, 40, "Archive extraction joins entry names into target paths but canonicalization prevents traversal.", map[string]any{"reviewed_by": "platform"}),
 				},
 			},
 			{
@@ -350,8 +350,8 @@ var seedAdvisories = []seededAdvisory{
 		isMalware:   true,
 		malwareType: "backdoor",
 		publishedAt: time.Date(2018, time.November, 26, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "npm", packageName: "event-stream", introduced: "3.3.6", lastAffected: "3.3.6", source: "seed"}},
-		targets: []seededMatchTarget{{repoKey: repoSeedKey("acme", "web-dashboard"), componentPURL: "pkg:npm/event-stream@3.3.6"}},
+		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "event-stream", introduced: "3.3.6", lastAffected: "3.3.6", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("acme", "web-dashboard"), componentPURL: "pkg:npm/event-stream@3.3.6"}},
 	},
 	{
 		canonicalID: "MAL-2021-1024",
@@ -361,8 +361,8 @@ var seedAdvisories = []seededAdvisory{
 		isMalware:   true,
 		malwareType: "cryptominer",
 		publishedAt: time.Date(2021, time.October, 23, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "npm", packageName: "ua-parser-js", introduced: "0.7.29", lastAffected: "0.7.29", source: "seed"}},
-		targets: []seededMatchTarget{{repoKey: repoSeedKey("acme", "mobile-app"), componentPURL: "pkg:npm/ua-parser-js@0.7.29"}},
+		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "ua-parser-js", introduced: "0.7.29", lastAffected: "0.7.29", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("acme", "mobile-app"), componentPURL: "pkg:npm/ua-parser-js@0.7.29"}},
 	},
 	{
 		canonicalID: "MAL-2022-0001",
@@ -372,8 +372,8 @@ var seedAdvisories = []seededAdvisory{
 		isMalware:   true,
 		malwareType: "data_exfiltration",
 		publishedAt: time.Date(2022, time.January, 11, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "pypi", packageName: "colourama", introduced: "0.4.6", lastAffected: "0.4.6", source: "seed"}},
-		targets: []seededMatchTarget{{repoKey: repoSeedKey("devtools", "code-analyzer"), componentPURL: "pkg:pypi/colourama@0.4.6"}},
+		ranges:      []seededAffectedRange{{ecosystem: "pypi", packageName: "colourama", introduced: "0.4.6", lastAffected: "0.4.6", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "code-analyzer"), componentPURL: "pkg:pypi/colourama@0.4.6"}},
 	},
 	{
 		canonicalID: "MAL-2022-0856",
@@ -383,8 +383,8 @@ var seedAdvisories = []seededAdvisory{
 		isMalware:   true,
 		malwareType: "backdoor",
 		publishedAt: time.Date(2022, time.March, 15, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "npm", packageName: "node-ipc", introduced: "10.1.0", lastAffected: "10.1.0", source: "seed"}},
-		targets: []seededMatchTarget{{repoKey: repoSeedKey("devtools", "ci-pipeline"), componentPURL: "pkg:npm/node-ipc@10.1.0"}},
+		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "node-ipc", introduced: "10.1.0", lastAffected: "10.1.0", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "ci-pipeline"), componentPURL: "pkg:npm/node-ipc@10.1.0"}},
 	},
 	{
 		canonicalID: "CVE-2023-44487",
@@ -392,7 +392,7 @@ var seedAdvisories = []seededAdvisory{
 		description: "golang.org/x/net HTTP/2 server implementations may be vulnerable to the Rapid Reset attack leading to denial of service.",
 		severity:    store.SeverityLevelHigh,
 		publishedAt: time.Date(2023, time.October, 10, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/net", introduced: "0", fixed: "0.17.0", source: "seed"}},
+		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/net", introduced: "0", fixed: "0.17.0", source: "seed"}},
 		targets: []seededMatchTarget{
 			{repoKey: repoSeedKey("acme", "api-gateway"), componentPURL: "pkg:golang/golang.org/x/net@0.16.0"},
 			{repoKey: repoSeedKey("acme", "auth-service"), componentPURL: "pkg:golang/golang.org/x/net@0.16.0"},
@@ -407,7 +407,7 @@ var seedAdvisories = []seededAdvisory{
 		description: "Certain HTTP/2 requests can consume excessive resources in affected golang.org/x/net versions.",
 		severity:    store.SeverityLevelHigh,
 		publishedAt: time.Date(2023, time.September, 6, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/net", introduced: "0", fixed: "0.17.0", source: "seed"}},
+		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/net", introduced: "0", fixed: "0.17.0", source: "seed"}},
 		targets: []seededMatchTarget{
 			{repoKey: repoSeedKey("acme", "api-gateway"), componentPURL: "pkg:golang/golang.org/x/net@0.16.0"},
 			{repoKey: repoSeedKey("acme", "auth-service"), componentPURL: "pkg:golang/golang.org/x/net@0.16.0"},
@@ -421,7 +421,7 @@ var seedAdvisories = []seededAdvisory{
 		description: "Affected runc versions may permit a crafted image or container to escape intended filesystem boundaries.",
 		severity:    store.SeverityLevelCritical,
 		publishedAt: time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "go", packageName: "github.com/opencontainers/runc", introduced: "0", fixed: "1.1.12", source: "seed"}},
+		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "github.com/opencontainers/runc", introduced: "0", fixed: "1.1.12", source: "seed"}},
 		targets: []seededMatchTarget{
 			{repoKey: repoSeedKey("cloudnative", "service-mesh"), componentPURL: "pkg:golang/github.com/opencontainers/runc@1.1.11"},
 			{repoKey: repoSeedKey("cloudnative", "container-runtime"), componentPURL: "pkg:golang/github.com/opencontainers/runc@1.1.11"},
@@ -433,8 +433,8 @@ var seedAdvisories = []seededAdvisory{
 		description: "Affected Zlib.Portable packages bundle a vulnerable zlib version that may permit buffer overflow conditions during decompression.",
 		severity:    store.SeverityLevelMedium,
 		publishedAt: time.Date(2023, time.December, 1, 0, 0, 0, 0, time.UTC),
-		ranges: []seededAffectedRange{{ecosystem: "nuget", packageName: "Zlib.Portable", introduced: "0", fixed: "1.12.0", source: "seed"}},
-		targets: []seededMatchTarget{{repoKey: repoSeedKey("devtools", "package-registry"), componentPURL: "pkg:nuget/Zlib.Portable@1.11.0"}},
+		ranges:      []seededAffectedRange{{ecosystem: "nuget", packageName: "Zlib.Portable", introduced: "0", fixed: "1.12.0", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "package-registry"), componentPURL: "pkg:nuget/Zlib.Portable@1.11.0"}},
 	},
 }
 
@@ -521,7 +521,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 			}
 
 			seededSnapshots[repoSeedKey(orgSeed.slug, repoSeed.slug)] = seededSnapshotState{
-				snapshotID:    snapshot.ID,
+				snapshotID:   snapshot.ID,
 				componentIDs: componentIDs,
 			}
 		}
@@ -537,11 +537,6 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 
 	log.Info().Int("organizations", len(seedOrgs)).Msg("development seed data created")
 	return nil
-}
-
-func seedComponents(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, components []seededComponent) error {
-	_, err := seedComponentsForSnapshot(ctx, tx, snapshotID, components)
-	return err
 }
 
 func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, components []seededComponent) (map[string]uuid.UUID, error) {
@@ -728,11 +723,13 @@ func finding(tool, ruleID string, severity store.SeverityLevel, status, filePath
 }
 
 func fakeCommitSHA(orgIndex, repoIndex int) string {
+	//nolint:gosec // G401: SHA1 is used only for deterministic fake git commit hashes.
 	sum := sha1.Sum([]byte(fmt.Sprintf("%d-%d", orgIndex, repoIndex)))
 	return hex.EncodeToString(sum[:])[:7]
 }
 
 func findingLocationHash(tool, ruleID, filePath string, startLine, endLine int32) string {
+	//nolint:gosec // G401: SHA1 is used only for deterministic seed location hashes.
 	sum := sha1.Sum([]byte(fmt.Sprintf("%s|%s|%s|%d|%d", tool, ruleID, filePath, startLine, endLine)))
 	return hex.EncodeToString(sum[:])
 }

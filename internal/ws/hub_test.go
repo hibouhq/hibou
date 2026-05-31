@@ -147,12 +147,15 @@ func TestHTTPHandlerRejectsUnauthorizedBeforeUpgrade(t *testing.T) {
 	if err == nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "test complete")
 		t.Fatal("expected unauthorized websocket dial to fail")
+		return
 	}
 	if resp == nil {
 		t.Fatal("expected HTTP response from failed websocket dial")
+		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, resp.StatusCode)
+		return
 	}
 }

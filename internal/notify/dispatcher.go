@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -133,7 +134,7 @@ func (d *Dispatcher) Subscribe() {
 	})
 }
 
-func (d *Dispatcher) handleEvent(ctx context.Context, eventType events.Type, rawPayload any) {
+func (d *Dispatcher) handleEvent(_ context.Context, eventType events.Type, rawPayload any) {
 	if d == nil || d.store == nil {
 		return
 	}
@@ -314,7 +315,7 @@ func ReplayPayloadFromAuditLog(entry dbgen.AuditLog) (Payload, error) {
 		Metadata:  mapValue(rawPayload["metadata"]),
 	}
 	if payload.EventType == "" {
-		return Payload{}, fmt.Errorf("audit log does not contain a replayable payload")
+		return Payload{}, errors.New("audit log does not contain a replayable payload")
 	}
 	return payload, nil
 }
@@ -933,7 +934,7 @@ func validateNotificationAddress(ctx context.Context, address string) error {
 	}
 	host = strings.TrimSpace(host)
 	if host == "" {
-		return fmt.Errorf("notification destination host is empty")
+		return errors.New("notification destination host is empty")
 	}
 	ips, err := resolveNotificationIPs(ctx, host)
 	if err != nil {

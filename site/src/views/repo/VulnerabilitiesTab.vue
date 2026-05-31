@@ -77,8 +77,13 @@
                   {{ vulnerability.primary_identifier?.value || vulnerability.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-3 py-2.5">
-                  <div class="text-gray-300">{{ vulnerability.title }}</div>
-                  <div v-if="formatLocation(vulnerability) !== 'n/a'" class="mt-0.5 font-mono text-xs text-gray-500">
+                  <div class="text-gray-300">
+                    {{ vulnerability.title }}
+                  </div>
+                  <div
+                    v-if="formatLocation(vulnerability) !== 'n/a'"
+                    class="mt-0.5 font-mono text-xs text-gray-500"
+                  >
                     {{ formatLocation(vulnerability) }}
                   </div>
                 </td>
@@ -154,9 +159,9 @@ const statusOptions = ['detected', 'confirmed', 'dismissed', 'resolved']
 const toolOptions = computed(() => Array.from(seenTools.value).sort())
 const fileOptions = computed(() => Array.from(seenFiles.value).sort())
 const filterDefs = computed(() => [
+  { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected,confirmed' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
-  { key: 'status', label: 'Status', options: statusOptions, multi: true },
   { key: 'tool', label: 'Tool', options: toolOptions.value, multi: true },
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
 ])

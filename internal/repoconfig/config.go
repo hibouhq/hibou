@@ -2,6 +2,7 @@ package repoconfig
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -204,7 +205,7 @@ func (c *RepoConfig) validate() error {
 			return fmt.Errorf("upload.window must be a valid duration: %w", err)
 		}
 		if d <= 0 {
-			return fmt.Errorf("upload.window must be a positive duration")
+			return errors.New("upload.window must be a positive duration")
 		}
 	}
 

@@ -127,8 +127,8 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 	}
 	params := dbgen.ListVulnerabilitiesBySnapshotParams{
 		SnapshotID: snapshotID,
-		Limit:      int32(opts.Limit),
-		Offset:     int32(opts.Offset),
+		Limit:      int32(opts.Limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset:     int32(opts.Offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 		Statuses:   statuses,
 		Types:      normalizeStringFilters(opts.Types),
 		Severities: normalizeStringFilters(opts.Severities),
@@ -190,6 +190,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshotDynamic(ctx context.Context, snap
 
 	sort = normalizeVulnerabilitySort(sort)
 	sortParam := len(baseArgs) + 1
+	//nolint:gosec // G201: query uses validated sort input and positional parameters.
 	listSQL := fmt.Sprintf(`SELECT %s FROM vulnerabilities
 WHERE %s
 %s
@@ -217,8 +218,7 @@ LIMIT $%d OFFSET $%d`, vulnerabilitySelectColumns, baseWhere, vulnerabilityOrder
 		return nil, 0, err
 	}
 
-	countSQL := fmt.Sprintf(`SELECT COUNT(*)::bigint FROM vulnerabilities
-WHERE %s`, baseWhere)
+	countSQL := "SELECT COUNT(*)::bigint FROM vulnerabilities\nWHERE " + baseWhere
 	var total int64
 	if err := q.sqlDB.QueryRowContext(ctx, countSQL, baseArgs...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -379,6 +379,7 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 
 const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier, identifiers, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at"
 
+//nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
 	return fmt.Sprintf(`ORDER BY
   CASE WHEN $%d::text = 'severity_asc' THEN CASE severity

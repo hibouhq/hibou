@@ -2,15 +2,16 @@ package vex
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
 
 type openVEXDocument struct {
-	Context    any                  `json:"@context"`
-	ID         string               `json:"@id"`
-	Timestamp  string               `json:"timestamp"`
-	Statements []openVEXStatement   `json:"statements"`
+	Context    any                `json:"@context"`
+	ID         string             `json:"@id"`
+	Timestamp  string             `json:"timestamp"`
+	Statements []openVEXStatement `json:"statements"`
 }
 
 type openVEXStatement struct {
@@ -34,7 +35,7 @@ func ParseOpenVEX(data []byte) (*ParseResult, error) {
 		return nil, fmt.Errorf("decode openvex document: %w", err)
 	}
 	if !openVEXContext(doc.Context) {
-		return nil, fmt.Errorf("document is not openvex")
+		return nil, errors.New("document is not openvex")
 	}
 
 	statements := make([]Statement, 0, len(doc.Statements))

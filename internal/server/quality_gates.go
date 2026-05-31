@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -179,16 +180,7 @@ func (s *Server) handleUpdateQualityGate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	updated, err := s.createOrUpdateQualityGate(r, org, nil, qualityGateFields{
-		Name:              input.Name,
-		Description:       input.Description,
-		MaxCritical:       input.MaxCritical,
-		MaxHigh:           input.MaxHigh,
-		MaxMedium:         input.MaxMedium,
-		MaxNewFindings:    input.MaxNewFindings,
-		FindingSeverities: input.FindingSeverities,
-		Enabled:           input.Enabled,
-	}, gate.ID)
+	updated, err := s.createOrUpdateQualityGate(r, org, nil, qualityGateFields(input), gate.ID)
 	if err != nil {
 		s.handleQualityGateError(w, err, false)
 		return
@@ -315,11 +307,13 @@ func (e *qualityGateAuthorizationError) Error() string {
 }
 
 func (s *Server) handleQualityGateError(w http.ResponseWriter, err error, creating bool) {
-	if validationErr, ok := err.(*qualityGateValidationError); ok {
+	var validationErr *qualityGateValidationError
+	if errors.As(err, &validationErr) {
 		api.JSONError(w, http.StatusBadRequest, validationErr.message)
 		return
 	}
-	if authzErr, ok := err.(*qualityGateAuthorizationError); ok {
+	var authzErr *qualityGateAuthorizationError
+	if errors.As(err, &authzErr) {
 		api.JSONError(w, http.StatusForbidden, authzErr.message)
 		return
 	}

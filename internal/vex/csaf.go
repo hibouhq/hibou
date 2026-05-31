@@ -2,6 +2,7 @@ package vex
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -75,7 +76,7 @@ func ParseCSAF(data []byte) (*ParseResult, error) {
 		return nil, fmt.Errorf("decode csaf document: %w", err)
 	}
 	if strings.TrimSpace(doc.Document.Category) != "csaf_vex" {
-		return nil, fmt.Errorf("document is not csaf vex")
+		return nil, errors.New("document is not csaf vex")
 	}
 
 	products := make(map[string]csafProductMatch)

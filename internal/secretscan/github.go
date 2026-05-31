@@ -3,6 +3,7 @@ package secretscan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -94,7 +95,7 @@ func (p *GitHubProvider) ScanRepo(ctx context.Context, opts ScanRepoOptions) ([]
 }
 
 func (p *GitHubProvider) ScanDiff(ctx context.Context, opts ScanDiffOptions) ([]SecretFinding, error) {
-	return nil, fmt.Errorf("github secret scanning provider does not support incremental commit-range scans")
+	return nil, errors.New("github secret scanning provider does not support incremental commit-range scans")
 }
 
 type gitHubSecretAlert struct {

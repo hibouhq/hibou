@@ -52,4 +52,3 @@ func (a *StoreAdapter) ListQualityGatesByRepo(ctx context.Context, repoID uuid.U
 func (a *StoreAdapter) ListOrgWideQualityGates(ctx context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error) {
 	return a.queries.ListOrgWideQualityGates(ctx, orgID)
 }
-

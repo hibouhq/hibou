@@ -37,8 +37,8 @@ func (q *Queries) RemoveOrgMember(ctx context.Context, orgID, userID uuid.UUID) 
 func (q *Queries) ListOrgMembers(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]OrgMember, int, error) {
 	rows, err := q.db.ListOrgMembers(ctx, dbgen.ListOrgMembersParams{
 		OrgID:  orgID,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

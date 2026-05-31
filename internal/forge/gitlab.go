@@ -75,7 +75,7 @@ func (g *GitLab) ListRepositories(ctx context.Context, opts ListReposOptions) ([
 
 func (g *GitLab) GetRepository(ctx context.Context, owner, name string) (*Repository, error) {
 	var payload gitlabProject
-	path := fmt.Sprintf("/api/v4/projects/%s", gitlabProjectID(owner, name))
+	path := "/api/v4/projects/" + gitlabProjectID(owner, name)
 	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
 		return nil, err
 	}

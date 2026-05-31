@@ -57,7 +57,7 @@ func (q *Queries) GetReleaseByID(ctx context.Context, id uuid.UUID) (*Release, e
 }
 
 func (q *Queries) ListReleasesByRepo(ctx context.Context, repoID uuid.UUID, limit, offset int) ([]Release, int, error) {
-	rows, err := q.db.ListReleasesByRepo(ctx, dbgen.ListReleasesByRepoParams{RepoID: repoID, Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.ListReleasesByRepo(ctx, dbgen.ListReleasesByRepoParams{RepoID: repoID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -76,7 +76,7 @@ func (q *Queries) ListReleasesByRepo(ctx context.Context, repoID uuid.UUID, limi
 }
 
 func (q *Queries) ListReleasesByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]Release, int, error) {
-	rows, err := q.db.ListReleasesByOrg(ctx, dbgen.ListReleasesByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.ListReleasesByOrg(ctx, dbgen.ListReleasesByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}

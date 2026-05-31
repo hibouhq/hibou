@@ -58,3 +58,4 @@ infra/**/kubeconfig.yaml
 
 .agents/skills/cave*
 .claude/skills/cave*
+skills-lock.json

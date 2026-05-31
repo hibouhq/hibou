@@ -2,6 +2,7 @@ package compliance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -69,7 +70,7 @@ type ISO27001Store interface {
 
 func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, asOfDate time.Time) (*ISO27001Report, error) {
 	if s.isoStore == nil {
-		return nil, fmt.Errorf("iso27001 store unavailable")
+		return nil, errors.New("iso27001 store unavailable")
 	}
 	if asOfDate.IsZero() {
 		asOfDate = time.Now().UTC()

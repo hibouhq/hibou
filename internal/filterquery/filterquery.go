@@ -1,6 +1,7 @@
 package filterquery
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -135,7 +136,7 @@ func (p *parser) parseOr(depth int) (Node, error) {
 			return nil, err
 		}
 		if right == nil {
-			return nil, fmt.Errorf("OR must be followed by an expression")
+			return nil, errors.New("OR must be followed by an expression")
 		}
 		left = OrNode{Left: left, Right: right}
 	}
@@ -162,7 +163,7 @@ func (p *parser) parseAnd(depth int) (Node, error) {
 			return nil, err
 		}
 		if right == nil {
-			return nil, fmt.Errorf("AND must be followed by an expression")
+			return nil, errors.New("AND must be followed by an expression")
 		}
 		left = AndNode{Left: left, Right: right}
 	}

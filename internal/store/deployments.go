@@ -68,7 +68,7 @@ func (q *Queries) GetDeploymentByID(ctx context.Context, id uuid.UUID) (*Deploym
 }
 
 func (q *Queries) ListDeploymentsByClient(ctx context.Context, clientID uuid.UUID, limit, offset int) ([]Deployment, int, error) {
-	rows, err := q.db.ListDeploymentsByClient(ctx, dbgen.ListDeploymentsByClientParams{ClientID: clientID, Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.ListDeploymentsByClient(ctx, dbgen.ListDeploymentsByClientParams{ClientID: clientID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -87,7 +87,7 @@ func (q *Queries) ListDeploymentsByClient(ctx context.Context, clientID uuid.UUI
 }
 
 func (q *Queries) ListDeploymentsWithReleaseByClient(ctx context.Context, clientID uuid.UUID, limit, offset int) ([]DeploymentWithRelease, int, error) {
-	rows, err := q.db.ListDeploymentsWithReleaseByClient(ctx, dbgen.ListDeploymentsWithReleaseByClientParams{ClientID: clientID, Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.ListDeploymentsWithReleaseByClient(ctx, dbgen.ListDeploymentsWithReleaseByClientParams{ClientID: clientID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -120,7 +120,7 @@ func (q *Queries) ListDeploymentsWithReleaseByClient(ctx context.Context, client
 }
 
 func (q *Queries) ListDeploymentsByRelease(ctx context.Context, releaseID uuid.UUID, limit, offset int) ([]Deployment, int, error) {
-	rows, err := q.db.ListDeploymentsByRelease(ctx, dbgen.ListDeploymentsByReleaseParams{ReleaseID: releaseID, Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.ListDeploymentsByRelease(ctx, dbgen.ListDeploymentsByReleaseParams{ReleaseID: releaseID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}

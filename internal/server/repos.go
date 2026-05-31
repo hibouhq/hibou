@@ -959,18 +959,3 @@ func componentDiffKey(entry componentEntryResponse) string {
 	}
 	return entry.Ecosystem + ":" + entry.Name + "@" + entry.Version
 }
-
-func applySeverityCount(counts *severityCounts, severity string, count int64) {
-	switch severity {
-	case "critical":
-		counts.Critical = int(count)
-	case "high":
-		counts.High = int(count)
-	case "medium":
-		counts.Medium = int(count)
-	case "low":
-		counts.Low = int(count)
-	case "info":
-		counts.Info = int(count)
-	}
-}

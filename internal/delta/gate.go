@@ -60,13 +60,13 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 		if !gate.Enabled {
 			continue
 		}
-		if int32(critical) > gate.MaxCritical {
+		if int32(critical) > gate.MaxCritical { //nolint:gosec // G115: severity counts are bounded by in-memory delta size.
 			reasons = append(reasons, fmt.Sprintf("gate %q exceeded max critical vulnerabilities: %d > %d", gate.Name, critical, gate.MaxCritical))
 		}
-		if int32(high) > gate.MaxHigh {
+		if int32(high) > gate.MaxHigh { //nolint:gosec // G115: severity counts are bounded by in-memory delta size.
 			reasons = append(reasons, fmt.Sprintf("gate %q exceeded max high vulnerabilities: %d > %d", gate.Name, high, gate.MaxHigh))
 		}
-		if gate.MaxMedium.Valid && int32(medium) > gate.MaxMedium.Int32 {
+		if gate.MaxMedium.Valid && int32(medium) > gate.MaxMedium.Int32 { //nolint:gosec // G115: severity counts are bounded by in-memory delta size.
 			reasons = append(reasons, fmt.Sprintf("gate %q exceeded max medium vulnerabilities: %d > %d", gate.Name, medium, gate.MaxMedium.Int32))
 		}
 	}
@@ -77,7 +77,7 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 				continue
 			}
 			newVulnerabilities := countVulnerabilitiesBySeverity(delta.New, gate.FindingSeverities)
-			if int32(newVulnerabilities) > gate.MaxNewFindings.Int32 {
+			if int32(newVulnerabilities) > gate.MaxNewFindings.Int32 { //nolint:gosec // G115: finding counts are bounded by in-memory delta size.
 				reasons = append(reasons, fmt.Sprintf("gate %q exceeded max new vulnerabilities: %d > %d", gate.Name, newVulnerabilities, gate.MaxNewFindings.Int32))
 			}
 		}

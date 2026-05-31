@@ -32,6 +32,7 @@ func newIPRateLimiter(ctx context.Context, rps float64, burst int) *ipRateLimite
 		ctx = context.Background()
 	}
 
+	//nolint:gosec // G118: cancel is retained on the limiter and invoked via server shutdown.
 	limiterCtx, cancel := context.WithCancel(ctx)
 
 	l := &ipRateLimiter{

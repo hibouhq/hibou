@@ -429,6 +429,7 @@ func TestParseTrailingOR(t *testing.T) {
 }
 
 func TestParseConsecutiveOperators(t *testing.T) {
+	//nolint:dupword // intentional duplicate for test case
 	_, err := Parse("type:sast AND AND severity:high")
 	if err == nil {
 		t.Fatal("expected error for consecutive operators")

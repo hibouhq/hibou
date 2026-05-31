@@ -24,6 +24,23 @@ func nullStringFromPtr(value *string) sql.NullString {
 	return sql.NullString{String: *value, Valid: true}
 }
 
+func float64PtrFromNull(value sql.NullFloat64) *float64 {
+	if !value.Valid {
+		return nil
+	}
+
+	result := value.Float64
+	return &result
+}
+
+func nullFloat64FromPtr(value *float64) sql.NullFloat64 {
+	if value == nil {
+		return sql.NullFloat64{}
+	}
+
+	return sql.NullFloat64{Float64: *value, Valid: true}
+}
+
 func int32PtrFromNull(value sql.NullInt32) *int32 {
 	if !value.Valid {
 		return nil

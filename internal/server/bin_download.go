@@ -54,10 +54,11 @@ func (s *Server) handleBinDownload(w http.ResponseWriter, r *http.Request) {
 
 	// All binaries live in hibou-bin/ next to the resolved executable
 	binPath := filepath.Join(exeDir, filename)
-	if info, err := os.Lstat(binPath); err == nil && info.Mode().IsRegular() {
+	if info, err := os.Lstat(binPath); err == nil && info.Mode().IsRegular() { //nolint:gosec // G703: path is derived from validated platform inputs next to the running binary.
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
 		w.Header().Set("X-Hibou-Version", version.Version)
+		//nolint:gosec // G304,G703: path is derived from validated platform inputs next to the running binary.
 		http.ServeFile(w, r, binPath)
 		return
 	}

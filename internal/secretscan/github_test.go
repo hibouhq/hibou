@@ -105,8 +105,8 @@ func TestGitHubProviderScanRepo(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeaders = append(authHeaders, r.Header.Get("Authorization"))
-		switch {
-		case r.URL.Path == "/repos/acme/repo/secret-scanning/alerts":
+		switch r.URL.Path {
+		case "/repos/acme/repo/secret-scanning/alerts":
 			if got := r.URL.Query().Get("page"); got != "1" {
 				t.Fatalf("page = %q, want %q", got, "1")
 			}
@@ -121,7 +121,7 @@ func TestGitHubProviderScanRepo(t *testing.T) {
 				"html_url":                 "https://github.com/acme/repo/security/secret-scanning/7",
 				"locations_url":            server.URL + "/locations/7",
 			}})
-		case r.URL.Path == "/locations/7":
+		case "/locations/7":
 			if got := r.Header.Get("Accept"); got != "application/vnd.github+json" {
 				t.Fatalf("Accept = %q, want github accept header", got)
 			}

@@ -56,7 +56,16 @@
           @mousedown.prevent
           @click.stop="clearAll"
         >
-          <svg class="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          <svg
+            class="h-3 w-3"
+            fill="none"
+            viewBox="0 0 12 12"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          >
+            <path d="M2 2l8 8M10 2l-8 8" />
+          </svg>
         </button>
       </div>
 
@@ -92,10 +101,9 @@
             >
               <span
                 v-if="item.type === 'key'"
-                class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500"
+                class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500"
                 :class="index === activeAutocompleteIndex ? 'text-accent/70' : ''"
-                v-html="filterKeyIcon(item.key)"
-              />
+              >{{ filterKeyBadge(item.key) }}</span>
               <span class="min-w-0 truncate font-medium">{{ item.primary }}</span>
               <span class="ml-auto shrink-0 text-xs text-gray-500">{{ item.secondary }}</span>
             </button>
@@ -140,9 +148,12 @@
         >
           <button
             class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition"
-            :class="isFilterMenuOpen(filter.key) || hasFilterSelection(filter.key)
-              ? 'border-accent/40 bg-accent-muted text-accent'
-              : 'border-surface-border bg-surface-raised text-gray-300 hover:border-surface-border-subtle hover:text-gray-100'"
+            :class="[
+              isFilterMenuOpen(filter.key) || hasFilterSelection(filter.key)
+                ? 'border-accent/40 bg-accent-muted text-accent'
+                : 'border-surface-border bg-surface-raised text-gray-300 hover:border-surface-border-subtle hover:text-gray-100',
+              filter.primary ? 'ring-1 ring-accent/20' : '',
+            ]"
             type="button"
             aria-haspopup="true"
             :aria-expanded="isFilterMenuOpen(filter.key)"
@@ -328,6 +339,9 @@ interface FilterDef {
   multi?: boolean
   icon?: string
   freeform?: boolean
+  hidden?: boolean
+  defaultValue?: string
+  primary?: boolean
 }
 
 interface SortDef {
@@ -733,10 +747,6 @@ function setDropdownSearch(key: string, value: string) {
   }
 }
 
-function selectedOptionsFor(filter: FilterDef) {
-  return getSelectedValues(filter)
-}
-
 function filteredOptionsFor(filter: FilterDef) {
   const search = (dropdownSearch.value[filter.key] ?? '').trim().toLowerCase()
   const selected = new Set(getSelectedValues(filter).map((v) => v.toLowerCase()))
@@ -817,7 +827,11 @@ function toggleFilterOption(filter: FilterDef, option: string) {
 
   const nextFilters = { ...(modelValue.value ?? {}) }
   if (nextValues.length === 0) {
-    delete nextFilters[filter.key]
+    if (filter.defaultValue) {
+      nextFilters[filter.key] = filter.defaultValue
+    } else {
+      delete nextFilters[filter.key]
+    }
   } else {
     nextFilters[filter.key] = filter.multi ? nextValues.join(',') : nextValues[0]
   }
@@ -841,7 +855,14 @@ function selectSortDirection(key: string) {
 }
 
 function clearAll() {
-  modelValue.value = {}
+  const defaultFilters: Record<string, string> = {}
+  for (const filter of props.filters) {
+    if (filter.defaultValue) {
+      defaultFilters[filter.key] = filter.defaultValue
+    }
+  }
+
+  modelValue.value = defaultFilters
   searchQuery.value = ''
   if (sortValue.value) {
     sortValue.value = ''
@@ -904,6 +925,10 @@ function buildBarQuery(filters: Record<string, string>, freeText: string) {
   const tokens: string[] = []
 
   for (const filter of props.filters) {
+    if (filter.hidden) {
+      continue
+    }
+
     const value = filters[filter.key]
     if (value) {
       tokens.push(`${filter.key}:${value}`)
@@ -956,6 +981,12 @@ function parseBarQuery(query: string): ParsedQuery {
 
     if (filter.multi) {
       continue
+    }
+  }
+
+  for (const [key, filter] of filterMap.value) {
+    if (filter.defaultValue && !(filter.key in filters)) {
+      filters[key] = filter.defaultValue
     }
   }
 
@@ -1263,21 +1294,11 @@ function addValidationIssue(target: Map<string, ValidationIssue>, issue: Validat
   }
 }
 
-const defaultIcons: Record<string, string> = {
-  severity: '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8zm9-3a1 1 0 11-2 0 1 1 0 012 0zM8 7a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 018 7z"/></svg>',
-  tool: '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M5.433 2.304A4.494 4.494 0 003.5 6c0 1.598.832 3.002 2.09 3.802.518.329.91.9.91 1.535v.663h3v-.663c0-.635.392-1.206.91-1.535A4.494 4.494 0 0012.5 6a4.494 4.494 0 00-1.933-3.696A4.49 4.49 0 008 1.5a4.49 4.49 0 00-2.567.804zM8 0a6 6 0 013.532 10.856c-.192.122-.282.322-.282.48V12H4.75v-.664c0-.158-.09-.358-.282-.48A6 6 0 018 0zM5.25 13.5h5.5a.75.75 0 010 1.5h-5.5a.75.75 0 010-1.5z"/></svg>',
-  status: '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 9.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/><path d="M8 0a8 8 0 100 16A8 8 0 008 0zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z"/></svg>',
-  ecosystem: '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M1 2.5A2.5 2.5 0 013.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 01-1.072 1.05A2.495 2.495 0 011 11.5v-9z"/></svg>',
-  search: '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M10.68 11.74a6 6 0 01-7.922-8.982 6 6 0 018.982 7.922l3.04 3.04a.749.749 0 01-.326 1.275.749.749 0 01-.734-.215l-3.04-3.04zM11.5 7a4.499 4.499 0 10-8.997 0A4.499 4.499 0 0011.5 7z"/></svg>',
-}
-
-const fallbackIcon = '<svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0114.25 16H1.75A1.75 1.75 0 010 14.25V1.75zM6.5 6.5v8h2v-8h-2zm-5 3v5h2v-5h-2zm10-3v8h2v-8h-2z"/></svg>'
-
-function filterKeyIcon(key: string): string {
+function filterKeyBadge(key: string): string {
   const filter = filterMap.value.get(key.toLowerCase())
-  if (filter?.icon) {
-    return filter.icon
+  if (filter?.label) {
+    return filter.label.slice(0, 2)
   }
-  return defaultIcons[key.toLowerCase()] ?? fallbackIcon
+  return key.slice(0, 2)
 }
 </script>

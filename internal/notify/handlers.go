@@ -38,8 +38,8 @@ func (s *Service) HandleListNotifications(w http.ResponseWriter, r *http.Request
 	pagination := api.ParsePagination(r)
 	items, err := s.store.ListNotificationsByUser(r.Context(), dbgen.ListNotificationsByUserParams{
 		UserID: user.ID,
-		Limit:  int32(pagination.PerPage),
-		Offset: int32(pagination.Offset),
+		Limit:  int32(pagination.PerPage), //nolint:gosec // G115: pagination is bounded by API parsing.
+		Offset: int32(pagination.Offset),  //nolint:gosec // G115: pagination is bounded by API parsing.
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list notifications")

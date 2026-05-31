@@ -49,8 +49,8 @@ func (q *Queries) SearchAdvisories(ctx context.Context, orgID uuid.UUID, query, 
 			OrgID:      orgID,
 			LikeEscape: []byte(pattern),
 			Severity:   normalizedSeverity,
-			Limit:      int32(limit),
-			Offset:     int32(offset),
+			Limit:      int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+			Offset:     int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 		})
 		if err != nil {
 			return nil, 0, err
@@ -66,7 +66,7 @@ func (q *Queries) SearchAdvisories(ctx context.Context, orgID uuid.UUID, query, 
 		return rows, int(total), nil
 	}
 
-	rows, err := q.db.SearchAdvisories(ctx, dbgen.SearchAdvisoriesParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.SearchAdvisories(ctx, dbgen.SearchAdvisoriesParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -79,7 +79,7 @@ func (q *Queries) SearchAdvisories(ctx context.Context, orgID uuid.UUID, query, 
 
 func (q *Queries) SearchComponents(ctx context.Context, orgID uuid.UUID, query string, limit, offset int) ([]dbgen.Component, int, error) {
 	pattern := searchPattern(query)
-	rows, err := q.db.SearchComponents(ctx, dbgen.SearchComponentsParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.SearchComponents(ctx, dbgen.SearchComponentsParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -92,7 +92,7 @@ func (q *Queries) SearchComponents(ctx context.Context, orgID uuid.UUID, query s
 
 func (q *Queries) SearchVulnerabilities(ctx context.Context, orgID uuid.UUID, query, severity string, limit, offset int) ([]Vulnerability, int, error) {
 	pattern := searchPattern(query)
-	rows, err := q.db.SearchVulnerabilities(ctx, dbgen.SearchVulnerabilitiesParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.SearchVulnerabilities(ctx, dbgen.SearchVulnerabilitiesParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -121,7 +121,7 @@ func (q *Queries) SearchVulnerabilities(ctx context.Context, orgID uuid.UUID, qu
 
 func (q *Queries) SearchClients(ctx context.Context, orgID uuid.UUID, query string, limit, offset int) ([]Client, int, error) {
 	pattern := searchPattern(query)
-	rows, err := q.db.SearchClients(ctx, dbgen.SearchClientsParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)})
+	rows, err := q.db.SearchClients(ctx, dbgen.SearchClientsParams{OrgID: orgID, LikeEscape: []byte(pattern), Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}

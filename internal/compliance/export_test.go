@@ -131,6 +131,7 @@ func TestGenerateReport(t *testing.T) {
 	}
 	if depEntry == nil {
 		t.Fatal("expected dependency vulnerability entry")
+		return
 	}
 	if depEntry.VEXStatus != string(dbgen.VexStatusNotAffected) {
 		t.Fatalf("VEXStatus = %q, want %q", depEntry.VEXStatus, dbgen.VexStatusNotAffected)

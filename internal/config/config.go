@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -138,7 +139,8 @@ func Load() (Config, error) {
 	v.AddConfigPath(os.ExpandEnv("$HOME/.config/hibou"))
 
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var configFileNotFoundErr viper.ConfigFileNotFoundError
+		if !errors.As(err, &configFileNotFoundErr) {
 			return Config{}, fmt.Errorf("reading config file: %w", err)
 		}
 	}

@@ -134,16 +134,18 @@ func (s *Scanner) collectDiffFindings(ctx context.Context, opts ScanDiffOptions)
 	for _, provider := range s.providers {
 		var providerFindings []SecretFinding
 		var err error
-		if provider.Capabilities().IncrementalScan {
+		capabilities := provider.Capabilities()
+		switch {
+		case capabilities.IncrementalScan:
 			providerFindings, err = provider.ScanDiff(ctx, opts)
-		} else if provider.Capabilities().FullScan {
+		case capabilities.FullScan:
 			providerFindings, err = provider.ScanRepo(ctx, ScanRepoOptions{
 				CloneURL:  opts.CloneURL,
 				Branch:    opts.Branch,
 				AuthToken: opts.AuthToken,
 				TempDir:   opts.TempDir,
 			})
-		} else {
+		default:
 			continue
 		}
 		if err != nil {

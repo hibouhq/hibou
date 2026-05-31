@@ -97,12 +97,16 @@ build: build-frontend ## Build the hibou binary for the current platform
 
 .PHONY: check-reproducible
 check-reproducible: ## Verify build reproducibility (rebuilds frontend + Go binary, compares with dist/)
-	@if [ ! -f $(DIST)/$(BINARY) ]; then echo "==> FAIL: run 'make build' first"; exit 1; fi
-	@echo "==> Rebuilding frontend..."
-	@cd $(FRONTEND) && npm run build > /dev/null 2>&1
-	@echo "==> Rebuilding Go binary..."
-	@CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o /tmp/hibou-repro .
-	@hash1=$$(sha256sum $(DIST)/$(BINARY) | cut -d' ' -f1); \
+	@REPRO_BIN=$(DIST)/$(BINARY)-$$(go env GOOS)-$$(go env GOARCH); \
+	 if [ ! -f "$$REPRO_BIN" ]; then \
+	   REPRO_BIN=$(DIST)/$(BINARY); \
+	   if [ ! -f "$$REPRO_BIN" ]; then echo "==> FAIL: run 'make build' or 'make build-all' first"; exit 1; fi; \
+	 fi; \
+	 echo "==> Rebuilding frontend..."; \
+	 cd $(FRONTEND) && npm run build > /dev/null 2>&1 && cd ..; \
+	 echo "==> Rebuilding Go binary..."; \
+	 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o /tmp/hibou-repro .; \
+	 hash1=$$(sha256sum "$$REPRO_BIN" | cut -d' ' -f1); \
 	 hash2=$$(sha256sum /tmp/hibou-repro | cut -d' ' -f1); \
 	 rm -f /tmp/hibou-repro; \
 	 if [ "$$hash1" = "$$hash2" ]; then \
@@ -128,28 +132,19 @@ base-image-lock: ## Resolve and lock Wolfi package versions
 	@echo "==> Lock file written: apko.lock.json"
 
 .PHONY: docker-build
-docker-build: base-image ## Build reproducible Docker image
+docker-build: build-all base-image ## Build reproducible Docker image
 	docker build \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg COMMIT=$(COMMIT) \
-		--build-arg DATE=$(DATE) \
 		-t ghcr.io/hibouhq/lehibou:$(VERSION) .
 
 .PHONY: check-reproducible-image
-check-reproducible-image: ## Verify Docker image reproducibility (builds twice without cache, compares digests)
+check-reproducible-image: build-all base-image ## Verify Docker image reproducibility (builds twice without cache, compares digests)
 	@echo "==> Building image twice (no cache) to verify reproducibility..."
 	@docker build --no-cache -q \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg COMMIT=$(COMMIT) \
-		--build-arg DATE=$(DATE) \
 		-t hibou-repro-1 . > /dev/null
 	@docker build --no-cache -q \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg COMMIT=$(COMMIT) \
-		--build-arg DATE=$(DATE) \
 		-t hibou-repro-2 . > /dev/null
 	@id1=$$(docker inspect --format='{{.Id}}' hibou-repro-1); \
 	 id2=$$(docker inspect --format='{{.Id}}' hibou-repro-2); \

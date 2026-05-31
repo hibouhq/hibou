@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -88,11 +88,11 @@ func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 
 	input, settingsBody, err := mergeOrgSettingsPatch(org.Settings, patch)
 	if err != nil {
-		if err == errInvalidOrgSettingsPatch {
+		if errors.Is(err, errInvalidOrgSettingsPatch) {
 			api.JSONError(w, http.StatusBadRequest, "invalid settings payload")
 			return
 		}
-		if err == errInvalidTLPLabel {
+		if errors.Is(err, errInvalidTLPLabel) {
 			api.JSONError(w, http.StatusBadRequest, "default_tlp_label must be empty or one of TLP:CLEAR, TLP:GREEN, TLP:AMBER, TLP:AMBER+STRICT, TLP:RED")
 			return
 		}
@@ -113,8 +113,8 @@ func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 }
 
 var (
-	errInvalidOrgSettingsPatch = fmt.Errorf("invalid settings patch")
-	errInvalidTLPLabel         = fmt.Errorf("invalid tlp label")
+	errInvalidOrgSettingsPatch = errors.New("invalid settings patch")
+	errInvalidTLPLabel         = errors.New("invalid tlp label")
 )
 
 var orgSettingsPatchKeys = map[string]struct{}{

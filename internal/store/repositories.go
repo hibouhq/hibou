@@ -120,8 +120,8 @@ func (q *Queries) GetRepositoryByProviderID(ctx context.Context, orgID uuid.UUID
 func (q *Queries) ListRepositoriesByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]Repository, int, error) {
 	rows, err := q.db.ListRepositoriesByOrg(ctx, dbgen.ListRepositoriesByOrgParams{
 		OrgID:  orgID,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err
@@ -147,8 +147,8 @@ func (q *Queries) ListStaleRepositories(ctx context.Context, before time.Time) (
 func (q *Queries) ListRepositoriesByTeam(ctx context.Context, teamID uuid.UUID, limit, offset int) ([]Repository, int, error) {
 	rows, err := q.db.ListRepositoriesByTeam(ctx, dbgen.ListRepositoriesByTeamParams{
 		TeamID: nullUUIDFromPtr(&teamID),
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

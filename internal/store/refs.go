@@ -106,8 +106,8 @@ func (q *Queries) GetRefByRepoAndName(ctx context.Context, repoID uuid.UUID, nam
 func (q *Queries) ListRefsByRepo(ctx context.Context, repoID uuid.UUID, limit, offset int) ([]Ref, int, error) {
 	rows, err := q.db.ListRefsByRepo(ctx, dbgen.ListRefsByRepoParams{
 		RepoID: repoID,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err
@@ -181,8 +181,8 @@ func (q *Queries) UpdateRefPRState(ctx context.Context, id uuid.UUID, prState *s
 func (q *Queries) ListRefsEnhanced(ctx context.Context, repoID uuid.UUID, limit, offset int) ([]EnhancedRef, int, error) {
 	rows, err := q.db.ListRefsEnhanced(ctx, dbgen.ListRefsEnhancedParams{
 		RepoID: repoID,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err
@@ -204,8 +204,8 @@ func (q *Queries) ListRefsEnhanced(ctx context.Context, repoID uuid.UUID, limit,
 func (q *Queries) ListPullRequestRefs(ctx context.Context, repoID uuid.UUID, limit, offset int) ([]EnhancedRef, error) {
 	rows, err := q.db.ListPullRequestRefs(ctx, dbgen.ListPullRequestRefsParams{
 		RepoID: repoID,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, err

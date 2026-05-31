@@ -67,8 +67,8 @@ func (q *Queries) GetOrganizationByProviderAndSlug(ctx context.Context, provider
 func (q *Queries) ListOrganizationsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]Organization, int, error) {
 	rows, err := q.db.ListOrganizationsByUser(ctx, dbgen.ListOrganizationsByUserParams{
 		UserID: userID,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

@@ -8,11 +8,11 @@ const (
 )
 
 const (
-	JustComponentNotPresent                    = "component_not_present"
-	JustVulnerableCodeNotPresent               = "vulnerable_code_not_present"
-	JustCodeNotInExecutePath                   = "vulnerable_code_not_in_execute_path"
-	JustCodeCannotBeControlled                 = "vulnerable_code_cannot_be_controlled_by_adversary"
-	JustInlineMitigationsExist                 = "inline_mitigations_already_exist"
+	JustComponentNotPresent      = "component_not_present"
+	JustVulnerableCodeNotPresent = "vulnerable_code_not_present"
+	JustCodeNotInExecutePath     = "vulnerable_code_not_in_execute_path"
+	JustCodeCannotBeControlled   = "vulnerable_code_cannot_be_controlled_by_adversary"
+	JustInlineMitigationsExist   = "inline_mitigations_already_exist"
 )
 
 const (

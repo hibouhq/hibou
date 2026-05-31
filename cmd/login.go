@@ -152,10 +152,13 @@ func openBrowser(rawURL string) error {
 
 	switch runtime.GOOS {
 	case "darwin":
+		//nolint:gosec // G204,G702: URL validated above and binary name is constant.
 		return exec.Command("open", cleanURL).Start()
 	case "windows":
+		//nolint:gosec // G204,G702: URL validated above and binary name is constant.
 		return exec.Command("rundll32", "url.dll,FileProtocolHandler", cleanURL).Start()
 	default:
+		//nolint:gosec // G204,G702: URL validated above and binary name is constant.
 		return exec.Command("xdg-open", cleanURL).Start()
 	}
 }

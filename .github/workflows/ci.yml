@@ -34,13 +34,18 @@ jobs:
           cacheFrom: ghcr.io/${{ github.repository }}-devcontainer
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'always' || 'never' }}
           runCmd: |
+            make build-all
             make lint
-            cd site && npm run typecheck && cd ..
             make test
-            make build
             make check-reproducible
-            make base-image
             make check-reproducible-image
+
+      - name: Upload build artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/hibou-*
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -48,16 +53,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Cross-compile all platforms
-        uses: devcontainers/ci@v0.3
+      - name: Download pre-built binaries
+        uses: actions/download-artifact@v4
         with:
-          imageName: ghcr.io/${{ github.repository }}-devcontainer
-          cacheFrom: ghcr.io/${{ github.repository }}-devcontainer
-          push: never
-          runCmd: make build-all
+          name: binaries
+          path: dist/
 
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v2
@@ -67,7 +68,7 @@ jobs:
 
   docker:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: ci
+    needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,6 +76,12 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download pre-built binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist/
 
       - name: Get commit timestamp
         id: commit
@@ -119,9 +126,6 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             SOURCE_DATE_EPOCH=${{ steps.commit.outputs.epoch }}
-            VERSION=${{ steps.meta.outputs.version }}
-            COMMIT=${{ github.sha }}
-            DATE=${{ github.event.head_commit.timestamp || '1970-01-01T00:00:00Z' }}
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

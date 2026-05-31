@@ -105,19 +105,20 @@ func detectArtifactType(content []byte) (string, string, string, error) {
 		if len(prefix) > 1024 {
 			prefix = prefix[:1024]
 		}
+		prefixLower := bytes.ToLower(prefix)
 		if bytes.Contains(prefix, []byte("cyclonedx.org/schema/bom")) {
 			return "sbom", "cyclonedx-xml", "", nil
 		}
 		if bytes.Contains(prefix, []byte("spdx:Document")) || bytes.Contains(prefix, []byte("http://spdx.org/rdf")) {
 			return "sbom", "spdx-xml", "", nil
 		}
-		if bytes.Contains(prefix, []byte("<coverage")) && (bytes.Contains(prefix, []byte("line-rate")) || bytes.Contains(prefix, []byte("branch-rate"))) {
+		if bytes.Contains(prefixLower, []byte("<coverage")) && (bytes.Contains(prefixLower, []byte("line-rate")) || bytes.Contains(prefixLower, []byte("branch-rate"))) {
 			return "coverage", "cobertura", "", nil
 		}
-		if bytes.Contains(prefix, []byte("<report")) && bytes.Contains(prefix, []byte("jacoco")) {
+		if bytes.Contains(prefixLower, []byte("<report")) && bytes.Contains(prefixLower, []byte("jacoco")) {
 			return "coverage", "jacoco", "", nil
 		}
-		if bytes.Contains(prefix, []byte("<coverage")) && bytes.Contains(prefix, []byte("clover")) {
+		if bytes.Contains(prefixLower, []byte("<coverage")) && bytes.Contains(prefixLower, []byte("clover")) {
 			return "coverage", "clover", "", nil
 		}
 	}
@@ -267,6 +268,9 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 			s.writeUploadError(w, err)
 			return
 		}
+		// TODO: replace fire-and-forget goroutine with a bounded worker pool or
+		// the server's background task system for proper shutdown coordination.
+		go s.processCoverageUpload(snapshot.ID, content, format) //nolint:gosec // G118: intentional background processing after request completes
 		status = "accepted"
 		api.JSON(w, http.StatusAccepted, uploadResponse{
 			UploadID:   snapshot.ID.String(),

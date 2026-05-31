@@ -266,6 +266,27 @@ export interface TrendPoint {
   components_total: number
 }
 
+export interface CoverageReport {
+  line_rate: number | null
+  branch_rate: number | null
+  lines_valid: number
+  lines_covered: number
+  branches_valid: number
+  branches_covered: number
+  format: string
+  files: CoverageFile[]
+}
+
+export interface CoverageFile {
+  file_path: string
+  line_rate: number | null
+  branch_rate: number | null
+  lines_valid: number
+  lines_covered: number
+  branches_valid: number
+  branches_covered: number
+}
+
 export interface PRSummary {
   ref: EnhancedRef
   pr_snapshot_id?: string
@@ -728,6 +749,17 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<RefSummary>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/summary${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  getCoverage(provider: string, slug: string, repoSlug: string, params?: { ref?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) {
+      query.set('ref', params.ref)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<CoverageReport | null>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/coverage${qs ? `?${qs}` : ''}`,
     )
   }
 

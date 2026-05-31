@@ -948,6 +948,31 @@ type Component struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+type CoverageFile struct {
+	ID               uuid.UUID       `json:"id"`
+	CoverageReportID uuid.UUID       `json:"coverage_report_id"`
+	FilePath         string          `json:"file_path"`
+	LineRate         sql.NullFloat64 `json:"line_rate"`
+	BranchRate       sql.NullFloat64 `json:"branch_rate"`
+	LinesValid       int32           `json:"lines_valid"`
+	LinesCovered     int32           `json:"lines_covered"`
+	BranchesValid    int32           `json:"branches_valid"`
+	BranchesCovered  int32           `json:"branches_covered"`
+}
+
+type CoverageReport struct {
+	ID              uuid.UUID       `json:"id"`
+	SnapshotID      uuid.UUID       `json:"snapshot_id"`
+	Format          string          `json:"format"`
+	LineRate        sql.NullFloat64 `json:"line_rate"`
+	BranchRate      sql.NullFloat64 `json:"branch_rate"`
+	LinesValid      int32           `json:"lines_valid"`
+	LinesCovered    int32           `json:"lines_covered"`
+	BranchesValid   int32           `json:"branches_valid"`
+	BranchesCovered int32           `json:"branches_covered"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
 type Deployment struct {
 	ID               uuid.UUID        `json:"id"`
 	ClientID         uuid.UUID        `json:"client_id"`

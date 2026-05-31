@@ -39,6 +39,7 @@ func (p *GitleaksProvider) ScanRepo(ctx context.Context, opts ScanRepoOptions) (
 	defer cleanup()
 
 	reportPath := filepath.Join(repoDir, "gitleaks-report.json")
+	//nolint:gosec // G204: binary path comes from LookPath during provider construction.
 	cmd := exec.CommandContext(ctx, p.bin,
 		"detect",
 		"--source="+repoDir,
@@ -65,6 +66,7 @@ func (p *GitleaksProvider) ScanDiff(ctx context.Context, opts ScanDiffOptions) (
 	defer cleanup()
 
 	reportPath := filepath.Join(repoDir, "gitleaks-report.json")
+	//nolint:gosec // G204: binary path comes from LookPath during provider construction.
 	cmd := exec.CommandContext(ctx, p.bin,
 		"detect",
 		"--source="+repoDir,

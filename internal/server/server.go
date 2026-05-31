@@ -174,8 +174,7 @@ func forgeDefaultCIDRs(fc config.ForgeConfig, log zerolog.Logger) []string {
 		return strings.Split(fc.AllowedCIDRs, ",")
 	}
 
-	switch fc.Type {
-	case "gitlab":
+	if fc.Type == "gitlab" {
 		if fc.URL == "" {
 			log.Info().Str("forge", fc.ID).Msg("using built-in GitLab SaaS IP ranges")
 			return gitlabSaaSCIDRs
@@ -319,6 +318,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
+						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
 						r.Route("/{repoSlug}/vex", func(r chi.Router) {

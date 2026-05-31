@@ -1,7 +1,6 @@
 package server
 
 import (
-	"database/sql"
 	"net/http"
 	"sort"
 	"strconv"
@@ -198,29 +197,6 @@ func mergeCSVFilters(filters ...[]string) []string {
 	}
 	sort.Strings(values)
 	return values
-}
-
-func matchesCSVQueryFilter(filter map[string]struct{}, value string) bool {
-	if len(filter) == 0 {
-		return true
-	}
-
-	_, ok := filter[strings.ToLower(strings.TrimSpace(value))]
-	return ok
-}
-
-func matchesFileFilter(filter map[string]struct{}, filePath string) bool {
-	if len(filter) == 0 {
-		return true
-	}
-
-	normalized := strings.ToLower(filePath)
-	for pattern := range filter {
-		if strings.Contains(normalized, pattern) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) {
@@ -684,14 +660,6 @@ func advisoryToResponse(advisory dbgen.Advisory) advisoryResponse {
 	}
 }
 
-func nullInt32Ptr(value sql.NullInt32) *int32 {
-	if !value.Valid {
-		return nil
-	}
-	v := value.Int32
-	return &v
-}
-
 func paginateSlice[T any](items []T, offset, limit int) []T {
 	if offset >= len(items) {
 		return []T{}
@@ -745,13 +713,6 @@ func incrementSeverity(counts *severityCounts, severity string) {
 	default:
 		counts.Info++
 	}
-}
-
-func stringPtrValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func severityRank(severity string) int {
