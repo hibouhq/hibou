@@ -27,7 +27,7 @@ internal/apidoc/
 Thumbs.db
 
 # Test
-coverage/
+/coverage/
 *.coverprofile
 playwright-report/
 test-results/
@@ -59,3 +59,4 @@ infra/**/kubeconfig.yaml
 .agents/skills/cave*
 .claude/skills/cave*
 skills-lock.json
+

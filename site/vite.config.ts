@@ -14,6 +14,13 @@ export default defineConfig({
     outDir: '../internal/ui/dist',
     emptyOutDir: true,
   },
+  test: {
+    coverage: {
+      provider: 'v8',
+      reporter: ['cobertura'],
+      reportsDirectory: './coverage',
+    },
+  },
   server: {
     port: 3000,
     proxy: {

@@ -21,6 +21,9 @@ ARG KUBECTL_VERSION='1.36.1'
 # renovate: datasource=github-releases packageName=rtk-ai/rtk
 ARG RTK_VERSION='0.42.0'
 
+# renovate: datasource=github-tags depName=devcontainers/features extractVersion=^feature_docker-in-docker_(?<version>.+)$
+ARG DIND_FEATURE_VERSION='2.16.1'
+
 FROM mcr.microsoft.com/devcontainers/base:noble AS base
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
@@ -108,5 +111,22 @@ RUN <<EOF
 EOF
 
 FROM base as final
+# ARG DIND_FEATURE_VERSION
+
+# # Install Docker-in-Docker using the official devcontainers feature install script. This is cached as a layer (unlike the feature which rebuilds every time).
+# RUN <<EOF
+#     # TODO must replace install from internet to artifactory proxy or equivalent
+# 	curl -fsSL "https://raw.githubusercontent.com/devcontainers/features/feature_docker-in-docker_${DIND_FEATURE_VERSION}/src/docker-in-docker/install.sh" -o /tmp/docker-in-docker-install.sh
+# 	chmod +x /tmp/docker-in-docker-install.sh
+
+# 	VERSION="latest" \
+# 	MOBY="true" \
+# 	DOCKERDASHCOMPOSEVERSION="v2" \
+# 	USERNAME="vscode" \
+# 	INSTALLDOCKERBUILDX="true" \
+# 	/tmp/docker-in-docker-install.sh
+
+# 	rm -f /tmp/docker-in-docker-install.sh
+# EOF
 
 COPY --from=build-tools-infra /tmp/output-bin/ /usr/local/bin/
