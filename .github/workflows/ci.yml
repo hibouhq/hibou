@@ -66,14 +66,21 @@ jobs:
           cacheTo: ${{ steps.cache-vars.outputs.cache_to }}
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'always' || 'never' }}
           runCmd: |
-            cd site && npm ci && cd ..
+            (cd site && npm ci)
             make check-generate
             make build-all
             make lint
             make coverage
-            cd site && npm run coverage && cd ..
+            (cd site && npm run coverage)
             make check-reproducible
             # make check-reproducible-image # todo: fix non-determinism in image builds before re-enabling this
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarcloud-github-action@v3
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - uses: actions/setup-go@v5
         with:
@@ -129,7 +136,7 @@ jobs:
           token: ${{ secrets.HIBOU_API_TOKEN }}
           file: |
             coverage.out
-            site/coverage/cobertura-coverage.xml
+            site/coverage/lcov.info
             gosec.sarif
             trivy-fs.sarif
             go-sbom.cdx.json
