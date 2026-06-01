@@ -1,0 +1,3609 @@
+basePath: /api/v1
+definitions:
+  api.Error:
+    properties:
+      code:
+        type: integer
+      message:
+        type: string
+    type: object
+  api.ListResponse:
+    properties:
+      data: {}
+      pagination:
+        $ref: '#/definitions/api.Pagination'
+    type: object
+  api.Pagination:
+    properties:
+      page:
+        type: integer
+      per_page:
+        type: integer
+      total:
+        type: integer
+    type: object
+  api.Response:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/api.Error'
+    type: object
+  auth.providerResponse:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  dbgen.NotificationDestinationType:
+    enum:
+    - webhook
+    - slack
+    - teams
+    - email
+    - discord
+    type: string
+    x-enum-varnames:
+    - NotificationDestinationTypeWebhook
+    - NotificationDestinationTypeSlack
+    - NotificationDestinationTypeTeams
+    - NotificationDestinationTypeEmail
+    - NotificationDestinationTypeDiscord
+  server.auditLogEntryResponse:
+    properties:
+      action:
+        type: string
+      actor_display:
+        type: string
+      actor_type:
+        type: string
+      context:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      id:
+        type: string
+      ip_address:
+        type: string
+      resource_id:
+        type: string
+      resource_type:
+        type: string
+    type: object
+  server.autoUploadRequest:
+    properties:
+      artifact:
+        $ref: '#/definitions/server.uploadArtifact'
+      commit_sha:
+        type: string
+      complete:
+        type: boolean
+      expect:
+        type: integer
+      org:
+        type: string
+      provider:
+        type: string
+      ref:
+        type: string
+      repo:
+        type: string
+      snapshot_label:
+        type: string
+      tool:
+        type: string
+    type: object
+  server.clientImpactResponse:
+    properties:
+      vulnerabilities:
+        items:
+          $ref: '#/definitions/server.clientImpactVulnerabilityResponse'
+        type: array
+    type: object
+  server.clientImpactVulnerabilityResponse:
+    properties:
+      canonical_id:
+        type: string
+      component_name:
+        type: string
+      release_version:
+        type: string
+      severity:
+        type: string
+    type: object
+  server.clientListItemResponse:
+    properties:
+      active_version:
+        type: string
+      client_type:
+        type: string
+      contact_email:
+        type: string
+      contact_name:
+        type: string
+      created_at:
+        type: string
+      deployments_count:
+        type: integer
+      id:
+        type: string
+      labels:
+        items:
+          type: integer
+        type: array
+      last_deployment_at:
+        type: string
+      metadata:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      notification_prefs:
+        items:
+          type: integer
+        type: array
+      org_id:
+        type: string
+      slug:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  server.createAPIKeyRequest:
+    properties:
+      expires_at:
+        type: string
+      name:
+        type: string
+      scopes:
+        items:
+          type: integer
+        type: array
+    type: object
+  server.createAPIKeyResponse:
+    properties:
+      api_key:
+        $ref: '#/definitions/store.APIKey'
+      key:
+        type: string
+    type: object
+  server.createClientRequest:
+    properties:
+      client_type:
+        type: string
+      contact_email:
+        type: string
+      contact_name:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      metadata:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      notification_prefs:
+        items:
+          type: integer
+        type: array
+      slug:
+        type: string
+    type: object
+  server.createDeploymentRequest:
+    properties:
+      deployed_at:
+        type: string
+      deployed_by:
+        type: string
+      environment:
+        type: string
+      notes:
+        type: string
+      release_id:
+        type: string
+      rollback_target_id:
+        type: string
+      status:
+        type: string
+    type: object
+  server.createIntegrationRequest:
+    properties:
+      config:
+        items:
+          type: integer
+        type: array
+      enabled:
+        type: boolean
+      integration_type:
+        type: string
+      name:
+        type: string
+    type: object
+  server.createNotificationRuleRequest:
+    properties:
+      conditions:
+        items:
+          type: integer
+        type: array
+      destination_config:
+        items:
+          type: integer
+        type: array
+      destination_type:
+        type: string
+      enabled:
+        type: boolean
+      event_type:
+        type: string
+      name:
+        type: string
+    type: object
+  server.createOrgRequest:
+    properties:
+      display_name:
+        type: string
+      name:
+        type: string
+      provider:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.createQualityGateRequest:
+    properties:
+      description:
+        type: string
+      enabled:
+        type: boolean
+      finding_severities:
+        items:
+          type: integer
+        type: array
+      max_critical:
+        type: integer
+      max_high:
+        type: integer
+      max_medium:
+        type: integer
+      max_new_findings:
+        type: integer
+      name:
+        type: string
+      repo_id:
+        type: string
+    type: object
+  server.createReleaseRequest:
+    properties:
+      artifact_ids:
+        items:
+          type: integer
+        type: array
+      build_metadata:
+        items:
+          type: integer
+        type: array
+      provenance:
+        items:
+          type: integer
+        type: array
+      published_at:
+        type: string
+      ref:
+        type: string
+      snapshot_id:
+        type: string
+      version:
+        type: string
+    type: object
+  server.createTeamRequest:
+    properties:
+      name:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.deploymentResponse:
+    properties:
+      client_id:
+        type: string
+      created_at:
+        type: string
+      deployed_at:
+        type: string
+      deployed_by:
+        type: string
+      environment:
+        type: string
+      id:
+        type: string
+      notes:
+        type: string
+      release_id:
+        type: string
+      release_version:
+        type: string
+      rollback_target_id:
+        type: string
+      status:
+        $ref: '#/definitions/store.DeploymentStatus'
+    type: object
+  server.enrollRepoRequest:
+    properties:
+      default_branch:
+        type: string
+      name:
+        type: string
+      provider_id:
+        type: string
+      slug:
+        type: string
+      team_id:
+        type: string
+    type: object
+  server.healthResponse:
+    properties:
+      status:
+        type: string
+      version:
+        type: string
+    type: object
+  server.metricsResponse:
+    properties:
+      go_version:
+        type: string
+      uptime_seconds:
+        type: number
+    type: object
+  server.readyResponse:
+    properties:
+      reason:
+        type: string
+      status:
+        type: string
+    type: object
+  server.searchResponse:
+    properties:
+      pagination:
+        $ref: '#/definitions/api.Pagination'
+      results:
+        items:
+          $ref: '#/definitions/server.searchResultResponse'
+        type: array
+    type: object
+  server.searchResultResponse:
+    properties:
+      id:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      severity:
+        type: string
+      subtitle:
+        type: string
+      title:
+        type: string
+      type:
+        type: string
+    type: object
+  server.updateClientRequest:
+    properties:
+      client_type:
+        type: string
+      contact_email:
+        type: string
+      contact_name:
+        type: string
+      labels:
+        additionalProperties:
+          type: string
+        type: object
+      metadata:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      notification_prefs:
+        items:
+          type: integer
+        type: array
+    type: object
+  server.updateIntegrationRequest:
+    properties:
+      config:
+        items:
+          type: integer
+        type: array
+      enabled:
+        type: boolean
+      name:
+        type: string
+    type: object
+  server.updateNotificationRuleRequest:
+    properties:
+      conditions:
+        items:
+          type: integer
+        type: array
+      destination_config:
+        items:
+          type: integer
+        type: array
+      destination_type:
+        type: string
+      enabled:
+        type: boolean
+      event_type:
+        type: string
+      name:
+        type: string
+    type: object
+  server.updateOrgRequest:
+    properties:
+      display_name:
+        type: string
+      name:
+        type: string
+    type: object
+  server.updateQualityGateRequest:
+    properties:
+      description:
+        type: string
+      enabled:
+        type: boolean
+      finding_severities:
+        items:
+          type: integer
+        type: array
+      max_critical:
+        type: integer
+      max_high:
+        type: integer
+      max_medium:
+        type: integer
+      max_new_findings:
+        type: integer
+      name:
+        type: string
+    type: object
+  server.updateRepoRequest:
+    properties:
+      default_branch:
+        type: string
+      name:
+        type: string
+      team_id:
+        type: string
+    type: object
+  server.updateTeamRequest:
+    properties:
+      name:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.uploadArtifact:
+    properties:
+      content_base64:
+        type: string
+      filename:
+        type: string
+      sha256:
+        type: string
+    type: object
+  server.uploadResponse:
+    properties:
+      snapshot_id:
+        type: string
+      status:
+        type: string
+      upload_id:
+        type: string
+    type: object
+  server.uploadStatusResponse:
+    properties:
+      commit_sha:
+        type: string
+      created_at:
+        type: string
+      ref_id:
+        type: string
+      snapshot_id:
+        type: string
+      status:
+        type: string
+      upload_id:
+        type: string
+    type: object
+  server.webhookResponse:
+    properties:
+      received:
+        type: boolean
+    type: object
+  sql.NullInt32:
+    properties:
+      int32:
+        format: int32
+        type: integer
+      valid:
+        description: Valid is true if Int32 is not NULL
+        type: boolean
+    type: object
+  sql.NullTime:
+    properties:
+      time:
+        type: string
+      valid:
+        description: Valid is true if Time is not NULL
+        type: boolean
+    type: object
+  store.APIKey:
+    properties:
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      key_hash:
+        type: string
+      last_used_at:
+        type: string
+      name:
+        type: string
+      scopes:
+        items:
+          type: integer
+        type: array
+      user:
+        $ref: '#/definitions/store.User'
+      user_id:
+        type: string
+    type: object
+  store.Client:
+    properties:
+      client_type:
+        type: string
+      contact_email:
+        type: string
+      contact_name:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      labels:
+        items:
+          type: integer
+        type: array
+      metadata:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      notification_prefs:
+        items:
+          type: integer
+        type: array
+      org_id:
+        type: string
+      slug:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.DeploymentStatus:
+    enum:
+    - active
+    - rolled_back
+    - superseded
+    - active
+    - rolled_back
+    - superseded
+    type: string
+    x-enum-varnames:
+    - DeploymentStatusActive
+    - DeploymentStatusRolledBack
+    - DeploymentStatusSuperseded
+  store.Integration:
+    properties:
+      config:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      failure_count:
+        type: integer
+      id:
+        type: string
+      integration_type:
+        type: string
+      last_failure_at:
+        $ref: '#/definitions/sql.NullTime'
+      last_success_at:
+        $ref: '#/definitions/sql.NullTime'
+      name:
+        type: string
+      org_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.NotificationRule:
+    properties:
+      conditions:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      destination_config:
+        items:
+          type: integer
+        type: array
+      destination_type:
+        $ref: '#/definitions/dbgen.NotificationDestinationType'
+      enabled:
+        type: boolean
+      event_type:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      org_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.Organization:
+    properties:
+      created_at:
+        type: string
+      display_name:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      provider:
+        type: string
+      settings:
+        items:
+          type: integer
+        type: array
+      slug:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.QualityGate:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      enabled:
+        type: boolean
+      finding_severities:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      max_critical:
+        type: integer
+      max_high:
+        type: integer
+      max_medium:
+        $ref: '#/definitions/sql.NullInt32'
+      max_new_findings:
+        $ref: '#/definitions/sql.NullInt32'
+      name:
+        type: string
+      org_id:
+        type: string
+      repo_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      updated_at:
+        type: string
+    type: object
+  store.Ref:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      latest_commit_sha:
+        type: string
+      merge_target_ref_id:
+        type: string
+      name:
+        type: string
+      pr_closed_at:
+        type: string
+      pr_merged_at:
+        type: string
+      pr_source_branch:
+        type: string
+      pr_state:
+        type: string
+      pr_title:
+        type: string
+      provider_id:
+        type: string
+      ref_type:
+        $ref: '#/definitions/store.RefType'
+      repo_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.RefType:
+    enum:
+    - branch
+    - tag
+    - pull_request
+    - branch
+    - tag
+    - pull_request
+    type: string
+    x-enum-varnames:
+    - RefTypeBranch
+    - RefTypeTag
+    - RefTypePullRequest
+  store.Release:
+    properties:
+      artifact_ids:
+        items:
+          type: integer
+        type: array
+      build_metadata:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      id:
+        type: string
+      provenance:
+        items:
+          type: integer
+        type: array
+      published_at:
+        type: string
+      ref_id:
+        type: string
+      repo_id:
+        type: string
+      snapshot_id:
+        type: string
+      updated_at:
+        type: string
+      version:
+        type: string
+    type: object
+  store.Repository:
+    properties:
+      created_at:
+        type: string
+      default_branch:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      org_id:
+        type: string
+      provider:
+        type: string
+      provider_id:
+        type: string
+      slug:
+        type: string
+      sync_state:
+        type: string
+      team_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.Team:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      org_id:
+        type: string
+      slug:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  store.User:
+    properties:
+      avatar_url:
+        type: string
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      provider:
+        type: string
+      provider_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  uuid.NullUUID:
+    properties:
+      uuid:
+        type: string
+      valid:
+        description: Valid is true if UUID is not NULL
+        type: boolean
+    type: object
+host: localhost:8585
+info:
+  contact: {}
+  description: DevSecOps security platform API
+  title: hibou API
+  version: "1.0"
+paths:
+  /auth/callback:
+    get:
+      description: Exchanges the OAuth callback code, upserts the user, sets the session
+        cookie, and redirects home
+      parameters:
+      - description: Provider ID
+        in: query
+        name: provider
+        required: true
+        type: string
+      - description: OAuth authorization code
+        in: query
+        name: code
+        required: true
+        type: string
+      - description: OAuth state
+        in: query
+        name: state
+        required: true
+        type: string
+      responses:
+        "302":
+          description: Found
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Handle login callback
+      tags:
+      - auth
+  /auth/dev-login:
+    post:
+      description: Creates or fetches a local admin user for development. Only available
+        when no forge providers are configured.
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: Found
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Dev login
+      tags:
+      - auth
+  /auth/login:
+    get:
+      description: Redirects the caller to the selected OAuth provider login flow
+      parameters:
+      - description: Provider ID
+        in: query
+        name: provider
+        required: true
+        type: string
+      responses:
+        "302":
+          description: Found
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Begin login
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      description: Clears the current session cookie
+      responses:
+        "204":
+          description: No Content
+      summary: Logout
+      tags:
+      - auth
+  /auth/providers:
+    get:
+      description: Returns the configured authentication providers
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/auth.providerResponse'
+                  type: array
+              type: object
+      summary: List auth providers
+      tags:
+      - auth
+  /health:
+    get:
+      description: Returns server health status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.healthResponse'
+              type: object
+      summary: Health check
+      tags:
+      - system
+  /metrics:
+    get:
+      description: Returns basic server metrics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.metricsResponse'
+              type: object
+      summary: Metrics
+      tags:
+      - system
+  /orgs:
+    get:
+      description: List organizations visible to the authenticated user
+      parameters:
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.Organization'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List organizations
+      tags:
+      - organizations
+    post:
+      consumes:
+      - application/json
+      description: Create a new organization and assign the caller as admin
+      parameters:
+      - description: Organization details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createOrgRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Organization'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create organization
+      tags:
+      - organizations
+  /orgs/{provider}/{slug}:
+    delete:
+      description: Delete an organization when the caller is an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete organization
+      tags:
+      - organizations
+    get:
+      description: Get an organization by provider and slug when the caller is a member
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Organization'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get organization
+      tags:
+      - organizations
+    put:
+      consumes:
+      - application/json
+      description: Update an existing organization when the caller is an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Organization updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateOrgRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Organization'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update organization
+      tags:
+      - organizations
+  /orgs/{provider}/{slug}/audit-logs:
+    get:
+      description: List audit log entries for an organization visible to organization
+        members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Action filter
+        in: query
+        name: action
+        type: string
+      - description: Resource type filter
+        in: query
+        name: resource_type
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.auditLogEntryResponse'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List audit logs
+      tags:
+      - audit
+  /orgs/{provider}/{slug}/clients:
+    get:
+      description: List clients in an organization visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.clientListItemResponse'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List clients
+      tags:
+      - clients
+    post:
+      consumes:
+      - application/json
+      description: Create a client within an organization when the caller is an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createClientRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Client'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create client
+      tags:
+      - clients
+  /orgs/{provider}/{slug}/clients/{clientSlug}:
+    delete:
+      description: Delete a client when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client slug
+        in: path
+        name: clientSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete client
+      tags:
+      - clients
+    get:
+      description: Get a client by slug when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client slug
+        in: path
+        name: clientSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Client'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get client
+      tags:
+      - clients
+    put:
+      consumes:
+      - application/json
+      description: Update a client when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client slug
+        in: path
+        name: clientSlug
+        required: true
+        type: string
+      - description: Client updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateClientRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Client'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update client
+      tags:
+      - clients
+  /orgs/{provider}/{slug}/clients/{clientSlug}/deployments:
+    get:
+      description: List deployments for a client visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client slug
+        in: path
+        name: clientSlug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.deploymentResponse'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List client deployments
+      tags:
+      - clients
+    post:
+      consumes:
+      - application/json
+      description: Create a deployment for a client when the caller is an organization
+        admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client slug
+        in: path
+        name: clientSlug
+        required: true
+        type: string
+      - description: Deployment details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createDeploymentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.deploymentResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create deployment
+      tags:
+      - clients
+  /orgs/{provider}/{slug}/clients/{clientSlug}/impact:
+    get:
+      description: List vulnerabilities affecting active deployments for a client
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Client slug
+        in: path
+        name: clientSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.clientImpactResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get client impact
+      tags:
+      - clients
+  /orgs/{provider}/{slug}/integrations:
+    get:
+      description: List integrations in an organization visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.Integration'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List integrations
+      tags:
+      - integrations
+    post:
+      consumes:
+      - application/json
+      description: Create an integration within an organization when the caller is
+        an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Integration details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createIntegrationRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Integration'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create integration
+      tags:
+      - integrations
+  /orgs/{provider}/{slug}/integrations/{integrationID}:
+    delete:
+      description: Delete an integration when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Integration ID
+        in: path
+        name: integrationID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete integration
+      tags:
+      - integrations
+    get:
+      description: Get an integration by ID when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Integration ID
+        in: path
+        name: integrationID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Integration'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get integration
+      tags:
+      - integrations
+    put:
+      consumes:
+      - application/json
+      description: Update an integration when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Integration ID
+        in: path
+        name: integrationID
+        required: true
+        type: string
+      - description: Integration updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateIntegrationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Integration'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update integration
+      tags:
+      - integrations
+  /orgs/{provider}/{slug}/notification-rules:
+    get:
+      description: List notification rules in an organization visible to organization
+        members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.NotificationRule'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List notification rules
+      tags:
+      - notification-rules
+    post:
+      consumes:
+      - application/json
+      description: Create a notification rule within an organization when the caller
+        is an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Notification rule details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createNotificationRuleRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.NotificationRule'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create notification rule
+      tags:
+      - notification-rules
+  /orgs/{provider}/{slug}/notification-rules/{ruleID}:
+    delete:
+      description: Delete a notification rule when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Notification rule ID
+        in: path
+        name: ruleID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete notification rule
+      tags:
+      - notification-rules
+    get:
+      description: Get a notification rule by ID when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Notification rule ID
+        in: path
+        name: ruleID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.NotificationRule'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get notification rule
+      tags:
+      - notification-rules
+    put:
+      consumes:
+      - application/json
+      description: Update a notification rule when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Notification rule ID
+        in: path
+        name: ruleID
+        required: true
+        type: string
+      - description: Notification rule updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateNotificationRuleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.NotificationRule'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update notification rule
+      tags:
+      - notification-rules
+  /orgs/{provider}/{slug}/quality-gates:
+    get:
+      description: List quality gates in an organization visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.QualityGate'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List quality gates
+      tags:
+      - quality-gates
+    post:
+      consumes:
+      - application/json
+      description: Create a quality gate within an organization when the caller is
+        an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Quality gate details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createQualityGateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.QualityGate'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create quality gate
+      tags:
+      - quality-gates
+  /orgs/{provider}/{slug}/quality-gates/{gateID}:
+    delete:
+      description: Delete a quality gate when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Quality gate ID
+        in: path
+        name: gateID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete quality gate
+      tags:
+      - quality-gates
+    get:
+      description: Get a quality gate by ID when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Quality gate ID
+        in: path
+        name: gateID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.QualityGate'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get quality gate
+      tags:
+      - quality-gates
+    put:
+      consumes:
+      - application/json
+      description: Update a quality gate when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Quality gate ID
+        in: path
+        name: gateID
+        required: true
+        type: string
+      - description: Quality gate updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateQualityGateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.QualityGate'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update quality gate
+      tags:
+      - quality-gates
+  /orgs/{provider}/{slug}/repos:
+    get:
+      description: List repositories in an organization visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.Repository'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List repositories
+      tags:
+      - repositories
+    post:
+      consumes:
+      - application/json
+      description: Enroll a repository in an organization when the caller is an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.enrollRepoRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Repository'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Enroll repository
+      tags:
+      - repositories
+  /orgs/{provider}/{slug}/repos/{repoSlug}:
+    delete:
+      description: Remove a repository when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Remove repository
+      tags:
+      - repositories
+    get:
+      description: Get a repository by slug when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Repository'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get repository
+      tags:
+      - repositories
+    put:
+      consumes:
+      - application/json
+      description: Update a repository when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Repository updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateRepoRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Repository'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update repository
+      tags:
+      - repositories
+  /orgs/{provider}/{slug}/repos/{repoSlug}/refs:
+    get:
+      description: List refs for a repository when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.Ref'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List repository refs
+      tags:
+      - repositories
+  /orgs/{provider}/{slug}/repos/{repoSlug}/releases:
+    get:
+      description: List releases for a repository visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.Release'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List releases
+      tags:
+      - releases
+    post:
+      consumes:
+      - application/json
+      description: Create a release for a repository when the caller is an organization
+        admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Release details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createReleaseRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Release'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create release
+      tags:
+      - releases
+  /orgs/{provider}/{slug}/search:
+    get:
+      description: Search vulnerabilities, components, findings, or clients within
+        an organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Search query
+        in: query
+        name: q
+        type: string
+      - description: 'Result type: vuln, component, finding, client'
+        in: query
+        name: type
+        type: string
+      - description: Severity filter for vulnerabilities or findings
+        in: query
+        name: severity
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.searchResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Global search
+      tags:
+      - search
+  /orgs/{provider}/{slug}/teams:
+    get:
+      description: List teams in an organization visible to organization members
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.Team'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List teams
+      tags:
+      - teams
+    post:
+      consumes:
+      - application/json
+      description: Create a team within an organization when the caller is an admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Team details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createTeamRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Team'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create team
+      tags:
+      - teams
+  /orgs/{provider}/{slug}/teams/{teamSlug}:
+    delete:
+      description: Delete a team when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Team slug
+        in: path
+        name: teamSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete team
+      tags:
+      - teams
+    get:
+      description: Get a team by slug when the caller belongs to the organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Team slug
+        in: path
+        name: teamSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Team'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get team
+      tags:
+      - teams
+    put:
+      consumes:
+      - application/json
+      description: Update a team when the caller is an organization admin
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Team slug
+        in: path
+        name: teamSlug
+        required: true
+        type: string
+      - description: Team updates
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateTeamRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Team'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update team
+      tags:
+      - teams
+  /ready:
+    get:
+      description: Returns server readiness status based on database connectivity
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.readyResponse'
+              type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.readyResponse'
+              type: object
+      summary: Readiness check
+      tags:
+      - system
+  /upload:
+    post:
+      consumes:
+      - application/json
+      description: Creates a pending snapshot. Artifact type (SBOM, SARIF, coverage
+        report, or VEX document) is auto-detected from content.
+      parameters:
+      - description: Upload payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.autoUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.uploadResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Upload artifact (auto-detect)
+      tags:
+      - uploads
+  /uploads/{id}/status:
+    get:
+      description: Returns the current status for an upload snapshot.
+      parameters:
+      - description: Snapshot ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.uploadStatusResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get upload status
+      tags:
+      - uploads
+  /users/me:
+    get:
+      description: Returns the authenticated user derived from the API key
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.User'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get current user
+      tags:
+      - users
+  /users/me/api-keys:
+    get:
+      description: List API keys owned by the authenticated user
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.APIKey'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List API keys
+      tags:
+      - api-keys
+    post:
+      consumes:
+      - application/json
+      description: Create a new API key for the authenticated user and return the
+        raw key once
+      parameters:
+      - description: API key details
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createAPIKeyRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.createAPIKeyResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create API key
+      tags:
+      - api-keys
+  /users/me/api-keys/{keyID}:
+    delete:
+      description: Delete an API key owned by the authenticated user
+      parameters:
+      - description: API key ID
+        in: path
+        name: keyID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete API key
+      tags:
+      - api-keys
+  /webhooks/{provider}:
+    post:
+      consumes:
+      - application/json
+      description: Validates and records forge webhook updates for refs and pull requests.
+      parameters:
+      - description: Forge provider ID
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.webhookResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Receive forge webhook
+      tags:
+      - webhooks
+securityDefinitions:
+  BearerAuth:
+    description: Enter your API key with the "Bearer " prefix
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
