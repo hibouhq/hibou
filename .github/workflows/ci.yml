@@ -34,6 +34,7 @@ jobs:
           cacheFrom: ghcr.io/${{ github.repository }}-devcontainer
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'always' || 'never' }}
           runCmd: |
+            cd site && npm ci && cd ..
             make build-all
             make lint
             make test
