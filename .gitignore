@@ -60,3 +60,5 @@ infra/**/kubeconfig.yaml
 .claude/skills/cave*
 skills-lock.json
 
+
+.copilot/agent-reports/
