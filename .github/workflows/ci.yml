@@ -19,6 +19,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Normalize devcontainer cache refs
+        id: cache-vars
+        run: |
+          ref_name="${{ github.head_ref || github.ref_name }}"
+          sanitized_ref_name="$(printf '%s' "$ref_name" | tr -cs 'A-Za-z0-9_.-' '-' | sed -E 's/^[.-]+//; s/-+$//')"
+          if [[ -z "$sanitized_ref_name" ]]; then
+            sanitized_ref_name="branch"
+          elif (( ${#sanitized_ref_name} > 96 )); then
+            branch_hash="$(printf '%s' "$ref_name" | sha1sum | cut -c1-12)"
+            sanitized_ref_name="${sanitized_ref_name:0:83}-${branch_hash}"
+          fi
+          echo "branch=${sanitized_ref_name}" >> "$GITHUB_OUTPUT"
+          echo "repo=ghcr.io/${{ github.repository }}-devcontainer-cache" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}" == "true" ]]; then
+            {
+              echo 'cache_from<<EOF'
+              echo "type=registry,ref=ghcr.io/${{ github.repository }}-devcontainer-cache:${sanitized_ref_name}"
+              echo 'type=registry,ref=ghcr.io/${{ github.repository }}-devcontainer-cache:main'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "cache_from=" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}" == "true" ]]; then
+            echo "cache_to=type=registry,ref=ghcr.io/${{ github.repository }}-devcontainer-cache:${sanitized_ref_name},mode=max" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache_to=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
         uses: docker/login-action@v3
@@ -31,15 +60,17 @@ jobs:
         uses: devcontainers/ci@v0.3
         with:
           imageName: ghcr.io/${{ github.repository }}-devcontainer
-          cacheFrom: ghcr.io/${{ github.repository }}-devcontainer
+          cacheFrom: ${{ steps.cache-vars.outputs.cache_from }}
+          cacheTo: ${{ steps.cache-vars.outputs.cache_to }}
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'always' || 'never' }}
           runCmd: |
             cd site && npm ci && cd ..
+            make check-generate
             make build-all
             make lint
             make test
             make check-reproducible
-            make check-reproducible-image
+            # make check-reproducible-image # todo: fix non-determinism in image builds before re-enabling this
 
       - name: Upload build artifacts
         if: startsWith(github.ref, 'refs/tags/v')

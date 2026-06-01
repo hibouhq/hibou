@@ -15,7 +15,7 @@ GO_BUILD_FLAGS := -buildvcs=false -trimpath
 PLATFORMS := linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64
 
 .PHONY: all
-all: lint test build ## Default: lint, test, build
+all: generate lint test build ## Default: generate, lint, test, build
 
 .PHONY: help
 help: ## Show this help
@@ -69,7 +69,7 @@ reset: ## Reset database and re-seed
 	@echo "Database reset and reseeded."
 
 .PHONY: lint
-lint: ## Run linters and check generated code
+lint: ## Run linters
 	sqlc diff
 	golangci-lint run ./...
 	cd $(FRONTEND) && npx eslint . --max-warnings=0
@@ -91,7 +91,7 @@ build-frontend: ## Build the Vue SPA
 	# Output: internal/ui/dist/
 
 .PHONY: build
-build: build-frontend ## Build the hibou binary for the current platform
+build: generate build-frontend ## Build the hibou binary for the current platform
 	mkdir -p $(DIST)
 	CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) .
 
@@ -163,7 +163,7 @@ install: build ## Install hibou binary and create hibou-server symlink
 	ln -sf $(BINARY) $(shell go env GOPATH)/bin/hibou-server
 
 .PHONY: build-all
-build-all: build-frontend ## Cross-compile for all target platforms
+build-all: generate build-frontend ## Cross-compile for all target platforms
 	$(foreach platform,$(PLATFORMS),\
 		$(eval GOOS := $(word 1,$(subst /, ,$(platform)))) \
 		$(eval GOARCH := $(word 2,$(subst /, ,$(platform)))) \
@@ -171,6 +171,7 @@ build-all: build-frontend ## Cross-compile for all target platforms
 		mkdir -p $(DIST) && \
 		GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 \
 			go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY)-$(GOOS)-$(GOARCH)$(EXT) . && \
+		if [ "$(GOOS)" = "linux" ]; then ln -sf $(BINARY)-$(GOOS)-$(GOARCH)$(EXT) $(DIST)/$(BINARY)-server-$(GOARCH); fi && \
 	) true
 
 .PHONY: dev
@@ -190,6 +191,10 @@ db-migrate: ## Database migrations run automatically on hibou-server serve start
 generate: ## Run code generation (sqlc, swagger)
 	sqlc generate
 	swag init --parseDependency --parseInternal -g main.go -o internal/apidoc
+
+.PHONY: check-generate
+check-generate: generate ## Fail if generated files are not up to date
+	@git diff --exit-code || (echo "Generated files are stale. Run 'make generate' and commit the result."; exit 1)
 
 .PHONY: clean
 clean: ## Remove build artifacts
