@@ -118,11 +118,23 @@ func (f *FilesystemStore) Exists(ctx context.Context, key string) (bool, error) 
 }
 
 func (f *FilesystemStore) resolvePath(key string) (string, error) {
-	trimmed := strings.TrimSpace(key)
-	if trimmed == "" {
+	cleaned, err := normalizeObjectKey(key)
+	if err != nil {
+		return "", err
+	}
+	resolved := filepath.Join(f.baseResolved, cleaned)
+	if err := f.validateResolvedPath(cleaned); err != nil {
+		return "", err
+	}
+	if !pathWithinBase(f.baseResolved, resolved) {
 		return "", errInvalidKey
 	}
-	if filepath.IsAbs(trimmed) {
+	return resolved, nil
+}
+
+func normalizeObjectKey(key string) (string, error) {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" || filepath.IsAbs(trimmed) {
 		return "", errInvalidKey
 	}
 	cleaned := filepath.Clean(trimmed)
@@ -134,34 +146,41 @@ func (f *FilesystemStore) resolvePath(key string) (string, error) {
 			return "", errInvalidKey
 		}
 	}
-	resolved := filepath.Join(f.baseResolved, cleaned)
+	return cleaned, nil
+}
+
+func (f *FilesystemStore) validateResolvedPath(cleaned string) error {
 	current := f.baseResolved
 	for _, part := range strings.Split(filepath.ToSlash(cleaned), "/") {
-		next := filepath.Join(current, part)
-		info, err := os.Lstat(next)
+		next, err := f.resolvePathPart(current, part)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				current = next
-				continue
-			}
-			return "", fmt.Errorf("resolve object path: %w", err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			resolvedLink, err := filepath.EvalSymlinks(next)
-			if err != nil {
-				return "", fmt.Errorf("resolve object path: %w", err)
-			}
-			if !pathWithinBase(f.baseResolved, resolvedLink) {
-				return "", errInvalidKey
-			}
-			next = resolvedLink
+			return err
 		}
 		current = next
 	}
-	if !pathWithinBase(f.baseResolved, resolved) {
+	return nil
+}
+
+func (f *FilesystemStore) resolvePathPart(current, part string) (string, error) {
+	next := filepath.Join(current, part)
+	info, err := os.Lstat(next)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return next, nil
+		}
+		return "", fmt.Errorf("resolve object path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return next, nil
+	}
+	resolvedLink, err := filepath.EvalSymlinks(next)
+	if err != nil {
+		return "", fmt.Errorf("resolve object path: %w", err)
+	}
+	if !pathWithinBase(f.baseResolved, resolvedLink) {
 		return "", errInvalidKey
 	}
-	return resolved, nil
+	return resolvedLink, nil
 }
 
 func pathWithinBase(basePath, candidate string) bool {

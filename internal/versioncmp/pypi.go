@@ -55,56 +55,103 @@ func (p *PyPI) Valid(v string) bool {
 func parsePyPIVersion(v string) pypiVersion {
 	v = strings.ToLower(strings.TrimSpace(v))
 	parsed := pypiVersion{dev: -1, pre: -1, post: -1}
-	if idx := strings.IndexByte(v, '+'); idx >= 0 {
-		parsed.local = v[idx+1:]
-		v = v[:idx]
-	}
-	if idx := strings.IndexByte(v, '!'); idx >= 0 {
-		parsed.epoch = parseIntDefault(v[:idx])
-		v = v[idx+1:]
-	}
-	m := pypiReleaseRe.FindStringSubmatch(v)
-	if m == nil {
+	v = stripPyPILocal(&parsed, v)
+	v = stripPyPIEpoch(&parsed, v)
+	release, remaining, ok := parsePyPIRelease(v)
+	if !ok {
 		return pypiVersion{}
 	}
-	for _, part := range strings.Split(m[1], ".") {
-		parsed.release = append(parsed.release, parseIntDefault(part))
-	}
-	parsed.release = trimTrailingZeroInts(parsed.release)
+	parsed.release = release
 	parsed.valid = true
-	remaining := v[len(m[1]):]
-	for remaining != "" {
-		if match := pypiPreRe.FindStringSubmatch(remaining); match != nil {
-			if parsed.pre >= 0 {
-				parsed.valid = false
-				return parsed
-			}
-			parsed.pre = encodePyPIPre(normalizePyPIStage(match[1]), parseIntDefault(match[2]))
-			remaining = remaining[len(match[0]):]
-			continue
-		}
-		if match := pypiPostRe.FindStringSubmatch(remaining); match != nil {
-			if parsed.post >= 0 {
-				parsed.valid = false
-				return parsed
-			}
-			parsed.post = parseIntDefault(match[2])
-			remaining = remaining[len(match[0]):]
-			continue
-		}
-		if match := pypiDevRe.FindStringSubmatch(remaining); match != nil {
-			if parsed.dev >= 0 {
-				parsed.valid = false
-				return parsed
-			}
-			parsed.dev = parseIntDefault(match[2])
-			remaining = remaining[len(match[0]):]
-			continue
-		}
+	if !parsePyPIRemaining(&parsed, remaining) {
 		parsed.valid = false
-		return parsed
 	}
 	return parsed
+}
+
+func stripPyPILocal(parsed *pypiVersion, value string) string {
+	if idx := strings.IndexByte(value, '+'); idx >= 0 {
+		parsed.local = value[idx+1:]
+		return value[:idx]
+	}
+	return value
+}
+
+func stripPyPIEpoch(parsed *pypiVersion, value string) string {
+	if idx := strings.IndexByte(value, '!'); idx >= 0 {
+		parsed.epoch = parseIntDefault(value[:idx])
+		return value[idx+1:]
+	}
+	return value
+}
+
+func parsePyPIRelease(value string) ([]int, string, bool) {
+	match := pypiReleaseRe.FindStringSubmatch(value)
+	if match == nil {
+		return nil, "", false
+	}
+	release := make([]int, 0, strings.Count(match[1], ".")+1)
+	for _, part := range strings.Split(match[1], ".") {
+		release = append(release, parseIntDefault(part))
+	}
+	return trimTrailingZeroInts(release), value[len(match[1]):], true
+}
+
+func parsePyPIRemaining(parsed *pypiVersion, remaining string) bool {
+	for remaining != "" {
+		next, ok := parseNextPyPIStage(parsed, remaining)
+		if ok {
+			remaining = next
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func parseNextPyPIStage(parsed *pypiVersion, remaining string) (string, bool) {
+	for _, parseStage := range []func(*pypiVersion, string) (string, bool){parsePyPIPreStage, parsePyPIPostStage, parsePyPIDevStage} {
+		next, ok := parseStage(parsed, remaining)
+		if ok {
+			return next, true
+		}
+	}
+	return "", false
+}
+
+func parsePyPIPreStage(parsed *pypiVersion, remaining string) (string, bool) {
+	match, next, ok := consumePyPIStage(remaining, pypiPreRe)
+	if !ok || parsed.pre >= 0 {
+		return "", false
+	}
+	parsed.pre = encodePyPIPre(normalizePyPIStage(match[1]), parseIntDefault(match[2]))
+	return next, true
+}
+
+func parsePyPIPostStage(parsed *pypiVersion, remaining string) (string, bool) {
+	match, next, ok := consumePyPIStage(remaining, pypiPostRe)
+	if !ok || parsed.post >= 0 {
+		return "", false
+	}
+	parsed.post = parseIntDefault(match[2])
+	return next, true
+}
+
+func parsePyPIDevStage(parsed *pypiVersion, remaining string) (string, bool) {
+	match, next, ok := consumePyPIStage(remaining, pypiDevRe)
+	if !ok || parsed.dev >= 0 {
+		return "", false
+	}
+	parsed.dev = parseIntDefault(match[2])
+	return next, true
+}
+
+func consumePyPIStage(remaining string, pattern *regexp.Regexp) ([]string, string, bool) {
+	match := pattern.FindStringSubmatch(remaining)
+	if match == nil {
+		return nil, remaining, false
+	}
+	return match, remaining[len(match[0]):], true
 }
 
 func comparePyPIPhases(a, b pypiVersion) int {

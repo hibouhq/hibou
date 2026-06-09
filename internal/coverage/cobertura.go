@@ -58,30 +58,10 @@ func parseCobertura(content []byte) (*Report, error) {
 
 func reportFromCobertura(doc coberturaDocument) *Report {
 	filesByPath := make(map[string]*FileCoverage)
-	classes := append([]coberturaClass{}, doc.Classes...)
-	for _, pkg := range doc.Packages {
-		classes = append(classes, pkg.Classes...)
-	}
+	classes := coberturaClasses(doc)
 
 	for _, class := range classes {
-		path := strings.TrimSpace(class.Filename)
-		if path == "" {
-			continue
-		}
-		file := filesByPath[path]
-		if file == nil {
-			file = &FileCoverage{Path: path}
-			filesByPath[path] = file
-		}
-		for _, line := range class.Lines {
-			file.LinesValid++
-			if line.Hits > 0 {
-				file.LinesCovered++
-			}
-			covered, valid := parseBranchCoverage(line)
-			file.BranchesCovered += covered
-			file.BranchesValid += valid
-		}
+		applyCoberturaClass(filesByPath, class)
 	}
 
 	files := make([]FileCoverage, 0, len(filesByPath))
@@ -91,43 +71,110 @@ func reportFromCobertura(doc coberturaDocument) *Report {
 		files = append(files, *file)
 	}
 
-	linesValid, okLinesValid := parseOptionalInt(doc.LinesValid)
-	linesCovered, okLinesCovered := parseOptionalInt(doc.LinesCovered)
-	branchesValid, okBranchesValid := parseOptionalInt(doc.BranchesValid)
-	branchesCovered, okBranchesCovered := parseOptionalInt(doc.BranchesCovered)
-	lineRate, okLineRate := parseOptionalFloat(doc.LineRate)
-	branchRate, okBranchRate := parseOptionalFloat(doc.BranchRate)
+	summary := buildCoberturaSummary(doc, files)
 
-	if !okLinesValid || !okLinesCovered || !okBranchesValid || !okBranchesCovered {
-		for _, file := range files {
-			linesValid += file.LinesValid
-			linesCovered += file.LinesCovered
-			branchesValid += file.BranchesValid
-			branchesCovered += file.BranchesCovered
-		}
-	}
-	if !okLineRate {
-		lineRate = rate(linesCovered, linesValid)
-	}
-	if !okBranchRate {
-		branchRate = rate(branchesCovered, branchesValid)
-	}
-
-	if len(files) == 0 && !okLinesValid && !okLineRate && !okBranchRate {
+	if len(files) == 0 && !summary.hasCounts && !summary.hasLineRate && !summary.hasBranchRate {
 		return nil
 	}
 
 	sortFiles(files)
 	return &Report{
 		Format:          "cobertura",
-		LineRate:        lineRate,
-		BranchRate:      branchRate,
-		LinesValid:      linesValid,
-		LinesCovered:    linesCovered,
-		BranchesValid:   branchesValid,
-		BranchesCovered: branchesCovered,
+		LineRate:        summary.lineRate,
+		BranchRate:      summary.branchRate,
+		LinesValid:      summary.linesValid,
+		LinesCovered:    summary.linesCovered,
+		BranchesValid:   summary.branchesValid,
+		BranchesCovered: summary.branchesCovered,
 		Files:           files,
 	}
+}
+
+type coberturaSummary struct {
+	lineRate        float64
+	branchRate      float64
+	linesValid      int
+	linesCovered    int
+	branchesValid   int
+	branchesCovered int
+	hasCounts       bool
+	hasLineRate     bool
+	hasBranchRate   bool
+}
+
+func coberturaClasses(doc coberturaDocument) []coberturaClass {
+	classes := append([]coberturaClass{}, doc.Classes...)
+	for _, pkg := range doc.Packages {
+		classes = append(classes, pkg.Classes...)
+	}
+	return classes
+}
+
+func applyCoberturaClass(filesByPath map[string]*FileCoverage, class coberturaClass) {
+	path := strings.TrimSpace(class.Filename)
+	if path == "" {
+		return
+	}
+	file := filesByPath[path]
+	if file == nil {
+		file = &FileCoverage{Path: path}
+		filesByPath[path] = file
+	}
+	for _, line := range class.Lines {
+		applyCoberturaLine(file, line)
+	}
+}
+
+func applyCoberturaLine(file *FileCoverage, line coberturaLine) {
+	file.LinesValid++
+	if line.Hits > 0 {
+		file.LinesCovered++
+	}
+	covered, valid := parseBranchCoverage(line)
+	file.BranchesCovered += covered
+	file.BranchesValid += valid
+}
+
+func buildCoberturaSummary(doc coberturaDocument, files []FileCoverage) coberturaSummary {
+	summary := coberturaSummary{}
+	summary.linesValid, summary.hasCounts = parseOptionalInt(doc.LinesValid)
+	summary.linesCovered, _ = parseOptionalInt(doc.LinesCovered)
+	summary.branchesValid, _ = parseOptionalInt(doc.BranchesValid)
+	summary.branchesCovered, _ = parseOptionalInt(doc.BranchesCovered)
+	summary.lineRate, summary.hasLineRate = parseOptionalFloat(doc.LineRate)
+	summary.branchRate, summary.hasBranchRate = parseOptionalFloat(doc.BranchRate)
+	if !summary.hasCounts || !docHasCoberturaCounts(doc) {
+		summary = aggregateCoberturaSummary(summary, files)
+	}
+	if !summary.hasLineRate {
+		summary.lineRate = rate(summary.linesCovered, summary.linesValid)
+	}
+	if !summary.hasBranchRate {
+		summary.branchRate = rate(summary.branchesCovered, summary.branchesValid)
+	}
+	return summary
+}
+
+func docHasCoberturaCounts(doc coberturaDocument) bool {
+	_, okLinesValid := parseOptionalInt(doc.LinesValid)
+	_, okLinesCovered := parseOptionalInt(doc.LinesCovered)
+	_, okBranchesValid := parseOptionalInt(doc.BranchesValid)
+	_, okBranchesCovered := parseOptionalInt(doc.BranchesCovered)
+	return okLinesValid && okLinesCovered && okBranchesValid && okBranchesCovered
+}
+
+func aggregateCoberturaSummary(summary coberturaSummary, files []FileCoverage) coberturaSummary {
+	summary.linesValid = 0
+	summary.linesCovered = 0
+	summary.branchesValid = 0
+	summary.branchesCovered = 0
+	for _, file := range files {
+		summary.linesValid += file.LinesValid
+		summary.linesCovered += file.LinesCovered
+		summary.branchesValid += file.BranchesValid
+		summary.branchesCovered += file.BranchesCovered
+	}
+	return summary
 }
 
 func parseBranchCoverage(line coberturaLine) (int, int) {
@@ -148,16 +195,7 @@ func parseBranchCoverage(line coberturaLine) (int, int) {
 func parseXMLSummary(content []byte) (*Report, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(content))
 
-	var (
-		lineRate        float64
-		branchRate      float64
-		linesValid      int
-		linesCovered    int
-		branchesValid   int
-		branchesCovered int
-		hasSummary      bool
-		rootSeen        bool
-	)
+	state := xmlSummaryState{}
 
 	for {
 		token, err := decoder.Token()
@@ -173,92 +211,115 @@ func parseXMLSummary(content []byte) (*Report, error) {
 			continue
 		}
 
-		if !rootSeen {
-			rootSeen = true
-			if value, ok := attrFloat(start.Attr, "line-rate"); ok {
-				lineRate = value
-				hasSummary = true
-			}
-			if value, ok := attrFloat(start.Attr, "branch-rate"); ok {
-				branchRate = value
-				hasSummary = true
-			}
-			if value, ok := attrInt(start.Attr, "lines-valid"); ok {
-				linesValid = value
-				hasSummary = true
-			}
-			if value, ok := attrInt(start.Attr, "lines-covered"); ok {
-				linesCovered = value
-				hasSummary = true
-			}
-			if value, ok := attrInt(start.Attr, "branches-valid"); ok {
-				branchesValid = value
-				hasSummary = true
-			}
-			if value, ok := attrInt(start.Attr, "branches-covered"); ok {
-				branchesCovered = value
-				hasSummary = true
-			}
+		if !state.rootSeen {
+			handleXMLSummaryRoot(&state, start)
 		}
 
 		switch start.Name.Local {
 		case "counter":
-			typ, _ := attrString(start.Attr, "type")
-			missed, missedOK := attrInt(start.Attr, "missed")
-			covered, coveredOK := attrInt(start.Attr, "covered")
-			if !missedOK || !coveredOK {
-				continue
-			}
-			total := missed + covered
-			switch strings.ToUpper(strings.TrimSpace(typ)) {
-			case "LINE":
-				if total >= linesValid {
-					linesCovered = covered
-					linesValid = total
-					lineRate = rate(linesCovered, linesValid)
-					hasSummary = true
-				}
-			case "BRANCH":
-				if total >= branchesValid {
-					branchesCovered = covered
-					branchesValid = total
-					branchRate = rate(branchesCovered, branchesValid)
-					hasSummary = true
-				}
-			}
+			handleXMLSummaryCounter(&state, start)
 		case "metrics":
-			metricLinesValid, metricLinesValidOK := attrInt(start.Attr, "statements")
-			metricLinesCovered, metricLinesCoveredOK := attrInt(start.Attr, "coveredstatements")
-			metricBranchesValid, metricBranchesValidOK := attrInt(start.Attr, "conditionals")
-			metricBranchesCovered, metricBranchesCoveredOK := attrInt(start.Attr, "coveredconditionals")
-			if metricLinesValidOK && metricLinesCoveredOK && metricLinesValid >= linesValid {
-				linesValid = metricLinesValid
-				linesCovered = metricLinesCovered
-				lineRate = rate(linesCovered, linesValid)
-				hasSummary = true
-			}
-			if metricBranchesValidOK && metricBranchesCoveredOK && metricBranchesValid >= branchesValid {
-				branchesValid = metricBranchesValid
-				branchesCovered = metricBranchesCovered
-				branchRate = rate(branchesCovered, branchesValid)
-				hasSummary = true
-			}
+			handleXMLSummaryMetrics(&state, start)
 		}
 	}
 
-	if !hasSummary {
+	if !state.hasSummary {
 		return nil, errors.New("unsupported coverage XML structure")
 	}
 
 	return &Report{
 		Format:          "cobertura",
-		LineRate:        lineRate,
-		BranchRate:      branchRate,
-		LinesValid:      linesValid,
-		LinesCovered:    linesCovered,
-		BranchesValid:   branchesValid,
-		BranchesCovered: branchesCovered,
+		LineRate:        state.lineRate,
+		BranchRate:      state.branchRate,
+		LinesValid:      state.linesValid,
+		LinesCovered:    state.linesCovered,
+		BranchesValid:   state.branchesValid,
+		BranchesCovered: state.branchesCovered,
 	}, nil
+}
+
+type xmlSummaryState struct {
+	lineRate        float64
+	branchRate      float64
+	linesValid      int
+	linesCovered    int
+	branchesValid   int
+	branchesCovered int
+	hasSummary      bool
+	rootSeen        bool
+}
+
+func handleXMLSummaryRoot(state *xmlSummaryState, start xml.StartElement) {
+	state.rootSeen = true
+	if value, ok := attrFloat(start.Attr, "line-rate"); ok {
+		state.lineRate = value
+		state.hasSummary = true
+	}
+	if value, ok := attrFloat(start.Attr, "branch-rate"); ok {
+		state.branchRate = value
+		state.hasSummary = true
+	}
+	if value, ok := attrInt(start.Attr, "lines-valid"); ok {
+		state.linesValid = value
+		state.hasSummary = true
+	}
+	if value, ok := attrInt(start.Attr, "lines-covered"); ok {
+		state.linesCovered = value
+		state.hasSummary = true
+	}
+	if value, ok := attrInt(start.Attr, "branches-valid"); ok {
+		state.branchesValid = value
+		state.hasSummary = true
+	}
+	if value, ok := attrInt(start.Attr, "branches-covered"); ok {
+		state.branchesCovered = value
+		state.hasSummary = true
+	}
+}
+
+func handleXMLSummaryCounter(state *xmlSummaryState, start xml.StartElement) {
+	typ, _ := attrString(start.Attr, "type")
+	missed, missedOK := attrInt(start.Attr, "missed")
+	covered, coveredOK := attrInt(start.Attr, "covered")
+	if !missedOK || !coveredOK {
+		return
+	}
+	total := missed + covered
+	switch strings.ToUpper(strings.TrimSpace(typ)) {
+	case "LINE":
+		if total >= state.linesValid {
+			state.linesCovered = covered
+			state.linesValid = total
+			state.lineRate = rate(state.linesCovered, state.linesValid)
+			state.hasSummary = true
+		}
+	case "BRANCH":
+		if total >= state.branchesValid {
+			state.branchesCovered = covered
+			state.branchesValid = total
+			state.branchRate = rate(state.branchesCovered, state.branchesValid)
+			state.hasSummary = true
+		}
+	}
+}
+
+func handleXMLSummaryMetrics(state *xmlSummaryState, start xml.StartElement) {
+	metricLinesValid, metricLinesValidOK := attrInt(start.Attr, "statements")
+	metricLinesCovered, metricLinesCoveredOK := attrInt(start.Attr, "coveredstatements")
+	metricBranchesValid, metricBranchesValidOK := attrInt(start.Attr, "conditionals")
+	metricBranchesCovered, metricBranchesCoveredOK := attrInt(start.Attr, "coveredconditionals")
+	if metricLinesValidOK && metricLinesCoveredOK && metricLinesValid >= state.linesValid {
+		state.linesValid = metricLinesValid
+		state.linesCovered = metricLinesCovered
+		state.lineRate = rate(state.linesCovered, state.linesValid)
+		state.hasSummary = true
+	}
+	if metricBranchesValidOK && metricBranchesCoveredOK && metricBranchesValid >= state.branchesValid {
+		state.branchesValid = metricBranchesValid
+		state.branchesCovered = metricBranchesCovered
+		state.branchRate = rate(state.branchesCovered, state.branchesValid)
+		state.hasSummary = true
+	}
 }
 
 func attrString(attrs []xml.Attr, name string) (string, bool) {

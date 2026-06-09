@@ -2,7 +2,10 @@ package audit
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 func TestRequestContext(t *testing.T) {
@@ -34,7 +37,11 @@ func TestRequestContext(t *testing.T) {
 				r.Header.Set("User-Agent", tt.userAgent)
 			}
 
-			gotIP, gotAgent := RequestContext(r)
+			var gotIP, gotAgent string
+			handler := middleware.ClientIPFromXFFTrustedProxies(1)(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				gotIP, gotAgent = RequestContext(req)
+			}))
+			handler.ServeHTTP(httptest.NewRecorder(), r)
 			if gotIP != tt.wantIP {
 				t.Fatalf("ip = %q, want %q", gotIP, tt.wantIP)
 			}

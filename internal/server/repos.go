@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -122,60 +123,12 @@ type trendPointResponse struct {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/repos [post]
 func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+	user, org, ok := s.loadAdminOrgForEnrollment(w, r)
+	if !ok {
 		return
 	}
-
-	org, err := s.resolveOrg(r)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
-		return
-	}
-	if org == nil {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
-		return
-	}
-
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
-		return
-	}
-	if role != "admin" {
-		api.JSONError(w, http.StatusForbidden, "admin access required")
-		return
-	}
-
-	var input enrollRepoRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	input.Name = strings.TrimSpace(input.Name)
-	input.Slug = strings.TrimSpace(input.Slug)
-	input.ProviderID = strings.TrimSpace(input.ProviderID)
-	input.DefaultBranch = strings.TrimSpace(input.DefaultBranch)
-	if input.DefaultBranch == "" {
-		input.DefaultBranch = "main"
-	}
-
-	if input.Name == "" {
-		api.JSONError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if input.Slug == "" {
-		api.JSONError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-	if !api.IsValidSlug(input.Slug) {
-		api.JSONError(w, http.StatusBadRequest, "slug must be 2-63 characters of lowercase letters, numbers, or hyphens")
-		return
-	}
-	if input.ProviderID == "" {
-		api.JSONError(w, http.StatusBadRequest, "provider_id is required")
+	input, ok := decodeEnrollRepoRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -190,20 +143,7 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 		input.DefaultBranch,
 		"enrolled",
 	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			if constraintName(err) == "repositories_provider_identity_key" {
-				api.JSONError(w, http.StatusBadRequest, "repository with this provider_id already exists in this organization")
-			} else {
-				api.JSONError(w, http.StatusBadRequest, "repository slug already exists in this organization")
-			}
-			return
-		}
-		if isForeignKeyViolation(err) {
-			api.JSONError(w, http.StatusBadRequest, "team_id references an unknown team")
-			return
-		}
-		api.JSONError(w, http.StatusInternalServerError, "failed to create repository")
+	if !handleEnrollRepoCreateError(w, err) {
 		return
 	}
 
@@ -213,6 +153,85 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 	})
 
 	api.JSON(w, http.StatusCreated, repo)
+}
+
+func (s *Server) loadAdminOrgForEnrollment(w http.ResponseWriter, r *http.Request) (*store.User, *store.Organization, bool) {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return nil, nil, false
+	}
+	org, err := s.resolveOrg(r)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return nil, nil, false
+	}
+	if org == nil {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return nil, nil, false
+	}
+	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return nil, nil, false
+	}
+	if role != "admin" {
+		api.JSONError(w, http.StatusForbidden, "admin access required")
+		return nil, nil, false
+	}
+	return user, org, true
+}
+
+func decodeEnrollRepoRequest(w http.ResponseWriter, r *http.Request) (enrollRepoRequest, bool) {
+	var input enrollRepoRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return enrollRepoRequest{}, false
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Slug = strings.TrimSpace(input.Slug)
+	input.ProviderID = strings.TrimSpace(input.ProviderID)
+	input.DefaultBranch = strings.TrimSpace(input.DefaultBranch)
+	if input.DefaultBranch == "" {
+		input.DefaultBranch = "main"
+	}
+	if input.Name == "" {
+		api.JSONError(w, http.StatusBadRequest, "name is required")
+		return enrollRepoRequest{}, false
+	}
+	if input.Slug == "" {
+		api.JSONError(w, http.StatusBadRequest, "slug is required")
+		return enrollRepoRequest{}, false
+	}
+	if !api.IsValidSlug(input.Slug) {
+		api.JSONError(w, http.StatusBadRequest, "slug must be 2-63 characters of lowercase letters, numbers, or hyphens")
+		return enrollRepoRequest{}, false
+	}
+	if input.ProviderID == "" {
+		api.JSONError(w, http.StatusBadRequest, "provider_id is required")
+		return enrollRepoRequest{}, false
+	}
+	return input, true
+}
+
+func handleEnrollRepoCreateError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return true
+	}
+	if isUniqueViolation(err) {
+		if constraintName(err) == "repositories_provider_identity_key" {
+			api.JSONError(w, http.StatusBadRequest, "repository with this provider_id already exists in this organization")
+		} else {
+			api.JSONError(w, http.StatusBadRequest, "repository slug already exists in this organization")
+		}
+		return false
+	}
+	if isForeignKeyViolation(err) {
+		api.JSONError(w, http.StatusBadRequest, "team_id references an unknown team")
+		return false
+	}
+	api.JSONError(w, http.StatusInternalServerError, "failed to create repository")
+	return false
 }
 
 // @Summary      List repositories
@@ -549,109 +568,22 @@ func (s *Server) handleGetPRSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	number, err := strconv.Atoi(chi.URLParam(r, "number"))
-	if err != nil || number <= 0 {
+	number, ok := parsePullRequestNumber(chi.URLParam(r, "number"))
+	if !ok {
 		api.JSONError(w, http.StatusBadRequest, "invalid pull request number")
 		return
 	}
 
-	forgeType := repo.Provider
-	if provider, ok := s.forges[repo.Provider]; ok && provider != nil {
-		forgeType = provider.ID()
-	}
-	refName := pullRequestRefName(forgeType, number)
-	ref, err := s.queries.GetRefByRepoAndName(r.Context(), repo.ID, refName, store.RefTypePullRequest)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request reference")
+	ref, prSnapshot, targetRef, targetSnapshot, ok := s.loadPRSummarySnapshots(w, r, repo, number)
+	if !ok {
 		return
 	}
-	if ref == nil {
-		api.JSONError(w, http.StatusNotFound, "pull request not found")
+	response := s.newPRSummaryResponse(ref, targetRef, prSnapshot)
+	if !s.populatePRSummary(w, r, response, prSnapshot, targetSnapshot) {
 		return
 	}
-
-	prSnapshot, err := s.queries.GetLatestSnapshotByRef(r.Context(), ref.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request snapshot")
+	if !s.populatePRSummaryDelta(w, r, response, org, repo, prSnapshot, targetSnapshot) {
 		return
-	}
-
-	var targetRef *store.Ref
-	var targetSnapshot *store.Snapshot
-	var targetRefName *string
-	if ref.MergeTargetRefID != nil {
-		targetRef, err = s.queries.GetRefByID(r.Context(), *ref.MergeTargetRefID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load target reference")
-			return
-		}
-		if targetRef != nil {
-			targetRefName = &targetRef.Name
-			targetSnapshot, err = s.queries.GetLatestSnapshotByRef(r.Context(), targetRef.ID)
-			if err != nil {
-				api.JSONError(w, http.StatusInternalServerError, "failed to load target snapshot")
-				return
-			}
-		}
-	}
-
-	responseRef := store.EnhancedRef{
-		ID:                 ref.ID,
-		RepoID:             ref.RepoID,
-		Name:               ref.Name,
-		RefType:            ref.RefType,
-		ProviderID:         ref.ProviderID,
-		MergeTargetRefID:   ref.MergeTargetRefID,
-		MergeTargetRefName: targetRefName,
-		LatestCommitSHA:    ref.LatestCommitSHA,
-		PrState:            ref.PrState,
-		PrTitle:            ref.PrTitle,
-		PrSourceBranch:     ref.PrSourceBranch,
-		PrMergedAt:         ref.PrMergedAt,
-		PrClosedAt:         ref.PrClosedAt,
-		CreatedAt:          ref.CreatedAt,
-		UpdatedAt:          ref.UpdatedAt,
-	}
-	if prSnapshot != nil {
-		responseRef.LatestSnapshotID = &prSnapshot.ID
-		status := string(prSnapshot.Status)
-		responseRef.LatestSnapshotStatus = &status
-		responseRef.LatestSnapshotDate = &prSnapshot.CreatedAt
-	}
-
-	response := prSummaryResponse{Ref: responseRef}
-	if prSnapshot == nil {
-		status := "no_data"
-		response.Summary.SnapshotStatus = &status
-	}
-	if prSnapshot != nil {
-		response.PRSnapshotID = &prSnapshot.ID
-		summary, err := s.buildRefSummary(r, prSnapshot)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to build pull request summary")
-			return
-		}
-		response.Summary = summary
-	}
-	if targetSnapshot != nil {
-		response.TargetSnapshotID = &targetSnapshot.ID
-	}
-
-	if s.deltaSvc != nil && prSnapshot != nil && targetSnapshot != nil {
-		deltaResult, err := s.deltaSvc.ComputeDelta(r.Context(), prSnapshot.ID, targetSnapshot.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to compute pull request delta")
-			return
-		}
-		response.Delta = deltaResult
-
-		weaknessGate := s.resolveRepoWeaknessGate(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshot.ID)
-		gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, deltaResult, weaknessGate)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
-			return
-		}
-		response.Gate = gate
 	}
 
 	api.JSON(w, http.StatusOK, response)
@@ -746,43 +678,13 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refName := r.URL.Query().Get("ref")
-	if refName == "" {
-		refName = repo.DefaultBranch
-	}
-	if refName == "" {
-		api.JSONError(w, http.StatusBadRequest, "ref is required")
+	query, err := parseTrendQuery(r, repo)
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	limit := 0
-	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
-		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed <= 0 {
-			api.JSONError(w, http.StatusBadRequest, "invalid limit")
-			return
-		}
-		if parsed > 365 {
-			parsed = 365
-		}
-		limit = parsed
-	}
-
-	var since *time.Time
-	if rawSince := strings.TrimSpace(r.URL.Query().Get("since")); rawSince != "" {
-		parsed, err := time.Parse(time.RFC3339, rawSince)
-		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, "invalid since")
-			return
-		}
-		parsed = parsed.UTC()
-		since = &parsed
-	}
-	if since == nil && limit == 0 {
-		limit = 30
-	}
-
-	ref, err := s.resolveRefForRepo(r, repo, refName)
+	ref, err := s.resolveRefForRepo(r, repo, query.refName)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load repository reference")
 		return
@@ -792,7 +694,7 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshots, err := s.listTrendSnapshots(r, ref.ID, limit, since)
+	snapshots, err := s.listTrendSnapshots(r, ref.ID, query.limit, query.since)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load trend snapshots")
 		return
@@ -800,107 +702,328 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 
 	points := make([]trendPointResponse, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
+		point, err := s.buildTrendPoint(r, snapshot)
 		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load vulnerability trends")
+			api.JSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		componentCount, err := s.queries.CountComponentsBySnapshot(r.Context(), snapshot.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load component trends")
-			return
-		}
-
-		findings := severityCounts{}
-		vulns := severityCounts{}
-		for _, vulnerability := range vulnerabilities {
-			if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
-				continue
-			}
-			if vulnerability.Type == "dependency" || vulnerability.Type == "malware" {
-				incrementSeverity(&vulns, string(vulnerability.Severity))
-				continue
-			}
-			if vulnerability.Type == "secret" || vulnerability.Type == "manual" {
-				continue
-			}
-			incrementSeverity(&findings, string(vulnerability.Severity))
-		}
-
-		points = append(points, trendPointResponse{
-			SnapshotID:       snapshot.ID,
-			Date:             snapshot.CreatedAt,
-			CommitSHA:        snapshot.CommitSHA,
-			FindingsCritical: findings.Critical,
-			FindingsHigh:     findings.High,
-			FindingsMedium:   findings.Medium,
-			FindingsLow:      findings.Low,
-			FindingsInfo:     findings.Info,
-			VulnsCritical:    vulns.Critical,
-			VulnsHigh:        vulns.High,
-			VulnsMedium:      vulns.Medium,
-			VulnsLow:         vulns.Low,
-			VulnsInfo:        vulns.Info,
-			ComponentsTotal:  int(componentCount),
-		})
+		points = append(points, point)
 	}
 
 	api.JSON(w, http.StatusOK, points)
 }
 
 func (s *Server) listTrendSnapshots(r *http.Request, refID uuid.UUID, limit int, since *time.Time) ([]store.Snapshot, error) {
-	offset := 0
-	capacity := limit
-	if capacity <= 0 {
-		capacity = 16
+	collected, err := s.collectTrendSnapshots(r, refID, limit, since)
+	if err != nil {
+		return nil, err
 	}
-	collected := make([]store.Snapshot, 0, capacity)
+	reverseSnapshots(collected)
+	return collected, nil
+}
 
+type trendQuery struct {
+	refName string
+	limit   int
+	since   *time.Time
+}
+
+func parsePullRequestNumber(raw string) (int, bool) {
+	number, err := strconv.Atoi(raw)
+	return number, err == nil && number > 0
+}
+
+func (s *Server) loadPRSummarySnapshots(w http.ResponseWriter, r *http.Request, repo *store.Repository, number int) (*store.Ref, *store.Snapshot, *store.Ref, *store.Snapshot, bool) {
+	ref, ok := s.loadPullRequestRef(w, r, repo, number)
+	if !ok {
+		return nil, nil, nil, nil, false
+	}
+	prSnapshot, err := s.queries.GetLatestSnapshotByRef(r.Context(), ref.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request snapshot")
+		return nil, nil, nil, nil, false
+	}
+	targetRef, targetSnapshot, ok := s.loadPRTargetSnapshot(w, r, ref)
+	if !ok {
+		return nil, nil, nil, nil, false
+	}
+	return ref, prSnapshot, targetRef, targetSnapshot, true
+}
+
+func (s *Server) loadPullRequestRef(w http.ResponseWriter, r *http.Request, repo *store.Repository, number int) (*store.Ref, bool) {
+	forgeType := repo.Provider
+	if provider, ok := s.forges[repo.Provider]; ok && provider != nil {
+		forgeType = provider.ID()
+	}
+	refName := pullRequestRefName(forgeType, number)
+	ref, err := s.queries.GetRefByRepoAndName(r.Context(), repo.ID, refName, store.RefTypePullRequest)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request reference")
+		return nil, false
+	}
+	if ref == nil {
+		api.JSONError(w, http.StatusNotFound, "pull request not found")
+		return nil, false
+	}
+	return ref, true
+}
+
+func (s *Server) loadPRTargetSnapshot(w http.ResponseWriter, r *http.Request, ref *store.Ref) (*store.Ref, *store.Snapshot, bool) {
+	if ref.MergeTargetRefID == nil {
+		return nil, nil, true
+	}
+	targetRef, err := s.queries.GetRefByID(r.Context(), *ref.MergeTargetRefID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load target reference")
+		return nil, nil, false
+	}
+	if targetRef == nil {
+		return nil, nil, true
+	}
+	targetSnapshot, err := s.queries.GetLatestSnapshotByRef(r.Context(), targetRef.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load target snapshot")
+		return nil, nil, false
+	}
+	return targetRef, targetSnapshot, true
+}
+
+func (s *Server) newPRSummaryResponse(ref *store.Ref, targetRef *store.Ref, prSnapshot *store.Snapshot) *prSummaryResponse {
+	var targetRefName *string
+	if targetRef != nil {
+		targetRefName = &targetRef.Name
+	}
+	responseRef := store.EnhancedRef{
+		ID:                 ref.ID,
+		RepoID:             ref.RepoID,
+		Name:               ref.Name,
+		RefType:            ref.RefType,
+		ProviderID:         ref.ProviderID,
+		MergeTargetRefID:   ref.MergeTargetRefID,
+		MergeTargetRefName: targetRefName,
+		LatestCommitSHA:    ref.LatestCommitSHA,
+		PrState:            ref.PrState,
+		PrTitle:            ref.PrTitle,
+		PrSourceBranch:     ref.PrSourceBranch,
+		PrMergedAt:         ref.PrMergedAt,
+		PrClosedAt:         ref.PrClosedAt,
+		CreatedAt:          ref.CreatedAt,
+		UpdatedAt:          ref.UpdatedAt,
+	}
+	if prSnapshot != nil {
+		responseRef.LatestSnapshotID = &prSnapshot.ID
+		status := string(prSnapshot.Status)
+		responseRef.LatestSnapshotStatus = &status
+		responseRef.LatestSnapshotDate = &prSnapshot.CreatedAt
+	}
+	response := &prSummaryResponse{Ref: responseRef}
+	if prSnapshot == nil {
+		status := "no_data"
+		response.Summary.SnapshotStatus = &status
+	}
+	return response
+}
+
+func (s *Server) populatePRSummary(w http.ResponseWriter, r *http.Request, response *prSummaryResponse, prSnapshot, targetSnapshot *store.Snapshot) bool {
+	if prSnapshot != nil {
+		response.PRSnapshotID = &prSnapshot.ID
+		summary, err := s.buildRefSummary(r, prSnapshot)
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to build pull request summary")
+			return false
+		}
+		response.Summary = summary
+	}
+	if targetSnapshot != nil {
+		response.TargetSnapshotID = &targetSnapshot.ID
+	}
+	return true
+}
+
+func (s *Server) populatePRSummaryDelta(w http.ResponseWriter, r *http.Request, response *prSummaryResponse, org *store.Organization, repo *store.Repository, prSnapshot, targetSnapshot *store.Snapshot) bool {
+	if s.deltaSvc == nil || prSnapshot == nil || targetSnapshot == nil {
+		return true
+	}
+	deltaResult, err := s.deltaSvc.ComputeDelta(r.Context(), prSnapshot.ID, targetSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to compute pull request delta")
+		return false
+	}
+	response.Delta = deltaResult
+	weaknessGate := s.resolveRepoWeaknessGate(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshot.ID)
+	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, deltaResult, weaknessGate)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
+		return false
+	}
+	response.Gate = gate
+	return true
+}
+
+func parseTrendQuery(r *http.Request, repo *store.Repository) (*trendQuery, error) {
+	query := &trendQuery{refName: r.URL.Query().Get("ref")}
+	if query.refName == "" {
+		query.refName = repo.DefaultBranch
+	}
+	if query.refName == "" {
+		return nil, errors.New("ref is required")
+	}
+	limit, err := parseTrendLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		return nil, err
+	}
+	since, err := parseTrendSince(r.URL.Query().Get("since"))
+	if err != nil {
+		return nil, err
+	}
+	query.limit = limit
+	query.since = since
+	if query.since == nil && query.limit == 0 {
+		query.limit = 30
+	}
+	return query, nil
+}
+
+func parseTrendLimit(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 0, errors.New("invalid limit")
+	}
+	if parsed > 365 {
+		parsed = 365
+	}
+	return parsed, nil
+}
+
+func parseTrendSince(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, errors.New("invalid since")
+	}
+	parsed = parsed.UTC()
+	return &parsed, nil
+}
+
+func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot) (trendPointResponse, error) {
+	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		return trendPointResponse{}, errors.New("failed to load vulnerability trends")
+	}
+	componentCount, err := s.queries.CountComponentsBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		return trendPointResponse{}, errors.New("failed to load component trends")
+	}
+	findings, vulns := countTrendSnapshotSeverities(vulnerabilities)
+	return trendPointResponse{
+		SnapshotID:       snapshot.ID,
+		Date:             snapshot.CreatedAt,
+		CommitSHA:        snapshot.CommitSHA,
+		FindingsCritical: findings.Critical,
+		FindingsHigh:     findings.High,
+		FindingsMedium:   findings.Medium,
+		FindingsLow:      findings.Low,
+		FindingsInfo:     findings.Info,
+		VulnsCritical:    vulns.Critical,
+		VulnsHigh:        vulns.High,
+		VulnsMedium:      vulns.Medium,
+		VulnsLow:         vulns.Low,
+		VulnsInfo:        vulns.Info,
+		ComponentsTotal:  int(componentCount),
+	}, nil
+}
+
+func countTrendSnapshotSeverities(vulnerabilities []store.Vulnerability) (severityCounts, severityCounts) {
+	findings := severityCounts{}
+	vulns := severityCounts{}
+	for _, vulnerability := range vulnerabilities {
+		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+			continue
+		}
+		if vulnerability.Type == "dependency" || vulnerability.Type == "malware" {
+			incrementSeverity(&vulns, string(vulnerability.Severity))
+			continue
+		}
+		if vulnerability.Type == "secret" || vulnerability.Type == "manual" {
+			continue
+		}
+		incrementSeverity(&findings, string(vulnerability.Severity))
+	}
+	return findings, vulns
+}
+
+func (s *Server) collectTrendSnapshots(r *http.Request, refID uuid.UUID, limit int, since *time.Time) ([]store.Snapshot, error) {
+	offset := 0
+	collected := make([]store.Snapshot, 0, trendSnapshotCapacity(limit))
 	for limit == 0 || len(collected) < limit {
-		pageSize := limit
-		if pageSize <= 0 || pageSize > 100 {
-			pageSize = 100
-		}
-		if pageSize < 10 {
-			pageSize = 10
-		}
-		snapshots, total, err := s.queries.ListSnapshotsByRef(r.Context(), refID, pageSize, offset)
+		snapshots, total, err := s.loadTrendSnapshotPage(r, refID, limit, offset)
 		if err != nil {
 			return nil, err
 		}
 		if len(snapshots) == 0 {
 			break
 		}
-
-		stop := false
-		for _, snapshot := range snapshots {
-			if since != nil && snapshot.CreatedAt.Before(*since) {
-				stop = true
-				break
-			}
-			if snapshot.Status != store.SnapshotStatusComplete && snapshot.Status != store.SnapshotStatusActive {
-				continue
-			}
-			collected = append(collected, snapshot)
-			if limit > 0 && len(collected) == limit {
-				break
-			}
-		}
+		stop := appendTrendSnapshots(&collected, snapshots, limit, since)
 		if stop {
 			break
 		}
-
 		offset += len(snapshots)
 		if offset >= total {
 			break
 		}
 	}
-
-	for left, right := 0, len(collected)-1; left < right; left, right = left+1, right-1 {
-		collected[left], collected[right] = collected[right], collected[left]
-	}
-
 	return collected, nil
+}
+
+func trendSnapshotCapacity(limit int) int {
+	if limit > 0 {
+		return limit
+	}
+	return 16
+}
+
+func (s *Server) loadTrendSnapshotPage(r *http.Request, refID uuid.UUID, limit, offset int) ([]store.Snapshot, int, error) {
+	pageSize := limit
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 100
+	}
+	if pageSize < 10 {
+		pageSize = 10
+	}
+	return s.queries.ListSnapshotsByRef(r.Context(), refID, pageSize, offset)
+}
+
+func appendTrendSnapshots(collected *[]store.Snapshot, snapshots []store.Snapshot, limit int, since *time.Time) bool {
+	for _, snapshot := range snapshots {
+		if since != nil && snapshot.CreatedAt.Before(*since) {
+			return true
+		}
+		if !isTrendSnapshotVisible(snapshot) {
+			continue
+		}
+		*collected = append(*collected, snapshot)
+		if limit > 0 && len(*collected) == limit {
+			return true
+		}
+	}
+	return false
+}
+
+func isTrendSnapshotVisible(snapshot store.Snapshot) bool {
+	return snapshot.Status == store.SnapshotStatusComplete || snapshot.Status == store.SnapshotStatusActive
+}
+
+func reverseSnapshots(snapshots []store.Snapshot) {
+	for left, right := 0, len(snapshots)-1; left < right; left, right = left+1, right-1 {
+		snapshots[left], snapshots[right] = snapshots[right], snapshots[left]
+	}
 }
 
 func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithVulnsRow) componentDiffResponse {

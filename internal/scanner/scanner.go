@@ -61,6 +61,8 @@ type Service struct {
 	log       zerolog.Logger
 }
 
+const providerNotConfiguredMessage = "provider not configured"
+
 func New(queries queryStore, cache cacheClient, ingester advisoryIngester, bus eventPublisher, providers map[string]provider.AdvisoryProvider, log zerolog.Logger) *Service {
 	if providers == nil {
 		providers = map[string]provider.AdvisoryProvider{}
@@ -84,23 +86,9 @@ var (
 
 func (s *Service) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error) {
 	resolvedProviders := s.resolveProviders(providerNames)
-	scanRecord, err := s.queries.CreateScan(ctx, dbgen.CreateScanParams{
-		SnapshotID:         snapshotID,
-		Status:             "pending",
-		ProvidersRequested: resolvedProviders,
-		TriggeredBy:        normalizeTriggeredBy(triggeredBy),
-	})
+	scanRecord, startedAt, err := s.startScan(ctx, snapshotID, resolvedProviders, triggeredBy)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create scan: %w", err)
-	}
-
-	startedAt := time.Now().UTC()
-	if _, err := s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
-		ID:        scanRecord.ID,
-		Status:    "running",
-		StartedAt: sql.NullTime{Time: startedAt, Valid: true},
-	}); err != nil {
-		return scanRecord.ID, fmt.Errorf("mark scan running: %w", err)
 	}
 
 	components, err := s.queries.ListComponentsBySnapshot(ctx, snapshotID)
@@ -109,111 +97,31 @@ func (s *Service) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 	}
 
 	packageQueries := buildPackageQueries(components)
-	providerSucceeded := 0
-	providerFailed := 0
 	freshMatchIDsByType := map[string]map[uuid.UUID]struct{}{
 		"dependency": {},
 		"malware":    {},
 	}
 
+	providerSucceeded := 0
+	providerFailed := 0
 	for _, providerName := range resolvedProviders {
-		providerRecord, providerErr := s.queries.CreateScanProvider(ctx, dbgen.CreateScanProviderParams{
-			ScanID:   scanRecord.ID,
-			Provider: providerName,
-			Status:   "running",
-		})
-		if providerErr != nil {
-			providerFailed++
-			s.log.Error().Err(providerErr).Str("provider", providerName).Msg("create scan provider record")
-			continue
-		}
-
-		providerStart := time.Now().UTC()
-		prov, ok := s.providers[providerName]
-		if !ok {
-			providerFailed++
-			s.log.Error().Str("provider", providerName).Msg("provider not configured")
-			s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", "provider not configured") //nolint:gosec // G115: query counts are bounded by component batch size.
-			continue
-		}
-
-		results, err := s.cache.QueryWithCache(ctx, prov, packageQueries)
+		providerResult, err := s.runScanProvider(ctx, scanRecord.ID, snapshotID, providerName, components, packageQueries)
 		if err != nil {
 			providerFailed++
-			s.log.Error().Err(err).Str("provider", providerName).Msg("query advisories")
-			s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", err.Error()) //nolint:gosec // G115: query counts are bounded by component batch size.
 			continue
 		}
-
-		advisoryMap, err := s.ingester.Ingest(ctx, providerName, toIngestResults(results))
-		if err != nil {
-			providerFailed++
-			s.log.Error().Err(err).Str("provider", providerName).Msg("ingest advisories")
-			s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(results)), "failed", err.Error()) //nolint:gosec // G115: provider result counts are bounded by requested packages.
-			continue
-		}
-
-		providerMatchIDsByType, err := s.matchComponents(ctx, snapshotID, providerName, components, advisoryMap)
-		if err != nil {
-			providerFailed++
-			s.log.Error().Err(err).Str("provider", providerName).Msg("match affected ranges")
-			s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "failed", err.Error()) //nolint:gosec // G115: advisory counts are bounded by provider responses.
-			continue
-		}
-		for vulnType, ids := range providerMatchIDsByType {
-			bucket := freshMatchIDsByType[vulnType]
-			if bucket == nil {
-				bucket = make(map[uuid.UUID]struct{})
-				freshMatchIDsByType[vulnType] = bucket
-			}
-			for _, matchID := range ids {
-				bucket[matchID] = struct{}{}
-			}
-		}
-
+		mergeFreshMatchIDs(freshMatchIDsByType, providerResult.matchIDsByType)
 		providerSucceeded++
-		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "complete", "") //nolint:gosec // G115: advisory counts are bounded by provider responses.
 	}
-
-	completedAt := time.Now().UTC()
-	finalStatus := "complete"
-	errorMessage := ""
-	eventType := events.ScanCompleted
-	if len(resolvedProviders) == 0 || providerSucceeded == 0 {
-		finalStatus = "failed"
-		eventType = events.ScanFailed
-		errorMessage = "all providers failed"
-	}
-
-	if providerSucceeded > 0 {
-		for vulnType, ids := range freshMatchIDsByType {
-			if err := s.queries.MarkStaleVulnerabilities(ctx, snapshotID, vulnType, uniqueMatchIDs(ids)); err != nil {
-				return scanRecord.ID, s.failScan(ctx, scanRecord.ID, snapshotID, fmt.Errorf("mark stale %s vulnerabilities: %w", vulnType, err))
-			}
-		}
-	}
-
-	if _, err := s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
-		ID:           scanRecord.ID,
-		Status:       finalStatus,
-		ErrorMessage: errorMessage,
-		StartedAt:    sql.NullTime{Time: startedAt, Valid: true},
-		CompletedAt:  sql.NullTime{Time: completedAt, Valid: true},
-	}); err != nil {
-		return scanRecord.ID, fmt.Errorf("update scan status: %w", err)
-	}
-
-	s.publish(ctx, eventType, map[string]any{
-		"scan_id":          scanRecord.ID.String(),
-		"snapshot_id":      snapshotID.String(),
-		"providers":        resolvedProviders,
-		"providers_failed": providerFailed,
+	return s.finalizeScan(ctx, scanCompletion{
+		scanID:              scanRecord.ID,
+		snapshotID:          snapshotID,
+		resolvedProviders:   resolvedProviders,
+		startedAt:           startedAt,
+		providerSucceeded:   providerSucceeded,
+		providerFailed:      providerFailed,
+		freshMatchIDsByType: freshMatchIDsByType,
 	})
-
-	if finalStatus == "failed" {
-		return scanRecord.ID, errors.New(errorMessage)
-	}
-	return scanRecord.ID, nil
 }
 
 func (s *Service) TriggerRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error) {
@@ -264,99 +172,290 @@ func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, pro
 		return nil, nil
 	}
 
-	advisorySet := make(map[uuid.UUID]struct{}, len(advisoryMap))
-	for _, advisoryID := range advisoryMap {
-		advisorySet[advisoryID] = struct{}{}
-	}
-
-	rangeCache := make(map[string][]dbgen.AffectedRange)
-	advisoryCache := make(map[uuid.UUID]dbgen.Advisory, len(advisorySet))
+	state := newComponentMatchState(advisoryMap)
 	freshMatchIDs := map[string][]uuid.UUID{"dependency": {}, "malware": {}}
 	for _, component := range components {
-		cacheKey := packageKey(component.Ecosystem, component.Name)
-		ranges, ok := rangeCache[cacheKey]
-		if !ok {
-			loaded, err := s.queries.ListAffectedRangesByPackage(ctx, dbgen.ListAffectedRangesByPackageParams{
-				Ecosystem:   component.Ecosystem,
-				PackageName: component.Name,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("list affected ranges for %s/%s: %w", component.Ecosystem, component.Name, err)
-			}
-			ranges = loaded
-			rangeCache[cacheKey] = ranges
-		}
-
-		for _, affectedRange := range ranges {
-			if _, ok := advisorySet[affectedRange.AdvisoryID]; !ok {
-				continue
-			}
-			affected, err := versioncmp.InRange(component.Ecosystem, component.Version, affectedRange.Introduced, affectedRange.Fixed, affectedRange.LastAffected)
-			if err != nil {
-				s.log.Warn().
-					Err(err).
-					Str("ecosystem", component.Ecosystem).
-					Str("component", component.Name).
-					Msg("skip version match")
-				continue
-			}
-			if !affected {
-				continue
-			}
-
-			advisoryRecord, ok := advisoryCache[affectedRange.AdvisoryID]
-			if !ok {
-				loaded, err := s.queries.GetAdvisoryByID(ctx, affectedRange.AdvisoryID)
-				if err != nil {
-					return nil, fmt.Errorf("load advisory %s: %w", affectedRange.AdvisoryID, err)
-				}
-				advisoryRecord = loaded
-				advisoryCache[affectedRange.AdvisoryID] = advisoryRecord
-			}
-			vulnType := "dependency"
-			if advisoryRecord.IsMalware {
-				vulnType = "malware"
-			}
-			vulnerability, err := s.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
-				Type:              vulnType,
-				SnapshotID:        snapshotID,
-				Title:             firstNonEmpty(strings.TrimSpace(advisoryRecord.Title), strings.TrimSpace(advisoryRecord.CanonicalID)),
-				Description:       strings.TrimSpace(advisoryRecord.Description),
-				PrimaryIdentifier: advisoryIdentifier(advisoryRecord.CanonicalID),
-				Identifiers:       json.RawMessage(`[]`),
-				OriginalSeverity:  advisoryRecord.Severity,
-				Severity:          advisoryRecord.Severity,
-				Status:            "detected",
-				ScannerName:       providerName,
-				Fingerprint:       dependencyFingerprint(affectedRange.AdvisoryID, component.ID),
-				ComponentID:       uuid.NullUUID{UUID: component.ID, Valid: true},
-				ComponentName:     sql.NullString{String: component.Name, Valid: strings.TrimSpace(component.Name) != ""},
-				ComponentVersion:  sql.NullString{String: component.Version, Valid: strings.TrimSpace(component.Version) != ""},
-				ComponentPurl:     sql.NullString{String: component.Purl, Valid: strings.TrimSpace(component.Purl) != ""},
-				Ecosystem:         sql.NullString{String: component.Ecosystem, Valid: strings.TrimSpace(component.Ecosystem) != ""},
-				AdvisoryID:        uuid.NullUUID{UUID: affectedRange.AdvisoryID, Valid: true},
-				AffectedRangeID:   uuid.NullUUID{UUID: affectedRange.ID, Valid: true},
-			})
-			if err != nil {
-				if isUniqueViolation(err) {
-					// TODO(adr-012): merge multi-provider dependency sources into vulnerability metadata when duplicate fingerprints collide.
-					continue
-				}
-				return nil, fmt.Errorf("create vulnerability for component %s advisory %s: %w", component.ID, affectedRange.AdvisoryID, err)
-			}
-			freshMatchIDs[vulnType] = append(freshMatchIDs[vulnType], vulnerability.ID)
-			s.publish(ctx, events.VulnerabilityCreated, map[string]any{
-				"id":          vulnerability.ID.String(),
-				"org_id":      "",
-				"snapshot_id": snapshotID.String(),
-				"advisory_id": affectedRange.AdvisoryID.String(),
-				"severity":    strings.ToLower(string(vulnerability.Severity)),
-				"type":        vulnerability.Type,
-			})
+		if err := s.matchComponentRanges(ctx, snapshotID, providerName, component, state, freshMatchIDs); err != nil {
+			return nil, err
 		}
 	}
 
 	return freshMatchIDs, nil
+}
+
+type scanProviderResult struct {
+	matchIDsByType map[string][]uuid.UUID
+}
+
+type scanCompletion struct {
+	scanID              uuid.UUID
+	snapshotID          uuid.UUID
+	resolvedProviders   []string
+	startedAt           time.Time
+	providerSucceeded   int
+	providerFailed      int
+	freshMatchIDsByType map[string]map[uuid.UUID]struct{}
+}
+
+type componentMatchState struct {
+	advisorySet   map[uuid.UUID]struct{}
+	rangeCache    map[string][]dbgen.AffectedRange
+	advisoryCache map[uuid.UUID]dbgen.Advisory
+}
+
+func (s *Service) startScan(ctx context.Context, snapshotID uuid.UUID, resolvedProviders []string, triggeredBy string) (dbgen.Scan, time.Time, error) {
+	scanRecord, err := s.queries.CreateScan(ctx, dbgen.CreateScanParams{
+		SnapshotID:         snapshotID,
+		Status:             "pending",
+		ProvidersRequested: resolvedProviders,
+		TriggeredBy:        normalizeTriggeredBy(triggeredBy),
+	})
+	if err != nil {
+		return dbgen.Scan{}, time.Time{}, err
+	}
+	startedAt := time.Now().UTC()
+	if _, err := s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
+		ID:        scanRecord.ID,
+		Status:    "running",
+		StartedAt: sql.NullTime{Time: startedAt, Valid: true},
+	}); err != nil {
+		return scanRecord, time.Time{}, fmt.Errorf("mark scan running: %w", err)
+	}
+	return scanRecord, startedAt, nil
+}
+
+func (s *Service) runScanProvider(ctx context.Context, scanID, snapshotID uuid.UUID, providerName string, components []dbgen.Component, packageQueries []provider.PackageQuery) (*scanProviderResult, error) {
+	providerRecord, providerErr := s.queries.CreateScanProvider(ctx, dbgen.CreateScanProviderParams{
+		ScanID:   scanID,
+		Provider: providerName,
+		Status:   "running",
+	})
+	if providerErr != nil {
+		s.log.Error().Err(providerErr).Str("provider", providerName).Msg("create scan provider record")
+		return nil, providerErr
+	}
+
+	providerStart := time.Now().UTC()
+	prov, ok := s.providers[providerName]
+	if !ok {
+		s.log.Error().Str("provider", providerName).Msg(providerNotConfiguredMessage)
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", providerNotConfiguredMessage) //nolint:gosec // G115: query counts are bounded by component batch size.
+		return nil, errors.New(providerNotConfiguredMessage)
+	}
+
+	results, err := s.cache.QueryWithCache(ctx, prov, packageQueries)
+	if err != nil {
+		s.log.Error().Err(err).Str("provider", providerName).Msg("query advisories")
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", err.Error()) //nolint:gosec // G115: query counts are bounded by component batch size.
+		return nil, err
+	}
+
+	advisoryMap, err := s.ingester.Ingest(ctx, providerName, toIngestResults(results))
+	if err != nil {
+		s.log.Error().Err(err).Str("provider", providerName).Msg("ingest advisories")
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(results)), "failed", err.Error()) //nolint:gosec // G115: provider result counts are bounded by requested packages.
+		return nil, err
+	}
+
+	providerMatchIDsByType, err := s.matchComponents(ctx, snapshotID, providerName, components, advisoryMap)
+	if err != nil {
+		s.log.Error().Err(err).Str("provider", providerName).Msg("match affected ranges")
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "failed", err.Error()) //nolint:gosec // G115: advisory counts are bounded by provider responses.
+		return nil, err
+	}
+
+	s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "complete", "") //nolint:gosec // G115: advisory counts are bounded by provider responses.
+	return &scanProviderResult{matchIDsByType: providerMatchIDsByType}, nil
+}
+
+func (s *Service) finalizeScan(ctx context.Context, completion scanCompletion) (uuid.UUID, error) {
+	completedAt := time.Now().UTC()
+	finalStatus := "complete"
+	errorMessage := ""
+	eventType := events.ScanCompleted
+	if len(completion.resolvedProviders) == 0 || completion.providerSucceeded == 0 {
+		finalStatus = "failed"
+		eventType = events.ScanFailed
+		errorMessage = "all providers failed"
+	}
+
+	if completion.providerSucceeded > 0 {
+		if err := s.markStaleMatchedVulnerabilities(ctx, completion.snapshotID, completion.freshMatchIDsByType); err != nil {
+			return completion.scanID, s.failScan(ctx, completion.scanID, completion.snapshotID, err)
+		}
+	}
+
+	if _, err := s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
+		ID:           completion.scanID,
+		Status:       finalStatus,
+		ErrorMessage: errorMessage,
+		StartedAt:    sql.NullTime{Time: completion.startedAt, Valid: true},
+		CompletedAt:  sql.NullTime{Time: completedAt, Valid: true},
+	}); err != nil {
+		return completion.scanID, fmt.Errorf("update scan status: %w", err)
+	}
+
+	s.publish(ctx, eventType, map[string]any{
+		"scan_id":          completion.scanID.String(),
+		"snapshot_id":      completion.snapshotID.String(),
+		"providers":        completion.resolvedProviders,
+		"providers_failed": completion.providerFailed,
+	})
+
+	if finalStatus == "failed" {
+		return completion.scanID, errors.New(errorMessage)
+	}
+	return completion.scanID, nil
+}
+
+func (s *Service) markStaleMatchedVulnerabilities(ctx context.Context, snapshotID uuid.UUID, freshMatchIDsByType map[string]map[uuid.UUID]struct{}) error {
+	for vulnType, ids := range freshMatchIDsByType {
+		if err := s.queries.MarkStaleVulnerabilities(ctx, snapshotID, vulnType, uniqueMatchIDs(ids)); err != nil {
+			return fmt.Errorf("mark stale %s vulnerabilities: %w", vulnType, err)
+		}
+	}
+	return nil
+}
+
+func mergeFreshMatchIDs(dst map[string]map[uuid.UUID]struct{}, src map[string][]uuid.UUID) {
+	for vulnType, ids := range src {
+		bucket := dst[vulnType]
+		if bucket == nil {
+			bucket = make(map[uuid.UUID]struct{})
+			dst[vulnType] = bucket
+		}
+		for _, matchID := range ids {
+			bucket[matchID] = struct{}{}
+		}
+	}
+}
+
+func newComponentMatchState(advisoryMap map[string]uuid.UUID) *componentMatchState {
+	advisorySet := make(map[uuid.UUID]struct{}, len(advisoryMap))
+	for _, advisoryID := range advisoryMap {
+		advisorySet[advisoryID] = struct{}{}
+	}
+	return &componentMatchState{
+		advisorySet:   advisorySet,
+		rangeCache:    make(map[string][]dbgen.AffectedRange),
+		advisoryCache: make(map[uuid.UUID]dbgen.Advisory, len(advisorySet)),
+	}
+}
+
+func (s *Service) matchComponentRanges(ctx context.Context, snapshotID uuid.UUID, providerName string, component dbgen.Component, state *componentMatchState, freshMatchIDs map[string][]uuid.UUID) error {
+	ranges, err := s.loadAffectedRangesForComponent(ctx, component, state)
+	if err != nil {
+		return err
+	}
+	for _, affectedRange := range ranges {
+		if _, ok := state.advisorySet[affectedRange.AdvisoryID]; !ok {
+			continue
+		}
+		if !s.componentMatchesAffectedRange(component, affectedRange) {
+			continue
+		}
+		vulnerability, vulnType, err := s.createMatchedVulnerability(ctx, snapshotID, providerName, component, affectedRange, state)
+		if err != nil {
+			if isUniqueViolation(err) {
+				continue
+			}
+			return fmt.Errorf("create vulnerability for component %s advisory %s: %w", component.ID, affectedRange.AdvisoryID, err)
+		}
+		freshMatchIDs[vulnType] = append(freshMatchIDs[vulnType], vulnerability.ID)
+		s.publishMatchedVulnerability(ctx, snapshotID, affectedRange.AdvisoryID, vulnerability)
+	}
+	return nil
+}
+
+func (s *Service) loadAffectedRangesForComponent(ctx context.Context, component dbgen.Component, state *componentMatchState) ([]dbgen.AffectedRange, error) {
+	cacheKey := packageKey(component.Ecosystem, component.Name)
+	if ranges, ok := state.rangeCache[cacheKey]; ok {
+		return ranges, nil
+	}
+	loaded, err := s.queries.ListAffectedRangesByPackage(ctx, dbgen.ListAffectedRangesByPackageParams{
+		Ecosystem:   component.Ecosystem,
+		PackageName: component.Name,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list affected ranges for %s/%s: %w", component.Ecosystem, component.Name, err)
+	}
+	state.rangeCache[cacheKey] = loaded
+	return loaded, nil
+}
+
+func (s *Service) componentMatchesAffectedRange(component dbgen.Component, affectedRange dbgen.AffectedRange) bool {
+	affected, err := versioncmp.InRange(component.Ecosystem, component.Version, affectedRange.Introduced, affectedRange.Fixed, affectedRange.LastAffected)
+	if err != nil {
+		s.log.Warn().
+			Err(err).
+			Str("ecosystem", component.Ecosystem).
+			Str("component", component.Name).
+			Msg("skip version match")
+		return false
+	}
+	return affected
+}
+
+func (s *Service) createMatchedVulnerability(ctx context.Context, snapshotID uuid.UUID, providerName string, component dbgen.Component, affectedRange dbgen.AffectedRange, state *componentMatchState) (*store.Vulnerability, string, error) {
+	advisoryRecord, err := s.loadMatchedAdvisory(ctx, affectedRange.AdvisoryID, state)
+	if err != nil {
+		return nil, "", err
+	}
+	vulnType := matchedVulnerabilityType(advisoryRecord)
+	vulnerability, err := s.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+		Type:              vulnType,
+		SnapshotID:        snapshotID,
+		Title:             firstNonEmpty(strings.TrimSpace(advisoryRecord.Title), strings.TrimSpace(advisoryRecord.CanonicalID)),
+		Description:       strings.TrimSpace(advisoryRecord.Description),
+		PrimaryIdentifier: advisoryIdentifier(advisoryRecord.CanonicalID),
+		Identifiers:       json.RawMessage(`[]`),
+		OriginalSeverity:  advisoryRecord.Severity,
+		Severity:          advisoryRecord.Severity,
+		Status:            "detected",
+		ScannerName:       providerName,
+		Fingerprint:       dependencyFingerprint(affectedRange.AdvisoryID, component.ID),
+		ComponentID:       uuid.NullUUID{UUID: component.ID, Valid: true},
+		ComponentName:     sql.NullString{String: component.Name, Valid: strings.TrimSpace(component.Name) != ""},
+		ComponentVersion:  sql.NullString{String: component.Version, Valid: strings.TrimSpace(component.Version) != ""},
+		ComponentPurl:     sql.NullString{String: component.Purl, Valid: strings.TrimSpace(component.Purl) != ""},
+		Ecosystem:         sql.NullString{String: component.Ecosystem, Valid: strings.TrimSpace(component.Ecosystem) != ""},
+		AdvisoryID:        uuid.NullUUID{UUID: affectedRange.AdvisoryID, Valid: true},
+		AffectedRangeID:   uuid.NullUUID{UUID: affectedRange.ID, Valid: true},
+	})
+	if err != nil {
+		return nil, vulnType, err
+	}
+	return vulnerability, vulnType, nil
+}
+
+func (s *Service) loadMatchedAdvisory(ctx context.Context, advisoryID uuid.UUID, state *componentMatchState) (dbgen.Advisory, error) {
+	if advisoryRecord, ok := state.advisoryCache[advisoryID]; ok {
+		return advisoryRecord, nil
+	}
+	loaded, err := s.queries.GetAdvisoryByID(ctx, advisoryID)
+	if err != nil {
+		return dbgen.Advisory{}, fmt.Errorf("load advisory %s: %w", advisoryID, err)
+	}
+	state.advisoryCache[advisoryID] = loaded
+	return loaded, nil
+}
+
+func matchedVulnerabilityType(advisoryRecord dbgen.Advisory) string {
+	if advisoryRecord.IsMalware {
+		return "malware"
+	}
+	return "dependency"
+}
+
+func (s *Service) publishMatchedVulnerability(ctx context.Context, snapshotID, advisoryID uuid.UUID, vulnerability *store.Vulnerability) {
+	s.publish(ctx, events.VulnerabilityCreated, map[string]any{
+		"id":          vulnerability.ID.String(),
+		"org_id":      "",
+		"snapshot_id": snapshotID.String(),
+		"advisory_id": advisoryID.String(),
+		"severity":    strings.ToLower(string(vulnerability.Severity)),
+		"type":        vulnerability.Type,
+	})
 }
 
 func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, err error) error {

@@ -100,86 +100,122 @@ func (s *Service) filterVEXedNewVulnerabilities(ctx context.Context, snapshotID 
 	if len(vulns) == 0 {
 		return nil, nil
 	}
-	filtered := make([]store.Vulnerability, 0, len(vulns))
-	if s == nil || s.vexStore == nil {
-		filtered = append(filtered, vulns...)
-		return filtered, nil
-	}
-	scopeStore, ok := s.store.(vexScopeStore)
+	filtered, scopeStore, ok := s.prepareVEXFilter(vulns)
 	if !ok {
-		filtered = append(filtered, vulns...)
 		return filtered, nil
 	}
-
-	snapshot, err := scopeStore.GetSnapshotByID(ctx, snapshotID)
+	repo, componentCache, err := s.loadVEXFilterContext(ctx, snapshotID, scopeStore)
 	if err != nil {
-		return nil, fmt.Errorf("load snapshot %s for vex filter: %w", snapshotID, err)
-	}
-	if snapshot == nil {
-		return nil, fmt.Errorf("snapshot %s not found for vex filter", snapshotID)
-	}
-	ref, err := scopeStore.GetRefByID(ctx, snapshot.RefID)
-	if err != nil {
-		return nil, fmt.Errorf("load ref %s for vex filter: %w", snapshot.RefID, err)
-	}
-	if ref == nil {
-		return nil, fmt.Errorf("ref %s not found for vex filter", snapshot.RefID)
-	}
-	repo, err := scopeStore.GetRepositoryByID(ctx, ref.RepoID)
-	if err != nil {
-		return nil, fmt.Errorf("load repo %s for vex filter: %w", ref.RepoID, err)
-	}
-	if repo == nil {
-		return nil, fmt.Errorf("repo %s not found for vex filter", ref.RepoID)
+		return nil, err
 	}
 
-	componentCache := make(map[uuid.UUID]dbgen.Component)
+	filtered = filtered[:0]
 	for _, vuln := range vulns {
-		if vuln.Type != "dependency" && vuln.Type != "malware" {
-			filtered = append(filtered, vuln)
-			continue
+		keep, err := s.keepNewVulnerabilityAfterVEX(ctx, scopeStore, repo, componentCache, vuln)
+		if err != nil {
+			return nil, err
 		}
-		if vuln.AdvisoryID == nil {
-			filtered = append(filtered, vuln)
-			continue
-		}
-		arg := dbgen.GetEffectiveVEXStatusParams{
-			OrgID:      repo.OrgID,
-			AdvisoryID: *vuln.AdvisoryID,
-			RepoID:     uuid.NullUUID{UUID: repo.ID, Valid: true},
-		}
-		componentPURL := ""
-		if vuln.ComponentPurl != nil {
-			componentPURL = strings.TrimSpace(*vuln.ComponentPurl)
-		}
-		if componentPURL == "" && vuln.ComponentID != nil {
-			component, componentErr := componentForVulnerability(ctx, scopeStore, componentCache, *vuln.ComponentID)
-			if componentErr != nil {
-				return nil, componentErr
-			}
-			componentPURL = strings.TrimSpace(component.Purl)
-		}
-		if componentPURL != "" {
-			arg.ComponentPurl = sql.NullString{String: componentPURL, Valid: true}
-		}
-		statement, vexErr := s.vexStore.GetEffectiveVEXStatus(ctx, arg)
-		if errors.Is(vexErr, sql.ErrNoRows) {
-			filtered = append(filtered, vuln)
-			continue
-		}
-		if vexErr != nil {
-			componentID := uuid.Nil
-			if vuln.ComponentID != nil {
-				componentID = *vuln.ComponentID
-			}
-			return nil, fmt.Errorf("load effective vex status for advisory %s component %s: %w", *vuln.AdvisoryID, componentID, vexErr)
-		}
-		if statement.Status != dbgen.VexStatusNotAffected && statement.Status != dbgen.VexStatusFixed {
+		if keep {
 			filtered = append(filtered, vuln)
 		}
 	}
 
 	return filtered, nil
+}
+
+func (s *Service) prepareVEXFilter(vulns []store.Vulnerability) ([]store.Vulnerability, vexScopeStore, bool) {
+	filtered := make([]store.Vulnerability, 0, len(vulns))
+	if s == nil || s.vexStore == nil {
+		return append(filtered, vulns...), nil, false
+	}
+	scopeStore, ok := s.store.(vexScopeStore)
+	if !ok {
+		return append(filtered, vulns...), nil, false
+	}
+	return filtered, scopeStore, true
+}
+
+func (s *Service) loadVEXFilterContext(ctx context.Context, snapshotID uuid.UUID, scopeStore vexScopeStore) (*store.Repository, map[uuid.UUID]dbgen.Component, error) {
+	snapshot, err := scopeStore.GetSnapshotByID(ctx, snapshotID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load snapshot %s for vex filter: %w", snapshotID, err)
+	}
+	if snapshot == nil {
+		return nil, nil, fmt.Errorf("snapshot %s not found for vex filter", snapshotID)
+	}
+	ref, err := scopeStore.GetRefByID(ctx, snapshot.RefID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load ref %s for vex filter: %w", snapshot.RefID, err)
+	}
+	if ref == nil {
+		return nil, nil, fmt.Errorf("ref %s not found for vex filter", snapshot.RefID)
+	}
+	repo, err := scopeStore.GetRepositoryByID(ctx, ref.RepoID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load repo %s for vex filter: %w", ref.RepoID, err)
+	}
+	if repo == nil {
+		return nil, nil, fmt.Errorf("repo %s not found for vex filter", ref.RepoID)
+	}
+	return repo, make(map[uuid.UUID]dbgen.Component), nil
+}
+
+func (s *Service) keepNewVulnerabilityAfterVEX(ctx context.Context, scopeStore vexScopeStore, repo *store.Repository, componentCache map[uuid.UUID]dbgen.Component, vuln store.Vulnerability) (bool, error) {
+	if !isVEXFilteredType(vuln) || vuln.AdvisoryID == nil {
+		return true, nil
+	}
+	statement, err := s.loadEffectiveVEXStatus(ctx, scopeStore, repo, componentCache, vuln)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return statement.Status != dbgen.VexStatusNotAffected && statement.Status != dbgen.VexStatusFixed, nil
+}
+
+func isVEXFilteredType(vuln store.Vulnerability) bool {
+	return vuln.Type == "dependency" || vuln.Type == "malware"
+}
+
+func (s *Service) loadEffectiveVEXStatus(ctx context.Context, scopeStore vexScopeStore, repo *store.Repository, componentCache map[uuid.UUID]dbgen.Component, vuln store.Vulnerability) (dbgen.VexStatement, error) {
+	arg := dbgen.GetEffectiveVEXStatusParams{
+		OrgID:      repo.OrgID,
+		AdvisoryID: *vuln.AdvisoryID,
+		RepoID:     uuid.NullUUID{UUID: repo.ID, Valid: true},
+	}
+	componentPURL, err := resolveVEXComponentPURL(ctx, scopeStore, componentCache, vuln)
+	if err != nil {
+		return dbgen.VexStatement{}, err
+	}
+	if componentPURL != "" {
+		arg.ComponentPurl = sql.NullString{String: componentPURL, Valid: true}
+	}
+	statement, vexErr := s.vexStore.GetEffectiveVEXStatus(ctx, arg)
+	if vexErr != nil {
+		componentID := uuid.Nil
+		if vuln.ComponentID != nil {
+			componentID = *vuln.ComponentID
+		}
+		return dbgen.VexStatement{}, fmt.Errorf("load effective vex status for advisory %s component %s: %w", *vuln.AdvisoryID, componentID, vexErr)
+	}
+	return statement, nil
+}
+
+func resolveVEXComponentPURL(ctx context.Context, scopeStore vexScopeStore, componentCache map[uuid.UUID]dbgen.Component, vuln store.Vulnerability) (string, error) {
+	if vuln.ComponentPurl != nil {
+		if componentPURL := strings.TrimSpace(*vuln.ComponentPurl); componentPURL != "" {
+			return componentPURL, nil
+		}
+	}
+	if vuln.ComponentID == nil {
+		return "", nil
+	}
+	component, err := componentForVulnerability(ctx, scopeStore, componentCache, *vuln.ComponentID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(component.Purl), nil
 }
 
 func componentForVulnerability(ctx context.Context, scopeStore vexScopeStore, cache map[uuid.UUID]dbgen.Component, componentID uuid.UUID) (dbgen.Component, error) {

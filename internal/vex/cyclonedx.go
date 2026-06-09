@@ -36,47 +36,11 @@ func ParseCycloneDX(data []byte) (*ParseResult, error) {
 		return nil, fmt.Errorf("decode cyclonedx document: %w", err)
 	}
 
-	components := make(map[string]string, len(doc.Components))
-	for _, component := range doc.Components {
-		key := strings.TrimSpace(component.BOMRef)
-		value := strings.TrimSpace(component.PURL)
-		if value == "" {
-			value = strings.TrimSpace(component.Name)
-		}
-		if key != "" {
-			components[key] = value
-		}
-	}
+	components := cycloneDXComponents(doc.Components)
 
 	statements := make([]Statement, 0, len(doc.Vulnerabilities))
 	for _, vulnerability := range doc.Vulnerabilities {
-		status := mapCycloneDXState(vulnerability.Analysis.State)
-		if status == "" {
-			continue
-		}
-		statement := Statement{
-			VulnerabilityID: strings.TrimSpace(vulnerability.ID),
-			Status:          status,
-			Justification:   mapCycloneDXJustification(vulnerability.Analysis.Justification),
-			ImpactStatement: strings.TrimSpace(vulnerability.Analysis.Detail),
-			ActionStatement: strings.Join(vulnerability.Analysis.Response, ", "),
-		}
-		if statement.VulnerabilityID == "" {
-			continue
-		}
-		if len(vulnerability.Affects) == 0 {
-			statements = append(statements, statement)
-			continue
-		}
-		for _, affected := range vulnerability.Affects {
-			affectedStatement := statement
-			ref := strings.TrimSpace(affected.Ref)
-			affectedStatement.ComponentPURL = strings.TrimSpace(components[ref])
-			if affectedStatement.ComponentPURL == "" {
-				affectedStatement.ComponentPURL = ref
-			}
-			statements = append(statements, affectedStatement)
-		}
+		statements = append(statements, cycloneDXStatements(components, vulnerability)...)
 	}
 
 	return &ParseResult{
@@ -85,6 +49,86 @@ func ParseCycloneDX(data []byte) (*ParseResult, error) {
 		DocumentID: strings.TrimSpace(doc.SerialNumber),
 		Timestamp:  strings.TrimSpace(doc.Metadata.Timestamp),
 	}, nil
+}
+
+func cycloneDXComponents(components []struct {
+	BOMRef string `json:"bom-ref"`
+	PURL   string `json:"purl"`
+	Name   string `json:"name"`
+}) map[string]string {
+	result := make(map[string]string, len(components))
+	for _, component := range components {
+		key := strings.TrimSpace(component.BOMRef)
+		value := strings.TrimSpace(component.PURL)
+		if value == "" {
+			value = strings.TrimSpace(component.Name)
+		}
+		if key != "" {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func cycloneDXStatements(components map[string]string, vulnerability struct {
+	ID       string `json:"id"`
+	Analysis struct {
+		State         string   `json:"state"`
+		Justification string   `json:"justification"`
+		Detail        string   `json:"detail"`
+		Response      []string `json:"response"`
+	} `json:"analysis"`
+	Affects []struct {
+		Ref string `json:"ref"`
+	} `json:"affects"`
+}) []Statement {
+	statement, ok := baseCycloneDXStatement(vulnerability)
+	if !ok {
+		return nil
+	}
+	if len(vulnerability.Affects) == 0 {
+		return []Statement{statement}
+	}
+	statements := make([]Statement, 0, len(vulnerability.Affects))
+	for _, affected := range vulnerability.Affects {
+		affectedStatement := statement
+		ref := strings.TrimSpace(affected.Ref)
+		affectedStatement.ComponentPURL = strings.TrimSpace(components[ref])
+		if affectedStatement.ComponentPURL == "" {
+			affectedStatement.ComponentPURL = ref
+		}
+		statements = append(statements, affectedStatement)
+	}
+	return statements
+}
+
+func baseCycloneDXStatement(vulnerability struct {
+	ID       string `json:"id"`
+	Analysis struct {
+		State         string   `json:"state"`
+		Justification string   `json:"justification"`
+		Detail        string   `json:"detail"`
+		Response      []string `json:"response"`
+	} `json:"analysis"`
+	Affects []struct {
+		Ref string `json:"ref"`
+	} `json:"affects"`
+}) (Statement, bool) {
+	status := mapCycloneDXState(vulnerability.Analysis.State)
+	if status == "" {
+		return Statement{}, false
+	}
+	statement := Statement{
+		VulnerabilityID: strings.TrimSpace(vulnerability.ID),
+		Status:          status,
+		Justification:   mapCycloneDXJustification(vulnerability.Analysis.Justification),
+		ImpactStatement: strings.TrimSpace(vulnerability.Analysis.Detail),
+		ActionStatement: strings.Join(vulnerability.Analysis.Response, ", "),
+	}
+	if statement.VulnerabilityID == "" {
+		return Statement{}, false
+	}
+	return statement, true
 }
 
 func mapCycloneDXState(value string) string {

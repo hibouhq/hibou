@@ -85,42 +85,45 @@ func NewService(store ExportStore, log zerolog.Logger) *Service {
 }
 
 func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug string, asOfDate time.Time) (*Report, error) {
-	repo, err := s.store.GetRepoBySlug(ctx, orgID, repoSlug)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrReportNotFound
-	}
+	data, err := s.loadReportData(ctx, orgID, repoSlug, asOfDate)
 	if err != nil {
 		return nil, err
-	}
-	if repo.ID == uuid.Nil {
-		return nil, ErrReportNotFound
-	}
-	org, err := s.store.GetOrganizationByID(ctx, orgID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrReportNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	if org.ID == uuid.Nil {
-		return nil, ErrReportNotFound
 	}
 
-	snapshot, err := s.store.GetSnapshotAtDate(ctx, dbgen.GetSnapshotAtDateParams{
-		RepoID:    repo.ID,
-		Name:      repo.DefaultBranch,
-		CreatedAt: asOfDate,
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrReportNotFound
+	report := buildComplianceReport(data.repo, data.org, data.snapshot, data.ref, asOfDate)
+	if err := s.populateReportVulnerabilities(report, data, asOfDate); err != nil {
+		return nil, err
 	}
+	sortReportVulnerabilities(report)
+
+	s.log.Info().Str("repo_id", data.repo.ID.String()).Str("snapshot_id", data.snapshot.ID.String()).Msg("generated compliance report")
+	return report, nil
+}
+
+type reportData struct {
+	repo            dbgen.Repository
+	org             dbgen.Organization
+	snapshot        dbgen.Snapshot
+	ref             dbgen.Ref
+	vulnerabilities []store.Vulnerability
+	advisoryByID    map[uuid.UUID]dbgen.Advisory
+	componentByID   map[uuid.UUID]dbgen.Component
+	vexByAdvisory   map[uuid.UUID][]dbgen.VexStatement
+}
+
+func (s *Service) loadReportData(ctx context.Context, orgID uuid.UUID, repoSlug string, asOfDate time.Time) (*reportData, error) {
+	repo, err := s.loadReportRepository(ctx, orgID, repoSlug)
 	if err != nil {
 		return nil, err
 	}
-	if snapshot.ID == uuid.Nil {
-		return nil, ErrReportNotFound
+	org, err := s.loadReportOrganization(ctx, orgID)
+	if err != nil {
+		return nil, err
 	}
-
+	snapshot, err := s.loadReportSnapshot(ctx, repo, asOfDate)
+	if err != nil {
+		return nil, err
+	}
 	ref, err := s.store.GetRefByID(ctx, snapshot.RefID)
 	if err != nil {
 		return nil, err
@@ -141,8 +144,20 @@ func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug 
 	if err != nil {
 		return nil, err
 	}
+	return &reportData{
+		repo:            repo,
+		org:             org,
+		snapshot:        snapshot,
+		ref:             ref,
+		vulnerabilities: vulnerabilities,
+		advisoryByID:    advisoryByID,
+		componentByID:   componentByID,
+		vexByAdvisory:   vexByAdvisory,
+	}, nil
+}
 
-	report := &Report{
+func buildComplianceReport(repo dbgen.Repository, org dbgen.Organization, snapshot dbgen.Snapshot, ref dbgen.Ref, asOfDate time.Time) *Report {
+	return &Report{
 		RepoName:    repo.Name,
 		OrgName:     org.Name,
 		AsOfDate:    asOfDate,
@@ -150,62 +165,133 @@ func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug 
 		SnapshotID:  snapshot.ID,
 		RefName:     ref.Name,
 	}
+}
 
+func (s *Service) populateReportVulnerabilities(report *Report, data *reportData, asOfDate time.Time) error {
 	componentSeen := make(map[uuid.UUID]struct{})
-	for _, vulnerability := range vulnerabilities {
-		entry := VulnEntry{
-			ID:          vulnerability.ID,
-			Type:        vulnerability.Type,
-			Title:       vulnerability.Title,
-			Description: vulnerability.Description,
-			Severity:    string(vulnerability.Severity),
-			Status:      vulnerability.Status,
-			ScannerName: vulnerability.ScannerName,
-			IsAffected:  vulnerability.Status != "resolved" && vulnerability.Status != "dismissed",
-			FirstSeenAt: vulnerability.FirstSeenAt,
-		}
-		if vulnerability.FilePath != nil {
-			entry.FilePath = *vulnerability.FilePath
-		}
-		if vulnerability.ComponentID != nil {
-			componentSeen[*vulnerability.ComponentID] = struct{}{}
-		}
-		if vulnerability.ComponentID != nil {
-			if component, ok := componentByID[*vulnerability.ComponentID]; ok {
-				entry.ComponentName = component.Name
-				entry.ComponentVersion = component.Version
-			}
-		}
-		if vulnerability.AdvisoryID != nil {
-			advisory, ok := advisoryByID[*vulnerability.AdvisoryID]
-			if !ok {
-				return nil, fmt.Errorf("lookup advisory %s: %w", *vulnerability.AdvisoryID, sql.ErrNoRows)
-			}
-			entry.CanonicalID = advisory.CanonicalID
-			componentPURL := ""
-			if vulnerability.ComponentPurl != nil {
-				componentPURL = *vulnerability.ComponentPurl
-			}
-			vexStatement := resolveVEXStatement(vexByAdvisory[*vulnerability.AdvisoryID], repo.ID, componentPURL, asOfDate)
-			if vexStatement != nil {
-				entry.VEXStatus = string(vexStatement.Status)
-				entry.VEXSource = string(vexStatement.Source)
-				if vexStatement.Justification.Valid {
-					entry.VEXJustification = string(vexStatement.Justification.VexJustification)
-				}
-				switch vexStatement.Status {
-				case dbgen.VexStatusNotAffected:
-					report.Summary.VEXNotAffected++
-				case dbgen.VexStatusFixed:
-					report.Summary.VEXFixed++
-				}
-			}
+	for _, vulnerability := range data.vulnerabilities {
+		entry, err := s.buildReportVulnerabilityEntry(data, vulnerability, report, asOfDate, componentSeen)
+		if err != nil {
+			return err
 		}
 		report.Vulnerabilities = append(report.Vulnerabilities, entry)
 		addSummary(&report.Summary, string(vulnerability.Severity))
 	}
 	report.Components = len(componentSeen)
+	return nil
+}
 
+func (s *Service) buildReportVulnerabilityEntry(data *reportData, vulnerability store.Vulnerability, report *Report, asOfDate time.Time, componentSeen map[uuid.UUID]struct{}) (VulnEntry, error) {
+	entry := VulnEntry{
+		ID:          vulnerability.ID,
+		Type:        vulnerability.Type,
+		Title:       vulnerability.Title,
+		Description: vulnerability.Description,
+		Severity:    string(vulnerability.Severity),
+		Status:      vulnerability.Status,
+		ScannerName: vulnerability.ScannerName,
+		IsAffected:  vulnerability.Status != "resolved" && vulnerability.Status != "dismissed",
+		FirstSeenAt: vulnerability.FirstSeenAt,
+	}
+	if vulnerability.FilePath != nil {
+		entry.FilePath = *vulnerability.FilePath
+	}
+	applyReportComponent(&entry, data.componentByID, vulnerability.ComponentID, componentSeen)
+	if err := applyReportAdvisory(&entry, report, data, vulnerability, asOfDate); err != nil {
+		return VulnEntry{}, err
+	}
+	return entry, nil
+}
+
+func (s *Service) loadReportRepository(ctx context.Context, orgID uuid.UUID, repoSlug string) (dbgen.Repository, error) {
+	repo, err := s.store.GetRepoBySlug(ctx, orgID, repoSlug)
+	if errors.Is(err, sql.ErrNoRows) {
+		return dbgen.Repository{}, ErrReportNotFound
+	}
+	if err != nil {
+		return dbgen.Repository{}, err
+	}
+	if repo.ID == uuid.Nil {
+		return dbgen.Repository{}, ErrReportNotFound
+	}
+	return repo, nil
+}
+
+func (s *Service) loadReportOrganization(ctx context.Context, orgID uuid.UUID) (dbgen.Organization, error) {
+	org, err := s.store.GetOrganizationByID(ctx, orgID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return dbgen.Organization{}, ErrReportNotFound
+	}
+	if err != nil {
+		return dbgen.Organization{}, err
+	}
+	if org.ID == uuid.Nil {
+		return dbgen.Organization{}, ErrReportNotFound
+	}
+	return org, nil
+}
+
+func (s *Service) loadReportSnapshot(ctx context.Context, repo dbgen.Repository, asOfDate time.Time) (dbgen.Snapshot, error) {
+	snapshot, err := s.store.GetSnapshotAtDate(ctx, dbgen.GetSnapshotAtDateParams{
+		RepoID:    repo.ID,
+		Name:      repo.DefaultBranch,
+		CreatedAt: asOfDate,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return dbgen.Snapshot{}, ErrReportNotFound
+	}
+	if err != nil {
+		return dbgen.Snapshot{}, err
+	}
+	if snapshot.ID == uuid.Nil {
+		return dbgen.Snapshot{}, ErrReportNotFound
+	}
+	return snapshot, nil
+}
+
+func applyReportComponent(entry *VulnEntry, componentByID map[uuid.UUID]dbgen.Component, componentID *uuid.UUID, componentSeen map[uuid.UUID]struct{}) {
+	if componentID == nil {
+		return
+	}
+	componentSeen[*componentID] = struct{}{}
+	if component, ok := componentByID[*componentID]; ok {
+		entry.ComponentName = component.Name
+		entry.ComponentVersion = component.Version
+	}
+}
+
+func applyReportAdvisory(entry *VulnEntry, report *Report, data *reportData, vulnerability store.Vulnerability, asOfDate time.Time) error {
+	if vulnerability.AdvisoryID == nil {
+		return nil
+	}
+	advisory, ok := data.advisoryByID[*vulnerability.AdvisoryID]
+	if !ok {
+		return fmt.Errorf("lookup advisory %s: %w", *vulnerability.AdvisoryID, sql.ErrNoRows)
+	}
+	entry.CanonicalID = advisory.CanonicalID
+	componentPURL := ""
+	if vulnerability.ComponentPurl != nil {
+		componentPURL = *vulnerability.ComponentPurl
+	}
+	vexStatement := resolveVEXStatement(data.vexByAdvisory[*vulnerability.AdvisoryID], data.repo.ID, componentPURL, asOfDate)
+	if vexStatement == nil {
+		return nil
+	}
+	entry.VEXStatus = string(vexStatement.Status)
+	entry.VEXSource = string(vexStatement.Source)
+	if vexStatement.Justification.Valid {
+		entry.VEXJustification = string(vexStatement.Justification.VexJustification)
+	}
+	switch vexStatement.Status {
+	case dbgen.VexStatusNotAffected:
+		report.Summary.VEXNotAffected++
+	case dbgen.VexStatusFixed:
+		report.Summary.VEXFixed++
+	}
+	return nil
+}
+
+func sortReportVulnerabilities(report *Report) {
 	sort.Slice(report.Vulnerabilities, func(i, j int) bool {
 		if report.Vulnerabilities[i].Severity == report.Vulnerabilities[j].Severity {
 			left := strings.TrimSpace(report.Vulnerabilities[i].CanonicalID)
@@ -220,9 +306,6 @@ func (s *Service) GenerateReport(ctx context.Context, orgID uuid.UUID, repoSlug 
 		}
 		return severityRank(report.Vulnerabilities[i].Severity) < severityRank(report.Vulnerabilities[j].Severity)
 	})
-
-	s.log.Info().Str("repo_id", repo.ID.String()).Str("snapshot_id", snapshot.ID.String()).Msg("generated compliance report")
-	return report, nil
 }
 
 func (s *Service) loadAdvisoriesByID(ctx context.Context, vulnerabilities []store.Vulnerability) (map[uuid.UUID]dbgen.Advisory, error) {

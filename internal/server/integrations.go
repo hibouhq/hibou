@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -186,20 +187,12 @@ func (s *Server) handleReplayIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	limit := 5
-	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
-		parsed, err := strconv.Atoi(rawLimit)
-		if err != nil || parsed <= 0 {
-			api.JSONError(w, http.StatusBadRequest, "invalid limit")
-			return
-		}
-		if parsed > 10 {
-			parsed = 10
-		}
-		limit = parsed
+	limit, ok := parseReplayLimit(w, r)
+	if !ok {
+		return
 	}
 
-	auditLogs, err := s.queries.ListAuditLogsByResource(r.Context(), "integration", integration.ID.String(), int32(limit), 0)
+	auditLogs, err := s.queries.ListAuditLogsByResource(r.Context(), "integration", integration.ID.String(), int32(limit), 0) //nolint:gosec // G115: limit is bounded to [1,10] by parseReplayLimit.
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load audit logs")
 		return
@@ -210,32 +203,59 @@ func (s *Server) handleReplayIntegration(w http.ResponseWriter, r *http.Request)
 		Requested:     limit,
 		AuditLogIDs:   make([]string, 0, len(auditLogs)),
 	}
-	processed := 0
-	for _, entry := range auditLogs {
-		if entry.Action != "integration.delivery" {
-			continue
-		}
-		processed++
-		payload, err := notify.ReplayPayloadFromAuditLog(entry)
-		if err != nil {
-			response.Skipped++
-			continue
-		}
-		payload.Metadata = cloneMap(payload.Metadata)
-		payload.Metadata["replay_source_audit_log_id"] = entry.ID.String()
-		if err := s.dispatcher.Replay(r.Context(), *integration, payload); err != nil {
-			response.Skipped++
-			continue
-		}
-		response.Replayed++
-		response.AuditLogIDs = append(response.AuditLogIDs, entry.ID.String())
-	}
+	processed := replayIntegrationAuditLogs(r.Context(), s.dispatcher, *integration, auditLogs, &response)
 	response.Skipped += processed - response.Replayed - response.Skipped
 	if response.Skipped < 0 {
 		response.Skipped = 0
 	}
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+func parseReplayLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	limit := 5
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			api.JSONError(w, http.StatusBadRequest, "invalid limit")
+			return 0, false
+		}
+		if parsed > 10 {
+			parsed = 10
+		}
+		limit = parsed
+	}
+	return limit, true
+}
+
+func replayIntegrationAuditLogs(ctx context.Context, dispatcher *notify.Dispatcher, integration store.Integration, auditLogs []dbgen.AuditLog, response *integrationReplayResponse) int {
+	processed := 0
+	for _, entry := range auditLogs {
+		if entry.Action != "integration.delivery" {
+			continue
+		}
+		processed++
+		if replayIntegrationAuditLog(ctx, dispatcher, integration, entry, response) {
+			response.Replayed++
+		}
+	}
+	return processed
+}
+
+func replayIntegrationAuditLog(ctx context.Context, dispatcher *notify.Dispatcher, integration store.Integration, entry dbgen.AuditLog, response *integrationReplayResponse) bool {
+	payload, err := notify.ReplayPayloadFromAuditLog(entry)
+	if err != nil {
+		response.Skipped++
+		return false
+	}
+	payload.Metadata = cloneMap(payload.Metadata)
+	payload.Metadata["replay_source_audit_log_id"] = entry.ID.String()
+	if err := dispatcher.Replay(ctx, integration, payload); err != nil {
+		response.Skipped++
+		return false
+	}
+	response.AuditLogIDs = append(response.AuditLogIDs, entry.ID.String())
+	return true
 }
 
 // @Summary      Update integration

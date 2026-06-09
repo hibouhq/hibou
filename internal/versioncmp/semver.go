@@ -97,23 +97,25 @@ func compareSemverPrerelease(a, b []string) int {
 	}
 
 	for i := 0; i < len(a) && i < len(b); i++ {
-		aNum := isDigits(a[i])
-		bNum := isDigits(b[i])
-		switch {
-		case aNum && bNum:
-			if cmp := cmpInts(parseIntDefault(a[i]), parseIntDefault(b[i])); cmp != 0 {
-				return cmp
-			}
-		case aNum && !bNum:
-			return -1
-		case !aNum && bNum:
-			return 1
-		default:
-			if cmp := cmpStrings(a[i], b[i]); cmp != 0 {
-				return cmp
-			}
+		if cmp := compareSemverIdentifier(a[i], b[i]); cmp != 0 {
+			return cmp
 		}
 	}
 
 	return cmpInts(len(a), len(b))
+}
+
+func compareSemverIdentifier(a, b string) int {
+	aNum := isDigits(a)
+	bNum := isDigits(b)
+	switch {
+	case aNum && bNum:
+		return cmpInts(parseIntDefault(a), parseIntDefault(b))
+	case aNum && !bNum:
+		return -1
+	case !aNum && bNum:
+		return 1
+	default:
+		return cmpStrings(a, b)
+	}
 }

@@ -56,53 +56,20 @@ func rpmvercmp(a, b string) int {
 		ai = rpmSkipSeparators(a, ai)
 		bi = rpmSkipSeparators(b, bi)
 
-		if ai < len(a) && a[ai] == '~' || bi < len(b) && b[bi] == '~' {
-			switch {
-			case ai < len(a) && a[ai] == '~' && bi < len(b) && b[bi] == '~':
-				ai++
-				bi++
-				continue
-			case ai < len(a) && a[ai] == '~':
-				return -1
-			default:
-				return 1
+		if cmp, nextA, nextB, handled := rpmCompareTilde(a, b, ai, bi); handled {
+			if cmp != 0 {
+				return cmp
 			}
+			ai = nextA
+			bi = nextB
+			continue
 		}
 
-		if ai >= len(a) && bi >= len(b) {
-			return 0
-		}
-		if ai >= len(a) {
-			if rpmOnlyZeroRemainder(b, bi) {
-				return 0
-			}
-			return -1
-		}
-		if bi >= len(b) {
-			if rpmOnlyZeroRemainder(a, ai) {
-				return 0
-			}
-			return 1
+		if cmp, done := rpmCompareRemainder(a, b, ai, bi); done {
+			return cmp
 		}
 
-		aNum := unicode.IsDigit(rune(a[ai]))
-		bNum := unicode.IsDigit(rune(b[bi]))
-		switch {
-		case aNum && !bNum:
-			return 1
-		case !aNum && bNum:
-			return -1
-		}
-
-		aSeg, nextA := rpmReadSegment(a, ai, aNum)
-		bSeg, nextB := rpmReadSegment(b, bi, bNum)
-
-		var cmp int
-		if aNum {
-			cmp = rpmCompareNumeric(aSeg, bSeg)
-		} else {
-			cmp = cmpStrings(aSeg, bSeg)
-		}
+		cmp, nextA, nextB := rpmCompareSegmentPair(a, b, ai, bi)
 		if cmp != 0 {
 			return cmp
 		}
@@ -110,6 +77,58 @@ func rpmvercmp(a, b string) int {
 		ai = nextA
 		bi = nextB
 	}
+}
+
+func rpmCompareTilde(a, b string, ai, bi int) (int, int, int, bool) {
+	hasATilde := ai < len(a) && a[ai] == '~'
+	hasBTilde := bi < len(b) && b[bi] == '~'
+	if !hasATilde && !hasBTilde {
+		return 0, ai, bi, false
+	}
+	switch {
+	case hasATilde && hasBTilde:
+		return 0, ai + 1, bi + 1, true
+	case hasATilde:
+		return -1, ai, bi, true
+	default:
+		return 1, ai, bi, true
+	}
+}
+
+func rpmCompareRemainder(a, b string, ai, bi int) (int, bool) {
+	if ai >= len(a) && bi >= len(b) {
+		return 0, true
+	}
+	if ai >= len(a) {
+		if rpmOnlyZeroRemainder(b, bi) {
+			return 0, true
+		}
+		return -1, true
+	}
+	if bi >= len(b) {
+		if rpmOnlyZeroRemainder(a, ai) {
+			return 0, true
+		}
+		return 1, true
+	}
+	return 0, false
+}
+
+func rpmCompareSegmentPair(a, b string, ai, bi int) (int, int, int) {
+	aNum := unicode.IsDigit(rune(a[ai]))
+	bNum := unicode.IsDigit(rune(b[bi]))
+	switch {
+	case aNum && !bNum:
+		return 1, ai, bi
+	case !aNum && bNum:
+		return -1, ai, bi
+	}
+	aSeg, nextA := rpmReadSegment(a, ai, aNum)
+	bSeg, nextB := rpmReadSegment(b, bi, bNum)
+	if aNum {
+		return rpmCompareNumeric(aSeg, bSeg), nextA, nextB
+	}
+	return cmpStrings(aSeg, bSeg), nextA, nextB
 }
 
 func rpmOnlyZeroRemainder(s string, idx int) bool {

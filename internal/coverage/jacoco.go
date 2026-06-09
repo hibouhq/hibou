@@ -42,27 +42,9 @@ func parseJaCoCo(content []byte) (*Report, error) {
 	applyJaCoCoCounters(report, doc.Counters)
 	hasReportSummary := report.LinesValid > 0 || report.BranchesValid > 0
 
-	files := make([]FileCoverage, 0)
-	for _, pkg := range doc.Packages {
-		for _, sourceFile := range pkg.SourceFiles {
-			path := joinJaCoCoPath(pkg.Name, sourceFile.Name)
-			if path == "" {
-				continue
-			}
-
-			file := FileCoverage{Path: path}
-			applyJaCoCoCountersToFile(&file, sourceFile.Counters)
-			file.LineRate = rate(file.LinesCovered, file.LinesValid)
-			file.BranchRate = rate(file.BranchesCovered, file.BranchesValid)
-			files = append(files, file)
-
-			if !hasReportSummary {
-				report.LinesValid += file.LinesValid
-				report.LinesCovered += file.LinesCovered
-				report.BranchesValid += file.BranchesValid
-				report.BranchesCovered += file.BranchesCovered
-			}
-		}
+	files := buildJaCoCoFiles(doc)
+	if !hasReportSummary {
+		accumulateJaCoCoSummary(report, files)
 	}
 
 	if report.LinesValid == 0 && report.BranchesValid == 0 && len(files) == 0 {
@@ -79,6 +61,40 @@ func parseJaCoCo(content []byte) (*Report, error) {
 	sortFiles(files)
 	report.Files = files
 	return report, nil
+}
+
+func buildJaCoCoFiles(doc jaCoCoDocument) []FileCoverage {
+	files := make([]FileCoverage, 0)
+	for _, pkg := range doc.Packages {
+		for _, sourceFile := range pkg.SourceFiles {
+			file, ok := newJaCoCoFileCoverage(pkg.Name, sourceFile)
+			if ok {
+				files = append(files, file)
+			}
+		}
+	}
+	return files
+}
+
+func newJaCoCoFileCoverage(pkgName string, sourceFile jaCoCoSourceFile) (FileCoverage, bool) {
+	path := joinJaCoCoPath(pkgName, sourceFile.Name)
+	if path == "" {
+		return FileCoverage{}, false
+	}
+	file := FileCoverage{Path: path}
+	applyJaCoCoCountersToFile(&file, sourceFile.Counters)
+	file.LineRate = rate(file.LinesCovered, file.LinesValid)
+	file.BranchRate = rate(file.BranchesCovered, file.BranchesValid)
+	return file, true
+}
+
+func accumulateJaCoCoSummary(report *Report, files []FileCoverage) {
+	for _, file := range files {
+		report.LinesValid += file.LinesValid
+		report.LinesCovered += file.LinesCovered
+		report.BranchesValid += file.BranchesValid
+		report.BranchesCovered += file.BranchesCovered
+	}
 }
 
 func applyJaCoCoCounters(report *Report, counters []jaCoCoCounter) {

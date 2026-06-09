@@ -69,52 +69,56 @@ func apkCompareBase(a, b string) int {
 		ai = apkSkipSeparators(a, ai)
 		bi = apkSkipSeparators(b, bi)
 
-		if ai < len(a) && a[ai] == '~' || bi < len(b) && b[bi] == '~' {
-			switch {
-			case ai < len(a) && a[ai] == '~' && bi < len(b) && b[bi] == '~':
-				ai++
-				bi++
-				continue
-			case ai < len(a) && a[ai] == '~':
-				return -1
-			default:
-				return 1
+		if cmp, nextA, nextB, handled := rpmCompareTilde(a, b, ai, bi); handled {
+			if cmp != 0 {
+				return cmp
 			}
+			ai = nextA
+			bi = nextB
+			continue
 		}
 
-		if ai >= len(a) && bi >= len(b) {
-			return 0
-		}
-		if ai >= len(a) {
-			return -1
-		}
-		if bi >= len(b) {
-			return 1
+		if cmp, done := apkCompareRemainder(a, b, ai, bi); done {
+			return cmp
 		}
 
-		aNum := unicode.IsDigit(rune(a[ai]))
-		bNum := unicode.IsDigit(rune(b[bi]))
-		switch {
-		case aNum && !bNum:
-			return 1
-		case !aNum && bNum:
-			return -1
-		}
-
-		aSeg, nextA := apkReadSegment(a, ai, aNum)
-		bSeg, nextB := apkReadSegment(b, bi, bNum)
-		var cmp int
-		if aNum {
-			cmp = rpmCompareNumeric(aSeg, bSeg)
-		} else {
-			cmp = cmpStrings(strings.ToLower(aSeg), strings.ToLower(bSeg))
-		}
+		cmp, nextA, nextB := apkCompareSegmentPair(a, b, ai, bi)
 		if cmp != 0 {
 			return cmp
 		}
 		ai = nextA
 		bi = nextB
 	}
+}
+
+func apkCompareRemainder(a, b string, ai, bi int) (int, bool) {
+	if ai >= len(a) && bi >= len(b) {
+		return 0, true
+	}
+	if ai >= len(a) {
+		return -1, true
+	}
+	if bi >= len(b) {
+		return 1, true
+	}
+	return 0, false
+}
+
+func apkCompareSegmentPair(a, b string, ai, bi int) (int, int, int) {
+	aNum := unicode.IsDigit(rune(a[ai]))
+	bNum := unicode.IsDigit(rune(b[bi]))
+	switch {
+	case aNum && !bNum:
+		return 1, ai, bi
+	case !aNum && bNum:
+		return -1, ai, bi
+	}
+	aSeg, nextA := apkReadSegment(a, ai, aNum)
+	bSeg, nextB := apkReadSegment(b, bi, bNum)
+	if aNum {
+		return rpmCompareNumeric(aSeg, bSeg), nextA, nextB
+	}
+	return cmpStrings(strings.ToLower(aSeg), strings.ToLower(bSeg)), nextA, nextB
 }
 
 func apkSkipSeparators(s string, idx int) int {

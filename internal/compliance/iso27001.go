@@ -68,6 +68,22 @@ type ISO27001Store interface {
 	CountComponentsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error)
 }
 
+type iso27001Metrics struct {
+	repoCount           int64
+	vexCount            int64
+	importedVEXCount    int64
+	auditLogCount       int64
+	gateAuditCount      int64
+	gateEvaluationCount int64
+	qualityGateCount    int64
+	vulnerabilityCount  int64
+	scanCount           int64
+	scanFreshnessDays   int64
+	malwareCount        int64
+	componentCount      int64
+	latestScanAt        time.Time
+}
+
 func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, asOfDate time.Time) (*ISO27001Report, error) {
 	if s.isoStore == nil {
 		return nil, errors.New("iso27001 store unavailable")
@@ -80,63 +96,9 @@ func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, a
 	if err != nil {
 		return nil, err
 	}
-	repoCount, err := s.isoStore.CountRepositoriesByOrg(ctx, orgID)
+	metrics, err := s.loadISO27001Metrics(ctx, orgID, asOfDate)
 	if err != nil {
 		return nil, err
-	}
-	vexCount, err := s.isoStore.CountVEXStatementsByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	vexStatements, err := s.listAllVEXStatements(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	auditLogCount, err := s.isoStore.CountAuditLogsByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	auditLogs, err := s.listAllAuditLogs(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	qualityGates, err := s.isoStore.ListQualityGatesByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	vulnerabilityCount, err := s.isoStore.CountVulnerabilitiesByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	scanCount, err := s.isoStore.CountScansByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	latestScanAt, err := s.isoStore.LatestScanByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	malwareCount, err := s.isoStore.CountMalwareAdvisoriesByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	componentCount, err := s.isoStore.CountComponentsByOrg(ctx, orgID)
-	if err != nil {
-		return nil, err
-	}
-	importedVEXCount := countVEXBySource(vexStatements, dbgen.VexSourceImported)
-	gateAuditCount := countAuditLogs(auditLogs, func(entry dbgen.AuditLog) bool {
-		return strings.HasPrefix(entry.Action, "gate.")
-	})
-	gateEvaluationCount := countAuditLogs(auditLogs, func(entry dbgen.AuditLog) bool {
-		return entry.Action == audit.ActionGateOverride || strings.HasPrefix(entry.Action, "gate.")
-	})
-	var scanFreshnessDays int64
-	if !latestScanAt.IsZero() {
-		delta := asOfDate.Sub(latestScanAt)
-		if delta > 0 {
-			scanFreshnessDays = int64(delta.Hours() / 24)
-		}
 	}
 
 	return &ISO27001Report{
@@ -144,93 +106,136 @@ func (s *Service) GenerateISO27001Report(ctx context.Context, orgID uuid.UUID, a
 		AsOfDate:    asOfDate,
 		GeneratedAt: generatedAt,
 		Framework:   "ISO 27001:2022",
-		Controls: []ControlEvidence{
-			{
-				ControlID:   "A.8.8",
-				ControlName: "Management of technical vulnerabilities",
-				Coverage:    "full",
-				Evidence: []EvidenceItem{
-					evidenceItem("repositories", "Repositories in scope for vulnerability management", repoCount, "repositories"),
-					evidenceItem("vulnerability_scanning", "Active vulnerabilities tracked across the organization", vulnerabilityCount, "vulnerabilities"),
-					evidenceItem("vex_statements", "VEX statements available to refine exploitability status", vexCount, "vex_statements"),
-					evidenceItem("scans", "Recorded scan executions across repository snapshots", scanCount, "scans"),
-					evidenceItem("scan_freshness_days", fmt.Sprintf("Days since most recent completed scan (%s)", latestScanAt.UTC().Format(time.RFC3339)), scanFreshnessDays, "scans"),
-				},
-			},
-			{
-				ControlID:   "A.8.25",
-				ControlName: "Secure development life cycle",
-				Coverage:    "full",
-				Evidence: []EvidenceItem{
-					evidenceItem("quality_gates", "Quality gate configurations enforcing security policy", int64(len(qualityGates)), "quality_gates"),
-					evidenceItem("gate_audit_logs", "Audit trail entries for quality gate administration and exceptions", gateAuditCount, "audit_logs"),
-				},
-			},
-			{
-				ControlID:   "A.8.28",
-				ControlName: "Secure coding",
-				Coverage:    "full",
-				Evidence: []EvidenceItem{
-					evidenceItem("security_vulnerabilities", "Application and supply-chain vulnerabilities captured from security tooling", vulnerabilityCount, "vulnerabilities"),
-				},
-			},
-			{
-				ControlID:   "A.8.29",
-				ControlName: "Security testing in development and acceptance",
-				Coverage:    "full",
-				Evidence: []EvidenceItem{
-					evidenceItem("scan_runs", "Scan executions recorded for repository snapshots", scanCount, "scans"),
-					evidenceItem("gate_evaluations", "Gate-related audit entries used as evaluation evidence", gateEvaluationCount, "audit_logs"),
-				},
-			},
-			{
-				ControlID:   "A.8.4",
-				ControlName: "Access to source code",
-				Coverage:    "partial",
-				Evidence: []EvidenceItem{
-					evidenceItem("audit_logs", "Operational audit trail for organization changes", auditLogCount, "audit_logs"),
-				},
-				Gaps: []string{"git-level access managed by forge"},
-			},
-			{
-				ControlID:   "A.8.7",
-				ControlName: "Protection against malware",
-				Coverage:    "partial",
-				Evidence: []EvidenceItem{
-					evidenceItem("malware_advisories", "Malware-tagged advisories identified in dependency intelligence", malwareCount, "advisories"),
-				},
-				Gaps: []string{"secret scanning not yet implemented"},
-			},
-			{
-				ControlID:   "A.8.19",
-				ControlName: "Installation of software on operational systems",
-				Coverage:    "partial",
-				Evidence: []EvidenceItem{
-					evidenceItem("components", "Distinct software components inventoried across repository snapshots", componentCount, "components"),
-				},
-				Gaps: []string{"no runtime agent"},
-			},
-			{
-				ControlID:   "A.8.26",
-				ControlName: "Application security requirements",
-				Coverage:    "partial",
-				Evidence: []EvidenceItem{
-					evidenceItem("quality_gate_configs", "Quality gates expressing security acceptance criteria", int64(len(qualityGates)), "quality_gates"),
-				},
-				Gaps: []string{"no security requirements template"},
-			},
-			{
-				ControlID:   "A.8.30",
-				ControlName: "Outsourced development",
-				Coverage:    "partial",
-				Evidence: []EvidenceItem{
-					evidenceItem("supplier_vex_imports", "Imported supplier VEX statements tracked for third-party components", importedVEXCount, "vex_statements"),
-					evidenceItem("components", "Third-party component inventory available for supplier review", componentCount, "components"),
-				},
-				Gaps: []string{"no contractual tracking"},
-			},
-		},
+		Controls:    buildISO27001Controls(metrics),
 	}, nil
+}
+
+func (s *Service) loadISO27001Metrics(ctx context.Context, orgID uuid.UUID, asOfDate time.Time) (iso27001Metrics, error) {
+	repoCount, err := s.isoStore.CountRepositoriesByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	vexCount, err := s.isoStore.CountVEXStatementsByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	vexStatements, err := s.listAllVEXStatements(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	auditLogCount, err := s.isoStore.CountAuditLogsByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	auditLogs, err := s.listAllAuditLogs(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	qualityGates, err := s.isoStore.ListQualityGatesByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	vulnerabilityCount, err := s.isoStore.CountVulnerabilitiesByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	scanCount, err := s.isoStore.CountScansByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	latestScanAt, err := s.isoStore.LatestScanByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	malwareCount, err := s.isoStore.CountMalwareAdvisoriesByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	componentCount, err := s.isoStore.CountComponentsByOrg(ctx, orgID)
+	if err != nil {
+		return iso27001Metrics{}, err
+	}
+	return iso27001Metrics{
+		repoCount:           repoCount,
+		vexCount:            vexCount,
+		importedVEXCount:    countVEXBySource(vexStatements, dbgen.VexSourceImported),
+		auditLogCount:       auditLogCount,
+		gateAuditCount:      countAuditLogs(auditLogs, isGateAuditLog),
+		gateEvaluationCount: countAuditLogs(auditLogs, isGateEvaluationAuditLog),
+		qualityGateCount:    int64(len(qualityGates)),
+		vulnerabilityCount:  vulnerabilityCount,
+		scanCount:           scanCount,
+		scanFreshnessDays:   scanFreshnessDays(asOfDate, latestScanAt),
+		malwareCount:        malwareCount,
+		componentCount:      componentCount,
+		latestScanAt:        latestScanAt,
+	}, nil
+}
+
+func buildISO27001Controls(metrics iso27001Metrics) []ControlEvidence {
+	return []ControlEvidence{
+		fullControl("A.8.8", "Management of technical vulnerabilities",
+			evidenceItem("repositories", "Repositories in scope for vulnerability management", metrics.repoCount, "repositories"),
+			evidenceItem("vulnerability_scanning", "Active vulnerabilities tracked across the organization", metrics.vulnerabilityCount, "vulnerabilities"),
+			evidenceItem("vex_statements", "VEX statements available to refine exploitability status", metrics.vexCount, "vex_statements"),
+			evidenceItem("scans", "Recorded scan executions across repository snapshots", metrics.scanCount, "scans"),
+			evidenceItem("scan_freshness_days", fmt.Sprintf("Days since most recent completed scan (%s)", metrics.latestScanAt.UTC().Format(time.RFC3339)), metrics.scanFreshnessDays, "scans"),
+		),
+		fullControl("A.8.25", "Secure development life cycle",
+			evidenceItem("quality_gates", "Quality gate configurations enforcing security policy", metrics.qualityGateCount, "quality_gates"),
+			evidenceItem("gate_audit_logs", "Audit trail entries for quality gate administration and exceptions", metrics.gateAuditCount, "audit_logs"),
+		),
+		fullControl("A.8.28", "Secure coding",
+			evidenceItem("security_vulnerabilities", "Application and supply-chain vulnerabilities captured from security tooling", metrics.vulnerabilityCount, "vulnerabilities"),
+		),
+		fullControl("A.8.29", "Security testing in development and acceptance",
+			evidenceItem("scan_runs", "Scan executions recorded for repository snapshots", metrics.scanCount, "scans"),
+			evidenceItem("gate_evaluations", "Gate-related audit entries used as evaluation evidence", metrics.gateEvaluationCount, "audit_logs"),
+		),
+		partialControl("A.8.4", "Access to source code", []string{"git-level access managed by forge"},
+			evidenceItem("audit_logs", "Operational audit trail for organization changes", metrics.auditLogCount, "audit_logs"),
+		),
+		partialControl("A.8.7", "Protection against malware", []string{"secret scanning not yet implemented"},
+			evidenceItem("malware_advisories", "Malware-tagged advisories identified in dependency intelligence", metrics.malwareCount, "advisories"),
+		),
+		partialControl("A.8.19", "Installation of software on operational systems", []string{"no runtime agent"},
+			evidenceItem("components", "Distinct software components inventoried across repository snapshots", metrics.componentCount, "components"),
+		),
+		partialControl("A.8.26", "Application security requirements", []string{"no security requirements template"},
+			evidenceItem("quality_gate_configs", "Quality gates expressing security acceptance criteria", metrics.qualityGateCount, "quality_gates"),
+		),
+		partialControl("A.8.30", "Outsourced development", []string{"no contractual tracking"},
+			evidenceItem("supplier_vex_imports", "Imported supplier VEX statements tracked for third-party components", metrics.importedVEXCount, "vex_statements"),
+			evidenceItem("components", "Third-party component inventory available for supplier review", metrics.componentCount, "components"),
+		),
+	}
+}
+
+func fullControl(id, name string, evidence ...EvidenceItem) ControlEvidence {
+	return ControlEvidence{ControlID: id, ControlName: name, Coverage: "full", Evidence: evidence}
+}
+
+func partialControl(id, name string, gaps []string, evidence ...EvidenceItem) ControlEvidence {
+	return ControlEvidence{ControlID: id, ControlName: name, Coverage: "partial", Evidence: evidence, Gaps: gaps}
+}
+
+func isGateAuditLog(entry dbgen.AuditLog) bool {
+	return strings.HasPrefix(entry.Action, "gate.")
+}
+
+func isGateEvaluationAuditLog(entry dbgen.AuditLog) bool {
+	return entry.Action == audit.ActionGateOverride || strings.HasPrefix(entry.Action, "gate.")
+}
+
+func scanFreshnessDays(asOfDate, latestScanAt time.Time) int64 {
+	if latestScanAt.IsZero() {
+		return 0
+	}
+	delta := asOfDate.Sub(latestScanAt)
+	if delta <= 0 {
+		return 0
+	}
+	return int64(delta.Hours() / 24)
 }
 
 func (s *Service) GenerateStatementOfApplicability(ctx context.Context, orgID uuid.UUID, asOfDate time.Time) (*StatementOfApplicability, error) {

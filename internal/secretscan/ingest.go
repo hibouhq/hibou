@@ -40,83 +40,15 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 	if i == nil || i.store == nil {
 		return 0, errors.New("store is required")
 	}
-	discoveryContext = strings.TrimSpace(discoveryContext)
-	if discoveryContext == "" {
-		discoveryContext = "full_scan"
-	}
+	discoveryContext = normalizeDiscoveryContext(discoveryContext)
 
 	created := 0
 	for _, finding := range findings {
-		tool := strings.TrimSpace(finding.Tool)
-		if tool == "" {
-			return created, errors.New("secret finding tool is required")
-		}
-		ruleID := strings.TrimSpace(finding.RuleID)
-		if ruleID == "" {
-			return created, errors.New("secret finding rule_id is required")
-		}
-		secretHash := strings.TrimSpace(finding.SecretHash)
-
-		severity, err := severityFromString(finding.Severity)
+		params, err := buildSecretVulnerabilityParams(snapshotID, finding, discoveryContext)
 		if err != nil {
 			return created, err
 		}
-
-		metadata, err := json.Marshal(finding.Metadata)
-		if err != nil {
-			return created, fmt.Errorf("marshal secret finding metadata: %w", err)
-		}
-
-		fingerprint := strings.TrimSpace(finding.Fingerprint)
-		if fingerprint == "" {
-			fingerprint = ComputeFingerprint(finding.FilePath, finding.StartLine, secretHash)
-		}
-		sourceMetadata, err := json.Marshal(map[string]any{
-			"rule_id":      ruleID,
-			"severity":     finding.Severity,
-			"description":  finding.Description,
-			"secret_type":  finding.SecretType,
-			"secret_hash":  secretHash,
-			"verified":     finding.Verified,
-			"commit_sha":   finding.CommitSHA,
-			"author_email": finding.AuthorEmail,
-		})
-		if err != nil {
-			return created, fmt.Errorf("marshal secret finding source metadata: %w", err)
-		}
-
-		var startLine *int32
-		var endLine *int32
-		if finding.StartLine > 0 {
-			startLine = &finding.StartLine
-		}
-		if finding.EndLine > 0 {
-			endLine = &finding.EndLine
-		}
-
-		metadata = mergeSecretMetadata(metadata, discoveryContext, sourceMetadata)
-		_, err = i.store.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
-			Type:              "secret",
-			SnapshotID:        snapshotID,
-			Title:             truncateSecretTitle(strings.TrimSpace(finding.Description), strings.TrimSpace(finding.SecretType), 200),
-			Description:       strings.TrimSpace(finding.Description),
-			PrimaryIdentifier: json.RawMessage(fmt.Sprintf(`{"type":"rule","value":%q}`, ruleID)),
-			Identifiers:       json.RawMessage(`[]`),
-			OriginalSeverity:  severity,
-			Severity:          severity,
-			Status:            secretStatusToVulnerabilityStatus(secretStatusOpen),
-			ScannerName:       tool,
-			FilePath:          nullString(strings.TrimSpace(finding.FilePath)),
-			StartLine:         nullInt32(startLine),
-			EndLine:           nullInt32(endLine),
-			Fingerprint:       fingerprint,
-			SecretType:        nullString(strings.TrimSpace(finding.SecretType)),
-			SecretHash:        nullString(secretHash),
-			CommitSha:         nullString(strings.TrimSpace(finding.CommitSHA)),
-			AuthorEmail:       nullString(strings.TrimSpace(finding.AuthorEmail)),
-			Verified:          sql.NullBool{Bool: finding.Verified, Valid: true},
-			Metadata:          metadata,
-		})
+		_, err = i.store.CreateVulnerability(ctx, params)
 		if err != nil {
 			if isDuplicateSecretFinding(err) {
 				// TODO(adr-012): merge multi-tool secret sources into vulnerability metadata on duplicate fingerprints.
@@ -128,6 +60,105 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 	}
 
 	return created, nil
+}
+
+func normalizeDiscoveryContext(discoveryContext string) string {
+	discoveryContext = strings.TrimSpace(discoveryContext)
+	if discoveryContext == "" {
+		return "full_scan"
+	}
+	return discoveryContext
+}
+
+func buildSecretVulnerabilityParams(snapshotID uuid.UUID, finding SecretFinding, discoveryContext string) (dbgen.CreateVulnerabilityParams, error) {
+	tool, ruleID, secretHash, err := validateSecretFinding(finding)
+	if err != nil {
+		return dbgen.CreateVulnerabilityParams{}, err
+	}
+	severity, err := severityFromString(finding.Severity)
+	if err != nil {
+		return dbgen.CreateVulnerabilityParams{}, err
+	}
+	metadata, err := marshalSecretMetadata(finding, discoveryContext, ruleID, secretHash)
+	if err != nil {
+		return dbgen.CreateVulnerabilityParams{}, err
+	}
+	startLine, endLine := secretFindingLines(finding)
+	return dbgen.CreateVulnerabilityParams{
+		Type:              "secret",
+		SnapshotID:        snapshotID,
+		Title:             truncateSecretTitle(strings.TrimSpace(finding.Description), strings.TrimSpace(finding.SecretType), 200),
+		Description:       strings.TrimSpace(finding.Description),
+		PrimaryIdentifier: json.RawMessage(fmt.Sprintf(`{"type":"rule","value":%q}`, ruleID)),
+		Identifiers:       json.RawMessage(`[]`),
+		OriginalSeverity:  severity,
+		Severity:          severity,
+		Status:            secretStatusToVulnerabilityStatus(secretStatusOpen),
+		ScannerName:       tool,
+		FilePath:          nullString(strings.TrimSpace(finding.FilePath)),
+		StartLine:         nullInt32(startLine),
+		EndLine:           nullInt32(endLine),
+		Fingerprint:       secretFindingFingerprint(finding, secretHash),
+		SecretType:        nullString(strings.TrimSpace(finding.SecretType)),
+		SecretHash:        nullString(secretHash),
+		CommitSha:         nullString(strings.TrimSpace(finding.CommitSHA)),
+		AuthorEmail:       nullString(strings.TrimSpace(finding.AuthorEmail)),
+		Verified:          sql.NullBool{Bool: finding.Verified, Valid: true},
+		Metadata:          metadata,
+	}, nil
+}
+
+func validateSecretFinding(finding SecretFinding) (string, string, string, error) {
+	tool := strings.TrimSpace(finding.Tool)
+	if tool == "" {
+		return "", "", "", errors.New("secret finding tool is required")
+	}
+	ruleID := strings.TrimSpace(finding.RuleID)
+	if ruleID == "" {
+		return "", "", "", errors.New("secret finding rule_id is required")
+	}
+	return tool, ruleID, strings.TrimSpace(finding.SecretHash), nil
+}
+
+func marshalSecretMetadata(finding SecretFinding, discoveryContext, ruleID, secretHash string) (json.RawMessage, error) {
+	metadata, err := json.Marshal(finding.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal secret finding metadata: %w", err)
+	}
+	sourceMetadata, err := json.Marshal(map[string]any{
+		"rule_id":      ruleID,
+		"severity":     finding.Severity,
+		"description":  finding.Description,
+		"secret_type":  finding.SecretType,
+		"secret_hash":  secretHash,
+		"verified":     finding.Verified,
+		"commit_sha":   finding.CommitSHA,
+		"author_email": finding.AuthorEmail,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal secret finding source metadata: %w", err)
+	}
+	return mergeSecretMetadata(metadata, discoveryContext, sourceMetadata), nil
+}
+
+func secretFindingLines(finding SecretFinding) (*int32, *int32) {
+	var startLine *int32
+	var endLine *int32
+	if finding.StartLine > 0 {
+		startLine = &finding.StartLine
+	}
+	if finding.EndLine > 0 {
+		endLine = &finding.EndLine
+	}
+	return startLine, endLine
+}
+
+func secretFindingFingerprint(finding SecretFinding, secretHash string) string {
+	fingerprint := strings.TrimSpace(finding.Fingerprint)
+	if fingerprint != "" {
+		return fingerprint
+	}
+	return ComputeFingerprint(finding.FilePath, finding.StartLine, secretHash)
 }
 
 func severityFromString(value string) (store.SeverityLevel, error) {

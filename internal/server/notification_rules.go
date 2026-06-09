@@ -10,6 +10,7 @@ import (
 	"github.com/hibouhq/lehibou/internal/events"
 	"github.com/hibouhq/lehibou/internal/notify"
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
 )
 
 type createNotificationRuleRequest struct {
@@ -151,25 +152,8 @@ func (s *Server) handleDryRunNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	var input createNotificationRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	input.Name = strings.TrimSpace(input.Name)
-	input.EventType = strings.TrimSpace(input.EventType)
-	destinationType, valid := normalizeDestinationType(input.DestinationType)
-	if !valid {
-		api.JSONError(w, http.StatusBadRequest, "destination_type must be one of 'webhook', 'slack', 'teams', 'discord', or 'email'")
-		return
-	}
-	if input.EventType == "" {
-		api.JSONError(w, http.StatusBadRequest, "event_type is required")
-		return
-	}
-	if !isValidNotificationEventType(input.EventType) {
-		api.JSONError(w, http.StatusBadRequest, "invalid event_type")
+	input, destinationType, ok := decodeDryRunNotificationRuleRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -183,7 +167,6 @@ func (s *Server) handleDryRunNotificationRule(w http.ResponseWriter, r *http.Req
 		api.JSONError(w, http.StatusInternalServerError, "failed to load recent events")
 		return
 	}
-
 	rule := store.NotificationRule{
 		OrgID:             org.ID,
 		Name:              input.Name,
@@ -193,43 +176,75 @@ func (s *Server) handleDryRunNotificationRule(w http.ResponseWriter, r *http.Req
 		DestinationConfig: defaultRawJSON(input.DestinationConfig, "{}"),
 		Enabled:           true,
 	}
-	response := dryRunNotificationRuleResponse{Matches: make([]dryRunNotificationRuleMatch, 0)}
-	seen := make(map[string]struct{})
-	for _, entry := range auditLogs {
-		if entry.Action != "integration.delivery" {
-			continue
-		}
-		key := string(entry.Context)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		payload, err := notify.ReplayPayloadFromAuditLog(entry)
-		if err != nil || payload.EventType != input.EventType {
-			continue
-		}
-		targets := notify.PreviewIntegrationsForRule(payload, integrations, rule)
-		if len(targets) == 0 {
-			continue
-		}
-		match := dryRunNotificationRuleMatch{
-			EventType:    payload.EventType,
-			Title:        payload.Title,
-			RepoName:     payload.RepoName,
-			CreatedAt:    entry.CreatedAt.UTC(),
-			Integrations: make([]dryRunNotificationTarget, 0, len(targets)),
-		}
-		for _, integration := range targets {
-			match.Integrations = append(match.Integrations, dryRunNotificationTarget{
-				ID:   integration.ID.String(),
-				Name: integration.Name,
-				Type: integration.IntegrationType,
-			})
-		}
-		response.Matches = append(response.Matches, match)
-	}
+	response := dryRunNotificationRuleResponse{Matches: previewDryRunNotificationMatches(auditLogs, integrations, rule, input.EventType)}
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+func decodeDryRunNotificationRuleRequest(w http.ResponseWriter, r *http.Request) (createNotificationRuleRequest, dbgen.NotificationDestinationType, bool) {
+	var input createNotificationRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return createNotificationRuleRequest{}, "", false
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.EventType = strings.TrimSpace(input.EventType)
+	destinationType, valid := normalizeDestinationType(input.DestinationType)
+	if !valid {
+		api.JSONError(w, http.StatusBadRequest, "destination_type must be one of 'webhook', 'slack', 'teams', 'discord', or 'email'")
+		return createNotificationRuleRequest{}, "", false
+	}
+	if input.EventType == "" {
+		api.JSONError(w, http.StatusBadRequest, "event_type is required")
+		return createNotificationRuleRequest{}, "", false
+	}
+	if !isValidNotificationEventType(input.EventType) {
+		api.JSONError(w, http.StatusBadRequest, "invalid event_type")
+		return createNotificationRuleRequest{}, "", false
+	}
+	return input, destinationType, true
+}
+
+func previewDryRunNotificationMatches(auditLogs []dbgen.AuditLog, integrations []store.Integration, rule store.NotificationRule, eventType string) []dryRunNotificationRuleMatch {
+	matches := make([]dryRunNotificationRuleMatch, 0)
+	seen := make(map[string]struct{})
+	for _, entry := range auditLogs {
+		match, ok := buildDryRunNotificationMatch(entry, seen, integrations, rule, eventType)
+		if ok {
+			matches = append(matches, match)
+		}
+	}
+	return matches
+}
+
+func buildDryRunNotificationMatch(entry dbgen.AuditLog, seen map[string]struct{}, integrations []store.Integration, rule store.NotificationRule, eventType string) (dryRunNotificationRuleMatch, bool) {
+	if entry.Action != "integration.delivery" {
+		return dryRunNotificationRuleMatch{}, false
+	}
+	key := string(entry.Context)
+	if _, ok := seen[key]; ok {
+		return dryRunNotificationRuleMatch{}, false
+	}
+	seen[key] = struct{}{}
+	payload, err := notify.ReplayPayloadFromAuditLog(entry)
+	if err != nil || payload.EventType != eventType {
+		return dryRunNotificationRuleMatch{}, false
+	}
+	targets := notify.PreviewIntegrationsForRule(payload, integrations, rule)
+	if len(targets) == 0 {
+		return dryRunNotificationRuleMatch{}, false
+	}
+	match := dryRunNotificationRuleMatch{
+		EventType:    payload.EventType,
+		Title:        payload.Title,
+		RepoName:     payload.RepoName,
+		CreatedAt:    entry.CreatedAt.UTC(),
+		Integrations: make([]dryRunNotificationTarget, 0, len(targets)),
+	}
+	for _, integration := range targets {
+		match.Integrations = append(match.Integrations, dryRunNotificationTarget{ID: integration.ID.String(), Name: integration.Name, Type: integration.IntegrationType})
+	}
+	return match, true
 }
 
 // @Summary      Get notification rule

@@ -96,7 +96,7 @@ TB-7  MCP clients <-> Dedicated MCP listener
 ```
 
 1. Internet to ingress: public network entry for browsers, CI runners, and webhook senders. Main risks are spoofing, flood traffic, and TLS or routing mistakes.
-2. Ingress to application: reverse proxy headers influence request handling. `internal/server/server.go` uses `middleware.RealIP`, so proxy trust configuration matters.
+2. Ingress to application: reverse proxy headers influence request handling. `internal/server/server.go` uses `middleware.ClientIPFromXFFTrustedProxies(1)`, so proxy trust configuration matters.
 3. Application to database: all tenant data, API keys, RBAC policies, and audit logs cross this boundary.
 4. Application to Trivy: scanner and enrichment results influence downstream findings. Availability and trust in returned data matter.
 5. Application to forge APIs: OAuth exchanges, repository discovery, webhook validation, and commit status updates cross this boundary.

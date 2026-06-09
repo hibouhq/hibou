@@ -16,6 +16,7 @@ import (
 	"github.com/hibouhq/lehibou/internal/api"
 	"github.com/hibouhq/lehibou/internal/metrics"
 	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/lehibou/internal/store/dbgen"
 	"github.com/hibouhq/lehibou/internal/vex"
 )
 
@@ -57,6 +58,15 @@ type uploadStatusResponse struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+type detectedUpload struct {
+	input        *autoUploadRequest
+	content      []byte
+	detectedType string
+	format       string
+	tool         string
+	status       *string
+}
+
 // detectArtifactType inspects the decoded content to determine the upload type and format.
 // Returns (uploadType, format, toolName, error).
 func detectArtifactType(content []byte) (string, string, string, error) {
@@ -68,34 +78,8 @@ func detectArtifactType(content []byte) (string, string, string, error) {
 	if trimmed[0] == '{' {
 		var probe map[string]json.RawMessage
 		if err := json.Unmarshal(trimmed, &probe); err == nil {
-			if raw, ok := probe["@context"]; ok {
-				var ctx string
-				if json.Unmarshal(raw, &ctx) == nil && strings.Contains(ctx, "openvex.dev") {
-					return "vex", "openvex", "", nil
-				}
-			}
-			if raw, ok := probe["document"]; ok {
-				var doc struct {
-					Category string `json:"category"`
-				}
-				if json.Unmarshal(raw, &doc) == nil && doc.Category == "csaf_vex" {
-					return "vex", "csaf", "", nil
-				}
-			}
-			if _, ok := probe["bomFormat"]; ok {
-				return "sbom", "cyclonedx-json", "", nil
-			}
-			if _, ok := probe["spdxVersion"]; ok {
-				return "sbom", "spdx-json", "", nil
-			}
-			if _, ok := probe["runs"]; ok {
-				return "sarif", "", extractSARIFToolName(trimmed), nil
-			}
-			if raw, ok := probe["$schema"]; ok {
-				var schema string
-				if json.Unmarshal(raw, &schema) == nil && strings.Contains(strings.ToLower(schema), "sarif") {
-					return "sarif", "", extractSARIFToolName(trimmed), nil
-				}
+			if uploadType, format, toolName, ok := detectJSONArtifactType(probe, trimmed); ok {
+				return uploadType, format, toolName, nil
 			}
 		}
 	}
@@ -105,35 +89,82 @@ func detectArtifactType(content []byte) (string, string, string, error) {
 		if len(prefix) > 1024 {
 			prefix = prefix[:1024]
 		}
-		prefixLower := bytes.ToLower(prefix)
-		if bytes.Contains(prefix, []byte("cyclonedx.org/schema/bom")) {
-			return "sbom", "cyclonedx-xml", "", nil
-		}
-		if bytes.Contains(prefix, []byte("spdx:Document")) || bytes.Contains(prefix, []byte("http://spdx.org/rdf")) {
-			return "sbom", "spdx-xml", "", nil
-		}
-		if bytes.Contains(prefixLower, []byte("<coverage")) && (bytes.Contains(prefixLower, []byte("line-rate")) || bytes.Contains(prefixLower, []byte("branch-rate"))) {
-			return "coverage", "cobertura", "", nil
-		}
-		if bytes.Contains(prefixLower, []byte("<report")) && bytes.Contains(prefixLower, []byte("jacoco")) {
-			return "coverage", "jacoco", "", nil
-		}
-		if bytes.Contains(prefixLower, []byte("<coverage")) && bytes.Contains(prefixLower, []byte("clover")) {
-			return "coverage", "clover", "", nil
+		if uploadType, format, toolName, ok := detectXMLArtifactType(prefix); ok {
+			return uploadType, format, toolName, nil
 		}
 	}
 
-	if bytes.HasPrefix(trimmed, []byte("SPDXVersion:")) {
-		return "sbom", "spdx-tv", "", nil
-	}
-	if bytes.HasPrefix(trimmed, []byte("TN:")) || bytes.HasPrefix(trimmed, []byte("SF:")) {
-		return "coverage", "lcov", "", nil
-	}
-	if bytes.HasPrefix(trimmed, []byte("mode:")) {
-		return "coverage", "gocover", "", nil
+	if uploadType, format, toolName, ok := detectTextArtifactType(trimmed); ok {
+		return uploadType, format, toolName, nil
 	}
 
 	return "", "", "", errors.New("could not detect artifact type from content")
+}
+
+func detectJSONArtifactType(probe map[string]json.RawMessage, content []byte) (string, string, string, bool) {
+	if raw, ok := probe["@context"]; ok {
+		var ctx string
+		if json.Unmarshal(raw, &ctx) == nil && strings.Contains(ctx, "openvex.dev") {
+			return "vex", "openvex", "", true
+		}
+	}
+	if raw, ok := probe["document"]; ok {
+		var doc struct {
+			Category string `json:"category"`
+		}
+		if json.Unmarshal(raw, &doc) == nil && doc.Category == "csaf_vex" {
+			return "vex", "csaf", "", true
+		}
+	}
+	if _, ok := probe["bomFormat"]; ok {
+		return "sbom", "cyclonedx-json", "", true
+	}
+	if _, ok := probe["spdxVersion"]; ok {
+		return "sbom", "spdx-json", "", true
+	}
+	if _, ok := probe["runs"]; ok {
+		return "sarif", "", extractSARIFToolName(content), true
+	}
+	if raw, ok := probe["$schema"]; ok {
+		var schema string
+		if json.Unmarshal(raw, &schema) == nil && strings.Contains(strings.ToLower(schema), "sarif") {
+			return "sarif", "", extractSARIFToolName(content), true
+		}
+	}
+	return "", "", "", false
+}
+
+func detectXMLArtifactType(prefix []byte) (string, string, string, bool) {
+	prefixLower := bytes.ToLower(prefix)
+	if bytes.Contains(prefix, []byte("cyclonedx.org/schema/bom")) {
+		return "sbom", "cyclonedx-xml", "", true
+	}
+	if bytes.Contains(prefix, []byte("spdx:Document")) || bytes.Contains(prefix, []byte("http://spdx.org/rdf")) {
+		return "sbom", "spdx-xml", "", true
+	}
+	if bytes.Contains(prefixLower, []byte("<coverage")) && (bytes.Contains(prefixLower, []byte("line-rate")) || bytes.Contains(prefixLower, []byte("branch-rate"))) {
+		return "coverage", "cobertura", "", true
+	}
+	if bytes.Contains(prefixLower, []byte("<report")) && bytes.Contains(prefixLower, []byte("jacoco")) {
+		return "coverage", "jacoco", "", true
+	}
+	if bytes.Contains(prefixLower, []byte("<coverage")) && bytes.Contains(prefixLower, []byte("clover")) {
+		return "coverage", "clover", "", true
+	}
+	return "", "", "", false
+}
+
+func detectTextArtifactType(content []byte) (string, string, string, bool) {
+	if bytes.HasPrefix(content, []byte("SPDXVersion:")) {
+		return "sbom", "spdx-tv", "", true
+	}
+	if bytes.HasPrefix(content, []byte("TN:")) || bytes.HasPrefix(content, []byte("SF:")) {
+		return "coverage", "lcov", "", true
+	}
+	if bytes.HasPrefix(content, []byte("mode:")) {
+		return "coverage", "gocover", "", true
+	}
+	return "", "", "", false
 }
 
 func extractSARIFToolName(content []byte) string {
@@ -178,33 +209,11 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadSize)
-	var input autoUploadRequest
-	if !decodeUploadJSONBody(w, r, &input) {
-		return
-	}
-
-	normalizeUploadRequest(&input.uploadRequest)
-	input.Tool = strings.TrimSpace(input.Tool)
-
-	if err := validateUploadRequest(input.uploadRequest); err != nil {
-		api.JSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if input.Artifact == nil {
-		api.JSONError(w, http.StatusBadRequest, "artifact is required")
-		return
-	}
-	input.Artifact.ContentBase64 = strings.TrimSpace(input.Artifact.ContentBase64)
-	if input.Artifact.ContentBase64 == "" {
-		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 is required")
-		return
-	}
-
-	content, err := base64.StdEncoding.DecodeString(input.Artifact.ContentBase64)
+	input, content, err := s.parseAutoUploadRequest(w, r)
 	if err != nil {
-		api.JSONError(w, http.StatusBadRequest, "artifact.content_base64 must be valid base64")
+		if err.Error() != "" {
+			api.JSONError(w, http.StatusBadRequest, err.Error())
+		}
 		return
 	}
 
@@ -220,73 +229,131 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		tool = detectedTool
 	}
 
-	switch detectedType {
+	_ = s.handleDetectedUploadType(w, r, user.ID, detectedUpload{
+		input:        input,
+		content:      content,
+		detectedType: detectedType,
+		format:       format,
+		tool:         tool,
+		status:       &status,
+	})
+}
+
+func (s *Server) parseAutoUploadRequest(w http.ResponseWriter, r *http.Request) (*autoUploadRequest, []byte, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadSize)
+	var input autoUploadRequest
+	if !decodeUploadJSONBody(w, r, &input) {
+		return nil, nil, errors.New("")
+	}
+	normalizeUploadRequest(&input.uploadRequest)
+	input.Tool = strings.TrimSpace(input.Tool)
+	if err := validateUploadRequest(input.uploadRequest); err != nil {
+		return nil, nil, err
+	}
+	content, err := decodeAutoUploadArtifact(input.Artifact)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &input, content, nil
+}
+
+func decodeAutoUploadArtifact(artifact *uploadArtifact) ([]byte, error) {
+	if artifact == nil {
+		return nil, errors.New("artifact is required")
+	}
+	artifact.ContentBase64 = strings.TrimSpace(artifact.ContentBase64)
+	if artifact.ContentBase64 == "" {
+		return nil, errors.New("artifact.content_base64 is required")
+	}
+	content, err := base64.StdEncoding.DecodeString(artifact.ContentBase64)
+	if err != nil {
+		return nil, errors.New("artifact.content_base64 must be valid base64")
+	}
+	return content, nil
+}
+
+func (s *Server) handleDetectedUploadType(w http.ResponseWriter, r *http.Request, userID uuid.UUID, upload detectedUpload) bool {
+	switch upload.detectedType {
 	case "sbom":
-		if format == "" {
-			api.JSONError(w, http.StatusBadRequest, "could not determine SBOM format")
-			return
-		}
-		label := input.SnapshotLabel
-		if label == "" {
-			label = format
-		}
-		snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
-		if err != nil {
-			s.writeUploadError(w, err)
-			return
-		}
-		status = "accepted"
-		api.JSON(w, http.StatusAccepted, uploadResponse{
-			UploadID:   snapshot.ID.String(),
-			SnapshotID: snapshot.ID.String(),
-			Status:     string(snapshot.Status),
-		})
+		return s.handleSBOMUpload(w, r, userID, upload.input, upload.format, upload.status)
 	case "sarif":
-		if tool == "" {
-			api.JSONError(w, http.StatusBadRequest, "tool could not be detected from SARIF content; provide 'tool' in the request")
-			return
-		}
-		label := tool
-		snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
-		if err != nil {
-			s.writeUploadError(w, err)
-			return
-		}
-		status = "accepted"
-		api.JSON(w, http.StatusAccepted, uploadResponse{
-			UploadID:   snapshot.ID.String(),
-			SnapshotID: snapshot.ID.String(),
-			Status:     string(snapshot.Status),
-		})
+		return s.handleSARIFUpload(w, r, userID, upload.input, upload.tool, upload.status)
 	case "coverage":
-		label := input.SnapshotLabel
-		if label == "" {
-			label = format
-		}
-		snapshot, err := s.createPendingUploadSnapshot(r, user.ID, input.uploadRequest, label)
-		if err != nil {
-			s.writeUploadError(w, err)
-			return
-		}
-		// TODO: replace fire-and-forget goroutine with a bounded worker pool or
-		// the server's background task system for proper shutdown coordination.
-		go s.processCoverageUpload(snapshot.ID, content, format) //nolint:gosec // G118: intentional background processing after request completes
-		status = "accepted"
-		api.JSON(w, http.StatusAccepted, uploadResponse{
-			UploadID:   snapshot.ID.String(),
-			SnapshotID: snapshot.ID.String(),
-			Status:     string(snapshot.Status),
-		})
+		return s.handleCoverageUpload(w, r, userID, upload.input, upload.content, upload.format, upload.status)
 	case "vex":
-		if err := s.importUploadedVEX(r, user.ID, input.uploadRequest, input.Artifact, format, content); err != nil {
+		if err := s.importUploadedVEX(r, userID, upload.input.uploadRequest, upload.input.Artifact, upload.format, upload.content); err != nil {
 			s.writeUploadError(w, err)
-			return
+			return false
 		}
-		status = "accepted"
+		*upload.status = "accepted"
 		api.JSON(w, http.StatusAccepted, uploadResponse{Status: "accepted"})
+		return true
 	default:
 		api.JSONError(w, http.StatusBadRequest, "could not detect artifact type from content")
+		return false
 	}
+}
+
+func (s *Server) handleSBOMUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, format string, status *string) bool {
+	if format == "" {
+		api.JSONError(w, http.StatusBadRequest, "could not determine SBOM format")
+		return false
+	}
+	label := input.SnapshotLabel
+	if label == "" {
+		label = format
+	}
+	return s.writePendingUploadSnapshotResponse(w, r, userID, input.uploadRequest, label, status)
+}
+
+func (s *Server) handleSARIFUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, tool string, status *string) bool {
+	if tool == "" {
+		api.JSONError(w, http.StatusBadRequest, "tool could not be detected from SARIF content; provide 'tool' in the request")
+		return false
+	}
+	return s.writePendingUploadSnapshotResponse(w, r, userID, input.uploadRequest, tool, status)
+}
+
+func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
+	label := input.SnapshotLabel
+	if label == "" {
+		label = format
+	}
+	snapshot, ok := s.createUploadSnapshot(w, r, userID, input.uploadRequest, label)
+	if !ok {
+		return false
+	}
+	go s.processCoverageUpload(snapshot.ID, content, format)
+	*status = "accepted"
+	api.JSON(w, http.StatusAccepted, uploadResponse{
+		UploadID:   snapshot.ID.String(),
+		SnapshotID: snapshot.ID.String(),
+		Status:     string(snapshot.Status),
+	})
+	return true
+}
+
+func (s *Server) writePendingUploadSnapshotResponse(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input uploadRequest, label string, status *string) bool {
+	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, label)
+	if !ok {
+		return false
+	}
+	*status = "accepted"
+	api.JSON(w, http.StatusAccepted, uploadResponse{
+		UploadID:   snapshot.ID.String(),
+		SnapshotID: snapshot.ID.String(),
+		Status:     string(snapshot.Status),
+	})
+	return true
+}
+
+func (s *Server) createUploadSnapshot(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input uploadRequest, label string) (*store.Snapshot, bool) {
+	snapshot, err := s.createPendingUploadSnapshot(r, userID, input, label)
+	if err != nil {
+		s.writeUploadError(w, err)
+		return nil, false
+	}
+	return snapshot, true
 }
 
 // @Summary      Get upload status
@@ -435,13 +502,87 @@ func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, use
 	return org, repo, nil
 }
 
-func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uploadRequest, artifact *uploadArtifact, format string, content []byte) error {
+func parseUploadedVEXStatements(format string, content []byte) ([]vex.Statement, error) {
 	parsed, err := parseUploadedVEXDocument(format, content)
 	if err != nil {
-		return errBadRequest(err.Error())
+		return nil, errBadRequest(err.Error())
 	}
 	if len(parsed.Statements) == 0 {
-		return errBadRequest("VEX document did not contain any statements")
+		return nil, errBadRequest("VEX document did not contain any statements")
+	}
+	return parsed.Statements, nil
+}
+
+func resolveUploadedVEXSourceDocumentURL(artifact *uploadArtifact) string {
+	if artifact == nil {
+		return ""
+	}
+	return strings.TrimSpace(artifact.Filename)
+}
+
+func classifyUploadedVEXStatementError(index int, vulnerabilityID string, err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return errNotFound(fmt.Sprintf("advisory not found for vulnerability %q", strings.TrimSpace(vulnerabilityID)))
+	}
+	if err.Error() == "vulnerability_id is required" {
+		return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, err.Error()))
+	}
+	return err
+}
+
+type uploadedVEXImportContext struct {
+	orgID             uuid.UUID
+	repoID            uuid.UUID
+	userID            uuid.UUID
+	sourceDocumentURL string
+}
+
+func buildUploadedVEXStatementParams(ctx uploadedVEXImportContext, advisoryID uuid.UUID, statement vex.Statement) (dbgen.CreateVEXStatementParams, error) {
+	params, err := buildCreateVEXParams(ctx.orgID, ctx.repoID, ctx.userID, advisoryID, createVEXStatementRequest{
+		VulnerabilityID:   statement.VulnerabilityID,
+		Status:            statement.Status,
+		Justification:     statement.Justification,
+		ImpactStatement:   statement.ImpactStatement,
+		ActionStatement:   statement.ActionStatement,
+		ComponentPURL:     statement.ComponentPURL,
+		Source:            vex.SourceImported,
+		SourceDocumentURL: ctx.sourceDocumentURL,
+		Supplier:          statement.Supplier,
+	})
+	if err != nil {
+		return dbgen.CreateVEXStatementParams{}, err
+	}
+	return params, nil
+}
+
+func (s *Server) importUploadedVEXStatement(r *http.Request, queries *store.Queries, ctx uploadedVEXImportContext, statement vex.Statement, index int) error {
+	advisory, err := resolveVEXAdvisoryWithQueries(r.Context(), queries, statement.VulnerabilityID)
+	if err != nil {
+		return classifyUploadedVEXStatementError(index, statement.VulnerabilityID, err)
+	}
+
+	params, err := buildUploadedVEXStatementParams(ctx, advisory.ID, statement)
+	if err != nil {
+		return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, err.Error()))
+	}
+
+	_, err = queries.CreateVEXStatement(r.Context(), params)
+	return err
+}
+
+func (s *Server) importUploadedVEXStatements(r *http.Request, queries *store.Queries, ctx uploadedVEXImportContext, statements []vex.Statement) error {
+	for index, statement := range statements {
+		if err := s.importUploadedVEXStatement(r, queries, ctx, statement, index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uploadRequest, artifact *uploadArtifact, format string, content []byte) error {
+	statements, err := parseUploadedVEXStatements(format, content)
+	if err != nil {
+		return err
 	}
 
 	tx, err := s.db.BeginTx(r.Context(), nil)
@@ -458,41 +599,14 @@ func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uplo
 		return err
 	}
 
-	sourceDocumentURL := ""
-	if artifact != nil {
-		sourceDocumentURL = strings.TrimSpace(artifact.Filename)
+	importCtx := uploadedVEXImportContext{
+		orgID:             org.ID,
+		repoID:            repo.ID,
+		userID:            userID,
+		sourceDocumentURL: resolveUploadedVEXSourceDocumentURL(artifact),
 	}
-
-	for index, statement := range parsed.Statements {
-		advisory, advisoryErr := resolveVEXAdvisoryWithQueries(r.Context(), queries, statement.VulnerabilityID)
-		if advisoryErr != nil {
-			if errors.Is(advisoryErr, sql.ErrNoRows) {
-				return errNotFound(fmt.Sprintf("advisory not found for vulnerability %q", strings.TrimSpace(statement.VulnerabilityID)))
-			}
-			if advisoryErr.Error() == "vulnerability_id is required" {
-				return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, advisoryErr.Error()))
-			}
-			return advisoryErr
-		}
-
-		params, paramsErr := buildCreateVEXParams(org.ID, repo.ID, userID, advisory.ID, createVEXStatementRequest{
-			VulnerabilityID:   statement.VulnerabilityID,
-			Status:            statement.Status,
-			Justification:     statement.Justification,
-			ImpactStatement:   statement.ImpactStatement,
-			ActionStatement:   statement.ActionStatement,
-			ComponentPURL:     statement.ComponentPURL,
-			Source:            vex.SourceImported,
-			SourceDocumentURL: sourceDocumentURL,
-			Supplier:          statement.Supplier,
-		})
-		if paramsErr != nil {
-			return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, paramsErr.Error()))
-		}
-
-		if _, err := queries.CreateVEXStatement(r.Context(), params); err != nil {
-			return err
-		}
+	if err := s.importUploadedVEXStatements(r, queries, importCtx, statements); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {

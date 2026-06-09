@@ -10,50 +10,20 @@ import (
 
 func parseGoCover(content []byte) (*Report, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, err
-		}
-		return nil, errors.New("empty go cover profile")
-	}
-	if !strings.HasPrefix(strings.TrimSpace(scanner.Text()), "mode:") {
-		return nil, errors.New("invalid go cover profile")
+	if err := validateGoCoverHeader(scanner); err != nil {
+		return nil, err
 	}
 
 	filesByPath := make(map[string]*FileCoverage)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		entry, err := parseGoCoverEntry(scanner.Text())
+		if err != nil {
+			return nil, err
+		}
+		if entry == nil {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("invalid go cover line: %s", line)
-		}
-
-		path, ok := splitGoCoverPath(fields[0])
-		if !ok {
-			return nil, fmt.Errorf("invalid go cover file segment: %s", fields[0])
-		}
-		statements, statementsOK := parseOptionalInt(fields[1])
-		count, countOK := parseOptionalInt(fields[2])
-		if !statementsOK || !countOK {
-			return nil, fmt.Errorf("invalid go cover counters: %s", line)
-		}
-
-		file := filesByPath[path]
-		if file == nil {
-			file = &FileCoverage{Path: path}
-			filesByPath[path] = file
-		}
-		// NOTE: Go cover profiles count statements, not individual lines.
-		// We report statements as "lines" because that's the closest semantic
-		// mapping and is consistent with how tools like codecov/coveralls treat
-		// Go coverage data.
-		file.LinesValid += statements
-		if count > 0 {
-			file.LinesCovered += statements
-		}
+		applyGoCoverEntry(filesByPath, *entry)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -71,6 +41,58 @@ func parseGoCover(content []byte) (*Report, error) {
 	sortFiles(files)
 	report.Files = files
 	return report, nil
+}
+
+type goCoverEntry struct {
+	path       string
+	statements int
+	count      int
+}
+
+func validateGoCoverHeader(scanner *bufio.Scanner) error {
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		return errors.New("empty go cover profile")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(scanner.Text()), "mode:") {
+		return errors.New("invalid go cover profile")
+	}
+	return nil
+}
+
+func parseGoCoverEntry(rawLine string) (*goCoverEntry, error) {
+	line := strings.TrimSpace(rawLine)
+	if line == "" {
+		return nil, nil
+	}
+	fields := strings.Fields(line)
+	if len(fields) != 3 {
+		return nil, fmt.Errorf("invalid go cover line: %s", line)
+	}
+	path, ok := splitGoCoverPath(fields[0])
+	if !ok {
+		return nil, fmt.Errorf("invalid go cover file segment: %s", fields[0])
+	}
+	statements, statementsOK := parseOptionalInt(fields[1])
+	count, countOK := parseOptionalInt(fields[2])
+	if !statementsOK || !countOK {
+		return nil, fmt.Errorf("invalid go cover counters: %s", line)
+	}
+	return &goCoverEntry{path: path, statements: statements, count: count}, nil
+}
+
+func applyGoCoverEntry(filesByPath map[string]*FileCoverage, entry goCoverEntry) {
+	file := filesByPath[entry.path]
+	if file == nil {
+		file = &FileCoverage{Path: entry.path}
+		filesByPath[entry.path] = file
+	}
+	file.LinesValid += entry.statements
+	if entry.count > 0 {
+		file.LinesCovered += entry.statements
+	}
 }
 
 func splitGoCoverPath(segment string) (string, bool) {

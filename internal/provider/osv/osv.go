@@ -175,17 +175,27 @@ func (p *Provider) QueryPackages(ctx context.Context, queries []provider.Package
 }
 
 func (p *Provider) queryBatch(ctx context.Context, queries []provider.PackageQuery) ([]provider.AdvisoryResult, error) {
+	reqBody, expandedQueries, err := buildOSVBatchRequest(queries)
+	if err != nil {
+		return nil, err
+	}
+	batchResp, err := p.executeQueryBatch(ctx, reqBody, len(expandedQueries))
+	if err != nil {
+		return nil, err
+	}
+	return collectBatchResults(batchResp, expandedQueries)
+}
+
+func buildOSVBatchRequest(queries []provider.PackageQuery) (queryBatchRequest, []provider.PackageQuery, error) {
 	reqBody := queryBatchRequest{Queries: make([]osvQuery, 0, len(queries))}
 	expandedQueries := make([]provider.PackageQuery, 0, len(queries))
 	for _, query := range queries {
 		osvEcosystems, ok := toOSVEcosystems(query.Ecosystem)
 		if !ok {
-			return nil, fmt.Errorf("osv: unsupported ecosystem %q", query.Ecosystem)
+			return queryBatchRequest{}, nil, fmt.Errorf("osv: unsupported ecosystem %q", query.Ecosystem)
 		}
 		for _, osvEcosystem := range osvEcosystems {
-			reqBody.Queries = append(reqBody.Queries, osvQuery{
-				Package: queryPackage{Name: query.Name, Ecosystem: osvEcosystem},
-			})
+			reqBody.Queries = append(reqBody.Queries, osvQuery{Package: queryPackage{Name: query.Name, Ecosystem: osvEcosystem}})
 			expandedQueries = append(expandedQueries, provider.PackageQuery{
 				Ecosystem: strings.ToLower(strings.TrimSpace(query.Ecosystem)),
 				Name:      query.Name,
@@ -193,58 +203,72 @@ func (p *Provider) queryBatch(ctx context.Context, queries []provider.PackageQue
 			})
 		}
 	}
+	return reqBody, expandedQueries, nil
+}
 
+func (p *Provider) executeQueryBatch(ctx context.Context, reqBody queryBatchRequest, expectedResults int) (*queryBatchResponse, error) {
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("osv: marshal request: %w", err)
 	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/querybatch", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("osv: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "hibou/"+version.Version)
-
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("osv: query packages: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("osv: query packages returned status %d", resp.StatusCode)
 	}
-
 	var batchResp queryBatchResponse
 	limitedBody := io.LimitReader(resp.Body, 50<<20)
 	if err := json.NewDecoder(limitedBody).Decode(&batchResp); err != nil {
 		return nil, fmt.Errorf("osv: decode response: %w", err)
 	}
-	if len(batchResp.Results) != len(expandedQueries) {
-		return nil, fmt.Errorf("osv: unexpected result count %d for %d queries", len(batchResp.Results), len(expandedQueries))
+	if len(batchResp.Results) != expectedResults {
+		return nil, fmt.Errorf("osv: unexpected result count %d for %d queries", len(batchResp.Results), expectedResults)
 	}
+	return &batchResp, nil
+}
 
+func collectBatchResults(batchResp *queryBatchResponse, expandedQueries []provider.PackageQuery) ([]provider.AdvisoryResult, error) {
 	results := make([]provider.AdvisoryResult, 0)
 	rpmResults := make([]provider.AdvisoryResult, 0)
 	for idx, result := range batchResp.Results {
-		for _, vuln := range result.Vulns {
-			mapped, err := mapVulnerability(vuln)
-			if err != nil {
-				return nil, err
-			}
-			if resultMatchesPackageQuery(expandedQueries[idx], mapped) {
-				if expandedQueries[idx].Ecosystem == "rpm" {
-					rpmResults = append(rpmResults, mapped)
-					continue
-				}
-				results = append(results, mapped)
-			}
+		mapped, rpmMapped, err := collectQueryResultMatches(result, expandedQueries[idx])
+		if err != nil {
+			return nil, err
 		}
+		results = append(results, mapped...)
+		rpmResults = append(rpmResults, rpmMapped...)
 	}
 	results = append(results, dedupeAdvisoryResultsByID(rpmResults)...)
-
 	return results, nil
+}
+
+func collectQueryResultMatches(result queryResult, query provider.PackageQuery) ([]provider.AdvisoryResult, []provider.AdvisoryResult, error) {
+	results := make([]provider.AdvisoryResult, 0, len(result.Vulns))
+	rpmResults := make([]provider.AdvisoryResult, 0)
+	for _, vuln := range result.Vulns {
+		mapped, err := mapVulnerability(vuln)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !resultMatchesPackageQuery(query, mapped) {
+			continue
+		}
+		if query.Ecosystem == "rpm" {
+			rpmResults = append(rpmResults, mapped)
+			continue
+		}
+		results = append(results, mapped)
+	}
+	return results, rpmResults, nil
 }
 
 func toOSVEcosystems(ecosystem string) ([]string, bool) {
@@ -382,44 +406,53 @@ func normalizeDBSeverity(raw string) *advisory.Severity {
 func mapAffectedRanges(affected []affectedPackage) []advisory.AffectedRange {
 	ranges := make([]advisory.AffectedRange, 0)
 	for _, pkg := range affected {
-		ecosystem := normalizeOSVEcosystem(pkg.Package.Ecosystem)
-		for _, osvRange := range pkg.Ranges {
-			if !strings.EqualFold(osvRange.Type, "ECOSYSTEM") {
-				continue
-			}
-
-			introduced := ""
-			for _, event := range osvRange.Events {
-				if event.Introduced != "" {
-					introduced = event.Introduced
-					continue
-				}
-
-				if event.Fixed != "" || event.LastAffected != "" {
-					ranges = append(ranges, advisory.AffectedRange{
-						Ecosystem:    ecosystem,
-						PackageName:  pkg.Package.Name,
-						Introduced:   introduced,
-						Fixed:        event.Fixed,
-						LastAffected: event.LastAffected,
-						Source:       "osv",
-					})
-					introduced = ""
-				}
-			}
-
-			if introduced != "" {
-				ranges = append(ranges, advisory.AffectedRange{
-					Ecosystem:   ecosystem,
-					PackageName: pkg.Package.Name,
-					Introduced:  introduced,
-					Source:      "osv",
-				})
-			}
-		}
+		ranges = append(ranges, mapAffectedPackageRanges(pkg)...)
 	}
 
 	return ranges
+}
+
+func mapAffectedPackageRanges(pkg affectedPackage) []advisory.AffectedRange {
+	ecosystem := normalizeOSVEcosystem(pkg.Package.Ecosystem)
+	ranges := make([]advisory.AffectedRange, 0)
+	for _, osvRange := range pkg.Ranges {
+		if !strings.EqualFold(osvRange.Type, "ECOSYSTEM") {
+			continue
+		}
+		ranges = append(ranges, mapAffectedRangeEvents(pkg.Package.Name, ecosystem, osvRange.Events)...)
+	}
+	return ranges
+}
+
+func mapAffectedRangeEvents(packageName, ecosystem string, events []rangeEvent) []advisory.AffectedRange {
+	ranges := make([]advisory.AffectedRange, 0)
+	introduced := ""
+	for _, event := range events {
+		if event.Introduced != "" {
+			introduced = event.Introduced
+			continue
+		}
+		if event.Fixed == "" && event.LastAffected == "" {
+			continue
+		}
+		ranges = append(ranges, buildAffectedRange(packageName, ecosystem, introduced, event.Fixed, event.LastAffected))
+		introduced = ""
+	}
+	if introduced != "" {
+		ranges = append(ranges, buildAffectedRange(packageName, ecosystem, introduced, "", ""))
+	}
+	return ranges
+}
+
+func buildAffectedRange(packageName, ecosystem, introduced, fixed, lastAffected string) advisory.AffectedRange {
+	return advisory.AffectedRange{
+		Ecosystem:    ecosystem,
+		PackageName:  packageName,
+		Introduced:   introduced,
+		Fixed:        fixed,
+		LastAffected: lastAffected,
+		Source:       "osv",
+	}
 }
 
 func resultMatchesPackageQuery(query provider.PackageQuery, result provider.AdvisoryResult) bool {

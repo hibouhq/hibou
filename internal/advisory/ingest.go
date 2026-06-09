@@ -90,38 +90,20 @@ func (ing *Ingester) Ingest(ctx context.Context, providerName string, results []
 }
 
 func (ing *Ingester) ingestOne(ctx context.Context, providerName string, result IngestResult) (dbgen.Advisory, error) {
-	tx, err := ing.queries.BeginTx(ctx)
+	tx, queries, committed, err := ing.beginIngestTx(ctx, providerName, result)
 	if err != nil {
-		return dbgen.Advisory{}, fmt.Errorf("begin advisory transaction for %s/%s: %w", providerName, result.ProviderID, err)
+		return dbgen.Advisory{}, err
 	}
-
-	queries := ing.queries
-	if tx != nil && ing.withTx != nil {
-		queries = ing.withTx(tx)
-	}
-	committed := false
-	defer func() {
-		if tx != nil && !committed {
-			_ = tx.Rollback()
-		}
-	}()
+	defer rollbackAdvisoryTx(tx, &committed)
 
 	canonicalID := preferredCanonicalID(result)
 	existing, found, err := ing.findExistingAdvisory(ctx, result)
 	if err != nil {
 		return dbgen.Advisory{}, err
 	}
-	if found && shouldPromoteCanonicalID(existing.CanonicalID, canonicalID) {
-		if err := queries.UpdateAdvisoryCanonicalID(ctx, dbgen.UpdateAdvisoryCanonicalIDParams{
-			AdvisoryID:  existing.ID,
-			CanonicalID: canonicalID,
-		}); err != nil {
-			return dbgen.Advisory{}, fmt.Errorf("promote advisory canonical ID %s -> %s: %w", existing.CanonicalID, canonicalID, err)
-		}
-		existing.CanonicalID = canonicalID
-	}
-	if found && !shouldPromoteCanonicalID(existing.CanonicalID, canonicalID) {
-		canonicalID = existing.CanonicalID
+	canonicalID, existing, err = ing.reconcileCanonicalID(ctx, queries, existing, found, canonicalID)
+	if err != nil {
+		return dbgen.Advisory{}, err
 	}
 
 	base := mergedAdvisoryUpsert(existing, found, canonicalID, result)
@@ -130,17 +112,70 @@ func (ing *Ingester) ingestOne(ctx context.Context, providerName string, result 
 		return dbgen.Advisory{}, fmt.Errorf("upsert advisory %s: %w", canonicalID, err)
 	}
 
-	for _, alias := range uniqueAliases(result.ProviderID, result.Aliases) {
-		if err := queries.UpsertAdvisoryAlias(ctx, dbgen.UpsertAdvisoryAliasParams{
-			AdvisoryID: advisoryRecord.ID,
-			Alias:      alias,
-		}); err != nil {
-			return dbgen.Advisory{}, fmt.Errorf("upsert advisory alias %s: %w", alias, err)
-		}
+	if err := ing.syncAdvisorySources(ctx, queries, advisoryRecord.ID, providerName, result); err != nil {
+		return dbgen.Advisory{}, err
+	}
+	finalRecord, err := ing.finalizeAdvisoryRecord(ctx, queries, advisoryRecord, canonicalID, result)
+	if err != nil {
+		return dbgen.Advisory{}, err
 	}
 
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return dbgen.Advisory{}, fmt.Errorf("commit advisory %s: %w", canonicalID, err)
+		}
+		committed = true
+	}
+
+	ing.log.Debug().
+		Str("provider", providerName).
+		Str("provider_id", result.ProviderID).
+		Str("advisory_id", finalRecord.ID.String()).
+		Msg("ingested advisory")
+
+	return finalRecord, nil
+}
+
+func (ing *Ingester) beginIngestTx(ctx context.Context, providerName string, result IngestResult) (*sql.Tx, IngesterStore, bool, error) {
+	tx, err := ing.queries.BeginTx(ctx)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("begin advisory transaction for %s/%s: %w", providerName, result.ProviderID, err)
+	}
+	queries := ing.queries
+	if tx != nil && ing.withTx != nil {
+		queries = ing.withTx(tx)
+	}
+	return tx, queries, false, nil
+}
+
+func rollbackAdvisoryTx(tx *sql.Tx, committed *bool) {
+	if tx != nil && !*committed {
+		_ = tx.Rollback()
+	}
+}
+
+func (ing *Ingester) reconcileCanonicalID(ctx context.Context, queries IngesterStore, existing dbgen.Advisory, found bool, canonicalID string) (string, dbgen.Advisory, error) {
+	if found && shouldPromoteCanonicalID(existing.CanonicalID, canonicalID) {
+		if err := queries.UpdateAdvisoryCanonicalID(ctx, dbgen.UpdateAdvisoryCanonicalIDParams{
+			AdvisoryID:  existing.ID,
+			CanonicalID: canonicalID,
+		}); err != nil {
+			return "", dbgen.Advisory{}, fmt.Errorf("promote advisory canonical ID %s -> %s: %w", existing.CanonicalID, canonicalID, err)
+		}
+		existing.CanonicalID = canonicalID
+	}
+	if found && !shouldPromoteCanonicalID(existing.CanonicalID, canonicalID) {
+		canonicalID = existing.CanonicalID
+	}
+	return canonicalID, existing, nil
+}
+
+func (ing *Ingester) syncAdvisorySources(ctx context.Context, queries IngesterStore, advisoryID uuid.UUID, providerName string, result IngestResult) error {
+	if err := ing.upsertAdvisoryAliases(ctx, queries, advisoryID, result); err != nil {
+		return err
+	}
 	if err := queries.UpsertAdvisorySource(ctx, dbgen.UpsertAdvisorySourceParams{
-		AdvisoryID:  advisoryRecord.ID,
+		AdvisoryID:  advisoryID,
 		Provider:    providerName,
 		ProviderID:  result.ProviderID,
 		Severity:    toNullSeverityLevel(result.Severity),
@@ -150,19 +185,33 @@ func (ing *Ingester) ingestOne(ctx context.Context, providerName string, result 
 		RawData:     result.RawData,
 		FetchedAt:   time.Now().UTC(),
 	}); err != nil {
-		return dbgen.Advisory{}, fmt.Errorf("upsert advisory source %s/%s: %w", providerName, result.ProviderID, err)
+		return fmt.Errorf("upsert advisory source %s/%s: %w", providerName, result.ProviderID, err)
 	}
+	if err := ing.replaceAffectedRanges(ctx, queries, advisoryID, providerName, result.AffectedRanges); err != nil {
+		return err
+	}
+	return nil
+}
 
+func (ing *Ingester) upsertAdvisoryAliases(ctx context.Context, queries IngesterStore, advisoryID uuid.UUID, result IngestResult) error {
+	for _, alias := range uniqueAliases(result.ProviderID, result.Aliases) {
+		if err := queries.UpsertAdvisoryAlias(ctx, dbgen.UpsertAdvisoryAliasParams{AdvisoryID: advisoryID, Alias: alias}); err != nil {
+			return fmt.Errorf("upsert advisory alias %s: %w", alias, err)
+		}
+	}
+	return nil
+}
+
+func (ing *Ingester) replaceAffectedRanges(ctx context.Context, queries IngesterStore, advisoryID uuid.UUID, providerName string, ranges []AffectedRange) error {
 	if err := queries.DeleteAffectedRangesByAdvisoryAndSource(ctx, dbgen.DeleteAffectedRangesByAdvisoryAndSourceParams{
-		AdvisoryID: advisoryRecord.ID,
+		AdvisoryID: advisoryID,
 		Source:     providerName,
 	}); err != nil {
-		return dbgen.Advisory{}, fmt.Errorf("delete affected ranges for %s/%s: %w", providerName, advisoryRecord.ID, err)
+		return fmt.Errorf("delete affected ranges for %s/%s: %w", providerName, advisoryID, err)
 	}
-
-	for _, affectedRange := range result.AffectedRanges {
+	for _, affectedRange := range ranges {
 		if _, err := queries.CreateAffectedRange(ctx, dbgen.CreateAffectedRangeParams{
-			AdvisoryID:   advisoryRecord.ID,
+			AdvisoryID:   advisoryID,
 			Ecosystem:    affectedRange.Ecosystem,
 			PackageName:  affectedRange.PackageName,
 			Introduced:   affectedRange.Introduced,
@@ -170,15 +219,17 @@ func (ing *Ingester) ingestOne(ctx context.Context, providerName string, result 
 			LastAffected: affectedRange.LastAffected,
 			Source:       providerName,
 		}); err != nil {
-			return dbgen.Advisory{}, fmt.Errorf("create affected range for %s/%s: %w", providerName, advisoryRecord.ID, err)
+			return fmt.Errorf("create affected range for %s/%s: %w", providerName, advisoryID, err)
 		}
 	}
+	return nil
+}
 
+func (ing *Ingester) finalizeAdvisoryRecord(ctx context.Context, queries IngesterStore, advisoryRecord dbgen.Advisory, canonicalID string, result IngestResult) (dbgen.Advisory, error) {
 	sources, err := queries.ListSourcesByAdvisory(ctx, advisoryRecord.ID)
 	if err != nil {
 		return dbgen.Advisory{}, fmt.Errorf("list advisory sources for %s: %w", advisoryRecord.ID, err)
 	}
-
 	mergedSeverity, mergedScore, mergedVector := MergeSeverity(convertSources(sources))
 	mergedVersion := selectCanonicalCVSSVersion(sources)
 	finalRecord, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
@@ -198,20 +249,6 @@ func (ing *Ingester) ingestOne(ctx context.Context, providerName string, result 
 	if err != nil {
 		return dbgen.Advisory{}, fmt.Errorf("update canonical advisory %s: %w", canonicalID, err)
 	}
-
-	if tx != nil {
-		if err := tx.Commit(); err != nil {
-			return dbgen.Advisory{}, fmt.Errorf("commit advisory %s: %w", canonicalID, err)
-		}
-		committed = true
-	}
-
-	ing.log.Debug().
-		Str("provider", providerName).
-		Str("provider_id", result.ProviderID).
-		Str("advisory_id", finalRecord.ID.String()).
-		Msg("ingested advisory")
-
 	return finalRecord, nil
 }
 
@@ -320,15 +357,10 @@ func selectCanonicalSource(sources []dbgen.AdvisorySource) *dbgen.AdvisorySource
 	var best *dbgen.AdvisorySource
 	for i := range sources {
 		source := &sources[i]
-		if !dbSourceHasSignal(source) {
+		if !dbSourceHasSignal(source) || shouldSkipCanonicalSource(best, source) {
 			continue
 		}
-		if best != nil && strings.EqualFold(best.Provider, "nvd") {
-			if !strings.EqualFold(source.Provider, "nvd") {
-				continue
-			}
-		}
-		if strings.EqualFold(source.Provider, "nvd") && (best == nil || !strings.EqualFold(best.Provider, "nvd")) {
+		if preferCanonicalNVD(best, source) {
 			best = source
 			continue
 		}
@@ -337,6 +369,14 @@ func selectCanonicalSource(sources []dbgen.AdvisorySource) *dbgen.AdvisorySource
 		}
 	}
 	return best
+}
+
+func shouldSkipCanonicalSource(best *dbgen.AdvisorySource, source *dbgen.AdvisorySource) bool {
+	return best != nil && strings.EqualFold(best.Provider, "nvd") && !strings.EqualFold(source.Provider, "nvd")
+}
+
+func preferCanonicalNVD(best *dbgen.AdvisorySource, source *dbgen.AdvisorySource) bool {
+	return strings.EqualFold(source.Provider, "nvd") && (best == nil || !strings.EqualFold(best.Provider, "nvd"))
 }
 
 func dbSourceHasSignal(source *dbgen.AdvisorySource) bool {

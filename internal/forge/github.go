@@ -103,29 +103,31 @@ func (g *GitHub) Installations(ctx context.Context) ([]Installation, error) {
 
 func (g *GitHub) ListRepositories(ctx context.Context, opts ListReposOptions) ([]Repository, error) {
 	if g.isAppMode() {
-		installations, err := g.listInstallations(ctx)
+		return g.listAppRepositories(ctx, opts)
+	}
+	return g.listUserRepositories(ctx, opts)
+}
+
+func (g *GitHub) listAppRepositories(ctx context.Context, opts ListReposOptions) ([]Repository, error) {
+	installations, err := g.listInstallations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	repositories := make([]Repository, 0)
+	seen := make(map[string]struct{})
+	for _, installation := range installations {
+		installationRepos, err := g.ListInstallationRepositories(ctx, installation.ID)
 		if err != nil {
 			return nil, err
 		}
-
-		repositories := make([]Repository, 0)
-		seen := make(map[string]struct{})
-		for _, installation := range installations {
-			installationRepos, err := g.ListInstallationRepositories(ctx, installation.ID)
-			if err != nil {
-				return nil, err
-			}
-			for _, repo := range installationRepos {
-				if _, ok := seen[repo.FullName]; ok {
-					continue
-				}
-				seen[repo.FullName] = struct{}{}
-				repositories = append(repositories, repo)
-			}
-		}
-
-		return paginateRepositories(repositories, opts), nil
+		repositories = appendUniqueRepositories(repositories, installationRepos, seen)
 	}
+
+	return paginateRepositories(repositories, opts), nil
+}
+
+func (g *GitHub) listUserRepositories(ctx context.Context, opts ListReposOptions) ([]Repository, error) {
 
 	path := "/user/repos"
 	values := url.Values{}
@@ -150,6 +152,17 @@ func (g *GitHub) ListRepositories(ctx context.Context, opts ListReposOptions) ([
 	}
 
 	return repositories, nil
+}
+
+func appendUniqueRepositories(target []Repository, repositories []Repository, seen map[string]struct{}) []Repository {
+	for _, repo := range repositories {
+		if _, ok := seen[repo.FullName]; ok {
+			continue
+		}
+		seen[repo.FullName] = struct{}{}
+		target = append(target, repo)
+	}
+	return target
 }
 
 func (g *GitHub) GetRepository(ctx context.Context, owner, name string) (*Repository, error) {

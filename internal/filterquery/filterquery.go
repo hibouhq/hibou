@@ -280,29 +280,11 @@ func buildSQL(node Node, param int, depth int) (string, []interface{}, int, erro
 	case QualifierNode:
 		return qualifierToSQL(typed, param)
 	case TextNode:
-		escaped := escapeLikeFragment(typed.Value)
-		where := fmt.Sprintf("(title ILIKE '%%' || $%d || '%%' ESCAPE '\\\\' OR primary_identifier->>'value' ILIKE '%%' || $%d || '%%' ESCAPE '\\\\')", param, param)
-		return where, []interface{}{escaped}, param + 1, nil
+		return textNodeToSQL(typed, param), []interface{}{escapeLikeFragment(typed.Value)}, param + 1, nil
 	case AndNode:
-		leftWhere, leftParams, nextParam, err := buildSQL(typed.Left, param, depth)
-		if err != nil {
-			return "", nil, param, err
-		}
-		rightWhere, rightParams, nextParam, err := buildSQL(typed.Right, nextParam, depth)
-		if err != nil {
-			return "", nil, param, err
-		}
-		return fmt.Sprintf("(%s AND %s)", leftWhere, rightWhere), append(leftParams, rightParams...), nextParam, nil
+		return buildBinarySQL("AND", typed.Left, typed.Right, param, depth)
 	case OrNode:
-		leftWhere, leftParams, nextParam, err := buildSQL(typed.Left, param, depth)
-		if err != nil {
-			return "", nil, param, err
-		}
-		rightWhere, rightParams, nextParam, err := buildSQL(typed.Right, nextParam, depth)
-		if err != nil {
-			return "", nil, param, err
-		}
-		return fmt.Sprintf("(%s OR %s)", leftWhere, rightWhere), append(leftParams, rightParams...), nextParam, nil
+		return buildBinarySQL("OR", typed.Left, typed.Right, param, depth)
 	case GroupNode:
 		childWhere, params, nextParam, err := buildSQL(typed.Child, param, depth+1)
 		if err != nil {
@@ -312,6 +294,22 @@ func buildSQL(node Node, param int, depth int) (string, []interface{}, int, erro
 	default:
 		return "", nil, param, fmt.Errorf("unsupported node type %T", node)
 	}
+}
+
+func textNodeToSQL(node TextNode, param int) string {
+	return fmt.Sprintf("(title ILIKE '%%' || $%d || '%%' ESCAPE '\\\\' OR primary_identifier->>'value' ILIKE '%%' || $%d || '%%' ESCAPE '\\\\')", param, param)
+}
+
+func buildBinarySQL(operator string, left Node, right Node, param int, depth int) (string, []interface{}, int, error) {
+	leftWhere, leftParams, nextParam, err := buildSQL(left, param, depth)
+	if err != nil {
+		return "", nil, param, err
+	}
+	rightWhere, rightParams, nextParam, err := buildSQL(right, nextParam, depth)
+	if err != nil {
+		return "", nil, param, err
+	}
+	return fmt.Sprintf("(%s %s %s)", leftWhere, operator, rightWhere), append(leftParams, rightParams...), nextParam, nil
 }
 
 func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, error) {
@@ -327,45 +325,44 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 
 	switch node.Key {
 	case "file":
-		if len(values) == 1 {
-			return fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\\\'", column, param), []interface{}{escapeLikeFragment(values[0])}, param + 1, nil
-		}
-
-		parts := make([]string, 0, len(values))
-		params := make([]interface{}, 0, len(values))
-		next := param
-		for _, value := range values {
-			parts = append(parts, fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\\\'", column, next))
-			params = append(params, escapeLikeFragment(value))
-			next++
-		}
-		return "(" + strings.Join(parts, " OR ") + ")", params, next, nil
+		return fileQualifierToSQL(column, values, param), fileQualifierParams(values), param + len(values), nil
 	case "status":
-		if len(values) == 1 {
-			return fmt.Sprintf("%s = $%d::vulnerability_status", column, param), []interface{}{values[0]}, param + 1, nil
-		}
-		return fmt.Sprintf("%s = ANY($%d::vulnerability_status[])", column, param), []interface{}{pq.Array(values)}, param + 1, nil
+		return singleOrArraySQL(column, values, param, "%s = $%d::vulnerability_status", "%s = ANY($%d::vulnerability_status[])")
 	case "severity":
-		if len(values) == 1 {
-			return fmt.Sprintf("%s::text = $%d", column, param), []interface{}{values[0]}, param + 1, nil
-		}
-		return fmt.Sprintf("%s::text = ANY($%d::text[])", column, param), []interface{}{pq.Array(values)}, param + 1, nil
+		return singleOrArraySQL(column, values, param, "%s::text = $%d", "%s::text = ANY($%d::text[])")
 	case "language":
-		if len(values) == 1 {
-			return fmt.Sprintf("COALESCE(%s, '') = $%d", column, param), []interface{}{values[0]}, param + 1, nil
-		}
-		return fmt.Sprintf("COALESCE(%s, '') = ANY($%d::text[])", column, param), []interface{}{pq.Array(values)}, param + 1, nil
+		return singleOrArraySQL("COALESCE("+column+", '')", values, param, "%s = $%d", "%s = ANY($%d::text[])")
 	case "type":
-		if len(values) == 1 {
-			return fmt.Sprintf("%s::text = $%d", column, param), []interface{}{values[0]}, param + 1, nil
-		}
-		return fmt.Sprintf("%s::text = ANY($%d::text[])", column, param), []interface{}{pq.Array(values)}, param + 1, nil
+		return singleOrArraySQL(column, values, param, "%s::text = $%d", "%s::text = ANY($%d::text[])")
 	default:
-		if len(values) == 1 {
-			return fmt.Sprintf("%s = $%d", column, param), []interface{}{values[0]}, param + 1, nil
-		}
-		return fmt.Sprintf("%s = ANY($%d::text[])", column, param), []interface{}{pq.Array(values)}, param + 1, nil
+		return singleOrArraySQL(column, values, param, "%s = $%d", "%s = ANY($%d::text[])")
 	}
+}
+
+func fileQualifierToSQL(column string, values []string, param int) string {
+	if len(values) == 1 {
+		return fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\\\'", column, param)
+	}
+	parts := make([]string, 0, len(values))
+	for index := range values {
+		parts = append(parts, fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\\\'", column, param+index))
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
+}
+
+func fileQualifierParams(values []string) []interface{} {
+	params := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		params = append(params, escapeLikeFragment(value))
+	}
+	return params
+}
+
+func singleOrArraySQL(column string, values []string, param int, singleFmt string, arrayFmt string) (string, []interface{}, int, error) {
+	if len(values) == 1 {
+		return fmt.Sprintf(singleFmt, column, param), []interface{}{values[0]}, param + 1, nil
+	}
+	return fmt.Sprintf(arrayFmt, column, param), []interface{}{pq.Array(values)}, param + 1, nil
 }
 
 func splitValues(raw string) []string {

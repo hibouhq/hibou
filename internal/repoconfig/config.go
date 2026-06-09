@@ -111,45 +111,16 @@ func (c *RepoConfig) MatchGate(targetBranch string) *QualityGate {
 	}
 
 	targetBranch = strings.TrimSpace(targetBranch)
-	bestIndex := -1
-	bestScore := -1
-	bestExact := false
-
+	best := gateMatchCandidate{index: -1, score: -1}
 	for index := range c.QualityGates {
-		gate := &c.QualityGates[index]
-		for _, branch := range gate.Branches {
-			trimmed := strings.TrimSpace(branch)
-			if trimmed == "" {
-				continue
-			}
-
-			exact := trimmed == targetBranch
-			matched := exact
-			if !matched {
-				globMatch, err := path.Match(trimmed, targetBranch)
-				if err != nil {
-					continue
-				}
-				matched = globMatch
-			}
-			if !matched {
-				continue
-			}
-
-			score := branchSpecificity(trimmed)
-			if bestIndex == -1 || (exact && !bestExact) || (exact == bestExact && score > bestScore) {
-				bestIndex = index
-				bestScore = score
-				bestExact = exact
-			}
-		}
+		best = selectBetterGateMatch(best, gateMatchForBranches(c.QualityGates[index].Branches, targetBranch, index))
 	}
 
-	if bestIndex == -1 {
+	if best.index == -1 {
 		return nil
 	}
 
-	return &c.QualityGates[bestIndex]
+	return &c.QualityGates[best.index]
 }
 
 func (w *WeaknessThresholds) EnabledValue() bool {
@@ -165,50 +136,132 @@ func (c *RepoConfig) validate() error {
 	}
 
 	for index := range c.QualityGates {
-		gate := &c.QualityGates[index]
-		if len(gate.Branches) == 0 {
-			return fmt.Errorf("quality_gates[%d].branches must not be empty", index)
-		}
-		for branchIndex, branch := range gate.Branches {
-			gate.Branches[branchIndex] = strings.TrimSpace(branch)
-			if gate.Branches[branchIndex] == "" {
-				return fmt.Errorf("quality_gates[%d].branches[%d] must not be empty", index, branchIndex)
-			}
-		}
-		if gate.Weaknesses != nil {
-			for fieldName, value := range map[string]*int{
-				"max_critical": gate.Weaknesses.MaxCritical,
-				"max_high":     gate.Weaknesses.MaxHigh,
-				"max_medium":   gate.Weaknesses.MaxMedium,
-			} {
-				if value != nil && *value < 0 {
-					return fmt.Errorf("quality_gates[%d].weaknesses.%s must be >= 0", index, fieldName)
-				}
-			}
-		}
-		if gate.Coverage != nil {
-			for fieldName, value := range map[string]*float64{
-				"min_coverage": gate.Coverage.MinCoverage,
-				"grace":        gate.Coverage.Grace,
-				"diff_minimum": gate.Coverage.DiffMinimum,
-			} {
-				if value != nil && (*value < 0 || *value > 100) {
-					return fmt.Errorf("quality_gates[%d].coverage.%s must be between 0 and 100", index, fieldName)
-				}
-			}
+		if err := validateQualityGate(&c.QualityGates[index], index); err != nil {
+			return err
 		}
 	}
 
-	if c.Upload != nil && strings.TrimSpace(c.Upload.Window) != "" {
-		d, err := time.ParseDuration(c.Upload.Window)
+	if err := validateUploadConfig(c.Upload); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type gateMatchCandidate struct {
+	index int
+	score int
+	exact bool
+}
+
+func gateMatchForBranches(branches []string, targetBranch string, index int) gateMatchCandidate {
+	best := gateMatchCandidate{index: -1, score: -1}
+	for _, branch := range branches {
+		candidate, ok := branchMatchCandidate(branch, targetBranch, index)
+		if !ok {
+			continue
+		}
+		best = selectBetterGateMatch(best, candidate)
+	}
+	return best
+}
+
+func branchMatchCandidate(branch, targetBranch string, index int) (gateMatchCandidate, bool) {
+	trimmed := strings.TrimSpace(branch)
+	if trimmed == "" {
+		return gateMatchCandidate{}, false
+	}
+	exact := trimmed == targetBranch
+	matched := exact
+	if !matched {
+		globMatch, err := path.Match(trimmed, targetBranch)
 		if err != nil {
-			return fmt.Errorf("upload.window must be a valid duration: %w", err)
+			return gateMatchCandidate{}, false
 		}
-		if d <= 0 {
-			return errors.New("upload.window must be a positive duration")
+		matched = globMatch
+	}
+	if !matched {
+		return gateMatchCandidate{}, false
+	}
+	return gateMatchCandidate{index: index, score: branchSpecificity(trimmed), exact: exact}, true
+}
+
+func selectBetterGateMatch(current, candidate gateMatchCandidate) gateMatchCandidate {
+	if candidate.index == -1 {
+		return current
+	}
+	if current.index == -1 || (candidate.exact && !current.exact) || (candidate.exact == current.exact && candidate.score > current.score) {
+		return candidate
+	}
+	return current
+}
+
+func validateQualityGate(gate *QualityGate, index int) error {
+	if err := validateGateBranches(gate, index); err != nil {
+		return err
+	}
+	if err := validateWeaknessThresholds(gate.Weaknesses, index); err != nil {
+		return err
+	}
+	return validateCoverageThresholds(gate.Coverage, index)
+}
+
+func validateGateBranches(gate *QualityGate, index int) error {
+	if len(gate.Branches) == 0 {
+		return fmt.Errorf("quality_gates[%d].branches must not be empty", index)
+	}
+	for branchIndex, branch := range gate.Branches {
+		gate.Branches[branchIndex] = strings.TrimSpace(branch)
+		if gate.Branches[branchIndex] == "" {
+			return fmt.Errorf("quality_gates[%d].branches[%d] must not be empty", index, branchIndex)
 		}
 	}
+	return nil
+}
 
+func validateWeaknessThresholds(thresholds *WeaknessThresholds, index int) error {
+	if thresholds == nil {
+		return nil
+	}
+	for fieldName, value := range map[string]*int{
+		"max_critical": thresholds.MaxCritical,
+		"max_high":     thresholds.MaxHigh,
+		"max_medium":   thresholds.MaxMedium,
+	} {
+		if value != nil && *value < 0 {
+			return fmt.Errorf("quality_gates[%d].weaknesses.%s must be >= 0", index, fieldName)
+		}
+	}
+	return nil
+}
+
+func validateCoverageThresholds(thresholds *CoverageThresholds, index int) error {
+	if thresholds == nil {
+		return nil
+	}
+	for fieldName, value := range map[string]*float64{
+		"min_coverage": thresholds.MinCoverage,
+		"grace":        thresholds.Grace,
+		"diff_minimum": thresholds.DiffMinimum,
+	} {
+		if value != nil && (*value < 0 || *value > 100) {
+			return fmt.Errorf("quality_gates[%d].coverage.%s must be between 0 and 100", index, fieldName)
+		}
+	}
+	return nil
+}
+
+func validateUploadConfig(upload *UploadConfig) error {
+	if upload == nil || strings.TrimSpace(upload.Window) == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(upload.Window)
+	if err != nil {
+		return fmt.Errorf("upload.window must be a valid duration: %w", err)
+	}
+	if d <= 0 {
+		return errors.New("upload.window must be a positive duration")
+	}
 	return nil
 }
 

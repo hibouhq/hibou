@@ -44,20 +44,8 @@ func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input createReleaseRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	input.Version = strings.TrimSpace(input.Version)
-	input.Ref = strings.TrimSpace(input.Ref)
-	if input.Version == "" {
-		api.JSONError(w, http.StatusBadRequest, "version is required")
-		return
-	}
-	if input.Ref == "" {
-		api.JSONError(w, http.StatusBadRequest, "ref is required")
+	input, ok := decodeCreateReleaseRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -71,27 +59,9 @@ func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var snapshotID *uuid.UUID
-	if input.SnapshotID != nil && strings.TrimSpace(*input.SnapshotID) != "" {
-		parsed, err := uuid.Parse(strings.TrimSpace(*input.SnapshotID))
-		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, "invalid snapshot_id")
-			return
-		}
-		snapshot, err := s.queries.GetSnapshotByID(r.Context(), parsed)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load snapshot")
-			return
-		}
-		if snapshot == nil {
-			api.JSONError(w, http.StatusNotFound, "snapshot not found")
-			return
-		}
-		if snapshot.RefID != ref.ID {
-			api.JSONError(w, http.StatusBadRequest, "snapshot does not belong to the selected ref")
-			return
-		}
-		snapshotID = &parsed
+	snapshotID, ok := s.resolveReleaseSnapshotID(w, r, ref.ID, input.SnapshotID)
+	if !ok {
+		return
 	}
 
 	release, err := s.queries.CreateRelease(r.Context(), repo.ID, ref.ID, snapshotID, input.Version, input.BuildMetadata, input.ArtifactIDs, input.Provenance, input.PublishedAt)
@@ -105,6 +75,50 @@ func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusCreated, release)
+}
+
+func decodeCreateReleaseRequest(w http.ResponseWriter, r *http.Request) (createReleaseRequest, bool) {
+	var input createReleaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return createReleaseRequest{}, false
+	}
+	input.Version = strings.TrimSpace(input.Version)
+	input.Ref = strings.TrimSpace(input.Ref)
+	if input.Version == "" {
+		api.JSONError(w, http.StatusBadRequest, "version is required")
+		return createReleaseRequest{}, false
+	}
+	if input.Ref == "" {
+		api.JSONError(w, http.StatusBadRequest, "ref is required")
+		return createReleaseRequest{}, false
+	}
+	return input, true
+}
+
+func (s *Server) resolveReleaseSnapshotID(w http.ResponseWriter, r *http.Request, refID uuid.UUID, rawSnapshotID *string) (*uuid.UUID, bool) {
+	if rawSnapshotID == nil || strings.TrimSpace(*rawSnapshotID) == "" {
+		return nil, true
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(*rawSnapshotID))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid snapshot_id")
+		return nil, false
+	}
+	snapshot, err := s.queries.GetSnapshotByID(r.Context(), parsed)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load snapshot")
+		return nil, false
+	}
+	if snapshot == nil {
+		api.JSONError(w, http.StatusNotFound, "snapshot not found")
+		return nil, false
+	}
+	if snapshot.RefID != refID {
+		api.JSONError(w, http.StatusBadRequest, "snapshot does not belong to the selected ref")
+		return nil, false
+	}
+	return &parsed, true
 }
 
 // @Summary      List releases

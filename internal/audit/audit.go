@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 )
 
@@ -67,9 +68,10 @@ type Entry struct {
 
 // RequestContext extracts IP and user agent from an HTTP request.
 func RequestContext(r *http.Request) (ip, userAgent string) {
-	ip = r.RemoteAddr
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		ip = forwarded
+	if clientIP := middleware.GetClientIP(r.Context()); clientIP != "" {
+		ip = clientIP
+	} else {
+		ip = r.RemoteAddr
 	}
 	return ip, r.UserAgent()
 }

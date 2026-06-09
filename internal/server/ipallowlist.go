@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 )
 
@@ -172,9 +173,14 @@ func (a *forgeIPAllowlist) loaded() bool {
 // Middleware returns an HTTP middleware that rejects requests not in the allowlist.
 func (a *forgeIPAllowlist) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
+		host := middleware.GetClientIP(r.Context())
+		if host == "" {
+			parsedHost, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			} else {
+				host = parsedHost
+			}
 		}
 
 		ip := net.ParseIP(host)

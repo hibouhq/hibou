@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -382,47 +383,15 @@ func (s *Server) handleCreateDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	releaseID, err := uuid.Parse(strings.TrimSpace(input.ReleaseID))
-	if err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid release_id")
+	release, ok := s.loadDeploymentRelease(w, r, org.ID, input.ReleaseID)
+	if !ok {
 		return
 	}
-
-	release, err := s.queries.GetReleaseByID(r.Context(), releaseID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load release")
+	status, ok := parseDeploymentStatus(input.Status)
+	if !ok {
+		api.JSONError(w, http.StatusBadRequest, "invalid deployment status")
 		return
 	}
-	if release == nil {
-		api.JSONError(w, http.StatusNotFound, "release not found")
-		return
-	}
-
-	belongsToOrg, err := s.releaseBelongsToOrg(r, release, org.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to validate release")
-		return
-	}
-	if !belongsToOrg {
-		api.JSONError(w, http.StatusNotFound, "release not found")
-		return
-	}
-
-	status := store.DeploymentStatusActive
-	if strings.TrimSpace(input.Status) != "" {
-		switch strings.ToLower(strings.TrimSpace(input.Status)) {
-		case string(store.DeploymentStatusActive):
-			status = store.DeploymentStatusActive
-		case string(store.DeploymentStatusRolledBack):
-			status = store.DeploymentStatusRolledBack
-		case string(store.DeploymentStatusSuperseded):
-			status = store.DeploymentStatusSuperseded
-		default:
-			api.JSONError(w, http.StatusBadRequest, "invalid deployment status")
-			return
-		}
-	}
-
 	environment := strings.TrimSpace(input.Environment)
 	if environment == "" {
 		api.JSONError(w, http.StatusBadRequest, "environment is required")
@@ -431,36 +400,16 @@ func (s *Server) handleCreateDeployment(w http.ResponseWriter, r *http.Request) 
 	trimStringPtr(input.DeployedBy)
 	trimStringPtr(input.Notes)
 
-	var rollbackTargetID *uuid.UUID
-	if input.RollbackTargetID != nil && strings.TrimSpace(*input.RollbackTargetID) != "" {
-		parsed, err := uuid.Parse(strings.TrimSpace(*input.RollbackTargetID))
-		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, "invalid rollback_target_id")
-			return
-		}
-		rollbackTargetID = &parsed
+	rollbackTargetID, err := parseRollbackTargetID(input.RollbackTargetID)
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid rollback_target_id")
+		return
 	}
+	deployedAt := deploymentTime(input.DeployedAt)
 
-	deployedAt := time.Now().UTC()
-	if input.DeployedAt != nil {
-		deployedAt = input.DeployedAt.UTC()
-	}
-
-	if status == store.DeploymentStatusActive {
-		activeDeployments, err := s.queries.ListActiveDeploymentsByClient(r.Context(), client.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load active deployments")
-			return
-		}
-		for _, activeDeployment := range activeDeployments {
-			if activeDeployment.Environment != environment {
-				continue
-			}
-			if _, err := s.queries.UpdateDeploymentStatus(r.Context(), activeDeployment.ID, store.DeploymentStatusSuperseded); err != nil {
-				api.JSONError(w, http.StatusInternalServerError, "failed to update active deployments")
-				return
-			}
-		}
+	if err := s.supersedeActiveDeployments(r, client.ID, environment, status); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	deployment, err := s.queries.CreateDeployment(r.Context(), client.ID, release.ID, environment, status, deployedAt, input.DeployedBy, rollbackTargetID, input.Notes)
@@ -471,6 +420,87 @@ func (s *Server) handleCreateDeployment(w http.ResponseWriter, r *http.Request) 
 
 	response := deploymentResponse{Deployment: *deployment, ReleaseVersion: &release.Version}
 	api.JSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) loadDeploymentRelease(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, rawReleaseID string) (*store.Release, bool) {
+	releaseID, err := uuid.Parse(strings.TrimSpace(rawReleaseID))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid release_id")
+		return nil, false
+	}
+	release, err := s.queries.GetReleaseByID(r.Context(), releaseID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load release")
+		return nil, false
+	}
+	if release == nil {
+		api.JSONError(w, http.StatusNotFound, "release not found")
+		return nil, false
+	}
+	belongsToOrg, err := s.releaseBelongsToOrg(r, release, orgID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to validate release")
+		return nil, false
+	}
+	if !belongsToOrg {
+		api.JSONError(w, http.StatusNotFound, "release not found")
+		return nil, false
+	}
+	return release, true
+}
+
+func parseDeploymentStatus(raw string) (store.DeploymentStatus, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" {
+		return store.DeploymentStatusActive, true
+	}
+	switch normalized {
+	case string(store.DeploymentStatusActive):
+		return store.DeploymentStatusActive, true
+	case string(store.DeploymentStatusRolledBack):
+		return store.DeploymentStatusRolledBack, true
+	case string(store.DeploymentStatusSuperseded):
+		return store.DeploymentStatusSuperseded, true
+	default:
+		return "", false
+	}
+}
+
+func parseRollbackTargetID(raw *string) (*uuid.UUID, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	parsed, err := uuid.Parse(strings.TrimSpace(*raw))
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
+}
+
+func deploymentTime(raw *time.Time) time.Time {
+	if raw == nil {
+		return time.Now().UTC()
+	}
+	return raw.UTC()
+}
+
+func (s *Server) supersedeActiveDeployments(r *http.Request, clientID uuid.UUID, environment string, status store.DeploymentStatus) error {
+	if status != store.DeploymentStatusActive {
+		return nil
+	}
+	activeDeployments, err := s.queries.ListActiveDeploymentsByClient(r.Context(), clientID)
+	if err != nil {
+		return errors.New("failed to load active deployments")
+	}
+	for _, activeDeployment := range activeDeployments {
+		if activeDeployment.Environment != environment {
+			continue
+		}
+		if _, err := s.queries.UpdateDeploymentStatus(r.Context(), activeDeployment.ID, store.DeploymentStatusSuperseded); err != nil {
+			return errors.New("failed to update active deployments")
+		}
+	}
+	return nil
 }
 
 // @Summary      Get client impact

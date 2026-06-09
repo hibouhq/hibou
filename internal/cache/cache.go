@@ -71,57 +71,85 @@ func (s *Service) QueryWithCache(ctx context.Context, prov provider.AdvisoryProv
 	missQueries := make([]provider.PackageQuery, 0)
 
 	for _, query := range uniqueQueries {
-		cached, err := s.cache.GetAdvisoryCache(ctx, dbgen.GetAdvisoryCacheParams{
-			Ecosystem:   query.Ecosystem,
-			PackageName: query.Name,
-			Provider:    providerName,
-		})
-		if err == nil {
-			var cachedResults []provider.AdvisoryResult
-			if err := json.Unmarshal(cached.ResponseData, &cachedResults); err != nil {
-				return nil, fmt.Errorf("cache: unmarshal advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
-			}
-			metrics.CacheHits.WithLabelValues(providerName).Inc()
+		cachedResults, hit, err := s.lookupCachedResults(ctx, providerName, query)
+		if err != nil {
+			return nil, err
+		}
+		if hit {
 			hitResults = append(hitResults, cachedResults...)
 			continue
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("cache: get advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
-		}
-		metrics.CacheMisses.WithLabelValues(providerName).Inc()
 		missQueries = append(missQueries, query)
 	}
 
 	freshResults := make([]provider.AdvisoryResult, 0)
 	for _, chunk := range chunkQueries(missQueries, prov.BatchSize()) {
-		batchResults, err := prov.QueryPackages(ctx, chunk)
+		chunkResults, err := s.queryAndCacheBatch(ctx, prov, providerName, chunk)
 		if err != nil {
-			return nil, fmt.Errorf("cache: query provider %s: %w", providerName, err)
+			return nil, err
 		}
-
-		for _, query := range chunk {
-			matched := filterResultsForQuery(query, batchResults)
-			payload, err := json.Marshal(matched)
-			if err != nil {
-				return nil, fmt.Errorf("cache: marshal advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
-			}
-			fetchedAt := time.Now().UTC()
-			if err := s.cache.UpsertAdvisoryCache(ctx, dbgen.UpsertAdvisoryCacheParams{
-				Ecosystem:     query.Ecosystem,
-				PackageName:   query.Name,
-				Provider:      providerName,
-				ResponseData:  payload,
-				AdvisoryCount: int32(len(matched)), //nolint:gosec // G115: advisory count is bounded by batch query size.
-				FetchedAt:     fetchedAt,
-				ExpiresAt:     fetchedAt.Add(s.ttlForProvider(providerName)),
-			}); err != nil {
-				return nil, fmt.Errorf("cache: upsert advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
-			}
-			freshResults = append(freshResults, matched...)
-		}
+		freshResults = append(freshResults, chunkResults...)
 	}
 
 	return append(hitResults, freshResults...), nil
+}
+
+func (s *Service) lookupCachedResults(ctx context.Context, providerName string, query provider.PackageQuery) ([]provider.AdvisoryResult, bool, error) {
+	cached, err := s.cache.GetAdvisoryCache(ctx, dbgen.GetAdvisoryCacheParams{
+		Ecosystem:   query.Ecosystem,
+		PackageName: query.Name,
+		Provider:    providerName,
+	})
+	if err == nil {
+		var cachedResults []provider.AdvisoryResult
+		if err := json.Unmarshal(cached.ResponseData, &cachedResults); err != nil {
+			return nil, false, fmt.Errorf("cache: unmarshal advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
+		}
+		metrics.CacheHits.WithLabelValues(providerName).Inc()
+		return cachedResults, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, fmt.Errorf("cache: get advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
+	}
+	metrics.CacheMisses.WithLabelValues(providerName).Inc()
+	return nil, false, nil
+}
+
+func (s *Service) queryAndCacheBatch(ctx context.Context, prov provider.AdvisoryProvider, providerName string, chunk []provider.PackageQuery) ([]provider.AdvisoryResult, error) {
+	batchResults, err := prov.QueryPackages(ctx, chunk)
+	if err != nil {
+		return nil, fmt.Errorf("cache: query provider %s: %w", providerName, err)
+	}
+	freshResults := make([]provider.AdvisoryResult, 0)
+	for _, query := range chunk {
+		matched, err := s.cacheBatchResultsForQuery(ctx, providerName, query, batchResults)
+		if err != nil {
+			return nil, err
+		}
+		freshResults = append(freshResults, matched...)
+	}
+	return freshResults, nil
+}
+
+func (s *Service) cacheBatchResultsForQuery(ctx context.Context, providerName string, query provider.PackageQuery, batchResults []provider.AdvisoryResult) ([]provider.AdvisoryResult, error) {
+	matched := filterResultsForQuery(query, batchResults)
+	payload, err := json.Marshal(matched)
+	if err != nil {
+		return nil, fmt.Errorf("cache: marshal advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
+	}
+	fetchedAt := time.Now().UTC()
+	if err := s.cache.UpsertAdvisoryCache(ctx, dbgen.UpsertAdvisoryCacheParams{
+		Ecosystem:     query.Ecosystem,
+		PackageName:   query.Name,
+		Provider:      providerName,
+		ResponseData:  payload,
+		AdvisoryCount: int32(len(matched)), //nolint:gosec // G115: advisory count is bounded by batch query size.
+		FetchedAt:     fetchedAt,
+		ExpiresAt:     fetchedAt.Add(s.ttlForProvider(providerName)),
+	}); err != nil {
+		return nil, fmt.Errorf("cache: upsert advisory cache for %s/%s: %w", query.Ecosystem, query.Name, err)
+	}
+	return matched, nil
 }
 
 func (s *Service) InvalidateByPackage(ctx context.Context, ecosystem, packageName string) error {

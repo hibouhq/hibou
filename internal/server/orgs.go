@@ -1,12 +1,14 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/lehibou/internal/api"
@@ -49,38 +51,8 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input createOrgRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	input.Name = strings.TrimSpace(input.Name)
-	input.Slug = strings.TrimSpace(input.Slug)
-	input.DisplayName = strings.TrimSpace(input.DisplayName)
-	input.Provider = strings.TrimSpace(input.Provider)
-
-	if input.Name == "" {
-		api.JSONError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if input.Slug == "" {
-		api.JSONError(w, http.StatusBadRequest, "slug is required")
-		return
-	}
-	if !api.IsValidSlug(input.Slug) {
-		api.JSONError(w, http.StatusBadRequest, "slug must be 2-63 characters of lowercase letters, numbers, or hyphens")
-		return
-	}
-	if input.DisplayName == "" {
-		api.JSONError(w, http.StatusBadRequest, "display_name is required")
-		return
-	}
-	if input.Provider == "" {
-		input.Provider = "github"
-	}
-	if !isValidOrgProvider(input.Provider) {
-		api.JSONError(w, http.StatusBadRequest, "provider must be one of github, gitlab, or forgejo")
+	input, ok := decodeCreateOrgInput(w, r)
+	if !ok {
 		return
 	}
 
@@ -93,25 +65,8 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		_ = tx.Rollback()
 	}()
 
-	queries := s.queries.WithTx(tx)
-	org, err := queries.CreateOrganization(r.Context(), input.Name, input.Slug, input.DisplayName, input.Provider)
-	if err != nil {
-		if isUniqueViolation(err) {
-			api.JSONError(w, http.StatusBadRequest, "organization slug already exists")
-			return
-		}
-		api.JSONError(w, http.StatusInternalServerError, "failed to create organization")
-		return
-	}
-
-	if err := queries.AddOrgMember(r.Context(), org.ID, user.ID, "admin"); err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to add organization member")
-		return
-	}
-
-	// Every org starts with an "Internal" client representing the platform's own deployment.
-	if _, err := queries.CreateClient(r.Context(), org.ID, "Internal", "internal", nil, "internal", nil, nil, nil, nil); err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to create default client")
+	org, ok := s.createOrganizationWithDefaults(w, r, tx, user.ID, input)
+	if !ok {
 		return
 	}
 
@@ -120,16 +75,79 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.enforcer != nil {
-		if err := s.enforcer.SeedOrgPolicies(org.ID); err != nil {
-			s.log.Error().Err(err).Str("org_id", org.ID.String()).Msg("failed to seed org RBAC policies")
-		}
-		if err := s.enforcer.AddRoleForUserInOrg(user.ID, "admin", org.ID); err != nil {
-			s.log.Error().Err(err).Str("org_id", org.ID.String()).Str("user_id", user.ID.String()).Msg("failed to assign admin role")
-		}
-	}
+	s.seedCreatedOrg(org.ID, user.ID)
 
 	api.JSON(w, http.StatusCreated, org)
+}
+
+func decodeCreateOrgInput(w http.ResponseWriter, r *http.Request) (createOrgRequest, bool) {
+	var input createOrgRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return createOrgRequest{}, false
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Slug = strings.TrimSpace(input.Slug)
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	input.Provider = strings.TrimSpace(input.Provider)
+	if input.Name == "" {
+		api.JSONError(w, http.StatusBadRequest, "name is required")
+		return createOrgRequest{}, false
+	}
+	if input.Slug == "" {
+		api.JSONError(w, http.StatusBadRequest, "slug is required")
+		return createOrgRequest{}, false
+	}
+	if !api.IsValidSlug(input.Slug) {
+		api.JSONError(w, http.StatusBadRequest, "slug must be 2-63 characters of lowercase letters, numbers, or hyphens")
+		return createOrgRequest{}, false
+	}
+	if input.DisplayName == "" {
+		api.JSONError(w, http.StatusBadRequest, "display_name is required")
+		return createOrgRequest{}, false
+	}
+	if input.Provider == "" {
+		input.Provider = "github"
+	}
+	if !isValidOrgProvider(input.Provider) {
+		api.JSONError(w, http.StatusBadRequest, "provider must be one of github, gitlab, or forgejo")
+		return createOrgRequest{}, false
+	}
+	return input, true
+}
+
+func (s *Server) createOrganizationWithDefaults(w http.ResponseWriter, r *http.Request, tx *sql.Tx, userID uuid.UUID, input createOrgRequest) (*store.Organization, bool) {
+	queries := s.queries.WithTx(tx)
+	org, err := queries.CreateOrganization(r.Context(), input.Name, input.Slug, input.DisplayName, input.Provider)
+	if err != nil {
+		if isUniqueViolation(err) {
+			api.JSONError(w, http.StatusBadRequest, "organization slug already exists")
+		} else {
+			api.JSONError(w, http.StatusInternalServerError, "failed to create organization")
+		}
+		return nil, false
+	}
+	if err := queries.AddOrgMember(r.Context(), org.ID, userID, "admin"); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to add organization member")
+		return nil, false
+	}
+	if _, err := queries.CreateClient(r.Context(), org.ID, "Internal", "internal", nil, "internal", nil, nil, nil, nil); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create default client")
+		return nil, false
+	}
+	return org, true
+}
+
+func (s *Server) seedCreatedOrg(orgID, userID uuid.UUID) {
+	if s.enforcer == nil {
+		return
+	}
+	if err := s.enforcer.SeedOrgPolicies(orgID); err != nil {
+		s.log.Error().Err(err).Str("org_id", orgID.String()).Msg("failed to seed org RBAC policies")
+	}
+	if err := s.enforcer.AddRoleForUserInOrg(userID, "admin", orgID); err != nil {
+		s.log.Error().Err(err).Str("org_id", orgID.String()).Str("user_id", userID.String()).Msg("failed to assign admin role")
+	}
 }
 
 func isValidOrgProvider(provider string) bool {

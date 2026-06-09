@@ -189,19 +189,7 @@ func (s *Service) resolveRecipients(ctx context.Context, payload any) (string, u
 		return stringValue(data, "repo_name", "repository"), uuidFromPayload(data, "repo_id"), userIDs, nil
 	}
 	if repoID := uuidFromPayload(data, "repo_id"); repoID != uuid.Nil {
-		repo, err := resolver.GetRepositoryByID(ctx, repoID)
-		if err != nil || repo == nil {
-			return "", uuid.Nil, nil, fmt.Errorf("load repository: %w", err)
-		}
-		members, _, err := resolver.ListOrgMembers(ctx, repo.OrgID, 1000, 0)
-		if err != nil {
-			return "", uuid.Nil, nil, fmt.Errorf("list org members: %w", err)
-		}
-		recipients := make([]uuid.UUID, 0, len(members))
-		for _, member := range members {
-			recipients = append(recipients, member.UserID)
-		}
-		return repo.Name, repo.ID, recipients, nil
+		return s.resolveRecipientsForRepo(ctx, resolver, repoID)
 	}
 
 	snapshotID := uuidFromPayload(data, "snapshot_id")
@@ -209,6 +197,22 @@ func (s *Service) resolveRecipients(ctx context.Context, payload any) (string, u
 		return stringValue(data, "repo_name", "repository"), uuidFromPayload(data, "repo_id"), nil, errors.New("snapshot_id is required")
 	}
 
+	return s.resolveRecipientsForSnapshot(ctx, resolver, snapshotID)
+}
+
+func (s *Service) resolveRecipientsForRepo(ctx context.Context, resolver recipientResolver, repoID uuid.UUID) (string, uuid.UUID, []uuid.UUID, error) {
+	repo, err := resolver.GetRepositoryByID(ctx, repoID)
+	if err != nil || repo == nil {
+		return "", uuid.Nil, nil, fmt.Errorf("load repository: %w", err)
+	}
+	recipients, err := listRecipientUserIDs(ctx, resolver, repo.OrgID)
+	if err != nil {
+		return "", uuid.Nil, nil, err
+	}
+	return repo.Name, repo.ID, recipients, nil
+}
+
+func (s *Service) resolveRecipientsForSnapshot(ctx context.Context, resolver recipientResolver, snapshotID uuid.UUID) (string, uuid.UUID, []uuid.UUID, error) {
 	snapshot, err := resolver.GetSnapshotByID(ctx, snapshotID)
 	if err != nil || snapshot == nil {
 		return "", uuid.Nil, nil, fmt.Errorf("load snapshot: %w", err)
@@ -221,17 +225,23 @@ func (s *Service) resolveRecipients(ctx context.Context, payload any) (string, u
 	if err != nil || repo == nil {
 		return "", uuid.Nil, nil, fmt.Errorf("load repository: %w", err)
 	}
-	// NOTE: Capped at 1000 members per org for notification fan-out.
-	// For orgs exceeding this limit, implement cursor-based pagination.
-	members, _, err := resolver.ListOrgMembers(ctx, repo.OrgID, 1000, 0)
+	recipients, err := listRecipientUserIDs(ctx, resolver, repo.OrgID)
 	if err != nil {
-		return "", uuid.Nil, nil, fmt.Errorf("list org members: %w", err)
+		return "", uuid.Nil, nil, err
+	}
+	return repo.Name, repo.ID, recipients, nil
+}
+
+func listRecipientUserIDs(ctx context.Context, resolver recipientResolver, orgID uuid.UUID) ([]uuid.UUID, error) {
+	members, _, err := resolver.ListOrgMembers(ctx, orgID, 1000, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list org members: %w", err)
 	}
 	recipients := make([]uuid.UUID, 0, len(members))
 	for _, member := range members {
 		recipients = append(recipients, member.UserID)
 	}
-	return repo.Name, repo.ID, recipients, nil
+	return recipients, nil
 }
 
 func repoLink(repoID uuid.UUID) string {

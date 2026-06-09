@@ -9,6 +9,36 @@ import (
 	"strings"
 )
 
+type trufflehogRow struct {
+	DetectorName string `json:"DetectorName"`
+	DetectorType string `json:"DetectorType"`
+	Raw          string `json:"Raw"`
+	Line         int32  `json:"Line"`
+	StartLine    int32  `json:"StartLine"`
+	EndLine      int32  `json:"EndLine"`
+	Verified     bool   `json:"Verified"`
+	SourceMeta   struct {
+		Data struct {
+			Git struct {
+				File      string `json:"file"`
+				Commit    string `json:"commit"`
+				Email     string `json:"email"`
+				Line      int32  `json:"line"`
+				StartLine int32  `json:"start_line"`
+				EndLine   int32  `json:"end_line"`
+			} `json:"git"`
+			Filesystem struct {
+				File      string `json:"file"`
+				Line      int32  `json:"line"`
+				StartLine int32  `json:"start_line"`
+				EndLine   int32  `json:"end_line"`
+			} `json:"filesystem"`
+		} `json:"Data"`
+	} `json:"SourceMetadata"`
+	File string         `json:"file"`
+	Meta map[string]any `json:"-"`
+}
+
 func HashSecret(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
@@ -114,126 +144,23 @@ func ParseTruffleHogReport(content []byte) ([]SecretFinding, error) {
 	if len(trimmed) == 0 {
 		return nil, nil
 	}
-
-	type trufflehogRow struct {
-		DetectorName string `json:"DetectorName"`
-		DetectorType string `json:"DetectorType"`
-		Raw          string `json:"Raw"`
-		Line         int32  `json:"Line"`
-		StartLine    int32  `json:"StartLine"`
-		EndLine      int32  `json:"EndLine"`
-		Verified     bool   `json:"Verified"`
-		SourceMeta   struct {
-			Data struct {
-				Git struct {
-					File      string `json:"file"`
-					Commit    string `json:"commit"`
-					Email     string `json:"email"`
-					Line      int32  `json:"line"`
-					StartLine int32  `json:"start_line"`
-					EndLine   int32  `json:"end_line"`
-				} `json:"git"`
-				Filesystem struct {
-					File      string `json:"file"`
-					Line      int32  `json:"line"`
-					StartLine int32  `json:"start_line"`
-					EndLine   int32  `json:"end_line"`
-				} `json:"filesystem"`
-			} `json:"Data"`
-		} `json:"SourceMetadata"`
-		File string         `json:"file"`
-		Meta map[string]any `json:"-"`
-	}
-
-	decodeRow := func(raw map[string]any) (SecretFinding, bool, error) {
-		encoded, err := json.Marshal(raw)
-		if err != nil {
-			return SecretFinding{}, false, fmt.Errorf("marshal trufflehog finding: %w", err)
-		}
-		var row trufflehogRow
-		if err := json.Unmarshal(encoded, &row); err != nil {
-			return SecretFinding{}, false, fmt.Errorf("decode trufflehog finding: %w", err)
-		}
-		match := strings.TrimSpace(row.Raw)
-		if match == "" {
-			return SecretFinding{}, false, nil
-		}
-		filePath := strings.TrimSpace(row.File)
-		if filePath == "" {
-			filePath = strings.TrimSpace(row.SourceMeta.Data.Git.File)
-		}
-		if filePath == "" {
-			filePath = strings.TrimSpace(row.SourceMeta.Data.Filesystem.File)
-		}
-		ruleID := strings.TrimSpace(row.DetectorName)
-		if ruleID == "" {
-			ruleID = strings.TrimSpace(row.DetectorType)
-		}
-		startLine := row.StartLine
-		if startLine == 0 {
-			startLine = row.Line
-		}
-		if startLine == 0 {
-			startLine = row.SourceMeta.Data.Git.StartLine
-		}
-		if startLine == 0 {
-			startLine = row.SourceMeta.Data.Git.Line
-		}
-		if startLine == 0 {
-			startLine = row.SourceMeta.Data.Filesystem.StartLine
-		}
-		if startLine == 0 {
-			startLine = row.SourceMeta.Data.Filesystem.Line
-		}
-		endLine := row.EndLine
-		if endLine == 0 {
-			endLine = row.SourceMeta.Data.Git.EndLine
-		}
-		if endLine == 0 {
-			endLine = row.SourceMeta.Data.Filesystem.EndLine
-		}
-		if endLine == 0 {
-			endLine = startLine
-		}
-		secretHash := HashSecret(match)
-		finding := SecretFinding{
-			Tool:        "trufflehog",
-			RuleID:      ruleID,
-			Description: ruleID,
-			Severity:    mapVerifiedSeverity(row.Verified),
-			FilePath:    filePath,
-			StartLine:   startLine,
-			EndLine:     endLine,
-			SecretType:  ruleID,
-			SecretHash:  secretHash,
-			CommitSHA:   strings.TrimSpace(row.SourceMeta.Data.Git.Commit),
-			AuthorEmail: strings.TrimSpace(row.SourceMeta.Data.Git.Email),
-			Verified:    row.Verified,
-			Metadata:    raw,
-		}
-		finding.Fingerprint = ComputeFingerprint(finding.FilePath, finding.StartLine, finding.SecretHash)
-		return finding, true, nil
-	}
-
-	findings := make([]SecretFinding, 0)
 	if trimmed[0] == '[' {
-		var rows []map[string]any
-		if err := json.Unmarshal(trimmed, &rows); err != nil {
-			return nil, fmt.Errorf("decode trufflehog report: %w", err)
-		}
-		for _, raw := range rows {
-			finding, ok, err := decodeRow(raw)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				findings = append(findings, finding)
-			}
-		}
-		return findings, nil
+		return parseTruffleHogJSONArray(trimmed)
 	}
+	return parseTruffleHogJSONL(trimmed)
+}
 
-	for _, line := range bytes.Split(trimmed, []byte("\n")) {
+func parseTruffleHogJSONArray(content []byte) ([]SecretFinding, error) {
+	var rows []map[string]any
+	if err := json.Unmarshal(content, &rows); err != nil {
+		return nil, fmt.Errorf("decode trufflehog report: %w", err)
+	}
+	return collectTruffleHogFindings(rows)
+}
+
+func parseTruffleHogJSONL(content []byte) ([]SecretFinding, error) {
+	rows := make([]map[string]any, 0)
+	for _, line := range bytes.Split(content, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
@@ -242,7 +169,15 @@ func ParseTruffleHogReport(content []byte) ([]SecretFinding, error) {
 		if err := json.Unmarshal(line, &raw); err != nil {
 			return nil, fmt.Errorf("decode trufflehog jsonl row: %w", err)
 		}
-		finding, ok, err := decodeRow(raw)
+		rows = append(rows, raw)
+	}
+	return collectTruffleHogFindings(rows)
+}
+
+func collectTruffleHogFindings(rows []map[string]any) ([]SecretFinding, error) {
+	findings := make([]SecretFinding, 0, len(rows))
+	for _, raw := range rows {
+		finding, ok, err := decodeTruffleHogRow(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -250,8 +185,77 @@ func ParseTruffleHogReport(content []byte) ([]SecretFinding, error) {
 			findings = append(findings, finding)
 		}
 	}
-
 	return findings, nil
+}
+
+func decodeTruffleHogRow(raw map[string]any) (SecretFinding, bool, error) {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return SecretFinding{}, false, fmt.Errorf("marshal trufflehog finding: %w", err)
+	}
+	var row trufflehogRow
+	if err := json.Unmarshal(encoded, &row); err != nil {
+		return SecretFinding{}, false, fmt.Errorf("decode trufflehog finding: %w", err)
+	}
+	match := strings.TrimSpace(row.Raw)
+	if match == "" {
+		return SecretFinding{}, false, nil
+	}
+	ruleID := trufflehogRuleID(row)
+	startLine := trufflehogStartLine(row)
+	secretHash := HashSecret(match)
+	finding := SecretFinding{
+		Tool:        "trufflehog",
+		RuleID:      ruleID,
+		Description: ruleID,
+		Severity:    mapVerifiedSeverity(row.Verified),
+		FilePath:    trufflehogFilePath(row),
+		StartLine:   startLine,
+		EndLine:     trufflehogEndLine(row, startLine),
+		SecretType:  ruleID,
+		SecretHash:  secretHash,
+		CommitSHA:   strings.TrimSpace(row.SourceMeta.Data.Git.Commit),
+		AuthorEmail: strings.TrimSpace(row.SourceMeta.Data.Git.Email),
+		Verified:    row.Verified,
+		Metadata:    raw,
+	}
+	finding.Fingerprint = ComputeFingerprint(finding.FilePath, finding.StartLine, finding.SecretHash)
+	return finding, true, nil
+}
+
+func trufflehogFilePath(row trufflehogRow) string {
+	for _, candidate := range []string{row.File, row.SourceMeta.Data.Git.File, row.SourceMeta.Data.Filesystem.File} {
+		if value := strings.TrimSpace(candidate); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func trufflehogRuleID(row trufflehogRow) string {
+	ruleID := strings.TrimSpace(row.DetectorName)
+	if ruleID == "" {
+		ruleID = strings.TrimSpace(row.DetectorType)
+	}
+	return ruleID
+}
+
+func trufflehogStartLine(row trufflehogRow) int32 {
+	for _, candidate := range []int32{row.StartLine, row.Line, row.SourceMeta.Data.Git.StartLine, row.SourceMeta.Data.Git.Line, row.SourceMeta.Data.Filesystem.StartLine, row.SourceMeta.Data.Filesystem.Line} {
+		if candidate != 0 {
+			return candidate
+		}
+	}
+	return 0
+}
+
+func trufflehogEndLine(row trufflehogRow, startLine int32) int32 {
+	for _, candidate := range []int32{row.EndLine, row.SourceMeta.Data.Git.EndLine, row.SourceMeta.Data.Filesystem.EndLine} {
+		if candidate != 0 {
+			return candidate
+		}
+	}
+	return startLine
 }
 
 func severityFromTags(tags []string) string {

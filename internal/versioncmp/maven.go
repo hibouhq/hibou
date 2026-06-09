@@ -74,30 +74,33 @@ func tokenizeMaven(v string) []mavenToken {
 			i++
 			continue
 		}
-		start := i
-		numeric := unicode.IsDigit(rune(v[i]))
-		i++
-		for i < len(v) {
-			if v[i] == '.' || v[i] == '-' || v[i] == '_' {
-				break
-			}
-			if numeric != unicode.IsDigit(rune(v[i])) {
-				break
-			}
-			i++
-		}
-		part := v[start:i]
-		qualifier := lastSep == '-' || prevWasQualifier
-		if isDigits(part) {
-			tokens = append(tokens, mavenToken{numeric: true, qualifier: qualifier, value: parseIntDefault(part)})
-			prevWasQualifier = qualifier
-		} else {
-			tokens = append(tokens, mavenToken{qualifier: true, qual: normalizeMavenQualifier(part)})
-			prevWasQualifier = true
-		}
+		token, nextIndex, qualifier := nextMavenToken(v, i, lastSep, prevWasQualifier)
+		tokens = append(tokens, token)
+		prevWasQualifier = qualifier
+		i = nextIndex
 		lastSep = 0
 	}
 	return trimMavenTrailing(tokens)
+}
+
+func nextMavenToken(v string, start int, lastSep byte, prevWasQualifier bool) (mavenToken, int, bool) {
+	end := start + 1
+	numeric := unicode.IsDigit(rune(v[start]))
+	for end < len(v) {
+		if v[end] == '.' || v[end] == '-' || v[end] == '_' {
+			break
+		}
+		if numeric != unicode.IsDigit(rune(v[end])) {
+			break
+		}
+		end++
+	}
+	part := v[start:end]
+	qualifier := lastSep == '-' || prevWasQualifier
+	if isDigits(part) {
+		return mavenToken{numeric: true, qualifier: qualifier, value: parseIntDefault(part)}, end, qualifier
+	}
+	return mavenToken{qualifier: true, qual: normalizeMavenQualifier(part)}, end, true
 }
 
 func normalizeMavenQualifier(q string) string {

@@ -18,8 +18,9 @@ FROM hibou-base:latest-arm64 AS runtime-arm64
 
 FROM busybox:stable AS prep
 ARG TARGETARCH
-COPY dist/hibou-linux-${TARGETARCH} /out/hibou
-RUN ln -s hibou /out/hibou-server
+COPY dist/hibou-* /out/
+RUN cp "/out/hibou-linux-${TARGETARCH}" /out/hibou \
+	&& ln -s hibou /out/hibou-server
 
 FROM runtime-${TARGETARCH}
 

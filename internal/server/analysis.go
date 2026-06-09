@@ -392,44 +392,57 @@ func (s *Server) loadAuthorizedRepo(r *http.Request, w http.ResponseWriter) (*st
 	return org, repo, true
 }
 
+func (s *Server) loadSnapshotForRepoByID(r *http.Request, repo *store.Repository, snapshotID string) (*store.Snapshot, int, string) {
+	parsed, err := uuid.Parse(snapshotID)
+	if err != nil {
+		return nil, http.StatusBadRequest, "invalid snapshot"
+	}
+
+	snapshot, err := s.queries.GetSnapshotByID(r.Context(), parsed)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "failed to load snapshot"
+	}
+	if snapshot == nil {
+		return nil, http.StatusNotFound, "snapshot not found"
+	}
+
+	ref, err := s.queries.GetRefByID(r.Context(), snapshot.RefID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "failed to load snapshot reference"
+	}
+	if ref == nil || ref.RepoID != repo.ID {
+		return nil, http.StatusForbidden, "snapshot does not belong to this repository"
+	}
+
+	return snapshot, 0, ""
+}
+
+func resolveRequestedRefName(r *http.Request, repo *store.Repository) string {
+	refName := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if refName == "" {
+		return repo.DefaultBranch
+	}
+	return refName
+}
+
 func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWriter, repo *store.Repository) (*store.Snapshot, bool) {
 	snapshotID := strings.TrimSpace(r.URL.Query().Get("snapshot"))
 	if snapshotID != "" {
-		parsed, err := uuid.Parse(snapshotID)
-		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, "invalid snapshot")
-			return nil, false
-		}
-		snapshot, err := s.queries.GetSnapshotByID(r.Context(), parsed)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load snapshot")
-			return nil, false
-		}
-		if snapshot == nil {
-			api.JSONError(w, http.StatusNotFound, "snapshot not found")
-			return nil, false
-		}
-		ref, err := s.queries.GetRefByID(r.Context(), snapshot.RefID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load snapshot reference")
-			return nil, false
-		}
-		if ref == nil || ref.RepoID != repo.ID {
-			api.JSONError(w, http.StatusForbidden, "snapshot does not belong to this repository")
+		snapshot, status, message := s.loadSnapshotForRepoByID(r, repo, snapshotID)
+		if status != 0 {
+			api.JSONError(w, status, message)
 			return nil, false
 		}
 		return snapshot, true
 	}
 
-	refName := strings.TrimSpace(r.URL.Query().Get("ref"))
-	if refName == "" {
-		refName = repo.DefaultBranch
-	}
+	refName := resolveRequestedRefName(r, repo)
 	if refName == "" {
 		api.JSONError(w, http.StatusBadRequest, "ref is required")
 		return nil, false
 	}
 
+	var err error
 	ref, snapshot, err := s.resolveSnapshotForRepo(r, repo, refName)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load repository reference")
@@ -457,53 +470,57 @@ func (s *Server) resolveSnapshotForRepo(r *http.Request, repo *store.Repository,
 	return ref, snapshot, nil
 }
 
+func (s *Server) lookupRepoRef(r *http.Request, repo *store.Repository, name string, refType store.RefType) (*store.Ref, error) {
+	if name == "" {
+		return nil, nil
+	}
+	return s.queries.GetRefByRepoAndName(r.Context(), repo.ID, name, refType)
+}
+
+func (s *Server) resolveRefByCandidates(r *http.Request, repo *store.Repository, refType store.RefType, names ...string) (*store.Ref, error) {
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		ref, err := s.lookupRepoRef(r, repo, name, refType)
+		if err != nil {
+			return nil, err
+		}
+		if ref != nil {
+			return ref, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Server) resolveGenericRefForRepo(r *http.Request, repo *store.Repository, requestedName, normalizedName string) (*store.Ref, error) {
+	ref, err := s.resolveRefByCandidates(r, repo, store.RefTypeBranch, normalizedName, requestedName)
+	if err != nil || ref != nil {
+		return ref, err
+	}
+	ref, err = s.resolveRefByCandidates(r, repo, store.RefTypeTag, normalizedName, requestedName)
+	if err != nil || ref != nil {
+		return ref, err
+	}
+	return s.resolveRefByCandidates(r, repo, store.RefTypePullRequest, requestedName, normalizedName)
+}
+
 func (s *Server) resolveRefForRepo(r *http.Request, repo *store.Repository, refName string) (*store.Ref, error) {
 	requestedName := strings.TrimSpace(refName)
 	normalizedName := normalizeStoredRefName(requestedName)
 
-	lookup := func(name string, refType store.RefType) (*store.Ref, error) {
-		if name == "" {
-			return nil, nil
-		}
-		return s.queries.GetRefByRepoAndName(r.Context(), repo.ID, name, refType)
-	}
-
-	tryNames := func(refType store.RefType, names ...string) (*store.Ref, error) {
-		seen := make(map[string]struct{}, len(names))
-		for _, name := range names {
-			if name == "" {
-				continue
-			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
-			ref, err := lookup(name, refType)
-			if err != nil {
-				return nil, err
-			}
-			if ref != nil {
-				return ref, nil
-			}
-		}
-		return nil, nil
-	}
-
 	switch {
 	case strings.HasPrefix(requestedName, "refs/heads/"):
-		return tryNames(store.RefTypeBranch, normalizedName, requestedName)
+		return s.resolveRefByCandidates(r, repo, store.RefTypeBranch, normalizedName, requestedName)
 	case strings.HasPrefix(requestedName, "refs/tags/"):
-		return tryNames(store.RefTypeTag, normalizedName, requestedName)
+		return s.resolveRefByCandidates(r, repo, store.RefTypeTag, normalizedName, requestedName)
 	default:
-		ref, err := tryNames(store.RefTypeBranch, normalizedName, requestedName)
-		if err != nil || ref != nil {
-			return ref, err
-		}
-		ref, err = tryNames(store.RefTypeTag, normalizedName, requestedName)
-		if err != nil || ref != nil {
-			return ref, err
-		}
-		return tryNames(store.RefTypePullRequest, requestedName, normalizedName)
+		return s.resolveGenericRefForRepo(r, repo, requestedName, normalizedName)
 	}
 }
 
@@ -560,56 +577,27 @@ type countedVuln struct {
 }
 
 func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulnerability) ([]countedVuln, error) {
-	advisoryIDs := make([]uuid.UUID, 0, len(vulnerabilities))
-	seenAdvisories := make(map[uuid.UUID]struct{})
-	for _, vulnerability := range vulnerabilities {
-		// TODO(vex): Query vex_statements for effective vulnerability status.
-		if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
-			continue
-		}
-		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
-			continue
-		}
-		if vulnerability.ComponentID == nil || vulnerability.AdvisoryID == nil {
-			continue
-		}
-		if _, ok := seenAdvisories[*vulnerability.AdvisoryID]; ok {
-			continue
-		}
-		seenAdvisories[*vulnerability.AdvisoryID] = struct{}{}
-		advisoryIDs = append(advisoryIDs, *vulnerability.AdvisoryID)
-	}
+	advisoryIDs := collectCountedAdvisoryIDs(vulnerabilities)
 	if len(advisoryIDs) == 0 {
 		return nil, nil
 	}
 
-	advisories, err := s.queries.GetAdvisoriesByIDs(r.Context(), advisoryIDs)
+	advisoryByID, err := s.loadAdvisoryMapForCountedVulns(r, advisoryIDs)
 	if err != nil {
 		return nil, err
-	}
-	advisoryByID := make(map[uuid.UUID]dbgen.Advisory, len(advisories))
-	for _, advisory := range advisories {
-		advisoryByID[advisory.ID] = advisory
 	}
 
 	counted := make([]countedVuln, 0, len(vulnerabilities))
 	seenPairs := make(map[string]struct{})
 	for _, vulnerability := range vulnerabilities {
-		// TODO(vex): Query vex_statements for effective vulnerability status.
-		if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
-			continue
-		}
-		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
-			continue
-		}
-		if vulnerability.ComponentID == nil || vulnerability.AdvisoryID == nil {
+		if !shouldCountVulnerability(vulnerability) {
 			continue
 		}
 		advisory, ok := advisoryByID[*vulnerability.AdvisoryID]
 		if !ok {
 			continue
 		}
-		key := vulnerability.ComponentID.String() + ":" + vulnerability.AdvisoryID.String()
+		key := countedVulnPairKey(*vulnerability.ComponentID, *vulnerability.AdvisoryID)
 		if _, ok := seenPairs[key]; ok {
 			continue
 		}
@@ -618,6 +606,49 @@ func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulne
 	}
 
 	return counted, nil
+}
+
+func collectCountedAdvisoryIDs(vulnerabilities []store.Vulnerability) []uuid.UUID {
+	advisoryIDs := make([]uuid.UUID, 0, len(vulnerabilities))
+	seenAdvisories := make(map[uuid.UUID]struct{})
+	for _, vulnerability := range vulnerabilities {
+		if !shouldCountVulnerability(vulnerability) {
+			continue
+		}
+		if _, ok := seenAdvisories[*vulnerability.AdvisoryID]; ok {
+			continue
+		}
+		seenAdvisories[*vulnerability.AdvisoryID] = struct{}{}
+		advisoryIDs = append(advisoryIDs, *vulnerability.AdvisoryID)
+	}
+	return advisoryIDs
+}
+
+func (s *Server) loadAdvisoryMapForCountedVulns(r *http.Request, advisoryIDs []uuid.UUID) (map[uuid.UUID]dbgen.Advisory, error) {
+	advisories, err := s.queries.GetAdvisoriesByIDs(r.Context(), advisoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	advisoryByID := make(map[uuid.UUID]dbgen.Advisory, len(advisories))
+	for _, advisory := range advisories {
+		advisoryByID[advisory.ID] = advisory
+	}
+	return advisoryByID, nil
+}
+
+func shouldCountVulnerability(vulnerability store.Vulnerability) bool {
+	// TODO(vex): Query vex_statements for effective vulnerability status.
+	if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
+		return false
+	}
+	if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+		return false
+	}
+	return vulnerability.ComponentID != nil && vulnerability.AdvisoryID != nil
+}
+
+func countedVulnPairKey(componentID, advisoryID uuid.UUID) string {
+	return componentID.String() + ":" + advisoryID.String()
 }
 
 func (s *Server) listAllReposByOrg(r *http.Request, orgID uuid.UUID) ([]store.Repository, error) {

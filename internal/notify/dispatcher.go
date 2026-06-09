@@ -718,27 +718,11 @@ func mapValue(raw any) map[string]any {
 func stringSliceValue(value any) []string {
 	switch typed := value.(type) {
 	case []string:
-		items := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if trimmed := strings.TrimSpace(item); trimmed != "" {
-				items = append(items, trimmed)
-			}
-		}
-		return items
+		return compactStrings(typed)
 	case []any:
-		items := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if value, ok := item.(string); ok {
-				if trimmed := strings.TrimSpace(value); trimmed != "" {
-					items = append(items, trimmed)
-				}
-			}
-		}
-		return items
+		return compactAnyStrings(typed)
 	case string:
-		if trimmed := strings.TrimSpace(typed); trimmed != "" {
-			return []string{trimmed}
-		}
+		return singleStringSlice(typed)
 	}
 	return nil
 }
@@ -819,27 +803,40 @@ func configStringSlice(config map[string]any, key string) []string {
 	}
 	switch typed := value.(type) {
 	case []string:
-		items := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if trimmed := strings.TrimSpace(item); trimmed != "" {
-				items = append(items, trimmed)
-			}
-		}
-		return items
+		return compactStrings(typed)
 	case []any:
-		items := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if str, ok := item.(string); ok {
-				if trimmed := strings.TrimSpace(str); trimmed != "" {
-					items = append(items, trimmed)
-				}
+		return compactAnyStrings(typed)
+	case string:
+		return singleStringSlice(typed)
+	}
+	return nil
+}
+
+func compactStrings(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func compactAnyStrings(items []any) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if value, ok := item.(string); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				result = append(result, trimmed)
 			}
 		}
-		return items
-	case string:
-		if trimmed := strings.TrimSpace(typed); trimmed != "" {
-			return []string{trimmed}
-		}
+	}
+	return result
+}
+
+func singleStringSlice(value string) []string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return []string{trimmed}
 	}
 	return nil
 }

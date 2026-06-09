@@ -1,5 +1,9 @@
 {
     "files.exclude": {
         "**/node_modules": true
+    },
+    "sonarlint.connectedMode.project": {
+        "connectionId": "hibouhq",
+        "projectKey": "hibouhq_hibou"
     }
 }

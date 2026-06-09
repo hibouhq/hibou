@@ -88,12 +88,7 @@ const retentionInterval = 24 * time.Hour
 func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) *Server {
 	r := chi.NewRouter()
 	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
-
-	//nolint:staticcheck // TODO: replace deprecated RealIP middleware with a proxy-aware alternative.
-	r.Use(middleware.RealIP)
-	r.Use(middleware.RequestID)
-	r.Use(requestLogger(log))
-	r.Use(middleware.Recoverer)
+	configureRouter(r, log)
 
 	s := &Server{
 		cfg:            cfg,
@@ -114,7 +109,21 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 			IdleTimeout:       120 * time.Second,
 		},
 	}
+	initializeServerServices(s, cfg, log, forges)
+	configureForgeProtection(s, cfg, log)
 
+	s.routes(siteFS)
+	return s
+}
+
+func configureRouter(r chi.Router, log zerolog.Logger) {
+	r.Use(middleware.ClientIPFromXFFTrustedProxies(1))
+	r.Use(middleware.RequestID)
+	r.Use(requestLogger(log))
+	r.Use(middleware.Recoverer)
+}
+
+func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, forges map[string]forge.Provider) {
 	s.wsHub = ws.NewHub(log)
 	artifactStore, err := objstore.NewFilesystemStore(cfg.ArtifactPath)
 	if err != nil {
@@ -144,26 +153,35 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
 	s.annotator.Subscribe()
+}
+
+func configureForgeProtection(s *Server, cfg config.Config, log zerolog.Logger) {
 	s.forgeIPAllowlists = make(map[string]*forgeIPAllowlist)
 	s.forgeLimiters = make(map[string]*ipRateLimiter)
 	for _, fc := range cfg.Forges {
-		if fc.IPAllowlist || fc.AllowedCIDRs != "" {
-			var source forgeIPSource
-			if fc.Type == "github" {
-				source = newGitHubIPSource(fc.URL)
-			}
-			cidrs := forgeDefaultCIDRs(fc, log)
-			if source != nil || len(cidrs) > 0 {
-				s.forgeIPAllowlists[fc.ID] = newForgeIPAllowlist(s.lifecycleCtx, log, source, cidrs)
-			}
-		}
-		if fc.RateLimitRPS > 0 {
-			s.forgeLimiters[fc.ID] = newIPRateLimiter(s.lifecycleCtx, fc.RateLimitRPS, int(fc.RateLimitRPS)*5)
-		}
+		configureForgeAllowlist(s, fc, log)
+		configureForgeRateLimiter(s, fc)
 	}
+}
 
-	s.routes(siteFS)
-	return s
+func configureForgeAllowlist(s *Server, fc config.ForgeConfig, log zerolog.Logger) {
+	if !fc.IPAllowlist && fc.AllowedCIDRs == "" {
+		return
+	}
+	var source forgeIPSource
+	if fc.Type == "github" {
+		source = newGitHubIPSource(fc.URL)
+	}
+	cidrs := forgeDefaultCIDRs(fc, log)
+	if source != nil || len(cidrs) > 0 {
+		s.forgeIPAllowlists[fc.ID] = newForgeIPAllowlist(s.lifecycleCtx, log, source, cidrs)
+	}
+}
+
+func configureForgeRateLimiter(s *Server, fc config.ForgeConfig) {
+	if fc.RateLimitRPS > 0 {
+		s.forgeLimiters[fc.ID] = newIPRateLimiter(s.lifecycleCtx, fc.RateLimitRPS, int(fc.RateLimitRPS)*5)
+	}
 }
 
 // forgeDefaultCIDRs returns the static CIDR list for a forge. User-provided
