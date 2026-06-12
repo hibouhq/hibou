@@ -8,13 +8,13 @@
 
 ARG SOURCE_DATE_EPOCH=0
 ARG TARGETARCH
+ARG BASE_IMAGE=hibou-base:latest
 
 # --- Runtime (Wolfi-based, reproducible, 0 CVE) ---
-# Built from apko.yaml using: apko build apko.yaml hibou-base:latest hibou-base.tar
+# Built from apko.yaml. CI publishes a multi-arch base image and passes BASE_IMAGE.
 # Lock file (apko.lock.json) pins exact package versions for reproducibility.
-# To update: apko lock apko.yaml && apko build --lockfile apko.lock.json apko.yaml ...
-FROM hibou-base:latest-amd64 AS runtime-amd64
-FROM hibou-base:latest-arm64 AS runtime-arm64
+# To update: apko lock apko.yaml.
+FROM ${BASE_IMAGE} AS runtime
 
 FROM busybox:stable AS prep
 ARG TARGETARCH
@@ -22,7 +22,7 @@ COPY dist/hibou-* /out/
 RUN cp "/out/hibou-linux-${TARGETARCH}" /out/hibou \
 	&& ln -s hibou /out/hibou-server
 
-FROM runtime-${TARGETARCH}
+FROM runtime
 
 COPY --from=prep /out/ /usr/local/bin/
 

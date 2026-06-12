@@ -3,6 +3,7 @@
 An Open Security Intelligence Platform for the Software Lifecycle. Unify dependency risk, code findings, PR analysis, and release impact into a single multi-tenant system.
 
 > **Status:** Early development. The core backend (API, auth, multi-tenant org management) and build pipeline are in place. Ingestion, findings, and the full UI are under active development — see [TODO.md](TODO.md) for the roadmap.
+> **Disclaimer:** This project uses LLM-assisted development to iterate quickly on user experience, automation, and proactive workflows. The current focus is shipping core capabilities first, then hardening stability, security, and dogfooding practices as the project matures.
 
 ## Features
 

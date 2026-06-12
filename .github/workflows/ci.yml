@@ -206,19 +206,21 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build apko base image
-        run: |
-          curl -sSL "https://github.com/chainguard-dev/apko/releases/download/v1.2.14/apko_1.2.14_linux_amd64.tar.gz" \
-            | tar xz -C /tmp --strip-components=1 && sudo mv /tmp/apko /usr/local/bin/apko
-          apko build --lockfile apko.lock.json apko.yaml hibou-base:latest /tmp/hibou-base.tar
-          docker load < /tmp/hibou-base.tar
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish apko base image
+        id: base
+        run: |
+          curl -sSL "https://github.com/chainguard-dev/apko/releases/download/v1.2.14/apko_1.2.14_linux_amd64.tar.gz" \
+            | tar xz -C /tmp --strip-components=1 && sudo mv /tmp/apko /usr/local/bin/apko
+          base_ref="ghcr.io/${{ github.repository }}-base:${{ github.ref_name }}"
+          apko publish --lockfile apko.lock.json apko.yaml "$base_ref"
+          echo "ref=$base_ref" >> "$GITHUB_OUTPUT"
 
       - name: Docker meta
         id: meta
@@ -241,6 +243,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             SOURCE_DATE_EPOCH=${{ steps.commit.outputs.epoch }}
+            BASE_IMAGE=${{ steps.base.outputs.ref }}
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

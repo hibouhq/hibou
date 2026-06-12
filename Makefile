@@ -135,6 +135,7 @@ base-image-lock: ## Resolve and lock Wolfi package versions
 docker-build: build-all base-image ## Build reproducible Docker image
 	docker build \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		--build-arg BASE_IMAGE=hibou-base:latest-$$(go env GOARCH) \
 		-t ghcr.io/hibouhq/lehibou:$(VERSION) .
 
 .PHONY: check-reproducible-image
@@ -142,9 +143,11 @@ check-reproducible-image: build-all base-image ## Verify Docker image reproducib
 	@echo "==> Building image twice (no cache) to verify reproducibility..."
 	@docker build --no-cache -q \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		--build-arg BASE_IMAGE=hibou-base:latest-$$(go env GOARCH) \
 		-t hibou-repro-1 . > /dev/null
 	@docker build --no-cache -q \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+		--build-arg BASE_IMAGE=hibou-base:latest-$$(go env GOARCH) \
 		-t hibou-repro-2 . > /dev/null
 	@id1=$$(docker inspect --format='{{.Id}}' hibou-repro-1); \
 	 id2=$$(docker inspect --format='{{.Id}}' hibou-repro-2); \
