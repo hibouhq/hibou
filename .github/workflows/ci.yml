@@ -3,9 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -27,7 +28,7 @@ jobs:
           if [[ -z "$sanitized_ref_name" ]]; then
             sanitized_ref_name="branch"
           elif (( ${#sanitized_ref_name} > 96 )); then
-            branch_hash="$(printf '%s' "$ref_name" | sha1sum | cut -c1-12)"
+            branch_hash="$(printf '%s' "$ref_name" | sha256sum | cut -c1-12)"
             sanitized_ref_name="${sanitized_ref_name:0:83}-${branch_hash}"
           fi
           echo "branch=${sanitized_ref_name}" >> "$GITHUB_OUTPUT"
