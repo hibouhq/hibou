@@ -9,12 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/api"
-	"github.com/hibouhq/lehibou/internal/audit"
-	"github.com/hibouhq/lehibou/internal/delta"
-	"github.com/hibouhq/lehibou/internal/repoconfig"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/repoconfig"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {

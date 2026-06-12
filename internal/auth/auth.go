@@ -14,8 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/forge"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 const (

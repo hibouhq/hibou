@@ -69,7 +69,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/hibouhq/lehibou
+        - github.com/hibouhq/hibou
   exclusions:
     generated: lax
     paths:

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/hibou/internal/api"
 )
 
 type providerResponse struct {

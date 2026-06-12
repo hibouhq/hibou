@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hibouhq/lehibou/internal/api"
-	"github.com/hibouhq/lehibou/internal/events"
-	"github.com/hibouhq/lehibou/internal/notify"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/events"
+	"github.com/hibouhq/hibou/internal/notify"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type createNotificationRuleRequest struct {

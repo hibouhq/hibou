@@ -9,10 +9,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/delta"
-	"github.com/hibouhq/lehibou/internal/events"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/events"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type Annotator struct {

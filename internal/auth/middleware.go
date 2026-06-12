@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type contextKey string

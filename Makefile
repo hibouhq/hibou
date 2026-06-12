@@ -136,7 +136,7 @@ docker-build: build-all base-image ## Build reproducible Docker image
 	docker build \
 		--build-arg SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
 		--build-arg BASE_IMAGE=hibou-base:latest-$$(go env GOARCH) \
-		-t ghcr.io/hibouhq/lehibou:$(VERSION) .
+		-t ghcr.io/hibouhq/hibou:$(VERSION) .
 
 .PHONY: check-reproducible-image
 check-reproducible-image: build-all base-image ## Verify Docker image reproducibility (builds twice without cache, compares digests)

@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/oauth2"
 
-	"github.com/hibouhq/lehibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/forge"
 )
 
 type testForgeProvider struct {

@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type StoreAdapter struct {

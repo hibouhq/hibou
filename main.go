@@ -1,6 +1,6 @@
 package main
 
-import "github.com/hibouhq/lehibou/cmd"
+import "github.com/hibouhq/hibou/cmd"
 
 // @title           hibou API
 // @version         1.0

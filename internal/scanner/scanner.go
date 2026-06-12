@@ -16,14 +16,14 @@ import (
 	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/advisory"
-	"github.com/hibouhq/lehibou/internal/audit"
-	"github.com/hibouhq/lehibou/internal/cache"
-	"github.com/hibouhq/lehibou/internal/events"
-	"github.com/hibouhq/lehibou/internal/provider"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
-	"github.com/hibouhq/lehibou/internal/versioncmp"
+	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/cache"
+	"github.com/hibouhq/hibou/internal/events"
+	"github.com/hibouhq/hibou/internal/provider"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/versioncmp"
 )
 
 type queryStore interface {

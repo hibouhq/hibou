@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/hibou/internal/api"
 )
 
 const defaultAuditLogsPerPage = 50

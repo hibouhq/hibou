@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/hibou/internal/api"
 )
 
 type createReleaseRequest struct {

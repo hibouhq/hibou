@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/auth"
 )
 
 func TestSendToUserDeliversToMatchingClients(t *testing.T) {

@@ -116,7 +116,7 @@ RUN <<EOF
     /tmp/output-bin/apko version
 EOF
 
-FROM base as final
+FROM base AS final
 # ARG DIND_FEATURE_VERSION
 
 # # Install Docker-in-Docker using the official devcontainers feature install script. This is cached as a layer (unlike the feature which rebuilds every time).

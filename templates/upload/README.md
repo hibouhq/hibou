@@ -8,7 +8,7 @@ For **GitHub Actions** and **Forgejo Actions**, see [`.github/actions/hibou-uplo
 
 ```yaml
 include:
-  - component: gitlab.com/hibouhq/lehibou/upload@main
+  - component: gitlab.com/hibouhq/hibou/upload@main
     inputs:
       server: $HIBOU_SERVER
       token: $HIBOU_TOKEN
@@ -35,7 +35,7 @@ All other fields (`org`, `repo`, `ref`, `sha`) are auto-detected from GitLab CI 
 
 ```yaml
 include:
-  - component: gitlab.com/hibouhq/lehibou/upload@main
+  - component: gitlab.com/hibouhq/hibou/upload@main
     inputs:
       server: $HIBOU_SERVER
       token: $HIBOU_TOKEN
@@ -48,7 +48,7 @@ include:
 
 ```yaml
 include:
-  - component: gitlab.com/hibouhq/lehibou/upload@main
+  - component: gitlab.com/hibouhq/hibou/upload@main
     inputs:
       server: $HIBOU_SERVER
       token: $HIBOU_TOKEN

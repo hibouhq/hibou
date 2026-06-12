@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hibouhq/lehibou/internal/api"
-	"github.com/hibouhq/lehibou/internal/compliance"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/compliance"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 func (s *Server) handleComplianceExport(w http.ResponseWriter, r *http.Request) {

@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	storepkg "github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	storepkg "github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type mockStore struct {

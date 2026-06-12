@@ -11,10 +11,10 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/metrics"
-	"github.com/hibouhq/lehibou/internal/provider"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/metrics"
+	"github.com/hibouhq/hibou/internal/provider"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type Config struct {

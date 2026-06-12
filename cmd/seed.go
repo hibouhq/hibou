@@ -5,9 +5,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hibouhq/lehibou/internal/config"
-	"github.com/hibouhq/lehibou/internal/seed"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/config"
+	"github.com/hibouhq/hibou/internal/seed"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 var seedCmd = &cobra.Command{

@@ -13,16 +13,16 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
-	"github.com/hibouhq/lehibou/internal/auth"
-	"github.com/hibouhq/lehibou/internal/config"
-	"github.com/hibouhq/lehibou/internal/delta"
-	"github.com/hibouhq/lehibou/internal/forge"
-	hiboumcp "github.com/hibouhq/lehibou/internal/mcp"
-	"github.com/hibouhq/lehibou/internal/rbac"
-	"github.com/hibouhq/lehibou/internal/server"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/ui"
-	"github.com/hibouhq/lehibou/internal/version"
+	"github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/config"
+	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/forge"
+	hiboumcp "github.com/hibouhq/hibou/internal/mcp"
+	"github.com/hibouhq/hibou/internal/rbac"
+	"github.com/hibouhq/hibou/internal/server"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/ui"
+	"github.com/hibouhq/hibou/internal/version"
 )
 
 var skipMigrations bool

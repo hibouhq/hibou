@@ -10,8 +10,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/api"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 func (s *Server) handleListTeamMembers(w http.ResponseWriter, r *http.Request) {

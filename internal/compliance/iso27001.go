@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/audit"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type ControlEvidence struct {

@@ -7,8 +7,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/hibouhq/lehibou/internal/auth"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type subscriptionPayload struct {

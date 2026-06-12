@@ -29,4 +29,4 @@ entrypoint:
 annotations:
   org.opencontainers.image.title: "hibou-base"
   org.opencontainers.image.description: "Minimal Wolfi base for Hibou static Go binary"
-  org.opencontainers.image.source: "https://github.com/hibouhq/lehibou"
+  org.opencontainers.image.source: "https://github.com/hibouhq/hibou"

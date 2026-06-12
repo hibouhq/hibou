@@ -20,10 +20,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/hibouhq/lehibou/internal/audit"
-	"github.com/hibouhq/lehibou/internal/events"
-	"github.com/hibouhq/lehibou/internal/metrics"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/events"
+	"github.com/hibouhq/hibou/internal/metrics"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 const (

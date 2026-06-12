@@ -13,9 +13,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/delta"
-	"github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 const timeLayout = "2006-01-02T15:04:05Z07:00"

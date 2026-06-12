@@ -11,10 +11,10 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/oauth2"
 
-	"github.com/hibouhq/lehibou/internal/delta"
-	"github.com/hibouhq/lehibou/internal/events"
-	storepkg "github.com/hibouhq/lehibou/internal/store"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/events"
+	storepkg "github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type mockForgeProvider struct {

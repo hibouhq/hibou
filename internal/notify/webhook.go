@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/hibouhq/lehibou/internal/version"
+	"github.com/hibouhq/hibou/internal/version"
 )
 
 type WebhookSender struct{ client *http.Client }

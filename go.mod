@@ -1,4 +1,4 @@
-module github.com/hibouhq/lehibou
+module github.com/hibouhq/hibou
 
 go 1.26.3
 

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hibouhq/lehibou/internal/api"
-	"github.com/hibouhq/lehibou/internal/auth"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type cliTokenResponse struct {

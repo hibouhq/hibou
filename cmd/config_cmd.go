@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hibouhq/lehibou/internal/cliconfig"
+	"github.com/hibouhq/hibou/internal/cliconfig"
 )
 
 var configCmd = &cobra.Command{

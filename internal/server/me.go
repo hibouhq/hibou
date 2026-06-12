@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/hibou/internal/api"
 )
 
 // @Summary      Get current user

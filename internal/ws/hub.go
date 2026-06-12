@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/metrics"
+	"github.com/hibouhq/hibou/internal/metrics"
 )
 
 const writeTimeout = 10 * time.Second

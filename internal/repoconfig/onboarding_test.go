@@ -8,7 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/forge"
 )
 
 func TestCreateOnboardingPRCallsForgeMethodsInCorrectOrder(t *testing.T) {

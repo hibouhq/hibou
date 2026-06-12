@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hibouhq/lehibou/internal/cliconfig"
+	"github.com/hibouhq/hibou/internal/cliconfig"
 )
 
 // Client is a thin HTTP client for CLI commands.

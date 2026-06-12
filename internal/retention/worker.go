@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/objstore"
-	"github.com/hibouhq/lehibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/objstore"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 const batchSize int32 = 100

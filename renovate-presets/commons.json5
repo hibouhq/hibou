@@ -17,7 +17,7 @@
         "customManagers:dockerfileVersions",
         "security:openssf-scorecard",
         "mergeConfidence:all-badges",
-        "github>hibouhq/lehibou//renovate-presets/fix/openssf-merge-confidence-columns.json5",
+        "github>hibouhq/hibou//renovate-presets/fix/openssf-merge-confidence-columns.json5",
     ],
     "packageRules": [
         {

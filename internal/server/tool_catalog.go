@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hibouhq/lehibou/internal/api"
+	"github.com/hibouhq/hibou/internal/api"
 )
 
 func (s *Server) handleGetToolCatalog(w http.ResponseWriter, r *http.Request) {

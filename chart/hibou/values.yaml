@@ -1,6 +1,6 @@
 hibou:
   image:
-    repository: ghcr.io/hibouhq/lehibou
+    repository: ghcr.io/hibouhq/hibou
     tag: latest
     pullPolicy: IfNotPresent
   replicas: 1

@@ -10,8 +10,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hibouhq/lehibou/internal/advisory"
-	"github.com/hibouhq/lehibou/internal/provider"
+	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/provider"
 )
 
 func TestQueryPackagesBasicMapping(t *testing.T) {

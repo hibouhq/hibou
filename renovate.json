@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>hibouhq/lehibou//renovate-presets/commons.json5"
+    "github>hibouhq/hibou//renovate-presets/commons.json5"
   ],
   "ignorePaths": [
     "**/testdata/**",

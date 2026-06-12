@@ -14,7 +14,7 @@ FULLNAME="hibou"  # matches helm fullname when release name contains chart name
 CNPG_CLUSTER="${FULLNAME}-pg"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CHART_DIR="${PROJECT_DIR}/chart/hibou"
-IMAGE_NAME="ghcr.io/hibouhq/lehibou"
+IMAGE_NAME="ghcr.io/hibouhq/hibou"
 IMAGE_TAG="dev"
 VCLUSTER_VERSION="v0.34.0"
 

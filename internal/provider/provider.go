@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/hibouhq/lehibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/advisory"
 )
 
 type PackageQuery struct {

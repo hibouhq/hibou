@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hibouhq/lehibou/internal/api"
-	coverageparser "github.com/hibouhq/lehibou/internal/coverage"
-	"github.com/hibouhq/lehibou/internal/store"
+	"github.com/hibouhq/hibou/internal/api"
+	coverageparser "github.com/hibouhq/hibou/internal/coverage"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type coverageSummaryResponse struct {

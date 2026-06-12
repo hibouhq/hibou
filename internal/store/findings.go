@@ -1,6 +1,6 @@
 package store
 
-import "github.com/hibouhq/lehibou/internal/store/dbgen"
+import "github.com/hibouhq/hibou/internal/store/dbgen"
 
 type SeverityLevel = dbgen.SeverityLevel
 
