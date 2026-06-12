@@ -160,7 +160,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: binaries
-          path: dist/hibou-*
+          path: |
+            dist/hibou-darwin-arm64
+            dist/hibou-linux-amd64
+            dist/hibou-linux-arm64
+            dist/hibou-windows-amd64.exe
+            dist/hibou-windows-arm64.exe
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -176,10 +181,16 @@ jobs:
           path: dist/
 
       - name: Upload release artifacts
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/hibou-*
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            dist/hibou-darwin-arm64 \
+            dist/hibou-linux-amd64 \
+            dist/hibou-linux-arm64 \
+            dist/hibou-windows-amd64.exe \
+            dist/hibou-windows-arm64.exe \
+            --clobber
 
   docker:
     if: startsWith(github.ref, 'refs/tags/v')

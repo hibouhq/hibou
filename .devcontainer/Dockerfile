@@ -2,6 +2,8 @@
 
 # renovate: datasource=github-releases packageName=chainguard-dev/apko
 ARG APKO_VERSION='1.2.14'
+# renovate: datasource=github-releases depName=cli/cli extractVersion=^v(?<version>.+)$
+ARG GH_CLI_VERSION='2.74.0'
 # renovate: datasource=golang-version packageName=go
 ARG GO_VERSION='1.26.3'
 # renovate: datasource=github-releases packageName=golangci/golangci-lint
@@ -27,7 +29,7 @@ ARG DIND_FEATURE_VERSION='2.16.1'
 FROM mcr.microsoft.com/devcontainers/base:noble AS base
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
-ARG GO_VERSION GOLANGCI_LINT_VERSION NODE_MAJOR RTK_VERSION
+ARG GH_CLI_VERSION GO_VERSION GOLANGCI_LINT_VERSION NODE_MAJOR RTK_VERSION
 
 RUN <<EOF
     packages=(
@@ -72,6 +74,10 @@ RUN <<EOF
     curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-${arch}-${rtk_target}.tar.gz" \
         | tar -xzf - -C /usr/local/bin rtk
     rtk --version
+
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
+        | tar -xzf - --strip-components=2 -C /usr/local/bin --wildcards '*/bin/gh'
+    gh --version
 EOF
 
 FROM base AS build-tools-infra
