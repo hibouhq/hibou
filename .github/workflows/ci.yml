@@ -34,7 +34,7 @@ jobs:
           push-pr-cache: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
 
       - name: Build and test
-        uses: ./.github/actions/devcontainer-run
+        uses: ./.github/actions/devcontainer-ci
         with:
           run-cmd: |
             (cd site && npm ci)
@@ -46,7 +46,7 @@ jobs:
             make check-reproducible
 
       - name: Run gosec
-        uses: ./.github/actions/devcontainer-run
+        uses: ./.github/actions/devcontainer-ci
         with:
           run-cmd: gosec -fmt sarif -out gosec.sarif ./... || true
 
@@ -179,7 +179,7 @@ jobs:
           registry: ghcr.io
 
       - name: Publish apko base image
-        uses: ./.github/actions/devcontainer-run
+        uses: ./.github/actions/devcontainer-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
@@ -264,7 +264,7 @@ jobs:
           file: image-sbom.cdx.json
 
       - name: Publish Helm chart
-        uses: ./.github/actions/devcontainer-run
+        uses: ./.github/actions/devcontainer-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}

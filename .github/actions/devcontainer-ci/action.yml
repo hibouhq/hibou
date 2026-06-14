@@ -49,15 +49,28 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Check if devcontainer is running
+      id: check
+      shell: bash
+      run: |
+        if devcontainer exec --workspace-folder . true 2>/dev/null; then
+          echo "running=true" >> "${GITHUB_OUTPUT}"
+        else
+          echo "running=false" >> "${GITHUB_OUTPUT}"
+        fi
+
     - name: Set up QEMU
+      if: ${{ steps.check.outputs.running == 'false' }}
       uses: docker/setup-qemu-action@v4
       with:
         cache-image: false
 
     - name: Set up Docker Buildx
+      if: ${{ steps.check.outputs.running == 'false' }}
       uses: docker/setup-buildx-action@v4
 
     - name: Compute devcontainer image refs
+      if: ${{ steps.check.outputs.running == 'false' }}
       id: refs
       shell: bash
       env:
@@ -199,6 +212,7 @@ runs:
 
     # renovate: datasource=npm depName=@devcontainers/cli
     - name: Install devcontainer CLI
+      if: ${{ steps.check.outputs.running == 'false' }}
       shell: bash
       env:
         DEVCONTAINER_CLI_VERSION: '0.87.0'
@@ -208,7 +222,7 @@ runs:
         fi
 
     - name: Build and push devcontainer
-      if: ${{ steps.refs.outputs.should_push == 'true' }}
+      if: ${{ steps.check.outputs.running == 'false' && steps.refs.outputs.should_push == 'true' }}
       shell: bash
       env:
         CONFIG_FILE: ${{ inputs.config-file }}
@@ -243,18 +257,34 @@ runs:
         devcontainer build "${args[@]}"
 
     - name: Start devcontainer
+      if: ${{ steps.check.outputs.running == 'false' }}
       shell: bash
       env:
         CONFIG_FILE: ${{ inputs.config-file }}
+        IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
+        IMAGE_TAG: ${{ steps.refs.outputs.image_tag }}
+        SHOULD_PUSH: ${{ steps.refs.outputs.should_push }}
         FILTERED_ENV: ${{ steps.filtered-env.outputs.env }}
-        RUN_CMD: ${{ inputs.run-cmd }}
       run: |
         set -euo pipefail
 
         # Use default docker driver to avoid OCI tar export from docker-container driver
         docker buildx use default
 
-        args=(--workspace-folder . --config "${CONFIG_FILE}" --skip-post-create --buildkit never)
+        # Pull the pushed image so devcontainer up can use it as layer cache
+        if [[ "${SHOULD_PUSH}" == 'true' ]]; then
+          first_tag="${IMAGE_TAG%%,*}"
+          cache_image="${IMAGE_NAME}:${first_tag}"
+          echo "Pulling ${cache_image} for local cache..."
+          docker pull "${cache_image}" || true
+        fi
+
+        args=(--workspace-folder . --config "${CONFIG_FILE}" --skip-post-create)
+
+        # Use pulled image as build cache
+        if [[ "${SHOULD_PUSH}" == 'true' ]]; then
+          args+=(--cache-from "${cache_image}")
+        fi
 
         if [[ -n "${FILTERED_ENV}" ]]; then
           while IFS= read -r line; do
@@ -264,6 +294,25 @@ runs:
 
         devcontainer up "${args[@]}"
 
-        if [[ -n "${RUN_CMD}" && "${RUN_CMD}" != 'echo "Devcontainer ready"' ]]; then
-          devcontainer exec --workspace-folder . bash -c "${RUN_CMD}"
+    - name: Run command in devcontainer
+      if: ${{ inputs.run-cmd != 'echo "Devcontainer ready"' }}
+      shell: bash
+      env:
+        RUN_CMD: ${{ inputs.run-cmd }}
+        INHERIT_ENV: ${{ inputs.inherit-env }}
+      run: |
+        SKIP_VARS="$(grep -vE '^#|^$' "${GITHUB_ACTION_PATH}/../ci-skip-env" | tr '\n' '|' | sed 's/|$//')"
+
+        args=()
+        if [[ "${INHERIT_ENV}" == "true" ]]; then
+          while IFS= read -r -d '' entry; do
+            key="${entry%%=*}"
+            value="${entry#*=}"
+            [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+            [[ "${key}" =~ ^(${SKIP_VARS}|INHERIT_ENV|RUN_CMD)$ ]] && continue
+            [[ "${value}" == *$'\n'* ]] && continue
+            args+=("--remote-env" "${key}=${value}")
+          done < <(env -0)
         fi
+        printf '%s\n' "${RUN_CMD}" | devcontainer exec "${args[@]}" --default-user-env-probe loginShell --workspace-folder . -- \
+          bash -c 'set -e; _script=$(cat); exec </dev/null; eval "${_script}"'

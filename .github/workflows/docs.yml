@@ -73,7 +73,7 @@ jobs:
           registry: ghcr.io
 
       - name: Build docs
-        uses: ./.github/actions/devcontainer-run
+        uses: ./.github/actions/devcontainer-ci
         with:
           run-cmd: |
             cd docs && npm ci
