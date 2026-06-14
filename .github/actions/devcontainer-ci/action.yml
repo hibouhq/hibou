@@ -128,9 +128,7 @@ runs:
           echo "should_push=${should_push}"
           echo "cache_to=${cache_to}"
           echo "cache_from<<CACHEEOF"
-          echo "${branch_cache}"
-          echo "${target_cache}"
-          echo "${default_branch_cache}"
+          printf '%s\n' "${branch_cache}" "${target_cache}" "${default_branch_cache}" | sort -u
           echo "CACHEEOF"
         } >> "${GITHUB_OUTPUT}"
 
@@ -196,21 +194,6 @@ runs:
           echo "CIENVEOF"
         } >> "${GITHUB_OUTPUT}"
 
-    - name: Build devcontainer
-      uses: devcontainers/ci@v0.3
-      with:
-        subFolder: .
-        configFile: ${{ inputs.config-file }}
-        imageName: ${{ steps.refs.outputs.image_name }}
-        imageTag: ${{ steps.refs.outputs.image_tag }}
-        platform: ${{ steps.refs.outputs.should_push == 'true' && inputs.platform || '' }}
-        cacheFrom: ${{ inputs.no-cache == 'true' && '' || steps.refs.outputs.cache_from }}
-        cacheTo: ${{ steps.refs.outputs.cache_to }}
-        push: ${{ steps.refs.outputs.should_push == 'true' && 'always' || 'never' }}
-        runCmd: ${{ inputs.run-cmd }}
-        inheritEnv: false
-        env: ${{ steps.filtered-env.outputs.env }}
-
     # renovate: datasource=npm depName=@devcontainers/cli
     - name: Install devcontainer CLI
       shell: bash
@@ -219,4 +202,64 @@ runs:
       run: |
         if ! command -v devcontainer &>/dev/null; then
           npm install -g --ignore-scripts "@devcontainers/cli@${DEVCONTAINER_CLI_VERSION}"
+        fi
+
+    - name: Build and push devcontainer
+      shell: bash
+      env:
+        CONFIG_FILE: ${{ inputs.config-file }}
+        IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
+        IMAGE_TAG: ${{ steps.refs.outputs.image_tag }}
+        SHOULD_PUSH: ${{ steps.refs.outputs.should_push }}
+        PLATFORM: ${{ inputs.platform }}
+        NO_CACHE: ${{ inputs.no-cache }}
+        CACHE_FROM: ${{ steps.refs.outputs.cache_from }}
+        CACHE_TO: ${{ steps.refs.outputs.cache_to }}
+      run: |
+        set -euo pipefail
+
+        args=(--workspace-folder . --config "${CONFIG_FILE}")
+
+        IFS=',' read -ra tags <<< "${IMAGE_TAG}"
+        for tag in "${tags[@]}"; do
+          args+=(--image-name "${IMAGE_NAME}:${tag}")
+        done
+
+        if [[ "${NO_CACHE}" == 'true' ]]; then
+          args+=(--no-cache)
+        else
+          while IFS= read -r cf; do
+            [[ -n "${cf}" ]] && args+=(--cache-from "${cf}")
+          done <<< "${CACHE_FROM}"
+        fi
+        [[ -n "${CACHE_TO}" ]] && args+=(--cache-to "${CACHE_TO}")
+
+        if [[ "${SHOULD_PUSH}" == 'true' ]]; then
+          [[ -n "${PLATFORM}" ]] && args+=(--platform "${PLATFORM}")
+          args+=(--push)
+        fi
+
+        devcontainer build "${args[@]}"
+
+    - name: Start devcontainer
+      shell: bash
+      env:
+        CONFIG_FILE: ${{ inputs.config-file }}
+        FILTERED_ENV: ${{ steps.filtered-env.outputs.env }}
+        RUN_CMD: ${{ inputs.run-cmd }}
+      run: |
+        set -euo pipefail
+
+        args=(--workspace-folder . --config "${CONFIG_FILE}" --skip-post-create)
+
+        if [[ -n "${FILTERED_ENV}" ]]; then
+          while IFS= read -r line; do
+            [[ -n "${line}" ]] && args+=(--remote-env "${line}")
+          done <<< "${FILTERED_ENV}"
+        fi
+
+        devcontainer up "${args[@]}"
+
+        if [[ -n "${RUN_CMD}" && "${RUN_CMD}" != 'echo "Devcontainer ready"' ]]; then
+          devcontainer exec --workspace-folder . bash -c "${RUN_CMD}"
         fi
