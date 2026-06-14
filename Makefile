@@ -167,15 +167,20 @@ install: build ## Install hibou binary and create hibou-server symlink
 
 .PHONY: build-all
 build-all: generate build-frontend ## Cross-compile for all target platforms
-	$(foreach platform,$(PLATFORMS),\
-		$(eval GOOS := $(word 1,$(subst /, ,$(platform)))) \
-		$(eval GOARCH := $(word 2,$(subst /, ,$(platform)))) \
-		$(eval EXT := $(if $(filter windows,$(GOOS)),.exe,)) \
-		mkdir -p $(DIST) && \
-		GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=0 \
-			go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY)-$(GOOS)-$(GOARCH)$(EXT) . && \
-		if [ "$(GOOS)" = "linux" ]; then ln -sf $(BINARY)-$(GOOS)-$(GOARCH)$(EXT) $(DIST)/$(BINARY)-server-$(GOARCH); fi && \
-	) true
+	@mkdir -p $(DIST); \
+	pids=""; fail=0; \
+	for platform in $(PLATFORMS); do \
+		goos=$${platform%%/*}; goarch=$${platform##*/}; \
+		ext=; [ "$$goos" = "windows" ] && ext=.exe; \
+		( GOOS=$$goos GOARCH=$$goarch CGO_ENABLED=0 \
+			go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' \
+			-o $(DIST)/$(BINARY)-$$goos-$$goarch$$ext . && \
+		  if [ "$$goos" = "linux" ]; then \
+			ln -sf $(BINARY)-$$goos-$$goarch$$ext $(DIST)/$(BINARY)-server-$$goarch; \
+		  fi ) & pids="$$pids $$!"; \
+	done; \
+	for pid in $$pids; do wait $$pid || fail=1; done; \
+	[ $$fail -eq 0 ]
 
 .PHONY: dev
 dev: ## Run backend + Vite dev server concurrently

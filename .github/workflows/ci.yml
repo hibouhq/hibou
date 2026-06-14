@@ -40,9 +40,10 @@ jobs:
             (cd site && npm ci)
             make check-generate
             make build-all
-            make lint
-            make coverage
-            (cd site && npm run coverage)
+            .github/scripts/parallel-run.sh \
+              "lint"      "make lint" \
+              "coverage"  "make coverage" \
+              "frontend"  "(cd site && npm run coverage)"
             make check-reproducible
 
       - name: Run gosec
