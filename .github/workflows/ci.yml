@@ -303,6 +303,8 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           sed -i "s/^version:.*/version: ${version}/" chart/hibou/Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: ${version}/" chart/hibou/Chart.yaml
+          helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts --force-update
+          helm repo update
           helm dependency build chart/hibou
           helm package chart/hibou --destination /tmp
           helm push "/tmp/hibou-${version}.tgz" oci://ghcr.io/${{ github.repository_owner }}/charts
