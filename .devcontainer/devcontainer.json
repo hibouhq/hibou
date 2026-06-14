@@ -4,10 +4,21 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
+  "remoteEnv": {
+    "DEVCONTAINER_ID": "${devcontainerId}",
+    "DEVCONTAINER_WORKSPACE": "${containerWorkspaceFolder}",
+    "PATH": "${containerEnv:PATH}:/home/vscode/bin",
+  },
+  "privileged": true,
+  "containerEnv": {
+    "DOCKER_BUILDKIT": "1",
+  },
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    // DO NOT USE FEATURES AS THEY ARE RUN EVERY TIME IN THE CI.
+    // Instead install features in dockerfile.
   },
   "postCreateCommand": ".devcontainer/scripts/post-create.sh",
+  "postStartCommand": ".devcontainer/scripts/post-start.sh",
   "forwardPorts": [
     3030,
     3000,
