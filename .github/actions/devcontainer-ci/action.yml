@@ -141,6 +141,12 @@ runs:
         {
           echo "image_name=${image_name}"
           echo "image_tag=${image_tag}"
+          echo "default_branch_tag=${default_branch_tag}"
+          if [ -n "${GITHUB_BASE_REF}" ]; then
+            echo "target_tag=${target_tag}"
+          else
+            echo "target_tag="
+          fi
           echo "should_push=${should_push}"
           echo "cache_to=${cache_to}"
           echo "cache_from<<CACHEEOF"
@@ -263,7 +269,10 @@ runs:
         CONFIG_FILE: ${{ inputs.config-file }}
         IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
         IMAGE_TAG: ${{ steps.refs.outputs.image_tag }}
+        DEFAULT_BRANCH_TAG: ${{ steps.refs.outputs.default_branch_tag }}
+        TARGET_TAG: ${{ steps.refs.outputs.target_tag }}
         SHOULD_PUSH: ${{ steps.refs.outputs.should_push }}
+        REF_TYPE: ${{ github.ref_type }}
         FILTERED_ENV: ${{ steps.filtered-env.outputs.env }}
       run: |
         set -euo pipefail
@@ -271,20 +280,31 @@ runs:
         # Use default docker driver to avoid OCI tar export from docker-container driver
         docker buildx use default
 
-        # Pull the pushed image so devcontainer up can use it as layer cache
-        if [[ "${SHOULD_PUSH}" == 'true' ]]; then
-          first_tag="${IMAGE_TAG%%,*}"
-          cache_image="${IMAGE_NAME}:${first_tag}"
-          echo "Pulling ${cache_image} for local cache..."
-          docker pull "${cache_image}" || true
+        # Pull cache images in priority order: default branch → target branch → current branch
+        # Deduplicates automatically; tag builds skip current branch (never pushed)
+        cache_tags=("${DEFAULT_BRANCH_TAG}")
+        if [[ -n "${TARGET_TAG}" && "${TARGET_TAG}" != "${DEFAULT_BRANCH_TAG}" ]]; then
+          cache_tags+=("${TARGET_TAG}")
         fi
+        if [[ "${REF_TYPE}" != 'tag' ]]; then
+          first_tag="${IMAGE_TAG%%,*}"
+          if [[ "${first_tag}" != "${DEFAULT_BRANCH_TAG}" && "${first_tag}" != "${TARGET_TAG}" ]]; then
+            cache_tags+=("${first_tag}")
+          fi
+        fi
+
+        cache_images=()
+        for tag in "${cache_tags[@]}"; do
+          img="${IMAGE_NAME}:${tag}"
+          echo "Pulling ${img} for local cache..."
+          docker pull "${img}" || true
+          cache_images+=("${img}")
+        done
 
         args=(--workspace-folder . --config "${CONFIG_FILE}" --skip-post-create)
-
-        # Use pulled image as build cache
-        if [[ "${SHOULD_PUSH}" == 'true' ]]; then
-          args+=(--cache-from "${cache_image}")
-        fi
+        for img in "${cache_images[@]}"; do
+          args+=(--cache-from "${img}")
+        done
 
         if [[ -n "${FILTERED_ENV}" ]]; then
           while IFS= read -r line; do
