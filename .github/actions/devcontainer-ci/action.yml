@@ -237,6 +237,9 @@ runs:
         if [[ "${SHOULD_PUSH}" == 'true' ]]; then
           [[ -n "${PLATFORM}" ]] && args+=(--platform "${PLATFORM}")
           args+=(--push)
+        else
+          # Avoid --load (default) which exports full OCI tar and fills disk
+          args+=(--output 'type=image,push=false')
         fi
 
         devcontainer build "${args[@]}"
