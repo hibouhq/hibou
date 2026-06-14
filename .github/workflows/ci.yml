@@ -8,48 +8,16 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: write
-  packages: write
-
 jobs:
   ci:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Normalize devcontainer cache refs
-        id: cache-vars
-        run: |
-          ref_name="${{ github.head_ref || github.ref_name }}"
-          sanitized_ref_name="$(printf '%s' "$ref_name" | tr -cs 'A-Za-z0-9_.-' '-' | sed -E 's/^[.-]+//; s/-+$//')"
-          if [[ -z "$sanitized_ref_name" ]]; then
-            sanitized_ref_name="branch"
-          elif (( ${#sanitized_ref_name} > 96 )); then
-            branch_hash="$(printf '%s' "$ref_name" | sha256sum | cut -c1-12)"
-            sanitized_ref_name="${sanitized_ref_name:0:83}-${branch_hash}"
-          fi
-          echo "branch=${sanitized_ref_name}" >> "$GITHUB_OUTPUT"
-          echo "repo=ghcr.io/${{ github.repository }}-devcontainer-cache" >> "$GITHUB_OUTPUT"
-          if [[ "${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}" == "true" ]]; then
-            {
-              echo 'cache_from<<EOF'
-              echo "type=registry,ref=ghcr.io/${{ github.repository }}-devcontainer-cache:${sanitized_ref_name}"
-              echo 'type=registry,ref=ghcr.io/${{ github.repository }}-devcontainer-cache:main'
-              echo 'EOF'
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "cache_from=" >> "$GITHUB_OUTPUT"
-          fi
-          if [[ "${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}" == "true" ]]; then
-            echo "cache_to=type=registry,ref=ghcr.io/${{ github.repository }}-devcontainer-cache:${sanitized_ref_name},mode=max" >> "$GITHUB_OUTPUT"
-          else
-            echo "cache_to=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
@@ -59,14 +27,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and test
-        uses: devcontainers/ci@v0.3
+      - name: Build and push devcontainer
+        uses: ./.github/actions/devcontainer-ci
         with:
-          imageName: ghcr.io/${{ github.repository }}-devcontainer
-          cacheFrom: ${{ steps.cache-vars.outputs.cache_from }}
-          cacheTo: ${{ steps.cache-vars.outputs.cache_to }}
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'always' || 'never' }}
-          runCmd: |
+          registry: ghcr.io
+          push-pr-cache: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+
+      - name: Build and test
+        uses: ./.github/actions/devcontainer-run
+        with:
+          run-cmd: |
             (cd site && npm ci)
             make check-generate
             make build-all
@@ -74,7 +44,11 @@ jobs:
             make coverage
             (cd site && npm run coverage)
             make check-reproducible
-            # make check-reproducible-image # todo: fix non-determinism in image builds before re-enabling this
+
+      - name: Run gosec
+        uses: ./.github/actions/devcontainer-run
+        with:
+          run-cmd: gosec -fmt sarif -out gosec.sarif ./... || true
 
       - name: SonarCloud scan
         uses: SonarSource/sonarcloud-github-action@v3
@@ -82,15 +56,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Run gosec
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -fmt sarif -out gosec.sarif ./... || true
 
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
@@ -171,6 +136,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: ci
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -183,8 +152,9 @@ jobs:
       - name: Upload release artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
+          gh release upload "${REF_NAME}" \
             dist/hibou-darwin-arm64 \
             dist/hibou-linux-amd64 \
             dist/hibou-linux-arm64 \
@@ -192,30 +162,9 @@ jobs:
             dist/hibou-windows-arm64.exe \
             --clobber
 
-  docker:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download pre-built binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: binaries
-          path: dist/
-
       - name: Get commit timestamp
         id: commit
         run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-qemu-action@v3
-
-      - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -224,14 +173,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build devcontainer
+        uses: ./.github/actions/devcontainer-ci
+        with:
+          registry: ghcr.io
+
       - name: Publish apko base image
+        uses: ./.github/actions/devcontainer-run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        with:
+          run-cmd: |
+            echo "${GITHUB_TOKEN}" | apko login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            base_ref="ghcr.io/${REPO}-base:${REF_NAME}"
+            apko publish --lockfile apko.lock.json apko.yaml "${base_ref}"
+            echo "${base_ref}" > .apko-base-ref
+
+      - name: Read apko base ref
         id: base
         run: |
-          curl -sSL "https://github.com/chainguard-dev/apko/releases/download/v1.2.14/apko_1.2.14_linux_amd64.tar.gz" \
-            | tar xz -C /tmp --strip-components=1 && sudo mv /tmp/apko /usr/local/bin/apko
-          base_ref="ghcr.io/${{ github.repository }}-base:${{ github.ref_name }}"
-          apko publish --lockfile apko.lock.json apko.yaml "$base_ref"
-          echo "ref=$base_ref" >> "$GITHUB_OUTPUT"
+          echo "ref=$(cat .apko-base-ref)" >> "$GITHUB_OUTPUT"
+          rm -f .apko-base-ref
 
       - name: Docker meta
         id: meta
@@ -299,12 +264,20 @@ jobs:
           file: image-sbom.cdx.json
 
       - name: Publish Helm chart
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version:.*/version: ${version}/" chart/hibou/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: ${version}/" chart/hibou/Chart.yaml
-          helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts --force-update
-          helm repo update
-          helm dependency build chart/hibou
-          helm package chart/hibou --destination /tmp
-          helm push "/tmp/hibou-${version}.tgz" oci://ghcr.io/${{ github.repository_owner }}/charts
+        uses: ./.github/actions/devcontainer-run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REF_NAME: ${{ github.ref_name }}
+        with:
+          run-cmd: |
+            echo "${GITHUB_TOKEN}" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            version="${REF_NAME#v}"
+            sed -i "s/^version:.*/version: ${version}/" chart/hibou/Chart.yaml
+            sed -i "s/^appVersion:.*/appVersion: ${version}/" chart/hibou/Chart.yaml
+            helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts --force-update
+            helm repo update
+            helm dependency build chart/hibou
+            helm package chart/hibou --destination /tmp
+            helm push "/tmp/hibou-${version}.tgz" "oci://ghcr.io/${REPO_OWNER}/charts"

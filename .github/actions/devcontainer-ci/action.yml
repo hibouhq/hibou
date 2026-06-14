@@ -1,0 +1,222 @@
+name: Devcontainer CI
+description: |
+  Build a devcontainer with registry caching, then run commands inside it.
+  Handles QEMU, Buildx, image refs, caching, push strategy, and multi-arch builds.
+
+inputs:
+  registry:
+    description: 'Container registry base URL for devcontainer cache images'
+    required: true
+  run-cmd:
+    description: 'Command(s) to run inside the devcontainer after build'
+    default: 'echo "Devcontainer ready"'
+  push-branches:
+    description: 'Branches eligible for push (pipe-separated globs). The repo default branch always pushes regardless.'
+    default: 'main|master|release*'
+  push-image:
+    description: 'Push the prebuild image for matching branches'
+    default: 'true'
+  push-cache:
+    description: 'Push BuildKit cache layers for matching branches'
+    default: 'true'
+  push-pr-cache:
+    description: 'Push BuildKit cache for PR branches (even if they don''t match push-branches)'
+    default: 'false'
+  no-cache:
+    description: 'Force fresh build with no cache'
+    default: 'false'
+  platform:
+    description: 'Target platform(s) for prebuild images pushed to registry (e.g. linux/amd64,linux/arm64)'
+    default: 'linux/amd64'
+  config-file:
+    description: 'Path to devcontainer.json'
+    default: '.devcontainer/devcontainer.json'
+  inherit-env:
+    description: 'Inherit all environment variables from the runner'
+    default: 'true'
+
+outputs:
+  image-name:
+    description: 'Full image name (without tag)'
+    value: ${{ steps.refs.outputs.image_name }}
+  image-tag:
+    description: 'Tag(s) applied to the image'
+    value: ${{ steps.refs.outputs.image_tag }}
+  should-push:
+    description: 'Whether the image was pushed to registry'
+    value: ${{ steps.refs.outputs.should_push }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v4
+      with:
+        cache-image: false
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Compute devcontainer image refs
+      id: refs
+      shell: bash
+      env:
+        INPUT_REGISTRY: ${{ inputs.registry }}
+        INPUT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        INPUT_PUSH_BRANCHES: ${{ inputs.push-branches }}
+        INPUT_PUSH_IMAGE: ${{ inputs.push-image }}
+        INPUT_PUSH_CACHE: ${{ inputs.push-cache }}
+        INPUT_PUSH_PR_CACHE: ${{ inputs.push-pr-cache }}
+      run: |
+        set -euo pipefail
+
+        sanitize_tag(){
+          printf '%s' "$1" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's#[^a-z0-9._-]+#-#g; s#(^[-.]+|[-.]+$)##g'
+        }
+
+        repo="$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+        branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+        default_branch="${INPUT_DEFAULT_BRANCH}"
+
+        branch_tag="$(sanitize_tag "${branch}")"
+        default_branch_tag="$(sanitize_tag "${default_branch}")"
+        image_name="${INPUT_REGISTRY}/${repo}-devcontainer"
+
+        branch_cache="type=registry,ref=${image_name}:buildcache-${branch_tag}"
+        target_tag="$(sanitize_tag "${GITHUB_BASE_REF:-${branch}}")"
+        target_cache="type=registry,ref=${image_name}:buildcache-${target_tag}"
+        default_branch_cache="type=registry,ref=${image_name}:buildcache-${default_branch_tag}"
+
+        # Push strategy
+        should_push='false'
+        cache_to=''
+        image_tag="${branch_tag}"
+
+        _matches_pattern(){
+          local value="$1" patterns="$2"
+          [ -z "${patterns}" ] && return 1
+          local IFS='|'
+          for pat in ${patterns}; do
+            # shellcheck disable=SC2254
+            case "${value}" in ${pat}) return 0 ;; esac
+          done
+          return 1
+        }
+
+        if [ "${branch_tag}" = "${default_branch_tag}" ]; then
+          should_push='true'
+          cache_to="${default_branch_cache},mode=max"
+          image_tag="${default_branch_tag},latest"
+        elif _matches_pattern "${branch}" "${INPUT_PUSH_BRANCHES}"; then
+          if [ "${INPUT_PUSH_IMAGE}" != 'false' ]; then
+            should_push='true'
+          fi
+          if [ "${INPUT_PUSH_CACHE}" != 'false' ]; then
+            cache_to="${branch_cache},mode=max"
+          fi
+        else
+          if [ "${INPUT_PUSH_PR_CACHE}" != 'false' ]; then
+            cache_to="${branch_cache},mode=max"
+          fi
+        fi
+
+        {
+          echo "image_name=${image_name}"
+          echo "image_tag=${image_tag}"
+          echo "should_push=${should_push}"
+          echo "cache_to=${cache_to}"
+          echo "cache_from<<CACHEEOF"
+          echo "${branch_cache}"
+          echo "${target_cache}"
+          echo "${default_branch_cache}"
+          echo "CACHEEOF"
+        } >> "${GITHUB_OUTPUT}"
+
+        echo ""
+        echo "┌─────────────────────────────────────────────────────────"
+        echo "│ Devcontainer image refs"
+        echo "├─────────────────────────────────────────────────────────"
+        echo "│ Branch:          ${branch}"
+        echo "│ Image:           ${image_name}:${image_tag}"
+        echo "│ Push image:      ${should_push}"
+        echo "│ Cache to:        ${cache_to:-none}"
+        echo "│ Cache from:"
+        echo "│   branch:        ${branch_cache}"
+        echo "│   target:        ${target_cache}"
+        echo "│   default:       ${default_branch_cache}"
+        echo "└─────────────────────────────────────────────────────────"
+
+        {
+          echo "### 🐳 Devcontainer"
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| **Branch** | \`${branch}\` |"
+          echo "| **Prebuild image** | \`${image_name}:${image_tag}\` |"
+          if [ "${should_push}" = 'true' ]; then
+            echo "| **Push image** | ✅ Yes |"
+          else
+            echo "| **Push image** | ⛔ No |"
+          fi
+          if [ -n "${cache_to}" ]; then
+            echo "| **Cache push** | \`${cache_to}\` |"
+          else
+            echo "| **Cache push** | ⛔ Disabled |"
+          fi
+          echo ""
+          echo "<details><summary>Cache sources</summary>"
+          echo ""
+          echo "| Source | Ref |"
+          echo "|--------|-----|"
+          echo "| Branch | \`${branch_cache}\` |"
+          echo "| Target | \`${target_cache}\` |"
+          echo "| Default | \`${default_branch_cache}\` |"
+          echo ""
+          echo "</details>"
+        } >> "${GITHUB_STEP_SUMMARY}"
+
+    - name: Compute filtered env for container
+      if: ${{ inputs.inherit-env == 'true' }}
+      id: filtered-env
+      shell: bash
+      run: |
+        SKIP_VARS="$(grep -vE '^#|^$' "${GITHUB_ACTION_PATH}/../ci-skip-env" | tr '\n' '|' | sed 's/|$//')"
+        {
+          echo "env<<CIENVEOF"
+          while IFS= read -r -d '' entry; do
+            key="${entry%%=*}"
+            value="${entry#*=}"
+            [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+            [[ "${key}" =~ ^(${SKIP_VARS})$ ]] && continue
+            [[ "${value}" == *$'\n'* ]] && continue
+            printf '%s=%s\n' "${key}" "${value}"
+          done < <(env -0)
+          echo "CIENVEOF"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Build devcontainer
+      uses: devcontainers/ci@v0.3
+      with:
+        subFolder: .
+        configFile: ${{ inputs.config-file }}
+        imageName: ${{ steps.refs.outputs.image_name }}
+        imageTag: ${{ steps.refs.outputs.image_tag }}
+        platform: ${{ steps.refs.outputs.should_push == 'true' && inputs.platform || '' }}
+        cacheFrom: ${{ inputs.no-cache == 'true' && '' || steps.refs.outputs.cache_from }}
+        cacheTo: ${{ steps.refs.outputs.cache_to }}
+        push: ${{ steps.refs.outputs.should_push == 'true' && 'always' || 'never' }}
+        runCmd: ${{ inputs.run-cmd }}
+        inheritEnv: false
+        env: ${{ steps.filtered-env.outputs.env }}
+
+    # renovate: datasource=npm depName=@devcontainers/cli
+    - name: Install devcontainer CLI
+      shell: bash
+      env:
+        DEVCONTAINER_CLI_VERSION: '0.87.0'
+      run: |
+        if ! command -v devcontainer &>/dev/null; then
+          npm install -g --ignore-scripts "@devcontainers/cli@${DEVCONTAINER_CLI_VERSION}"
+        fi

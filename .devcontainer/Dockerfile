@@ -8,6 +8,8 @@ ARG GH_CLI_VERSION='2.74.0'
 ARG GO_VERSION='1.26.3'
 # renovate: datasource=github-releases packageName=golangci/golangci-lint
 ARG GOLANGCI_LINT_VERSION='2.12.2'
+# renovate: datasource=github-releases depName=securego/gosec extractVersion=^v(?<version>.+)$
+ARG GOSEC_VERSION='2.27.0'
 # renovate: datasource=github-releases packageName=helm/helm
 ARG HELM_VERSION='4.2.0'
 # renovate: datasource=node-version packageName=node
@@ -29,7 +31,7 @@ ARG DIND_FEATURE_VERSION='3.0.1'
 FROM mcr.microsoft.com/devcontainers/base:noble AS base
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
-ARG GH_CLI_VERSION GO_VERSION GOLANGCI_LINT_VERSION NODE_MAJOR RTK_VERSION
+ARG GH_CLI_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION NODE_MAJOR RTK_VERSION
 
 RUN <<EOF
     packages=(
@@ -65,6 +67,9 @@ EOF
 RUN <<EOF
     GOBIN=/usr/local/bin go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${GOLANGCI_LINT_VERSION}"
     golangci-lint --version
+
+    GOBIN=/usr/local/bin go install "github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}"
+    gosec --version
 
     arch="$(echo "${TARGETARCH}" | sed 's/arm64/aarch64/' | sed 's/amd64/x86_64/')"
     rtk_target='unknown-linux-gnu'

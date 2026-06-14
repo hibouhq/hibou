@@ -1,0 +1,69 @@
+# Environment variables to exclude when forwarding runner env into the devcontainer.
+# One name (or regex pattern) per line. Comments (#) and blank lines are ignored.
+# Used by devcontainer-ci and devcontainer-run composite actions.
+
+# ── Shell / session basics ───────────────────────────────────────────
+PATH
+HOME
+USER
+LOGNAME
+SHELL
+PWD
+OLDPWD
+SHLVL
+HOSTNAME
+_
+
+# ── Locale / terminal ────────────────────────────────────────────────
+# Do not forward the runner's locale into the devcontainer: a C/POSIX/empty
+# locale overrides the image's en_US.UTF-8 and makes Java 17 default to
+# US-ASCII (corrupts non-ASCII test data). LC_.* covers LC_CTYPE, which Java
+# honours ahead of LANG when resolving the default charset.
+LANG
+LANGUAGE
+LC_.*
+TERM
+DISPLAY
+
+# ── Temp dirs ────────────────────────────────────────────────────────
+TMPDIR
+TEMP
+TMP
+
+# ── SDK / tool paths (runner-host, wrong inside container) ───────────
+JAVA_HOME
+JAVA_HOME_.*
+GOROOT_.*
+ANT_HOME
+GRADLE_HOME
+CONDA
+CHROME_BIN
+CHROMEWEBDRIVER
+SELENIUM_JAR_PATH
+AGENT_TOOLSDIRECTORY
+
+# ── Runner metadata (host-specific, useless in container) ────────────
+RUNNER_.*
+RUNS_ON_.*
+ImageVersion
+ImageOS
+
+# ── Dotnet / Pipx (runner-specific config) ───────────────────────────
+DOTNET_.*
+PIPX_.*
+
+# ── Systemd / cgroup (host-only) ────────────────────────────────────
+SYSTEMD_EXEC_PID
+INVOCATION_ID
+MEMORY_PRESSURE_.*
+
+# ── GitHub Actions files that exist on the runner host only ──────────
+# GITHUB_EVENT_PATH points to a file on the host runner filesystem that is
+# not mounted inside the devcontainer. SonarScanner crashes when it sees this
+# variable set but the file missing. Without it, Sonar falls back to GITHUB_SHA.
+GITHUB_EVENT_PATH
+
+# ── Container-internal (should not be overridden) ────────────────────
+XDG_RUNTIME_DIR
+XDG_CONFIG_HOME
+SSH_AUTH_SOCK

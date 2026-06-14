@@ -1,0 +1,38 @@
+name: Run in devcontainer
+description: |
+  Run commands in an already-running devcontainer (started by devcontainer-ci).
+  Use this after host-side actions to run more
+  commands inside the same devcontainer without rebuilding it.
+
+inputs:
+  run-cmd:
+    description: 'Command(s) to run inside the devcontainer'
+    required: true
+  inheritEnv:
+    description: 'Inherit all environment variables from the runner'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Run in devcontainer
+      shell: bash
+      env:
+        RUN_CMD: ${{ inputs.run-cmd }}
+        INHERIT_ENV: ${{ inputs.inheritEnv }}
+      run: |
+        SKIP_VARS="$(grep -vE '^#|^$' "${GITHUB_ACTION_PATH}/../ci-skip-env" | tr '\n' '|' | sed 's/|$//')"
+
+        args=()
+        if [[ "${INHERIT_ENV}" == "true" ]]; then
+          while IFS= read -r -d '' entry; do
+            key="${entry%%=*}"
+            value="${entry#*=}"
+            [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+            [[ "${key}" =~ ^(${SKIP_VARS}|INHERIT_ENV|RUN_CMD)$ ]] && continue
+            [[ "${value}" == *$'\n'* ]] && continue
+            args+=("--remote-env" "${key}=${value}")
+          done < <(env -0)
+        fi
+        printf '%s\n' "${RUN_CMD}" | devcontainer exec "${args[@]}" --default-user-env-probe loginShell --workspace-folder . -- \
+          bash -c 'set -e; _script=$(cat); exec </dev/null; eval "${_script}"'
