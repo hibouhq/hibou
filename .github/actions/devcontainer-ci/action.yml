@@ -105,7 +105,10 @@ runs:
           return 1
         }
 
-        if [ "${branch_tag}" = "${default_branch_tag}" ]; then
+        if [ "${GITHUB_REF_TYPE}" = 'tag' ]; then
+          # Tags: no push, no cache-to (one-off builds); cache-from includes default branch
+          :
+        elif [ "${branch_tag}" = "${default_branch_tag}" ]; then
           should_push='true'
           cache_to="${default_branch_cache},mode=max"
           image_tag="${default_branch_tag},latest"
@@ -205,12 +208,12 @@ runs:
         fi
 
     - name: Build and push devcontainer
+      if: ${{ steps.refs.outputs.should_push == 'true' }}
       shell: bash
       env:
         CONFIG_FILE: ${{ inputs.config-file }}
         IMAGE_NAME: ${{ steps.refs.outputs.image_name }}
         IMAGE_TAG: ${{ steps.refs.outputs.image_tag }}
-        SHOULD_PUSH: ${{ steps.refs.outputs.should_push }}
         PLATFORM: ${{ inputs.platform }}
         NO_CACHE: ${{ inputs.no-cache }}
         CACHE_FROM: ${{ steps.refs.outputs.cache_from }}
@@ -234,13 +237,8 @@ runs:
         fi
         [[ -n "${CACHE_TO}" ]] && args+=(--cache-to "${CACHE_TO}")
 
-        if [[ "${SHOULD_PUSH}" == 'true' ]]; then
-          [[ -n "${PLATFORM}" ]] && args+=(--platform "${PLATFORM}")
-          args+=(--push)
-        else
-          # Avoid --load (default) which exports full OCI tar and fills disk
-          args+=(--output 'type=image,push=false')
-        fi
+        [[ -n "${PLATFORM}" ]] && args+=(--platform "${PLATFORM}")
+        args+=(--push)
 
         devcontainer build "${args[@]}"
 
@@ -253,7 +251,10 @@ runs:
       run: |
         set -euo pipefail
 
-        args=(--workspace-folder . --config "${CONFIG_FILE}" --skip-post-create)
+        # Use default docker driver to avoid OCI tar export from docker-container driver
+        docker buildx use default
+
+        args=(--workspace-folder . --config "${CONFIG_FILE}" --skip-post-create --buildkit never)
 
         if [[ -n "${FILTERED_ENV}" ]]; then
           while IFS= read -r line; do
