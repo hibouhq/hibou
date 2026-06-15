@@ -62,3 +62,4 @@ skills-lock.json
 
 
 .copilot/agent-reports/
+*.tar
