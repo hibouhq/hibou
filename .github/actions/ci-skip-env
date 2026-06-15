@@ -63,6 +63,17 @@ MEMORY_PRESSURE_.*
 # variable set but the file missing. Without it, Sonar falls back to GITHUB_SHA.
 GITHUB_EVENT_PATH
 
+# ── Docker / Buildx (host Docker must not override dind) ────────────
+# setup-buildx-action exports BUILDER, and the host may have DOCKER_HOST
+# pointing to its own daemon. Forwarding these breaks dind.
+DOCKER_HOST
+DOCKER_CONTEXT
+DOCKER_CONFIG
+DOCKER_TLS_.*
+BUILDX_.*
+BUILDKIT_.*
+COMPOSE_.*
+
 # ── Container-internal (should not be overridden) ────────────────────
 XDG_RUNTIME_DIR
 XDG_CONFIG_HOME

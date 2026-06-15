@@ -234,9 +234,24 @@ jobs:
           IS_LATEST: ${{ steps.latest.outputs.is_latest }}
         with:
           run-cmd: |
+            set -euo pipefail
             echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+            # Ensure Docker daemon is running inside dind
+            if ! docker info >/dev/null 2>&1; then
+              echo "Docker daemon not running, starting..."
+              sudo /usr/local/share/docker-init.sh &
+              for i in $(seq 1 15); do docker info >/dev/null 2>&1 && break; sleep 1; done
+              docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon failed to start"; exit 1; }
+            fi
+
             # Create docker-container builder for multi-platform support
-            docker buildx create --use --name multiarch --driver docker-container
+            # renovate: datasource=github-releases depName=moby/buildkit packageName=moby/buildkit
+            BUILDKIT_VERSION='0.30.0'
+            docker pull --quiet "moby/buildkit:v${BUILDKIT_VERSION}"
+            docker buildx create --use --name multiarch --driver docker-container \
+              --driver-opt="image=moby/buildkit:v${BUILDKIT_VERSION}"
+
             sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
             export VERSION="${REF_NAME#v}"
             export MAJOR_MINOR="${VERSION%.*}"
