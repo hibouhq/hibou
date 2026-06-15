@@ -118,9 +118,22 @@ runs:
           return 1
         }
 
+        origin_cache=''
         if [ "${GITHUB_REF_TYPE}" = 'tag' ]; then
-          # Tags: no push, no cache-to (one-off builds); cache-from includes default branch
-          :
+          # Tags: no push, no cache-to; use default branch image + originating branch cache
+          image_tag="${default_branch_tag}"
+          # Find the branch this tag was created from
+          origin_branch=$(git branch -r --contains HEAD --format='%(refname:short)' 2>/dev/null \
+            | sed 's|^origin/||' | grep -v '^HEAD$' \
+            | grep -xF "${default_branch}" || true)
+          if [ -z "${origin_branch}" ]; then
+            origin_branch=$(git branch -r --contains HEAD --format='%(refname:short)' 2>/dev/null \
+              | sed 's|^origin/||' | grep -v '^HEAD$' | head -1 || true)
+          fi
+          if [ -n "${origin_branch}" ] && [ "${origin_branch}" != "${default_branch}" ]; then
+            origin_tag="$(sanitize_tag "${origin_branch}")"
+            origin_cache="type=registry,ref=${image_name}:buildcache-${origin_tag}"
+          fi
         elif [ "${branch_tag}" = "${default_branch_tag}" ]; then
           should_push='true'
           cache_to="${default_branch_cache},mode=max"
@@ -150,7 +163,7 @@ runs:
           echo "should_push=${should_push}"
           echo "cache_to=${cache_to}"
           echo "cache_from<<CACHEEOF"
-          printf '%s\n' "${branch_cache}" "${target_cache}" "${default_branch_cache}" | sort -u
+          printf '%s\n' "${branch_cache}" "${target_cache}" "${default_branch_cache}" ${origin_cache:+"${origin_cache}"} | sort -u
           echo "CACHEEOF"
         } >> "${GITHUB_OUTPUT}"
 
@@ -166,6 +179,7 @@ runs:
         echo "│   branch:        ${branch_cache}"
         echo "│   target:        ${target_cache}"
         echo "│   default:       ${default_branch_cache}"
+        echo "│   origin:        ${origin_cache:-none}"
         echo "└─────────────────────────────────────────────────────────"
 
         {
