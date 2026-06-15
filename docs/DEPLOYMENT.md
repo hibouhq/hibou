@@ -244,7 +244,7 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # ... scanning steps unchanged ...
       - name: Upload to Hibou
         uses: ./.github/actions/hibou-upload
