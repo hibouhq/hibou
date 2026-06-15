@@ -20,12 +20,12 @@ jobs:
       packages: write
       id-token: write
     steps:
-      - name: Free disk space
-        run: .github/scripts/free-disk-space.sh
-
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Free disk space
+        run: .github/scripts/free-disk-space.sh
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
