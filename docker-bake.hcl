@@ -34,6 +34,10 @@ variable "LATEST" {
     default = false
 }
 
+variable "CACHE_REPO" {
+    default = ""
+}
+
 variable "GIT_BRANCH" {
     default = ""
 }
@@ -66,9 +70,9 @@ target "default" {
         BASE_IMAGE        = BASE_IMAGE
     }
     cache-from = compact([
-    "type=registry,ref=${REPO}:buildcache-${GIT_DEFAULT_BRANCH}",
-    GIT_TARGET_BRANCH != "" && GIT_TARGET_BRANCH != GIT_DEFAULT_BRANCH ? "type=registry,ref=${REPO}:buildcache-${GIT_TARGET_BRANCH}" : "",
-    GIT_BRANCH != "" && GIT_BRANCH != GIT_DEFAULT_BRANCH && GIT_BRANCH != GIT_TARGET_BRANCH ? "type=registry,ref=${REPO}:buildcache-${GIT_BRANCH}" : "",
+    "type=registry,ref=${CACHE_REPO}:buildcache-${GIT_DEFAULT_BRANCH}",
+    GIT_TARGET_BRANCH != "" && GIT_TARGET_BRANCH != GIT_DEFAULT_BRANCH ? "type=registry,ref=${CACHE_REPO}:buildcache-${GIT_TARGET_BRANCH}" : "",
+    GIT_BRANCH != "" && GIT_BRANCH != GIT_DEFAULT_BRANCH && GIT_BRANCH != GIT_TARGET_BRANCH ? "type=registry,ref=${CACHE_REPO}:buildcache-${GIT_BRANCH}" : "",
   ])
-    cache-to = CACHE_PUSH ? ["type=registry,ref=${REPO}:buildcache-${GIT_BRANCH},mode=max"] : []
+    cache-to = CACHE_PUSH ? ["type=registry,ref=${CACHE_REPO}:buildcache-${GIT_BRANCH},mode=max"] : []
 }

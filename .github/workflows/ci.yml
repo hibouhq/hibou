@@ -197,27 +197,6 @@ jobs:
         with:
           registry: ghcr.io
 
-      - name: Publish apko base image
-        uses: ./.github/actions/devcontainer-ci
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          REPO: ${{ github.repository }}
-          REF_NAME: ${{ github.ref_name }}
-        with:
-          run-cmd: |
-            echo "${GITHUB_TOKEN}" | apko login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            repo="${REPO,,}"
-            base_ref="ghcr.io/${repo}:cache-base-${REF_NAME}"
-            apko publish --lockfile apko.lock.json apko.yaml "${base_ref}"
-            echo "${base_ref}" > .apko-base-ref
-
-      - name: Read apko base ref
-        id: base
-        run: |
-          echo "ref=$(cat .apko-base-ref)" >> "$GITHUB_OUTPUT"
-          rm -f .apko-base-ref
-
       - name: Build and push multi-arch image
         uses: ./.github/actions/devcontainer-ci
         env:
@@ -226,7 +205,6 @@ jobs:
           REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
           SOURCE_DATE_EPOCH: ${{ steps.commit.outputs.epoch }}
-          BASE_IMAGE: ${{ steps.base.outputs.ref }}
           GITHUB_SHA: ${{ github.sha }}
           GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
           GIT_TARGET_BRANCH: ${{ github.base_ref }}
@@ -235,7 +213,12 @@ jobs:
         with:
           run-cmd: |
             set -euo pipefail
-            echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            repo="${REPO,,}"
+
+            # Publish apko base image
+            echo "${GITHUB_TOKEN}" | apko login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            export BASE_IMAGE="ghcr.io/${repo}-cache:apko-base"
+            apko publish --lockfile apko.lock.json apko.yaml "${BASE_IMAGE}"
 
             # Ensure Docker daemon is running inside dind
             if ! docker info >/dev/null 2>&1; then
@@ -246,6 +229,7 @@ jobs:
             fi
 
             # Create docker-container builder for multi-platform support
+            echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
             # renovate: datasource=github-releases depName=moby/buildkit packageName=moby/buildkit
             BUILDKIT_VERSION='0.30.0'
             docker pull --quiet "moby/buildkit:v${BUILDKIT_VERSION}"
@@ -255,7 +239,8 @@ jobs:
             sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
             export VERSION="${REF_NAME#v}"
             export MAJOR_MINOR="${VERSION%.*}"
-            export REPO="ghcr.io/${REPO,,}"
+            export REPO="ghcr.io/${repo}"
+            export CACHE_REPO="ghcr.io/${repo}-cache"
             export GIT_BRANCH="$(sanitize "${GIT_BRANCH}")"
             export GIT_TARGET_BRANCH="$(sanitize "${GIT_TARGET_BRANCH}")"
             export GIT_DEFAULT_BRANCH="$(sanitize "${GIT_DEFAULT_BRANCH}")"
