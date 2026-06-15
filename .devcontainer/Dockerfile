@@ -16,6 +16,8 @@ ARG SQLC_VERSION='1.31.1'
 ARG SWAG_VERSION='1.16.6'
 # renovate: datasource=github-releases packageName=helm/helm
 ARG HELM_VERSION='4.2.0'
+# renovate: datasource=github-releases packageName=oras-project/oras
+ARG ORAS_VERSION='1.3.0'
 # renovate: datasource=node-version packageName=node
 ARG NODE_MAJOR='26'
 # renovate: datasource=github-releases packageName=opentofu/opentofu
@@ -43,6 +45,7 @@ RUN <<EOF
         ca-certificates
         curl
         gnupg
+        dnsutils
     )
     apt-get update
     apt-get install -y --no-install-recommends "${packages[@]}"
@@ -100,7 +103,7 @@ EOF
 
 FROM base AS build-tools-infra
 ARG TARGETARCH
-ARG APKO_VERSION KUBECTL_VERSION K9S_VERSION OPENTOFU_VERSION HELM_VERSION VCLUSTER_VERSION
+ARG APKO_VERSION KUBECTL_VERSION K9S_VERSION OPENTOFU_VERSION HELM_VERSION ORAS_VERSION VCLUSTER_VERSION
 
 RUN <<EOF
     mkdir -p /tmp/output-bin/
@@ -123,6 +126,11 @@ RUN <<EOF
 	tar -xzf /tmp/helm.tar.gz -C /tmp/output-bin/ "linux-${TARGETARCH}/helm" --strip-components=1
 	rm /tmp/helm.tar.gz
 	/tmp/output-bin/helm version
+
+	wget -qO /tmp/oras.tar.gz "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${TARGETARCH}.tar.gz"
+	tar -xzf /tmp/oras.tar.gz -C /tmp/output-bin/ "oras"
+	rm -f /tmp/oras.tar.gz
+	/tmp/output-bin/oras version
 
 	wget -qO /tmp/output-bin/vcluster "https://github.com/loft-sh/vcluster/releases/download/v${VCLUSTER_VERSION}/vcluster-linux-${TARGETARCH}"
 	chmod +x /tmp/output-bin/vcluster

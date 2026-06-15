@@ -19,12 +19,12 @@ FROM ${BASE_IMAGE} AS runtime
 FROM busybox:stable AS prep
 ARG TARGETARCH
 COPY dist/hibou-* /out/
-RUN cp "/out/hibou-linux-${TARGETARCH}" /out/hibou \
-	&& ln -s hibou /out/hibou-server
+RUN install -m 0555 "/out/hibou-linux-${TARGETARCH}" /out/hibou \
+	&& ln -sf hibou /out/hibou-server
 
 FROM runtime
 
-COPY --from=prep /out/ /usr/local/bin/
+COPY --from=prep /out/hibou /out/hibou-server /usr/local/bin/
 
 USER nonroot:nonroot
 EXPOSE 8080

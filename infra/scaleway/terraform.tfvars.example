@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in values.
+# NEVER commit terraform.tfvars to version control.
+
+scw_access_key = ""
+scw_secret_key = ""
+scw_project_id = ""
+
+# server_name   = "hibou"
+# instance_type = "DEV1-M"  # 3 vCPU, 4 GiB RAM. €14.74/mo.
+# zone          = "fr-par-1"  # Paris. Alternatives: fr-par-2, fr-par-3, nl-ams-1, nl-ams-2, nl-ams-3, pl-waw-1, pl-waw-2, pl-waw-3
+# ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+# Restrict SSH access to your IP (recommended for production):
+# ssh_allowed_ips = ["203.0.113.0/32"]
+
+# Open K8s API port (6443) for remote kubectl:
+# enable_k8s_api_access = true

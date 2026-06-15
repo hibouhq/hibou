@@ -57,10 +57,14 @@ postgresql:
     pullPolicy: IfNotPresent
   auth:
     # Provide an existing Secret containing key: url (full postgres:// connection string).
+    # When postgresql.enabled=true, the same Secret must also contain key: password
+    # for the bundled PostgreSQL container. auth.username and auth.database still
+    # come from values and must match the bundled PostgreSQL settings.
     # Create it with:
     #   kubectl create secret generic hibou-db-url -n hibou \
-    #     --from-literal=url="postgres://user:pass@host:5432/db?sslmode=require"
-    # When set, auth.username/password/database are ignored.
+    #     --from-literal=url="postgres://user:pass@host:5432/db?sslmode=require" \
+    #     --from-literal=password="pass"
+    # existingSecret only replaces the password source for bundled PostgreSQL.
     existingSecret: ""
     username: hibou
     # Set via --set in dev. In production, use existingSecret instead.

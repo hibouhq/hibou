@@ -4,7 +4,7 @@
 hcloud_token = ""
 
 # server_name = "hibou"
-# server_type = "cax11"  # 2 ARM vCPU, 4 GiB RAM, 40 GB - EUR 3.79/mo
+# server_type = "cax11"  # 2 ARM vCPU, 4 GiB RAM, 40 GB. Check live Hetzner pricing.
 # location    = "fsn1"   # Falkenstein, DE. Alternatives: nbg1, hel1, ash, hil
 # ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 

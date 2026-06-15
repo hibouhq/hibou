@@ -2,11 +2,7 @@ variable "REPO" {
     default = "ghcr.io/hibouhq/hibou"
 }
 
-variable "VERSION" {
-    default = "dev"
-}
-
-variable "MAJOR_MINOR" {
+variable "RELEASE_VERSION" {
     default = ""
 }
 
@@ -34,6 +30,10 @@ variable "LATEST" {
     default = false
 }
 
+variable "SHA_TAG" {
+    default = ""
+}
+
 variable "CACHE_REPO" {
     default = ""
 }
@@ -50,21 +50,32 @@ variable "GIT_DEFAULT_BRANCH" {
     default = "main"
 }
 
+variable "PLATFORMS" {
+    default = "linux/amd64,linux/arm64"
+}
+
 target "default" {
     context    = "."
-    platforms  = ["linux/amd64", "linux/arm64"]
+    platforms  = split(",", PLATFORMS)
     output     = PUSH ? ["type=registry"] : ["type=docker"]
     tags = compact([
-    "${REPO}:${VERSION}",
-    MAJOR_MINOR != "" ? "${REPO}:${MAJOR_MINOR}" : "",
-    LATEST ? "${REPO}:latest" : "",
-  ])
+        RELEASE_VERSION != "" ? "${REPO}:${RELEASE_VERSION}" : "",
+        RELEASE_VERSION != "" ? "${REPO}:${join(".", slice(split(".", RELEASE_VERSION), 0, 2))}" : "",
+        RELEASE_VERSION != "" && LATEST ? "${REPO}:latest" : "",
+        SHA_TAG != "" ? "${REPO}:${SHA_TAG}" : "",
+    ])
     labels = {
         "org.opencontainers.image.source"   = "https://github.com/hibouhq/hibou"
-        "org.opencontainers.image.version"  = VERSION
+        "org.opencontainers.image.version"  = coalesce(RELEASE_VERSION, SHA_TAG, "dev")
         "org.opencontainers.image.revision" = GITHUB_SHA
         "org.opencontainers.image.created"  = timestamp()
     }
+    annotations = [
+        "index,manifest:org.opencontainers.image.source=https://github.com/hibouhq/hibou",
+        "index,manifest:org.opencontainers.image.version=${coalesce(RELEASE_VERSION, SHA_TAG, "dev")}",
+        "index,manifest:org.opencontainers.image.revision=${GITHUB_SHA}",
+        "index,manifest:org.opencontainers.image.created=${timestamp()}",
+    ]
     args = {
         SOURCE_DATE_EPOCH = SOURCE_DATE_EPOCH
         BASE_IMAGE        = BASE_IMAGE

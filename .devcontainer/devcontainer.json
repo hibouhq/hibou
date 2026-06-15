@@ -95,6 +95,7 @@
         "editorconfig.editorconfig",
         "github.vscode-github-actions",
         "docker.docker",
+        "HashiCorp.terraform",
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",

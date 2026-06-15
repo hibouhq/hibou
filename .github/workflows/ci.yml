@@ -16,8 +16,9 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -49,6 +50,70 @@ jobs:
               "coverage"  "make coverage" \
               "frontend"  "(cd site && npm run coverage)"
             make check-reproducible
+
+      - name: Get commit info
+        if: github.event_name != 'pull_request'
+        id: commit
+        run: |
+          echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        if: github.event_name != 'pull_request'
+        uses: ./.github/actions/devcontainer-ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          SOURCE_DATE_EPOCH: ${{ steps.commit.outputs.epoch }}
+          GITHUB_SHA: ${{ github.sha }}
+          GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          GIT_TARGET_BRANCH: ${{ github.base_ref }}
+          GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
+          REF_NAME: ${{ github.ref_name }}
+        with:
+          run-cmd: |
+            set -euo pipefail
+            repo="${REPO,,}"
+
+            # Publish apko base image
+            echo "${GITHUB_TOKEN}" | apko login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            export BASE_IMAGE="ghcr.io/${repo}-cache:apko-base"
+            apko publish --lockfile apko.lock.json apko.yaml "${BASE_IMAGE}"
+
+            # Start Docker daemon
+            if ! docker info >/dev/null 2>&1; then
+              sudo /usr/local/share/docker-init.sh &
+              for i in $(seq 1 15); do docker info >/dev/null 2>&1 && break; sleep 1; done
+              docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon failed to start"; exit 1; }
+            fi
+
+            echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+            # renovate: datasource=github-releases depName=moby/buildkit packageName=moby/buildkit
+            BUILDKIT_VERSION='0.30.0'
+            docker pull --quiet "moby/buildkit:v${BUILDKIT_VERSION}"
+            docker buildx create --use --name multiarch --driver docker-container \
+              --driver-opt="image=moby/buildkit:v${BUILDKIT_VERSION}"
+
+            sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
+            export SHA_TAG="sha-${GITHUB_SHA:0:7}"
+            export REPO="ghcr.io/${repo}"
+            export CACHE_REPO="ghcr.io/${repo}-cache"
+            export GIT_BRANCH="$(sanitize "${GIT_BRANCH}")"
+            export GIT_TARGET_BRANCH="$(sanitize "${GIT_TARGET_BRANCH}")"
+            export GIT_DEFAULT_BRANCH="$(sanitize "${GIT_DEFAULT_BRANCH}")"
+            export PUSH=true
+            export CACHE_PUSH=true
+
+            # On release, add semver tags
+            if [ "${IS_RELEASE}" = "true" ]; then
+              export RELEASE_VERSION="${REF_NAME#v}"
+              highest=$(git tag -l 'v*' --sort=-v:refname | head -1)
+              [ "${REF_NAME}" = "${highest}" ] && export LATEST=true
+            fi
+
+            docker buildx bake -f docker-bake.hcl
 
       - name: Run gosec
         uses: ./.github/actions/devcontainer-ci
@@ -125,38 +190,15 @@ jobs:
             frontend-sbom.cdx.json
           retention-days: 30
 
-      - name: Upload build artifacts
+      # --- Release-only steps (tag pushes) ---
+
+      - name: Compute release version
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
-        with:
-          name: binaries
-          path: |
-            dist/hibou-darwin-arm64
-            dist/hibou-linux-amd64
-            dist/hibou-linux-arm64
-            dist/hibou-windows-amd64.exe
-            dist/hibou-windows-arm64.exe
+        id: release
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: ci
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Download pre-built binaries
-        uses: actions/download-artifact@v8
-        with:
-          name: binaries
-          path: dist/
-
-      - name: Upload release artifacts
+      - name: Upload release binaries
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
@@ -169,89 +211,12 @@ jobs:
             dist/hibou-windows-arm64.exe \
             --clobber
 
-      - name: Get commit timestamp
-        id: commit
-        run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
-
-      - name: Check if latest release
-        id: latest
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          highest=$(git tag -l 'v*' --sort=-v:refname | head -1)
-          if [ "${REF_NAME}" = "${highest}" ]; then
-            echo "is_latest=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_latest=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build devcontainer
-        uses: ./.github/actions/devcontainer-ci
-        with:
-          registry: ghcr.io
-
-      - name: Build and push multi-arch image
-        uses: ./.github/actions/devcontainer-ci
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          REPO: ${{ github.repository }}
-          REF_NAME: ${{ github.ref_name }}
-          SOURCE_DATE_EPOCH: ${{ steps.commit.outputs.epoch }}
-          GITHUB_SHA: ${{ github.sha }}
-          GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
-          GIT_TARGET_BRANCH: ${{ github.base_ref }}
-          GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          IS_LATEST: ${{ steps.latest.outputs.is_latest }}
-        with:
-          run-cmd: |
-            set -euo pipefail
-            repo="${REPO,,}"
-
-            # Publish apko base image
-            echo "${GITHUB_TOKEN}" | apko login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            export BASE_IMAGE="ghcr.io/${repo}-cache:apko-base"
-            apko publish --lockfile apko.lock.json apko.yaml "${BASE_IMAGE}"
-
-            # Ensure Docker daemon is running inside dind
-            if ! docker info >/dev/null 2>&1; then
-              echo "Docker daemon not running, starting..."
-              sudo /usr/local/share/docker-init.sh &
-              for i in $(seq 1 15); do docker info >/dev/null 2>&1 && break; sleep 1; done
-              docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon failed to start"; exit 1; }
-            fi
-
-            # Create docker-container builder for multi-platform support
-            echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            # renovate: datasource=github-releases depName=moby/buildkit packageName=moby/buildkit
-            BUILDKIT_VERSION='0.30.0'
-            docker pull --quiet "moby/buildkit:v${BUILDKIT_VERSION}"
-            docker buildx create --use --name multiarch --driver docker-container \
-              --driver-opt="image=moby/buildkit:v${BUILDKIT_VERSION}"
-
-            sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
-            export VERSION="${REF_NAME#v}"
-            export MAJOR_MINOR="${VERSION%.*}"
-            export REPO="ghcr.io/${repo}"
-            export CACHE_REPO="ghcr.io/${repo}-cache"
-            export GIT_BRANCH="$(sanitize "${GIT_BRANCH}")"
-            export GIT_TARGET_BRANCH="$(sanitize "${GIT_TARGET_BRANCH}")"
-            export GIT_DEFAULT_BRANCH="$(sanitize "${GIT_DEFAULT_BRANCH}")"
-            export PUSH=true
-            export LATEST="${IS_LATEST}"
-            docker buildx bake -f docker-bake.hcl
-
       - name: Install cosign
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: sigstore/cosign-installer@v3
 
       - name: Sign image
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
@@ -261,34 +226,17 @@ jobs:
           digest=$(docker buildx imagetools inspect "${image}:${version}" --format '{{.Manifest.Digest}}')
           cosign sign --yes "${image}@${digest}"
 
-      - name: Compute image version
-        id: version
-        run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
-        env:
-          REF_NAME: ${{ github.ref_name }}
-
-      - name: Generate image SBOM and scan
+      - name: Generate image SBOM
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}
+          image-ref: ghcr.io/${{ github.repository }}:${{ steps.release.outputs.version }}
           format: cyclonedx
           output: image-sbom.cdx.json
 
-      - name: Check Hibou upload config
-        id: hibou
-        run: |
-          if [[ -n "$HIBOU_SERVER_URL" && -n "$HIBOU_API_TOKEN" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          HIBOU_SERVER_URL: ${{ secrets.HIBOU_SERVER_URL }}
-          HIBOU_API_TOKEN: ${{ secrets.HIBOU_API_TOKEN }}
-
       - name: Upload image SBOM to Hibou
-        if: steps.hibou.outputs.enabled == 'true'
+        if: startsWith(github.ref, 'refs/tags/v') && steps.hibou-ci.outputs.enabled == 'true'
         continue-on-error: true
         uses: ./.github/actions/hibou-upload
         with:
@@ -298,20 +246,59 @@ jobs:
           file: image-sbom.cdx.json
 
       - name: Publish Helm chart
+        if: github.event_name != 'pull_request'
         uses: ./.github/actions/devcontainer-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
           REPO_OWNER: ${{ github.repository_owner }}
           REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          SOURCE_DATE_EPOCH: ${{ steps.commit.outputs.epoch }}
         with:
+          registry: ghcr.io
           run-cmd: |
+            set -euo pipefail
+
             echo "${GITHUB_TOKEN}" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            version="${REF_NAME#v}"
-            sed -i "s/^version:.*/version: ${version}/" chart/hibou/Chart.yaml
-            sed -i "s/^appVersion:.*/appVersion: ${version}/" chart/hibou/Chart.yaml
+            echo "${GITHUB_TOKEN}" | oras login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+            # Compute tags and versions
+            sha_tag="sha-${GITHUB_SHA:0:7}"
+            if [[ "${REF_NAME}" == v* ]]; then
+              chart_version="${REF_NAME#v}"
+              app_version="${REF_NAME#v}"
+              tags="${chart_version}"
+            else
+              chart_version="0.0.0-${sha_tag}"
+              app_version="${sha_tag}"
+              tags="${chart_version}"
+            fi
+            created="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+
+            # Build chart dependencies and package
             helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts --force-update
             helm repo update
             helm dependency build chart/hibou
-            helm package chart/hibou --destination /tmp
-            helm push "/tmp/hibou-${version}.tgz" "oci://ghcr.io/${REPO_OWNER}/charts"
+            helm package chart/hibou --version "${chart_version}" --app-version "${app_version}" --destination /tmp
+            chart_tgz="/tmp/hibou-${chart_version}.tgz"
+
+            # Build OCI config from packaged chart
+            chart_show="$(helm show chart "${chart_tgz}")"
+            chart_name="$(echo "${chart_show}" | grep '^name:' | awk '{print $2}')"
+            chart_desc="$(echo "${chart_show}" | grep '^description:' | sed 's/^description: //')"
+            chart_api="$(echo "${chart_show}" | grep '^apiVersion:' | awk '{print $2}')"
+            printf '{"name":"%s","version":"%s","description":"%s","apiVersion":"%s","appVersion":"%s"}' \
+              "${chart_name}" "${chart_version}" "${chart_desc}" "${chart_api}" "${app_version}" \
+              > /tmp/helm-config.json
+
+            # Push with oras: multiple tags + OCI annotations
+            oras push "ghcr.io/${REPO_OWNER}/charts/${chart_name}:${tags}" \
+              --config /tmp/helm-config.json:application/vnd.cncf.helm.config.v1+json \
+              --annotation "org.opencontainers.image.source=https://github.com/hibouhq/hibou" \
+              --annotation "org.opencontainers.image.version=${app_version}" \
+              --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --annotation "org.opencontainers.image.created=${created}" \
+              --annotation "org.opencontainers.image.title=${chart_name}" \
+              --annotation "org.opencontainers.image.description=${chart_desc}" \
+              "${chart_tgz}:application/vnd.cncf.helm.chart.content.v1.tar+gzip"
