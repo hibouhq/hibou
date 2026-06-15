@@ -229,7 +229,7 @@ jobs:
         with:
           run-cmd: |
             echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            docker buildx create --use --name multiarch --driver docker-container 2>/dev/null || docker buildx use multiarch
+            docker buildx use multiarch 2>/dev/null || docker buildx create --use --name multiarch --driver docker-container
             sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
             export VERSION="${REF_NAME#v}"
             export MAJOR_MINOR="${VERSION%.*}"
