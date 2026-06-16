@@ -30,6 +30,10 @@ variable "LATEST" {
     default = false
 }
 
+variable "STABLE_RELEASE" {
+    default = false
+}
+
 variable "SHA_TAG" {
     default = ""
 }
@@ -60,8 +64,8 @@ target "default" {
     output     = PUSH ? ["type=registry"] : ["type=docker"]
     tags = compact([
         RELEASE_VERSION != "" ? "${REPO}:${RELEASE_VERSION}" : "",
-        RELEASE_VERSION != "" ? "${REPO}:${join(".", slice(split(".", RELEASE_VERSION), 0, 2))}" : "",
-        RELEASE_VERSION != "" && LATEST ? "${REPO}:latest" : "",
+        RELEASE_VERSION != "" && STABLE_RELEASE ? "${REPO}:${join(".", slice(split(".", RELEASE_VERSION), 0, 2))}" : "",
+        RELEASE_VERSION != "" && STABLE_RELEASE && LATEST ? "${REPO}:latest" : "",
         SHA_TAG != "" ? "${REPO}:${SHA_TAG}" : "",
     ])
     labels = {

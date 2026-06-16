@@ -27,10 +27,10 @@ hibou:
   #   HIBOU_FORGE_0_APP_ID=<github-app-id>
   #   HIBOU_FORGE_0_PRIVATE_KEY=<pem-private-key>
   #   HIBOU_FORGE_0_IP_ALLOWLIST=true
-  # forges:
-  #   - type: github
-  #     id: github
-  #     existingSecret: hibou-forge-github
+  forges:
+    - type: github
+      id: github
+      existingSecret: hibou-forge-github
 
 postgresql:
   enabled: true

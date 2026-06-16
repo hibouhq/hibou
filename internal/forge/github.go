@@ -25,6 +25,7 @@ import (
 )
 
 const defaultGitHubAPIURL = "https://api.github.com"
+const githubBearerPrefix = "Bearer "
 
 type GitHub struct {
 	httpClient    *http.Client
@@ -386,15 +387,48 @@ func (g *GitHub) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	request.Header.Set("Authorization", githubBearerPrefix+token.AccessToken)
 
 	var payload githubUser
 	if err := g.do(request, &payload); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(payload.Email) == "" {
+		email, err := g.primaryEmail(ctx, token.AccessToken)
+		if err != nil {
+			return nil, err
+		}
+		payload.Email = email
+	}
 
 	user := payload.toUserInfo(g.ID())
 	return &user, nil
+}
+
+func (g *GitHub) primaryEmail(ctx context.Context, accessToken string) (string, error) {
+	request, err := g.newRequest(ctx, http.MethodGet, "/user/emails", nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", githubBearerPrefix+accessToken)
+
+	var payload []githubEmail
+	if err := g.do(request, &payload); err != nil {
+		return "", err
+	}
+
+	for _, email := range payload {
+		if email.Primary && email.Verified && strings.TrimSpace(email.Email) != "" {
+			return email.Email, nil
+		}
+	}
+	for _, email := range payload {
+		if email.Verified && strings.TrimSpace(email.Email) != "" {
+			return email.Email, nil
+		}
+	}
+
+	return "", nil
 }
 
 func (g *GitHub) isAppMode() bool {
@@ -463,7 +497,7 @@ func (g *GitHub) listInstallations(ctx context.Context) ([]githubInstallation, e
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+jwt)
+		req.Header.Set("Authorization", githubBearerPrefix+jwt)
 
 		var page []githubInstallation
 		resp, err := g.doWithResponse(req, &page)
@@ -492,7 +526,7 @@ func (g *GitHub) createInstallationToken(ctx context.Context, installationID int
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Authorization", githubBearerPrefix+jwt)
 
 	var token githubInstallationToken
 	if err := g.do(req, &token); err != nil {
@@ -517,7 +551,7 @@ func (g *GitHub) ListInstallationRepositories(ctx context.Context, installationI
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+token.Token)
+		req.Header.Set("Authorization", githubBearerPrefix+token.Token)
 
 		var payload struct {
 			Repositories []githubRepository `json:"repositories"`
@@ -792,6 +826,12 @@ type githubUser struct {
 	Login     string `json:"login"`
 	Name      string `json:"name"`
 	AvatarURL string `json:"avatar_url"`
+}
+
+type githubEmail struct {
+	Email    string `json:"email"`
+	Primary  bool   `json:"primary"`
+	Verified bool   `json:"verified"`
 }
 
 func (u githubUser) toUserInfo(providerID string) UserInfo {

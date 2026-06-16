@@ -112,8 +112,11 @@ jobs:
             # On release, add semver tags
             if [ "${IS_RELEASE}" = "true" ]; then
               export RELEASE_VERSION="${REF_NAME#v}"
-              highest=$(git tag -l 'v*' --sort=-v:refname | head -1)
-              [ "${REF_NAME}" = "${highest}" ] && export LATEST=true
+              if [[ "${RELEASE_VERSION}" != *-* ]]; then
+                export STABLE_RELEASE=true
+                highest=$(git tag -l 'v*' --sort=-v:refname | grep -Ev -- '-' | head -1)
+                [ "${REF_NAME}" = "${highest}" ] && export LATEST=true
+              fi
             fi
 
             docker buildx bake -f docker-bake.hcl
