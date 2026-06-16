@@ -283,25 +283,32 @@ jobs:
             helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts --force-update
             helm repo update
             helm dependency build chart/hibou
-            helm package chart/hibou --version "${chart_version}" --app-version "${app_version}" --destination /tmp
-            chart_tgz="/tmp/hibou-${chart_version}.tgz"
+            chart_tmpdir="$(mktemp -d)"
+            helm package chart/hibou --version "${chart_version}" --app-version "${app_version}" --destination "${chart_tmpdir}"
+            chart_tgz="${chart_tmpdir}/hibou-${chart_version}.tgz"
+            repo_owner="${REPO_OWNER,,}"
+            chart_file="$(basename "${chart_tgz}")"
 
             # Build OCI config from packaged chart
             chart_show="$(helm show chart "${chart_tgz}")"
             chart_name="$(echo "${chart_show}" | grep '^name:' | awk '{print $2}')"
             chart_desc="$(echo "${chart_show}" | grep '^description:' | sed 's/^description: //')"
             chart_api="$(echo "${chart_show}" | grep '^apiVersion:' | awk '{print $2}')"
+            config_file="helm-config.json"
             printf '{"name":"%s","version":"%s","description":"%s","apiVersion":"%s","appVersion":"%s"}' \
               "${chart_name}" "${chart_version}" "${chart_desc}" "${chart_api}" "${app_version}" \
-              > /tmp/helm-config.json
+              > "${chart_tmpdir}/${config_file}"
 
             # Push with oras: multiple tags + OCI annotations
-            oras push "ghcr.io/${REPO_OWNER}/charts/${chart_name}:${tags}" \
-              --config /tmp/helm-config.json:application/vnd.cncf.helm.config.v1+json \
-              --annotation "org.opencontainers.image.source=https://github.com/hibouhq/hibou" \
-              --annotation "org.opencontainers.image.version=${app_version}" \
-              --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
-              --annotation "org.opencontainers.image.created=${created}" \
-              --annotation "org.opencontainers.image.title=${chart_name}" \
-              --annotation "org.opencontainers.image.description=${chart_desc}" \
-              "${chart_tgz}:application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+            (
+              cd "${chart_tmpdir}"
+              oras push "ghcr.io/${repo_owner}/charts/${chart_name}:${tags}" \
+                --config "${config_file}:application/vnd.cncf.helm.config.v1+json" \
+                --annotation "org.opencontainers.image.source=https://github.com/hibouhq/hibou" \
+                --annotation "org.opencontainers.image.version=${app_version}" \
+                --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+                --annotation "org.opencontainers.image.created=${created}" \
+                --annotation "org.opencontainers.image.title=${chart_name}" \
+                --annotation "org.opencontainers.image.description=${chart_desc}" \
+                "${chart_file}:application/vnd.cncf.helm.chart.content.v1.tar+gzip"
+            )
