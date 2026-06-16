@@ -233,7 +233,19 @@ This removes the old Argo CD password-injection blocker without committing the p
    - Homepage URL: `https://$HIBOU_DOMAIN/`
    - Callback URL: `https://$HIBOU_DOMAIN/api/v1/auth/callback?provider=github`
    - Webhook URL: `https://$HIBOU_DOMAIN/api/v1/webhooks/github`
-   - Webhook secret: generate and save a random secret
+   - Webhook secret: generate it locally once, then paste the same value into GitHub and Kubernetes later:
+
+```bash
+export GITHUB_APP_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+printf '%s\n' "$GITHUB_APP_WEBHOOK_SECRET"
+```
+
+   Keep that exact value. You will reuse it below when creating `hibou-forge-github`.
+
+   Reachability note:
+   - `https://$HIBOU_DOMAIN/api/v1/webhooks/github` must be reachable from the public internet on TCP `443` because GitHub sends webhook deliveries from GitHub infrastructure.
+   - `https://$HIBOU_DOMAIN/api/v1/auth/callback?provider=github` must be reachable from end-user browsers on TCP `443` because GitHub redirects the user's browser there after login.
+   - Your current firewall shape is correct for that: SSH `22` and k3s API `6443` can stay restricted, but HTTPS `443` must stay open publicly.
 
 2. Grant repository permissions:
    - Metadata: Read-only
@@ -244,6 +256,10 @@ This removes the old Argo CD password-injection blocker without committing the p
 3. Subscribe to webhook events:
    - Push
    - Pull request
+
+   OAuth note:
+   - Hibou asks GitHub for `read:user` and `user:email` during sign-in.
+   - GitHub often leaves the `/user` email field empty when the account email is private. Hibou falls back to `/user/emails`, so the signing-in GitHub account must still have at least one verified email address on the account.
 
 4. Generate and save these GitHub App credentials:
    - App ID
@@ -258,7 +274,7 @@ This removes the old Argo CD password-injection blocker without committing the p
 export GITHUB_APP_ID="<app-id>"
 export GITHUB_APP_CLIENT_ID="<client-id>"
 export GITHUB_APP_CLIENT_SECRET="<client-secret>"
-export GITHUB_APP_WEBHOOK_SECRET="<webhook-secret>"
+export GITHUB_APP_WEBHOOK_SECRET="${GITHUB_APP_WEBHOOK_SECRET:?set the value generated above}"
 
 kubectl create secret generic hibou-forge-github \
   -n "$HIBOU_NAMESPACE" \
@@ -272,6 +288,10 @@ kubectl create secret generic hibou-forge-github \
   --from-literal=HIBOU_FORGE_0_IP_ALLOWLIST=true \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
+
+   Notes:
+   - `GITHUB_APP_CLIENT_SECRET` is the OAuth client secret from the GitHub App settings. It is not the webhook secret.
+   - `--from-file=HIBOU_FORGE_0_PRIVATE_KEY=...` must point to the `.pem` file you downloaded from the GitHub App page.
 
 6. Enable the forge config in the Helm values:
    - Uncomment the `hibou.forges` example in `infra/dogfood/values-dogfood.yaml`
@@ -288,6 +308,10 @@ helm upgrade --install hibou /workspaces/new_project/chart/hibou \
 ```
 
 8. Open `https://$HIBOU_DOMAIN/`, sign in with GitHub, and install the GitHub App on `hibouhq/hibou`.
+
+   Troubleshooting:
+   - If the login page still shows `Dev Login (no OAuth configured)`, inspect the live Deployment and confirm `hibou-forge-github` appears under `envFrom.secretRef`.
+   - If the callback fails with `provider user info missing email`, the GitHub account used for login usually has no verified email available to the app. Add or verify an email on that GitHub account, then try again.
 
 ## Phase 6: Enable Dogfooding Loop
 

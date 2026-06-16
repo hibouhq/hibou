@@ -17,15 +17,15 @@ hibou:
     level: info
     format: json
   sessionSecretExistingSecret: hibou-session
-  # Example GitHub App forge wiring.
+  # Example GitHub forge wiring.
   # Create Secret "hibou-forge-github" with env-style keys such as:
   #   HIBOU_FORGE_0_TYPE=github
   #   HIBOU_FORGE_0_ID=github
-  #   HIBOU_FORGE_0_CLIENT_ID=<github-app-client-id>
-  #   HIBOU_FORGE_0_CLIENT_SECRET=<github-app-client-secret>
+  #   HIBOU_FORGE_0_CLIENT_ID=<github-oauth-client-id>
+  #   HIBOU_FORGE_0_CLIENT_SECRET=<github-oauth-client-secret>
   #   HIBOU_FORGE_0_WEBHOOK_SECRET=<github-webhook-secret>
-  #   HIBOU_FORGE_0_APP_ID=<github-app-id>
-  #   HIBOU_FORGE_0_PRIVATE_KEY=<pem-private-key>
+  #   HIBOU_FORGE_0_APP_ID=<optional-github-app-id>
+  #   HIBOU_FORGE_0_PRIVATE_KEY=<optional-pem-private-key>
   #   HIBOU_FORGE_0_IP_ALLOWLIST=true
   forges:
     - type: github

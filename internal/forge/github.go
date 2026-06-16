@@ -413,7 +413,11 @@ func (g *GitHub) primaryEmail(ctx context.Context, accessToken string) (string, 
 	request.Header.Set("Authorization", githubBearerPrefix+accessToken)
 
 	var payload []githubEmail
-	if err := g.do(request, &payload); err != nil {
+	status, err := g.doWithStatus(request, &payload)
+	if err != nil && status == http.StatusForbidden && strings.Contains(err.Error(), "Resource not accessible by integration") {
+		return "", errors.New("github login requires OAuth App credentials in HIBOU_FORGE_N_CLIENT_ID and HIBOU_FORGE_N_CLIENT_SECRET; keep GitHub App credentials in HIBOU_FORGE_N_APP_ID and HIBOU_FORGE_N_PRIVATE_KEY only")
+	}
+	if err != nil {
 		return "", err
 	}
 
