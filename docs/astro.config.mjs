@@ -16,7 +16,7 @@ export default defineConfig({
                 {
                     icon: "github",
                     label: "Source",
-                    href: "https://github.com/hibouhq/lehibou",
+                    href: "https://github.com/hibouhq/hibou",
                 },
             ],
             components: {

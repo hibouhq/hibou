@@ -6,9 +6,9 @@ VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo de
 COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE      := $(shell git log -1 --format=%cI 2>/dev/null || echo 1970-01-01T00:00:00Z)
 
-LDFLAGS   := -X github.com/hibouhq/lehibou/internal/version.Version=$(VERSION) \
-             -X github.com/hibouhq/lehibou/internal/version.Commit=$(COMMIT) \
-             -X github.com/hibouhq/lehibou/internal/version.Date=$(DATE)
+LDFLAGS   := -X github.com/hibouhq/hibou/internal/version.Version=$(VERSION) \
+			 -X github.com/hibouhq/hibou/internal/version.Commit=$(COMMIT) \
+			 -X github.com/hibouhq/hibou/internal/version.Date=$(DATE)
 GO_BUILD_FLAGS := -buildvcs=false -trimpath
 
 # Build targets: linux/amd64, linux/arm64, windows/amd64, windows/arm64, darwin/arm64
