@@ -199,7 +199,19 @@ Backend ready: secret scanning (`internal/secretscan`, on-push). No UI.
 ## P2 — Account / developer settings
 
 - [ ] **API keys** ❌ — `users/me/api-keys` CRUD (create/list/delete). No client/UI.
-- [ ] **CLI token generation** ❌ — `POST /auth/cli-token`. No client/UI.
+  [SettingsView.vue](site/src/views/SettingsView.vue) is still a "coming soon" stub and the
+  avatar-menu "API Keys" link ([AppLayout.vue](site/src/layouts/AppLayout.vue)) points at it.
+  **Blocks CI:** the `HIBOU_API_TOKEN` secret used by
+  [.github/workflows/ci.yml](.github/workflows/ci.yml) can only be obtained today via a manual
+  browser-console `POST /api/v1/users/me/api-keys` call — there is no supported way to mint a key
+  from the product. Build a real **Settings → API Keys** panel (replace the SettingsView stub):
+  - Create form: name + scope multi-select (`upload`, `all`, …); `POST` returns the raw key once.
+  - Copy-once reveal with a clear "shown only once — store it now" warning.
+  - List active keys (name, scopes, created, expiry, last-used) via `GET`.
+  - Revoke via `DELETE /users/me/api-keys/{id}` with a confirm dialog.
+  - Add `api` client methods + types for all three operations.
+- [ ] **CLI token generation** ❌ — `POST /auth/cli-token` (session-only; rejects bearer auth).
+  No client/UI; pairs with the API keys panel to support the `hibou login --sso` flow.
 - [ ] **Upload status** ❌ — `GET /uploads/{id}/status` (CLI-only today; optional web view).
 
 ## Cross-cutting polish
