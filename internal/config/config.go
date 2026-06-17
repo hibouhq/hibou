@@ -14,21 +14,22 @@ import (
 )
 
 type Config struct {
-	Host          string
-	Port          int
-	MCPEnabled    bool
-	MCPPort       int
-	BaseURL       string
-	DatabaseURL   string
-	LogLevel      string
-	LogFormat     string
-	TriviURL      string
-	OSVURL        string
-	CacheTTL      time.Duration
-	ArtifactPath  string
-	MaxUploadSize int64
-	SessionSecret string
-	SecretScan    SecretScanConfig
+	Host              string
+	Port              int
+	MCPEnabled        bool
+	MCPPort           int
+	BaseURL           string
+	DatabaseURL       string
+	LogLevel          string
+	LogFormat         string
+	TriviURL          string
+	OSVURL            string
+	CacheTTL          time.Duration
+	ArtifactPath      string
+	MaxUploadSize     int64
+	SessionSecret     string
+	AutoProvisionOrgs bool
+	SecretScan        SecretScanConfig
 
 	Forges []ForgeConfig
 }
@@ -127,6 +128,7 @@ func Load() (Config, error) {
 	v.SetDefault("artifact.path", "/data/artifacts")
 	v.SetDefault("max.upload.size", int64(104857600))
 	v.SetDefault("session.secret", "change-me-in-production")
+	v.SetDefault("auto.provision.orgs", false)
 	v.SetDefault("secret_scan.enabled", false)
 	v.SetDefault("secret_scan.providers", []string{})
 	v.SetDefault("secret_scan.temp_dir", "")
@@ -151,20 +153,21 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Host:          v.GetString("host"),
-		Port:          v.GetInt("port"),
-		MCPEnabled:    v.GetBool("mcp.enabled"),
-		MCPPort:       v.GetInt("mcp.port"),
-		BaseURL:       v.GetString("base.url"),
-		DatabaseURL:   v.GetString("database.url"),
-		LogLevel:      v.GetString("log.level"),
-		LogFormat:     v.GetString("log.format"),
-		TriviURL:      v.GetString("trivy.url"),
-		OSVURL:        v.GetString("osv.url"),
-		CacheTTL:      cacheTTL,
-		ArtifactPath:  v.GetString("artifact.path"),
-		MaxUploadSize: v.GetInt64("max.upload.size"),
-		SessionSecret: v.GetString("session.secret"),
+		Host:              v.GetString("host"),
+		Port:              v.GetInt("port"),
+		MCPEnabled:        v.GetBool("mcp.enabled"),
+		MCPPort:           v.GetInt("mcp.port"),
+		BaseURL:           v.GetString("base.url"),
+		DatabaseURL:       v.GetString("database.url"),
+		LogLevel:          v.GetString("log.level"),
+		LogFormat:         v.GetString("log.format"),
+		TriviURL:          v.GetString("trivy.url"),
+		OSVURL:            v.GetString("osv.url"),
+		CacheTTL:          cacheTTL,
+		ArtifactPath:      v.GetString("artifact.path"),
+		MaxUploadSize:     v.GetInt64("max.upload.size"),
+		SessionSecret:     v.GetString("session.secret"),
+		AutoProvisionOrgs: v.GetBool("auto.provision.orgs"),
 		SecretScan: SecretScanConfig{
 			Enabled:   v.GetBool("secret_scan.enabled"),
 			Providers: normalizeList(v.GetStringSlice("secret_scan.providers")),

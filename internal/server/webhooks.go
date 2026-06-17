@@ -1,6 +1,9 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +19,8 @@ import (
 type webhookResponse struct {
 	Received bool `json:"received"`
 }
+
+type forgeEventHandler func(ctx context.Context, providerID string, event forge.WebhookEvent) error
 
 // @Summary      Receive forge webhook
 // @Description  Validates and records forge webhook updates for refs and pull requests.
@@ -50,26 +55,104 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	event, err := provider.ParseWebhookEvent(eventType, payload)
 	if err != nil {
+		if errors.Is(err, forge.ErrUnsupportedWebhookEvent) {
+			s.log.Debug().Str("provider", providerID).Str("event_type", eventType).Msg("ignored unsupported webhook event")
+			api.JSON(w, http.StatusOK, webhookResponse{Received: true})
+			return
+		}
 		api.JSONError(w, http.StatusBadRequest, "unsupported webhook event")
 		return
 	}
-
-	switch typed := event.(type) {
-	case forge.PushEvent:
-		if err := s.handlePushWebhookEvent(r, providerID, typed); err != nil {
+	handlers := s.webhookHandlers[event.EventType()]
+	if len(handlers) == 0 {
+		s.log.Debug().Str("provider", providerID).Str("event_type", event.EventType()).Msg("ignored unhandled webhook event")
+		api.JSON(w, http.StatusOK, webhookResponse{Received: true})
+		return
+	}
+	for _, handler := range handlers {
+		if err := handler(r.Context(), providerID, event); err != nil {
+			s.log.Error().Err(err).Str("provider", providerID).Str("event_type", event.EventType()).Msg("failed to process webhook event")
 			api.JSONError(w, http.StatusInternalServerError, "failed to process webhook")
 			return
 		}
-	case forge.PullRequestEvent:
-		if err := s.handlePullRequestWebhookEvent(r, providerID, provider.ID(), typed); err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to process webhook")
-			return
-		}
-	default:
-		s.log.Debug().Str("provider", providerID).Str("event_type", event.EventType()).Msg("ignored unsupported webhook event")
 	}
 
 	api.JSON(w, http.StatusOK, webhookResponse{Received: true})
+}
+
+func (s *Server) registerWebhookHandler(eventType string, h forgeEventHandler) {
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" || h == nil {
+		return
+	}
+	if s.webhookHandlers == nil {
+		s.webhookHandlers = make(map[string][]forgeEventHandler)
+	}
+	s.webhookHandlers[eventType] = append(s.webhookHandlers[eventType], h)
+}
+
+func (s *Server) registerDefaultWebhookHandlers() {
+	s.registerWebhookHandler("push", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.PushEvent)
+		if !ok {
+			return fmt.Errorf("unexpected push webhook event type %T", event)
+		}
+		request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/", nil)
+		return s.handlePushWebhookEvent(request, providerID, typed)
+	})
+	s.registerWebhookHandler("pull_request", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.PullRequestEvent)
+		if !ok {
+			return fmt.Errorf("unexpected pull_request webhook event type %T", event)
+		}
+		request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/", nil)
+		provider := s.forges[providerID]
+		forgeType := providerID
+		if provider != nil {
+			forgeType = provider.ID()
+		}
+		return s.handlePullRequestWebhookEvent(request, providerID, forgeType, typed)
+	})
+	s.registerWebhookHandler("installation", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.InstallationEvent)
+		if !ok {
+			return fmt.Errorf("unexpected installation webhook event type %T", event)
+		}
+		if s.inventorySvc == nil {
+			return nil
+		}
+		return s.inventorySvc.ApplyInstallation(ctx, providerID, typed)
+	})
+	s.registerWebhookHandler("installation", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.InstallationEvent)
+		if !ok {
+			return fmt.Errorf("unexpected installation webhook event type %T", event)
+		}
+		if s.orgProvisionSvc == nil {
+			return nil
+		}
+		return s.orgProvisionSvc.RecordInstallation(ctx, providerID, typed)
+	})
+	s.registerWebhookHandler("installation_repositories", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.InstallationRepositoriesEvent)
+		if !ok {
+			return fmt.Errorf("unexpected installation_repositories webhook event type %T", event)
+		}
+		if s.inventorySvc == nil {
+			return nil
+		}
+		return s.inventorySvc.ApplyInstallationRepositories(ctx, providerID, typed)
+	})
+	s.registerWebhookHandler("repository", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.RepositoryEvent)
+		if !ok {
+			return fmt.Errorf("unexpected repository webhook event type %T", event)
+		}
+		if s.inventorySvc == nil {
+			return nil
+		}
+		return s.inventorySvc.ApplyRepository(ctx, providerID, typed)
+	})
 }
 
 func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, event forge.PushEvent) error {

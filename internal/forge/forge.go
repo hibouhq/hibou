@@ -57,14 +57,16 @@ type Provider interface {
 }
 
 type Repository struct {
-	ProviderID    string
-	Owner         string
-	Name          string
-	FullName      string
-	DefaultBranch string
-	Private       bool
-	CloneURL      string
-	HTMLURL       string
+	ProviderID     string
+	ProviderRepoID string
+	Owner          string
+	Name           string
+	FullName       string
+	DefaultBranch  string
+	Archived       bool
+	Private        bool
+	CloneURL       string
+	HTMLURL        string
 }
 
 type Installation struct {
@@ -142,5 +144,40 @@ func (PullRequestEvent) EventType() string {
 	return "pull_request"
 }
 
+type InstallationEvent struct {
+	Action       string
+	Installation Installation
+	Repositories []Repository
+	Sender       UserInfo
+}
+
+func (InstallationEvent) EventType() string {
+	return "installation"
+}
+
+type InstallationRepositoriesEvent struct {
+	Action              string
+	Installation        Installation
+	RepositoriesAdded   []Repository
+	RepositoriesRemoved []Repository
+	Sender              UserInfo
+}
+
+func (InstallationRepositoriesEvent) EventType() string {
+	return "installation_repositories"
+}
+
+type RepositoryEvent struct {
+	Action      string
+	Repo        Repository
+	OldFullName string
+	Sender      UserInfo
+}
+
+func (RepositoryEvent) EventType() string {
+	return "repository"
+}
+
 var ErrNotImplemented = errors.New("forge: provider not implemented")
 var ErrFileNotFound = errors.New("forge: file not found")
+var ErrUnsupportedWebhookEvent = errors.New("forge: unsupported webhook event")

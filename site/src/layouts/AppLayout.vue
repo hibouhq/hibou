@@ -581,7 +581,7 @@ async function toggleRepoMenu() {
   repoListLoading.value = true
   try {
     const response = await api.listRepos(currentOrgProvider.value, currentOrgSlug.value)
-    repoList.value = response.data
+    repoList.value = response.data.filter((repo) => repo.enrolled ?? true)
   } catch {
     repoList.value = []
   } finally {

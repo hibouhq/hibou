@@ -29,8 +29,10 @@ import (
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/notify"
 	"github.com/hibouhq/hibou/internal/objstore"
+	"github.com/hibouhq/hibou/internal/orgprovision"
 	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/repoconfig"
+	"github.com/hibouhq/hibou/internal/repoinventory"
 	"github.com/hibouhq/hibou/internal/retention"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/toolcatalog"
@@ -53,6 +55,8 @@ type Server struct {
 	deltaSvc          *delta.Service
 	repoConfigLoader  *repoconfig.Loader
 	onboardingSvc     *repoconfig.OnboardingService
+	inventorySvc      *repoinventory.Service
+	orgProvisionSvc   *orgprovision.Service
 	complianceSvc     *compliance.Service
 	toolCatalogSvc    *toolcatalog.Service
 	retentionWorker   *retention.Worker
@@ -61,6 +65,7 @@ type Server struct {
 	annotator         *forge.Annotator
 	forgeIPAllowlists map[string]*forgeIPAllowlist
 	forgeLimiters     map[string]*ipRateLimiter
+	webhookHandlers   map[string][]forgeEventHandler
 	lifecycleCtx      context.Context
 	shutdownCancel    context.CancelFunc
 	startedAt         time.Time
@@ -91,18 +96,19 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	configureRouter(r, log)
 
 	s := &Server{
-		cfg:            cfg,
-		db:             db,
-		enforcer:       enforcer,
-		authMgr:        authMgr,
-		forges:         forges,
-		log:            log,
-		lifecycleCtx:   lifecycleCtx,
-		shutdownCancel: shutdownCancel,
-		queries:        store.NewQueries(db),
-		bus:            events.New(log),
-		startedAt:      time.Now(),
-		router:         r,
+		cfg:             cfg,
+		db:              db,
+		enforcer:        enforcer,
+		authMgr:         authMgr,
+		forges:          forges,
+		log:             log,
+		lifecycleCtx:    lifecycleCtx,
+		shutdownCancel:  shutdownCancel,
+		queries:         store.NewQueries(db),
+		bus:             events.New(log),
+		startedAt:       time.Now(),
+		router:          r,
+		webhookHandlers: make(map[string][]forgeEventHandler),
 		http: &http.Server{
 			Handler:           r,
 			ReadHeaderTimeout: 10 * time.Second,
@@ -136,6 +142,8 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.deltaSvc = delta.NewService(deltaStore, log, deltaStore)
 	s.repoConfigLoader = repoconfig.NewLoader(s.forges, log)
 	s.onboardingSvc = repoconfig.NewOnboardingService(s.forges, log)
+	s.inventorySvc = repoinventory.NewService(s.queries, s.forges, log)
+	s.orgProvisionSvc = orgprovision.NewService(orgprovision.NewStoreAdapter(s.queries), s.enforcer, s.forges, cfg.AutoProvisionOrgs, log)
 	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
 	s.toolCatalogSvc = toolcatalog.NewService(toolcatalog.NewStoreAdapter(s.queries))
 	if s.objStore != nil {
@@ -153,6 +161,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
 	s.annotator.Subscribe()
+	s.registerDefaultWebhookHandlers()
 }
 
 func configureForgeProtection(s *Server, cfg config.Config, log zerolog.Logger) {
@@ -218,7 +227,7 @@ func (s *Server) routes(siteFS fs.FS) {
 		))
 		r.Get("/auth/providers", auth.ProvidersHandler(s.authMgr))
 		r.Get("/auth/login", auth.LoginHandler(s.authMgr))
-		r.Get("/auth/callback", auth.CallbackHandler(s.authMgr))
+		r.Get("/auth/callback", s.handleAuthCallback)
 		r.Post("/auth/logout", auth.LogoutHandler(s.authMgr))
 		r.Post("/auth/dev-login", auth.DevLoginHandler(s.authMgr))
 		r.Route("/webhooks/{provider}", func(r chi.Router) {
@@ -240,6 +249,7 @@ func (s *Server) routes(siteFS fs.FS) {
 				r.Delete("/{keyID}", s.handleDeleteAPIKey)
 			})
 			r.Route("/orgs", func(r chi.Router) {
+				r.Get("/onboardable", s.handleListOnboardableOrgs)
 				r.Post("/", s.handleCreateOrg)
 				r.Get("/", s.handleListOrgs)
 				r.Route("/{provider}/{slug}", func(r chi.Router) {
@@ -321,6 +331,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					})
 					r.Route("/repos", func(r chi.Router) {
 						r.Post("/", s.handleEnrollRepo)
+						r.Post("/sync", s.handleSyncRepos)
 						r.Get("/", s.handleListRepos)
 						r.Put("/{repoSlug}", s.handleUpdateRepo)
 						r.Delete("/{repoSlug}", s.handleRemoveRepo)

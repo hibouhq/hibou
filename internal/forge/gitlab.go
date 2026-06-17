@@ -275,7 +275,7 @@ func (g *GitLab) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			Repo:         event.Project.toRepository(),
 		}, nil
 	default:
-		return nil, fmt.Errorf("gitlab webhook event %q not supported", eventType)
+		return nil, fmt.Errorf("%w: gitlab webhook event %q", ErrUnsupportedWebhookEvent, eventType)
 	}
 }
 

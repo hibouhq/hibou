@@ -149,7 +149,7 @@ func (g *GitHub) listUserRepositories(ctx context.Context, opts ListReposOptions
 
 	repositories := make([]Repository, 0, len(payload))
 	for _, repo := range payload {
-		repositories = append(repositories, repo.toRepository(g.ID()))
+		repositories = append(repositories, repo.toRepository())
 	}
 
 	return repositories, nil
@@ -173,7 +173,7 @@ func (g *GitHub) GetRepository(ctx context.Context, owner, name string) (*Reposi
 		return nil, err
 	}
 
-	repo := payload.toRepository(g.ID())
+	repo := payload.toRepository()
 	return &repo, nil
 }
 
@@ -339,8 +339,8 @@ func (g *GitHub) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			Ref:    event.Ref,
 			Before: event.Before,
 			After:  event.After,
-			Repo:   event.Repository.toRepository(g.ID()),
-			Sender: event.Sender.toUserInfo(g.ID()),
+			Repo:   event.Repository.toRepository(),
+			Sender: event.Sender.toUserInfo(),
 		}
 		return parsed, nil
 	case "pull_request":
@@ -356,11 +356,57 @@ func (g *GitHub) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			SourceBranch: event.PullRequest.Head.Ref,
 			TargetBranch: event.PullRequest.Base.Ref,
 			HeadSHA:      event.PullRequest.Head.SHA,
-			Repo:         event.Repository.toRepository(g.ID()),
+			Repo:         event.Repository.toRepository(),
 		}
 		return parsed, nil
+	case "installation":
+		var event githubInstallationEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode github installation event: %w", err)
+		}
+		repositories := make([]Repository, 0, len(event.Repositories))
+		for _, repo := range event.Repositories {
+			repositories = append(repositories, repo.toRepository(event.Installation.Account.Login))
+		}
+		return InstallationEvent{
+			Action:       event.Action,
+			Installation: event.Installation.toInstallation(),
+			Repositories: repositories,
+			Sender:       event.Sender.toUserInfo(),
+		}, nil
+	case "installation_repositories":
+		var event githubInstallationRepositoriesEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode github installation_repositories event: %w", err)
+		}
+		added := make([]Repository, 0, len(event.RepositoriesAdded))
+		for _, repo := range event.RepositoriesAdded {
+			added = append(added, repo.toRepository(event.Installation.Account.Login))
+		}
+		removed := make([]Repository, 0, len(event.RepositoriesRemoved))
+		for _, repo := range event.RepositoriesRemoved {
+			removed = append(removed, repo.toRepository(event.Installation.Account.Login))
+		}
+		return InstallationRepositoriesEvent{
+			Action:              event.Action,
+			Installation:        event.Installation.toInstallation(),
+			RepositoriesAdded:   added,
+			RepositoriesRemoved: removed,
+			Sender:              event.Sender.toUserInfo(),
+		}, nil
+	case "repository":
+		var event githubRepositoryEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode github repository event: %w", err)
+		}
+		return RepositoryEvent{
+			Action:      event.Action,
+			Repo:        event.Repository.toRepository(),
+			OldFullName: event.oldFullName(),
+			Sender:      event.Sender.toUserInfo(),
+		}, nil
 	default:
-		return nil, fmt.Errorf("github webhook event %q not supported", eventType)
+		return nil, fmt.Errorf("%w: github webhook event %q", ErrUnsupportedWebhookEvent, eventType)
 	}
 }
 
@@ -401,7 +447,7 @@ func (g *GitHub) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 		payload.Email = email
 	}
 
-	user := payload.toUserInfo(g.ID())
+	user := payload.toUserInfo()
 	return &user, nil
 }
 
@@ -565,7 +611,7 @@ func (g *GitHub) ListInstallationRepositories(ctx context.Context, installationI
 			return nil, fmt.Errorf("list installation repositories: %w", err)
 		}
 		for _, repo := range payload.Repositories {
-			repositories = append(repositories, repo.toRepository(g.ID()))
+			repositories = append(repositories, repo.toRepository())
 		}
 		path = nextPagePath(resp)
 		if resp != nil && resp.Body != nil {
@@ -760,8 +806,10 @@ func paginateRepositories(repositories []Repository, opts ListReposOptions) []Re
 }
 
 type githubRepository struct {
+	ID            int64  `json:"id"`
 	Name          string `json:"name"`
 	FullName      string `json:"full_name"`
+	Archived      bool   `json:"archived"`
 	Private       bool   `json:"private"`
 	CloneURL      string `json:"clone_url"`
 	HTMLURL       string `json:"html_url"`
@@ -785,6 +833,14 @@ type githubInstallation struct {
 	} `json:"account"`
 }
 
+func (i githubInstallation) toInstallation() Installation {
+	return Installation{
+		ID:          i.ID,
+		AccountName: i.Account.Login,
+		AccountType: i.Account.Type,
+	}
+}
+
 type githubInstallationToken struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -796,16 +852,23 @@ type githubPullRequestResource struct {
 	HTMLURL string `json:"html_url"`
 }
 
-func (r githubRepository) toRepository(providerID string) Repository {
+func (r githubRepository) toRepository() Repository {
+	providerRepoID := ""
+	if r.ID > 0 {
+		providerRepoID = strconv.FormatInt(r.ID, 10)
+	}
+
 	return Repository{
-		ProviderID:    providerID,
-		Owner:         r.Owner.Login,
-		Name:          r.Name,
-		FullName:      r.FullName,
-		DefaultBranch: r.DefaultBranch,
-		Private:       r.Private,
-		CloneURL:      r.CloneURL,
-		HTMLURL:       r.HTMLURL,
+		ProviderID:     r.FullName,
+		ProviderRepoID: providerRepoID,
+		Owner:          r.Owner.Login,
+		Name:           r.Name,
+		FullName:       r.FullName,
+		DefaultBranch:  r.DefaultBranch,
+		Archived:       r.Archived,
+		Private:        r.Private,
+		CloneURL:       r.CloneURL,
+		HTMLURL:        r.HTMLURL,
 	}
 }
 
@@ -826,6 +889,7 @@ func (b githubBranch) toBranch() Branch {
 }
 
 type githubUser struct {
+	ID        int64  `json:"id"`
 	Email     string `json:"email"`
 	Login     string `json:"login"`
 	Name      string `json:"name"`
@@ -838,10 +902,14 @@ type githubEmail struct {
 	Verified bool   `json:"verified"`
 }
 
-func (u githubUser) toUserInfo(providerID string) UserInfo {
+func (u githubUser) toUserInfo() UserInfo {
 	displayName := u.Name
 	if displayName == "" {
 		displayName = u.Login
+	}
+	providerID := u.Login
+	if u.ID > 0 {
+		providerID = strconv.FormatInt(u.ID, 10)
 	}
 
 	return UserInfo{
@@ -875,4 +943,88 @@ type githubPullRequestEvent struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
 	} `json:"pull_request"`
+}
+
+type githubInstallationRepository struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Private  bool   `json:"private"`
+}
+
+func (r githubInstallationRepository) toRepository(accountLogin string) Repository {
+	owner := strings.TrimSpace(accountLogin)
+	fullName := strings.TrimSpace(r.FullName)
+	name := strings.TrimSpace(r.Name)
+	if fullName == "" && owner != "" && name != "" {
+		fullName = owner + "/" + name
+	}
+	if owner == "" && fullName != "" {
+		parts := strings.SplitN(fullName, "/", 2)
+		if len(parts) == 2 {
+			owner = parts[0]
+			if name == "" {
+				name = parts[1]
+			}
+		}
+	}
+	providerRepoID := ""
+	if r.ID > 0 {
+		providerRepoID = strconv.FormatInt(r.ID, 10)
+	}
+
+	return Repository{
+		ProviderID:     fullName,
+		ProviderRepoID: providerRepoID,
+		Owner:          owner,
+		Name:           name,
+		FullName:       fullName,
+		Private:        r.Private,
+	}
+}
+
+type githubInstallationEvent struct {
+	Action       string                         `json:"action"`
+	Installation githubInstallation             `json:"installation"`
+	Repositories []githubInstallationRepository `json:"repositories"`
+	Sender       githubUser                     `json:"sender"`
+}
+
+type githubInstallationRepositoriesEvent struct {
+	Action              string                         `json:"action"`
+	Installation        githubInstallation             `json:"installation"`
+	RepositoriesAdded   []githubInstallationRepository `json:"repositories_added"`
+	RepositoriesRemoved []githubInstallationRepository `json:"repositories_removed"`
+	Sender              githubUser                     `json:"sender"`
+}
+
+type githubRepositoryEvent struct {
+	Action     string           `json:"action"`
+	Repository githubRepository `json:"repository"`
+	Changes    struct {
+		Repository struct {
+			Name struct {
+				From string `json:"from"`
+			} `json:"name"`
+		} `json:"repository"`
+	} `json:"changes"`
+	Sender githubUser `json:"sender"`
+}
+
+func (e githubRepositoryEvent) oldFullName() string {
+	oldName := strings.TrimSpace(e.Changes.Repository.Name.From)
+	if oldName == "" {
+		return ""
+	}
+	owner := strings.TrimSpace(e.Repository.Owner.Login)
+	if owner == "" {
+		parts := strings.SplitN(strings.TrimSpace(e.Repository.FullName), "/", 2)
+		if len(parts) == 2 {
+			owner = parts[0]
+		}
+	}
+	if owner == "" {
+		return oldName
+	}
+	return owner + "/" + oldName
 }

@@ -242,7 +242,7 @@ func handleEnrollRepoCreateError(w http.ResponseWriter, err error) bool {
 // @Param        slug      path      string  true   "Organization slug"
 // @Param        page      query     int     false  "Page number"
 // @Param        per_page  query     int     false  "Items per page"
-// @Success      200       {object}  api.ListResponse{data=[]store.Repository}
+// @Success      200       {object}  api.ListResponse{data=[]repositoryInventoryEntry}
 // @Failure      401       {object}  api.Response
 // @Failure      404       {object}  api.Response
 // @Failure      500       {object}  api.Response
@@ -272,13 +272,13 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pagination := api.ParsePagination(r)
-	repos, total, err := s.queries.ListRepositoriesByOrg(r.Context(), org.ID, pagination.PerPage, pagination.Offset)
+	repos, _, err := s.listRepositoryInventory(r, org)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list repositories")
 		return
 	}
 
-	api.JSONList(w, repos, pagination.Page, pagination.PerPage, total)
+	api.JSONList(w, paginateSlice(repos, pagination.Offset, pagination.PerPage), pagination.Page, pagination.PerPage, len(repos))
 }
 
 // @Summary      Get repository

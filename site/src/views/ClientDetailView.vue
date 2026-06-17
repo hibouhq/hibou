@@ -484,7 +484,7 @@ async function loadClientDetail() {
     client.value = clientResponse.data
     deployments.value = deploymentsResponse.data
     impact.value = impactResponse.data.vulnerabilities
-    repos.value = reposResponse.data
+    repos.value = reposResponse.data.filter((repo) => repo.enrolled ?? true)
   } catch (loadError) {
     client.value = null
     deployments.value = []

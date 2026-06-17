@@ -15,7 +15,17 @@ export interface Organization {
   display_name: string
   provider: string
   forge_url?: string
+  role?: string
 }
+
+export interface OnboardableAccount {
+  provider: string
+  account: string
+  slug: string
+  status: 'imported' | 'importable' | 'pending'
+}
+
+export type RepoLifecycleStatus = 'discovered' | 'active' | 'archived' | 'deleted'
 
 export interface Team {
   id: string
@@ -25,13 +35,21 @@ export interface Team {
 }
 
 export interface Repository {
-  id: string
+  id?: string
   name: string
   slug: string
-  org_id: string
+  org_id?: string
   provider: string
-  provider_id?: string
+  provider_id: string
   default_branch: string
+  sync_state?: string
+  full_name?: string
+  html_url?: string
+  private?: boolean
+  enrolled?: boolean
+  status?: RepoLifecycleStatus
+  last_scanned?: string | null
+  outdated?: boolean
 }
 
 export interface Client {
@@ -300,13 +318,18 @@ export interface PRSummary {
 }
 
 export interface RepoDashboardEntry {
-  repo_id: string
+  repo_id?: string
   repo_name: string
   repo_slug: string
+  provider_id: string
+  full_name: string
   provider: string
+  enrolled: boolean
+  status: RepoLifecycleStatus
   vulnerabilities: SeverityCounts
   components_total: number
-  last_scan?: string
+  last_scanned?: string
+  outdated: boolean
 }
 
 export interface OrgDashboard {
@@ -315,6 +338,22 @@ export interface OrgDashboard {
     vulnerabilities: SeverityCounts
     components_total: number
   }
+  coverage: {
+    total_accessible: number
+    enrolled: number
+    discovered: number
+    active: number
+    archived: number
+    outdated: number
+  }
+}
+
+export interface SyncReposResponse {
+  synced: boolean
+  provider: string
+  account: string
+  repo_count: number
+  summary: OrgDashboard['coverage']
 }
 
 export function forgeCommitUrl(forgeUrl: string | undefined, providerID: string | undefined, sha: string): string | null {
@@ -372,6 +411,17 @@ class ApiClient {
     return this.request<PaginatedResponse<Organization>>('/orgs')
   }
 
+  listOnboardableOrgs() {
+    return this.request<ApiResponse<OnboardableAccount[]>>('/orgs/onboardable')
+  }
+
+  createOrg(body: { name: string; slug: string; display_name: string; provider?: string }) {
+    return this.request<ApiResponse<Organization>>('/orgs', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
   getOrg(provider: string, slug: string) {
     return this.request<ApiResponse<Organization>>(`/orgs/${provider}/${slug}`)
   }
@@ -382,6 +432,23 @@ class ApiClient {
 
   listRepos(provider: string, slug: string) {
     return this.request<PaginatedResponse<Repository>>(`/orgs/${provider}/${slug}/repos`)
+  }
+
+  enrollRepo(
+    provider: string,
+    slug: string,
+    body: { name: string; slug: string; provider_id: string; default_branch?: string },
+  ) {
+    return this.request<ApiResponse<Repository>>(`/orgs/${provider}/${slug}/repos`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  syncRepos(provider: string, slug: string) {
+    return this.request<ApiResponse<SyncReposResponse>>(`/orgs/${provider}/${slug}/repos/sync`, {
+      method: 'POST',
+    })
   }
 
   getRepo(provider: string, slug: string, repoSlug: string) {

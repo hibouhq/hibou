@@ -986,6 +986,37 @@ type Deployment struct {
 	CreatedAt        time.Time        `json:"created_at"`
 }
 
+type ForgeOrgAdmin struct {
+	ID             uuid.UUID     `json:"id"`
+	Provider       string        `json:"provider"`
+	Account        string        `json:"account"`
+	ProviderUserID string        `json:"provider_user_id"`
+	OrgID          uuid.NullUUID `json:"org_id"`
+	Granted        bool          `json:"granted"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
+}
+
+type ForgeRepository struct {
+	ID             uuid.UUID      `json:"id"`
+	Provider       string         `json:"provider"`
+	InstallationID sql.NullInt64  `json:"installation_id"`
+	ProviderRepoID sql.NullString `json:"provider_repo_id"`
+	AccountLogin   string         `json:"account_login"`
+	Owner          string         `json:"owner"`
+	Name           string         `json:"name"`
+	FullName       string         `json:"full_name"`
+	ProviderKey    string         `json:"provider_key"`
+	Private        bool           `json:"private"`
+	DefaultBranch  string         `json:"default_branch"`
+	HtmlUrl        string         `json:"html_url"`
+	Archived       bool           `json:"archived"`
+	LastSeenAt     time.Time      `json:"last_seen_at"`
+	RemovedAt      sql.NullTime   `json:"removed_at"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
 type Integration struct {
 	ID              uuid.UUID       `json:"id"`
 	OrgID           uuid.UUID       `json:"org_id"`

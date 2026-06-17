@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,12 +13,14 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/orgprovision"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
 type orgResponse struct {
 	*store.Organization
 	ForgeURL string `json:"forge_url,omitempty"`
+	Role     string `json:"role,omitempty"`
 }
 
 type createOrgRequest struct {
@@ -30,6 +33,35 @@ type createOrgRequest struct {
 type updateOrgRequest struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name"`
+}
+
+// @Summary      List onboardable organizations
+// @Description  List forge accounts the authenticated user can onboard into Hibou
+// @Tags         organizations
+// @Produce      json
+// @Success      200   {object}  api.Response{data=[]orgprovision.OnboardableAccount}
+// @Failure      401   {object}  api.Response
+// @Failure      500   {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/onboardable [get]
+func (s *Server) handleListOnboardableOrgs(w http.ResponseWriter, r *http.Request) {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.orgProvisionSvc == nil {
+		api.JSON(w, http.StatusOK, []orgprovision.OnboardableAccount{})
+		return
+	}
+
+	accounts, err := s.orgProvisionSvc.ListOnboardableAccounts(r.Context(), user)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list onboardable organizations")
+		return
+	}
+
+	api.JSON(w, http.StatusOK, accounts)
 }
 
 // @Summary      Create organization
@@ -55,6 +87,17 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.forges[input.Provider] != nil && s.orgProvisionSvc != nil {
+		err := s.orgProvisionSvc.AuthorizeForgeOrgCreation(r.Context(), user, input.Provider, input.Slug)
+		if errors.Is(err, orgprovision.ErrForgeOrgUnauthorized) {
+			api.JSONError(w, http.StatusForbidden, "forge organization creation requires a verified forge admin of an installed account")
+			return
+		}
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to authorize forge organization creation")
+			return
+		}
+	}
 
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -76,6 +119,7 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.seedCreatedOrg(org.ID, user.ID)
+	s.syncCreatedOrg(org)
 
 	api.JSON(w, http.StatusCreated, org)
 }
@@ -150,6 +194,26 @@ func (s *Server) seedCreatedOrg(orgID, userID uuid.UUID) {
 	}
 }
 
+func (s *Server) syncCreatedOrg(org *store.Organization) {
+	if org == nil || s.inventorySvc == nil {
+		return
+	}
+	ctx := s.lifecycleCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.log.Error().Interface("panic", recovered).Str("provider", org.Provider).Str("account", org.Slug).Msg("background repository inventory sync panicked")
+			}
+		}()
+		if err := s.inventorySvc.Sync(ctx, org.Provider, org.Slug); err != nil {
+			s.log.Error().Err(err).Str("provider", org.Provider).Str("account", org.Slug).Msg("background repository inventory sync failed")
+		}
+	}()
+}
+
 func isValidOrgProvider(provider string) bool {
 	switch provider {
 	case "github", "gitlab", "forgejo":
@@ -201,7 +265,12 @@ func (s *Server) handleListOrgs(w http.ResponseWriter, r *http.Request) {
 
 	enriched := make([]orgResponse, len(orgs))
 	for i := range orgs {
-		enriched[i] = orgResponse{Organization: &orgs[i], ForgeURL: s.forgeWebURL(orgs[i].Provider)}
+		role, roleErr := s.queries.GetOrgMemberRole(r.Context(), orgs[i].ID, user.ID)
+		if roleErr != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to list organizations")
+			return
+		}
+		enriched[i] = orgResponse{Organization: &orgs[i], ForgeURL: s.forgeWebURL(orgs[i].Provider), Role: role}
 	}
 
 	api.JSONList(w, enriched, pagination.Page, pagination.PerPage, total)
@@ -213,7 +282,7 @@ func (s *Server) handleListOrgs(w http.ResponseWriter, r *http.Request) {
 // @Produce      json
 // @Param        provider  path      string  true  "Forge provider"
 // @Param        slug  path      string  true  "Organization slug"
-// @Success      200   {object}  api.Response{data=store.Organization}
+// @Success      200   {object}  api.Response{data=orgResponse}
 // @Failure      401   {object}  api.Response
 // @Failure      404   {object}  api.Response
 // @Failure      500   {object}  api.Response
@@ -246,7 +315,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, orgResponse{Organization: org, ForgeURL: s.forgeWebURL(org.Provider)})
+	api.JSON(w, http.StatusOK, orgResponse{Organization: org, ForgeURL: s.forgeWebURL(org.Provider), Role: role})
 }
 
 // @Summary      Update organization

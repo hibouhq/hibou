@@ -226,54 +226,61 @@ spec:
 
 This removes the old Argo CD password-injection blocker without committing the password: bootstrap creates `hibou-db-url` once, then Argo CD can render and sync from Git plus that pre-created secret. Tradeoff: dogfood PostgreSQL persistence is disabled, so data survives normal syncs and ordinary container restarts in the same pod, but is lost when the PostgreSQL pod is deleted and recreated, evicted, or rescheduled/replaced. That makes the database ephemeral, not guaranteed to reset on every Argo CD sync.
 
-## Phase 5: GitHub App Setup
+## Phase 5: GitHub Login and App Setup
 
-1. Create a GitHub App at https://github.com/settings/apps/new with:
-   - App name: `hibou-dogfood`
-   - Homepage URL: `https://$HIBOU_DOMAIN/`
-   - Callback URL: `https://$HIBOU_DOMAIN/api/v1/auth/callback?provider=github`
-   - Webhook URL: `https://$HIBOU_DOMAIN/api/v1/webhooks/github`
-   - Webhook secret: generate it locally once, then paste the same value into GitHub and Kubernetes later:
+Hibou uses a single GitHub App for both login and repository operations. You do not need a separate OAuth App. GitHub Apps ignore OAuth scopes, so login never requests broad `repo` access; the user-to-server token is governed by the App's declared permissions.
+
+1. Generate the webhook secret locally once:
 
 ```bash
 export GITHUB_APP_WEBHOOK_SECRET="$(openssl rand -hex 32)"
 printf '%s\n' "$GITHUB_APP_WEBHOOK_SECRET"
 ```
 
-   Keep that exact value. You will reuse it below when creating `hibou-forge-github`.
-
    Reachability note:
    - `https://$HIBOU_DOMAIN/api/v1/webhooks/github` must be reachable from the public internet on TCP `443` because GitHub sends webhook deliveries from GitHub infrastructure.
    - `https://$HIBOU_DOMAIN/api/v1/auth/callback?provider=github` must be reachable from end-user browsers on TCP `443` because GitHub redirects the user's browser there after login.
    - Your current firewall shape is correct for that: SSH `22` and k3s API `6443` can stay restricted, but HTTPS `443` must stay open publicly.
 
-2. Grant repository permissions:
+2. Create a GitHub App at https://github.com/settings/apps/new with:
+   - App name: `hibou-dogfood`
+   - Homepage URL: `https://$HIBOU_DOMAIN/`
+   - Callback URL: `https://$HIBOU_DOMAIN/api/v1/auth/callback?provider=github`
+      - This is the user login callback. Leave device flow disabled/off.
+   - Webhook URL: `https://$HIBOU_DOMAIN/api/v1/webhooks/github`
+   - Webhook secret: reuse `$GITHUB_APP_WEBHOOK_SECRET`
+
+3. Grant account permissions (required for login):
+   - Email addresses: Read-only
+
+   This lets login read the signing-in user's email via `/user/emails`. Without it, the callback fails with `Resource not accessible by integration`.
+
+4. Grant repository permissions (for app-mode operations):
    - Metadata: Read-only
    - Contents: Read and write
    - Pull requests: Read and write
    - Commit statuses: Read and write
 
-3. Subscribe to webhook events:
+5. Subscribe to webhook events:
    - Push
    - Pull request
 
-   OAuth note:
-   - Hibou asks GitHub for `read:user` and `user:email` during sign-in.
-   - GitHub often leaves the `/user` email field empty when the account email is private. Hibou falls back to `/user/emails`, so the signing-in GitHub account must still have at least one verified email address on the account.
+   Login note:
+   - The signing-in GitHub account must have at least one verified email address. GitHub often leaves the `/user` email field empty when the account email is private; Hibou falls back to `/user/emails`, which is why the `Email addresses` account permission is required.
 
-4. Generate and save these GitHub App credentials:
+6. Generate and save these GitHub App credentials:
    - App ID
-   - Client ID
-   - Client secret
-   - Private key PEM
-   - Webhook secret
+   - Client ID (starts with `Iv23...`)
+   - A generated Client secret
+   - Private key PEM (downloaded `.pem`)
+   - Webhook secret (`$GITHUB_APP_WEBHOOK_SECRET`)
 
-5. Create the forge secret expected by the Helm chart:
+7. Create the forge secret expected by the Helm chart. `CLIENT_ID`/`CLIENT_SECRET` are the GitHub App's client credentials (from the App's General page):
 
 ```bash
 export GITHUB_APP_ID="<app-id>"
-export GITHUB_APP_CLIENT_ID="<client-id>"
-export GITHUB_APP_CLIENT_SECRET="<client-secret>"
+export GITHUB_APP_CLIENT_ID="<github-app-client-id>"          # Iv23...
+export GITHUB_APP_CLIENT_SECRET="<github-app-client-secret>"
 export GITHUB_APP_WEBHOOK_SECRET="${GITHUB_APP_WEBHOOK_SECRET:?set the value generated above}"
 
 kubectl create secret generic hibou-forge-github \
@@ -290,14 +297,15 @@ kubectl create secret generic hibou-forge-github \
 ```
 
    Notes:
-   - `GITHUB_APP_CLIENT_SECRET` is the OAuth client secret from the GitHub App settings. It is not the webhook secret.
+   - `HIBOU_FORGE_0_CLIENT_ID` and `HIBOU_FORGE_0_CLIENT_SECRET` are the GitHub App's client credentials, not an OAuth App's.
+   - `GITHUB_APP_WEBHOOK_SECRET` is not the client secret.
    - `--from-file=HIBOU_FORGE_0_PRIVATE_KEY=...` must point to the `.pem` file you downloaded from the GitHub App page.
 
-6. Enable the forge config in the Helm values:
-   - Uncomment the `hibou.forges` example in `infra/dogfood/values-dogfood.yaml`
+8. Confirm the forge config in the Helm values:
+   - `infra/dogfood/values-dogfood.yaml` already enables `hibou.forges`
    - Keep `existingSecret: hibou-forge-github`
 
-7. Re-run the Helm upgrade:
+9. Re-run the Helm upgrade:
 
 ```bash
 sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/values-dogfood.yaml > /tmp/hibou-values-dogfood.yaml
@@ -307,11 +315,19 @@ helm upgrade --install hibou /workspaces/new_project/chart/hibou \
    -f /tmp/hibou-values-dogfood.yaml
 ```
 
-8. Open `https://$HIBOU_DOMAIN/`, sign in with GitHub, and install the GitHub App on `hibouhq/hibou`.
+   Secret changes do not restart running pods. If you updated the secret on an existing deployment, force a rollout:
+
+```bash
+kubectl rollout restart deploy/hibou -n "$HIBOU_NAMESPACE"
+```
+
+10. Open `https://$HIBOU_DOMAIN/`, sign in with GitHub, and install the GitHub App on `hibouhq/hibou`.
 
    Troubleshooting:
    - If the login page still shows `Dev Login (no OAuth configured)`, inspect the live Deployment and confirm `hibou-forge-github` appears under `envFrom.secretRef`.
-   - If the callback fails with `provider user info missing email`, the GitHub account used for login usually has no verified email available to the app. Add or verify an email on that GitHub account, then try again.
+   - If the callback fails with `Resource not accessible by integration` on `/user/emails`, the GitHub App is missing the `Email addresses: Read-only` account permission. Add it, then sign in again.
+   - If the callback fails with `provider user info missing email`, the GitHub account used for login has no verified email available to the app. Add or verify an email on that GitHub account, then try again.
+   - After changing the secret, force a pod restart with `kubectl rollout restart deploy/hibou -n "$HIBOU_NAMESPACE"`.
 
 ## Phase 6: Enable Dogfooding Loop
 

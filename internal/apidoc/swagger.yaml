@@ -49,6 +49,17 @@ definitions:
     - NotificationDestinationTypeTeams
     - NotificationDestinationTypeEmail
     - NotificationDestinationTypeDiscord
+  orgprovision.OnboardableAccount:
+    properties:
+      account:
+        type: string
+      provider:
+        type: string
+      slug:
+        type: string
+      status:
+        type: string
+    type: object
   server.auditLogEntryResponse:
     properties:
       action:
@@ -360,11 +371,96 @@ definitions:
       uptime_seconds:
         type: number
     type: object
+  server.orgResponse:
+    properties:
+      created_at:
+        type: string
+      display_name:
+        type: string
+      forge_url:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      provider:
+        type: string
+      role:
+        type: string
+      settings:
+        items:
+          type: integer
+        type: array
+      slug:
+        type: string
+      updated_at:
+        type: string
+    type: object
   server.readyResponse:
     properties:
       reason:
         type: string
       status:
+        type: string
+    type: object
+  server.repoInventorySummary:
+    properties:
+      active:
+        type: integer
+      archived:
+        type: integer
+      discovered:
+        type: integer
+      enrolled:
+        type: integer
+      outdated:
+        type: integer
+      total_accessible:
+        type: integer
+    type: object
+  server.repoLifecycleStatus:
+    enum:
+    - archived
+    - active
+    - discovered
+    - deleted
+    type: string
+    x-enum-varnames:
+    - repoLifecycleStatusArchived
+    - repoLifecycleStatusActive
+    - repoLifecycleStatusDiscovered
+    - repoLifecycleStatusDeleted
+  server.repositoryInventoryEntry:
+    properties:
+      default_branch:
+        type: string
+      enrolled:
+        type: boolean
+      full_name:
+        type: string
+      html_url:
+        type: string
+      id:
+        type: string
+      last_scanned:
+        type: string
+      name:
+        type: string
+      org_id:
+        type: string
+      outdated:
+        type: boolean
+      private:
+        type: boolean
+      provider:
+        type: string
+      provider_id:
+        type: string
+      slug:
+        type: string
+      status:
+        $ref: '#/definitions/server.repoLifecycleStatus'
+      sync_state:
         type: string
     type: object
   server.searchResponse:
@@ -391,6 +487,19 @@ definitions:
         type: string
       type:
         type: string
+    type: object
+  server.syncReposResponse:
+    properties:
+      account:
+        type: string
+      provider:
+        type: string
+      repo_count:
+        type: integer
+      summary:
+        $ref: '#/definitions/server.repoInventorySummary'
+      synced:
+        type: boolean
     type: object
   server.updateClientRequest:
     properties:
@@ -1148,7 +1257,7 @@ paths:
             - $ref: '#/definitions/api.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/store.Organization'
+                  $ref: '#/definitions/server.orgResponse'
               type: object
         "401":
           description: Unauthorized
@@ -2578,7 +2687,7 @@ paths:
             - properties:
                 data:
                   items:
-                    $ref: '#/definitions/store.Repository'
+                    $ref: '#/definitions/server.repositoryInventoryEntry'
                   type: array
               type: object
         "401":
@@ -2991,6 +3100,57 @@ paths:
       summary: Create release
       tags:
       - releases
+  /orgs/{provider}/{slug}/repos/sync:
+    post:
+      description: Reconcile the forge repository inventory for an organization
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.syncReposResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Sync forge repositories
+      tags:
+      - repositories
   /orgs/{provider}/{slug}/search:
     get:
       description: Search vulnerabilities, components, findings, or clients within
@@ -3321,6 +3481,36 @@ paths:
       summary: Update team
       tags:
       - teams
+  /orgs/onboardable:
+    get:
+      description: List forge accounts the authenticated user can onboard into Hibou
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/orgprovision.OnboardableAccount'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List onboardable organizations
+      tags:
+      - organizations
   /ready:
     get:
       description: Returns server readiness status based on database connectivity

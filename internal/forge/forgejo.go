@@ -270,7 +270,7 @@ func (f *Forgejo) ParseWebhookEvent(eventType string, payload []byte) (WebhookEv
 			Repo:         event.Repository.toRepository(),
 		}, nil
 	default:
-		return nil, fmt.Errorf("forgejo webhook event %q not supported", eventType)
+		return nil, fmt.Errorf("%w: forgejo webhook event %q", ErrUnsupportedWebhookEvent, eventType)
 	}
 }
 

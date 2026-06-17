@@ -44,32 +44,24 @@
           </div>
         </div>
 
-        <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
+        <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <article
+            v-for="item in coverageCards"
+            :key="item.label"
+            class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4"
+          >
             <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              Repositories
+              {{ item.label }}
             </div>
             <div class="mt-3 text-3xl font-semibold text-white">
-              {{ dashboard.repos.length }}
-            </div>
-          </article>
-          <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              Vulnerabilities
-            </div>
-            <div class="mt-3 text-3xl font-semibold text-white">
-              {{ totalVulnerabilities }}
-            </div>
-          </article>
-          <article class="rounded-2xl border border-surface-border-subtle bg-surface-overlay p-4">
-            <div class="text-xs uppercase tracking-[0.2em] text-gray-500">
-              Components
-            </div>
-            <div class="mt-3 text-3xl font-semibold text-white">
-              {{ dashboard.totals.components_total }}
+              {{ item.value }}
             </div>
           </article>
         </div>
+
+        <p class="mt-4 text-sm text-gray-400">
+          {{ summaryText }}
+        </p>
       </template>
     </section>
 
@@ -77,19 +69,19 @@
       <div class="flex items-center justify-between border-b border-surface-border-subtle px-6 py-4">
         <div>
           <h2 class="text-lg font-semibold text-white">
-            Top-risk repositories
+            Repository coverage
           </h2>
           <p class="mt-1 text-sm text-gray-400">
-            Repositories ranked by critical and high-severity findings.
+            Inventory-backed status for every repository visible to this organization.
           </p>
         </div>
       </div>
 
       <div
-        v-if="!loading && dashboard && dashboard.repos.length === 0"
+        v-if="!loading && dashboard && dashboard.coverage.total_accessible === 0"
         class="px-6 py-10 text-sm text-gray-500"
       >
-        No repositories have been synchronized for this organization yet.
+        No repositories discovered yet.
       </div>
 
       <div
@@ -101,6 +93,9 @@
             <tr>
               <th class="px-6 py-4 font-medium">
                 Repository
+              </th>
+              <th class="px-6 py-4 font-medium">
+                Status
               </th>
               <th class="px-6 py-4 font-medium">
                 Vulnerabilities
@@ -116,11 +111,12 @@
           <tbody class="divide-y divide-surface-border-subtle">
             <tr
               v-for="entry in dashboard.repos"
-              :key="entry.repo_id"
+              :key="repoEntryKey(entry)"
               class="transition hover:bg-white/5"
             >
               <td class="px-6 py-4">
                 <RouterLink
+                  v-if="entry.enrolled && entry.repo_slug"
                   :to="`/orgs/${provider}/${slug}/repos/${entry.repo_slug}`"
                   class="flex items-center gap-3 text-white transition hover:text-accent"
                 >
@@ -134,19 +130,51 @@
                       {{ entry.repo_name }}
                     </div>
                     <div class="text-xs uppercase tracking-[0.18em] text-gray-500">
-                      {{ entry.repo_slug }}
+                      {{ entry.full_name || entry.provider_id }}
                     </div>
                   </div>
                 </RouterLink>
+                <div
+                  v-else
+                  class="flex items-center gap-3 text-white"
+                >
+                  <ForgeIcon
+                    :provider="entry.provider"
+                    size="sm"
+                    class="text-gray-400"
+                  />
+                  <div>
+                    <div class="font-medium">
+                      {{ entry.repo_name }}
+                    </div>
+                    <div class="text-xs uppercase tracking-[0.18em] text-gray-500">
+                      {{ entry.full_name || entry.provider_id }}
+                    </div>
+                  </div>
+                </div>
+              </td>
+              <td class="px-6 py-4">
+                <span
+                  :class="statusClass(entry.status)"
+                  class="rounded-full border px-2.5 py-1 text-xs font-medium capitalize"
+                >
+                  {{ entry.status }}
+                </span>
               </td>
               <td class="px-6 py-4">
                 <div class="flex flex-wrap gap-2">
                   <span
                     v-for="item in toSeverityItems(entry.vulnerabilities)"
-                    :key="`${entry.repo_id}-vulnerability-${item.key}`"
+                    :key="`${repoEntryKey(entry)}-vulnerability-${item.key}`"
                     :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.key)]"
                   >
                     {{ item.key }} {{ item.value }}
+                  </span>
+                  <span
+                    v-if="toSeverityItems(entry.vulnerabilities).length === 0"
+                    class="text-gray-500"
+                  >
+                    None
                   </span>
                 </div>
               </td>
@@ -154,7 +182,13 @@
                 {{ entry.components_total }}
               </td>
               <td class="px-6 py-4 text-gray-400">
-                {{ formatDate(entry.last_scan) }}
+                <div>{{ formatDate(entry.last_scanned) }}</div>
+                <div
+                  v-if="entry.outdated"
+                  class="mt-1 text-xs text-amber-300"
+                >
+                  Out of date
+                </div>
               </td>
             </tr>
           </tbody>
@@ -168,7 +202,7 @@
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type OrgDashboard, type Organization, type SeverityCounts } from '@/api/client'
+import { api, type OrgDashboard, type Organization, type RepoDashboardEntry, type RepoLifecycleStatus, type SeverityCounts } from '@/api/client'
 import ForgeIcon from '@/components/ForgeIcon.vue'
 
 const route = useRoute()
@@ -183,6 +217,26 @@ const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium'
 
 const vulnerabilityBadges = computed(() => toSeverityItems(dashboard.value?.totals.vulnerabilities))
 const totalVulnerabilities = computed(() => sumCounts(dashboard.value?.totals.vulnerabilities))
+const summaryText = computed(() => {
+  const currentDashboard = dashboard.value
+  if (!currentDashboard) {
+    return ''
+  }
+  if (currentDashboard.coverage.active === 0 && currentDashboard.coverage.discovered > 0) {
+    return `${currentDashboard.coverage.discovered} discovered repositories are waiting for scan data.`
+  }
+  return `${totalVulnerabilities.value} open vulnerabilities across ${currentDashboard.totals.components_total} components in repositories with scan data.`
+})
+const coverageCards = computed(() => {
+  const coverage = dashboard.value?.coverage
+  return [
+    { label: 'Accessible', value: coverage?.total_accessible ?? 0 },
+    { label: 'Discovered', value: coverage?.discovered ?? 0 },
+    { label: 'Active', value: coverage?.active ?? 0 },
+    { label: 'Archived', value: coverage?.archived ?? 0 },
+    { label: 'Out of date', value: coverage?.outdated ?? 0 },
+  ]
+})
 
 watch(
   [provider, slug],
@@ -229,11 +283,29 @@ function severityClass(level: keyof SeverityCounts) {
   return `sev-${level}`
 }
 
+function statusClass(status: RepoLifecycleStatus) {
+  switch (status) {
+    case 'active':
+      return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+    case 'archived':
+      return 'border-gray-500/30 bg-white/5 text-gray-300'
+    case 'deleted':
+      return 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+    case 'discovered':
+    default:
+      return 'border-blue-500/30 bg-blue-500/10 text-blue-200'
+  }
+}
+
 function formatDate(value?: string) {
   if (!value) {
-    return 'No scans yet'
+    return 'Never'
   }
 
   return new Date(value).toLocaleString()
+}
+
+function repoEntryKey(entry: RepoDashboardEntry) {
+  return entry.repo_id || entry.provider_id || entry.full_name || entry.repo_name
 }
 </script>

@@ -374,6 +374,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/onboardable": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "List forge accounts the authenticated user can onboard into Hibou",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "List onboardable organizations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/orgprovision.OnboardableAccount"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}": {
             "get": {
                 "security": [
@@ -417,7 +469,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/store.Organization"
+                                            "$ref": "#/definitions/server.orgResponse"
                                         }
                                     }
                                 }
@@ -2744,7 +2796,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/store.Repository"
+                                                "$ref": "#/definitions/server.repositoryInventoryEntry"
                                             }
                                         }
                                     }
@@ -2859,6 +2911,89 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/sync": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Reconcile the forge repository inventory for an organization",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repositories"
+                ],
+                "summary": "Sync forge repositories",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.syncReposResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -4463,6 +4598,23 @@ const docTemplate = `{
                 "NotificationDestinationTypeDiscord"
             ]
         },
+        "orgprovision.OnboardableAccount": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "server.auditLogEntryResponse": {
             "type": "object",
             "properties": {
@@ -4939,6 +5091,44 @@ const docTemplate = `{
                 }
             }
         },
+        "server.orgResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "forge_url": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "settings": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "server.readyResponse": {
             "type": "object",
             "properties": {
@@ -4946,6 +5136,94 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.repoInventorySummary": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
+                },
+                "archived": {
+                    "type": "integer"
+                },
+                "discovered": {
+                    "type": "integer"
+                },
+                "enrolled": {
+                    "type": "integer"
+                },
+                "outdated": {
+                    "type": "integer"
+                },
+                "total_accessible": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.repoLifecycleStatus": {
+            "type": "string",
+            "enum": [
+                "archived",
+                "active",
+                "discovered",
+                "deleted"
+            ],
+            "x-enum-varnames": [
+                "repoLifecycleStatusArchived",
+                "repoLifecycleStatusActive",
+                "repoLifecycleStatusDiscovered",
+                "repoLifecycleStatusDeleted"
+            ]
+        },
+        "server.repositoryInventoryEntry": {
+            "type": "object",
+            "properties": {
+                "default_branch": {
+                    "type": "string"
+                },
+                "enrolled": {
+                    "type": "boolean"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "html_url": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_scanned": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "outdated": {
+                    "type": "boolean"
+                },
+                "private": {
+                    "type": "boolean"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/server.repoLifecycleStatus"
+                },
+                "sync_state": {
                     "type": "string"
                 }
             }
@@ -4985,6 +5263,26 @@ const docTemplate = `{
                 },
                 "type": {
                     "type": "string"
+                }
+            }
+        },
+        "server.syncReposResponse": {
+            "type": "object",
+            "properties": {
+                "account": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "repo_count": {
+                    "type": "integer"
+                },
+                "summary": {
+                    "$ref": "#/definitions/server.repoInventorySummary"
+                },
+                "synced": {
+                    "type": "boolean"
                 }
             }
         },

@@ -53,13 +53,18 @@ type refSummaryResponse struct {
 }
 
 type repoDashboardEntryResponse struct {
-	RepoID          uuid.UUID      `json:"repo_id"`
+	RepoID          *uuid.UUID     `json:"repo_id,omitempty"`
 	RepoName        string         `json:"repo_name"`
 	RepoSlug        string         `json:"repo_slug"`
+	ProviderID      string         `json:"provider_id"`
+	FullName        string         `json:"full_name"`
 	Provider        string         `json:"provider"`
+	Enrolled        bool           `json:"enrolled"`
+	Status          string         `json:"status"`
 	Vulnerabilities severityCounts `json:"vulnerabilities"`
 	ComponentsTotal int            `json:"components_total"`
-	LastScan        *time.Time     `json:"last_scan,omitempty"`
+	LastScanned     *time.Time     `json:"last_scanned,omitempty"`
+	Outdated        bool           `json:"outdated"`
 }
 
 type orgDashboardTotalsResponse struct {
@@ -68,8 +73,9 @@ type orgDashboardTotalsResponse struct {
 }
 
 type orgDashboardResponse struct {
-	Repos  []repoDashboardEntryResponse `json:"repos"`
-	Totals orgDashboardTotalsResponse   `json:"totals"`
+	Repos    []repoDashboardEntryResponse `json:"repos"`
+	Totals   orgDashboardTotalsResponse   `json:"totals"`
+	Coverage repoInventorySummary         `json:"coverage"`
 }
 
 func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
@@ -284,53 +290,16 @@ func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repos, err := s.listAllReposByOrg(r, org.ID)
+	repos, coverage, err := s.listRepositoryInventory(r, org)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list repositories")
 		return
 	}
 
-	response := orgDashboardResponse{
-		Repos: make([]repoDashboardEntryResponse, 0, len(repos)),
-	}
-
-	for _, repo := range repos {
-		entry := repoDashboardEntryResponse{
-			RepoID:   repo.ID,
-			RepoName: repo.Name,
-			RepoSlug: repo.Slug,
-			Provider: repo.Provider,
-		}
-
-		ref, snapshot, err := s.resolveSnapshotForRepo(r, &repo, repo.DefaultBranch)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard data")
-			return
-		}
-		if ref == nil || snapshot == nil {
-			response.Repos = append(response.Repos, entry)
-			continue
-		}
-
-		vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard vulnerabilities")
-			return
-		}
-		components, err := s.queries.ListComponentsBySnapshot(r.Context(), snapshot.ID)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard components")
-			return
-		}
-
-		entry.Vulnerabilities = countVulnerabilitySeverities(vulnerabilities)
-		entry.ComponentsTotal = len(components)
-		lastScan := snapshot.CreatedAt
-		entry.LastScan = &lastScan
-
-		addSeverityCounts(&response.Totals.Vulnerabilities, entry.Vulnerabilities)
-		response.Totals.ComponentsTotal += entry.ComponentsTotal
-		response.Repos = append(response.Repos, entry)
+	response, err := s.buildOrgDashboardResponse(r, repos, coverage)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load dashboard data")
+		return
 	}
 
 	sort.SliceStable(response.Repos, func(i, j int) bool {
@@ -339,12 +308,73 @@ func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {
 		leftRisk := left.Vulnerabilities.Critical + left.Vulnerabilities.High
 		rightRisk := right.Vulnerabilities.Critical + right.Vulnerabilities.High
 		if leftRisk == rightRisk {
-			return left.RepoName < right.RepoName
+			return left.FullName < right.FullName
 		}
 		return leftRisk > rightRisk
 	})
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+func (s *Server) buildOrgDashboardResponse(r *http.Request, repos []repositoryInventoryEntry, coverage repoInventorySummary) (orgDashboardResponse, error) {
+	response := orgDashboardResponse{
+		Repos:    make([]repoDashboardEntryResponse, 0, len(repos)),
+		Coverage: coverage,
+	}
+
+	for _, repo := range repos {
+		entry, err := s.buildRepoDashboardEntry(r, repo)
+		if err != nil {
+			return orgDashboardResponse{}, err
+		}
+		addSeverityCounts(&response.Totals.Vulnerabilities, entry.Vulnerabilities)
+		response.Totals.ComponentsTotal += entry.ComponentsTotal
+		response.Repos = append(response.Repos, entry)
+	}
+
+	return response, nil
+}
+
+func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInventoryEntry) (repoDashboardEntryResponse, error) {
+	entry := repoDashboardEntryResponse{
+		RepoID:      repo.ID,
+		RepoName:    repo.Name,
+		RepoSlug:    repo.Slug,
+		ProviderID:  repo.ProviderID,
+		FullName:    repo.FullName,
+		Provider:    repo.Provider,
+		Enrolled:    repo.Enrolled,
+		Status:      string(repo.Status),
+		LastScanned: repo.LastScanned,
+		Outdated:    repo.Outdated,
+	}
+
+	if !repo.Enrolled || repo.ID == nil {
+		return entry, nil
+	}
+
+	repository, err := s.queries.GetRepositoryByID(r.Context(), *repo.ID)
+	if err != nil || repository == nil {
+		return entry, err
+	}
+
+	_, snapshot, err := s.resolveSnapshotForRepo(r, repository, repository.DefaultBranch)
+	if err != nil || snapshot == nil {
+		return entry, err
+	}
+
+	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		return entry, err
+	}
+	components, err := s.queries.ListComponentsBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		return entry, err
+	}
+
+	entry.Vulnerabilities = countVulnerabilitySeverities(vulnerabilities)
+	entry.ComponentsTotal = len(components)
+	return entry, nil
 }
 
 func (s *Server) loadAuthorizedOrg(r *http.Request, w http.ResponseWriter) (*store.Organization, bool) {

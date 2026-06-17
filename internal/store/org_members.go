@@ -27,6 +27,14 @@ func (q *Queries) AddOrgMember(ctx context.Context, orgID, userID uuid.UUID, rol
 	})
 }
 
+func (q *Queries) UpsertOrgMemberRole(ctx context.Context, orgID, userID uuid.UUID, role string) error {
+	return q.db.UpsertOrgMemberRole(ctx, dbgen.UpsertOrgMemberRoleParams{
+		OrgID:  orgID,
+		UserID: userID,
+		Role:   role,
+	})
+}
+
 func (q *Queries) RemoveOrgMember(ctx context.Context, orgID, userID uuid.UUID) error {
 	return q.db.RemoveOrgMember(ctx, dbgen.RemoveOrgMemberParams{
 		OrgID:  orgID,

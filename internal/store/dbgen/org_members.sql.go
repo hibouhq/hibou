@@ -152,3 +152,20 @@ func (q *Queries) RemoveOrgMember(ctx context.Context, arg RemoveOrgMemberParams
 	_, err := q.db.ExecContext(ctx, removeOrgMember, arg.OrgID, arg.UserID)
 	return err
 }
+
+const upsertOrgMemberRole = `-- name: UpsertOrgMemberRole :exec
+INSERT INTO org_members (org_id, user_id, role)
+VALUES ($1, $2, $3)
+ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role
+`
+
+type UpsertOrgMemberRoleParams struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+	Role   string    `json:"role"`
+}
+
+func (q *Queries) UpsertOrgMemberRole(ctx context.Context, arg UpsertOrgMemberRoleParams) error {
+	_, err := q.db.ExecContext(ctx, upsertOrgMemberRole, arg.OrgID, arg.UserID, arg.Role)
+	return err
+}
