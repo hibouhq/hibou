@@ -81,6 +81,9 @@ func (m *mockForgeProvider) OAuth2Config(string) *oauth2.Config { return nil }
 func (m *mockForgeProvider) UserInfo(context.Context, *oauth2.Token) (*UserInfo, error) {
 	return nil, ErrNotImplemented
 }
+func (m *mockForgeProvider) ListUserAccess(context.Context, *oauth2.Token) (UserAccess, error) {
+	return UserAccess{}, nil
+}
 
 func (m *mockRepoConfigLoader) LoadWeaknessGate(_ context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.WeaknessGate, error) {
 	m.loadWeaknessCalls++

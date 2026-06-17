@@ -300,6 +300,34 @@ func TestAuthorizeForgeOrgCreation(t *testing.T) {
 	}
 }
 
+func TestAuthorizeForgeOrgCreationChecksAllCollidingInstallations(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeForgeProvider{
+		id: "github",
+		installations: []forge.Installation{
+			{ID: 1, AccountName: "foo.bar", AccountType: "Organization"},
+			{ID: 2, AccountName: "foo_bar", AccountType: "Organization"},
+		},
+	}
+	st := newFakeStore()
+	requester := st.addUser("github", "installer-2")
+	st.addForgeOrgAdmin("github", "foo_bar", requester.ProviderID)
+	svc := NewService(st, noopRBACSeeder{}, map[string]forge.Provider{"github": provider}, false, zerolog.New(io.Discard))
+
+	if err := svc.AuthorizeForgeOrgCreation(context.Background(), requester, "github", "foo-bar"); err != nil {
+		t.Fatalf("expected colliding second installation admin to be allowed, got %v", err)
+	}
+
+	unauthorized := st.addUser("github", "installer-3")
+	if err := svc.AuthorizeForgeOrgCreation(context.Background(), unauthorized, "github", "foo-bar"); !errors.Is(err, ErrForgeOrgUnauthorized) {
+		t.Fatalf("expected non-admin colliding requester to be denied, got %v", err)
+	}
+	if err := svc.AuthorizeForgeOrgCreation(context.Background(), requester, "github", "missing"); !errors.Is(err, ErrForgeOrgUnauthorized) {
+		t.Fatalf("expected missing colliding slug to be denied, got %v", err)
+	}
+}
+
 func TestListOnboardableAccountsClassifiesStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -499,8 +527,8 @@ func TestRecordInstallationCreatedIsIdempotent(t *testing.T) {
 	if len(st.clients) != 1 {
 		t.Fatalf("expected one default client after replay, got %d", len(st.clients))
 	}
-	if got := st.upsertMembershipCalls[st.onlyMembershipKey()]; got != 1 {
-		t.Fatalf("expected one membership upsert after replay, got %d", got)
+	if got := st.upsertMembershipCalls[st.onlyMembershipKey()]; got != 2 {
+		t.Fatalf("expected replay to reassert durable admin membership twice, got %d", got)
 	}
 	if len(rbac.assignments) != 1 {
 		t.Fatalf("expected one RBAC assignment after replay, got %d", len(rbac.assignments))
@@ -807,6 +835,10 @@ func (p *fakeForgeProvider) OAuth2Config(string) *oauth2.Config { return nil }
 
 func (p *fakeForgeProvider) UserInfo(context.Context, *oauth2.Token) (*forge.UserInfo, error) {
 	return nil, forge.ErrNotImplemented
+}
+
+func (p *fakeForgeProvider) ListUserAccess(context.Context, *oauth2.Token) (forge.UserAccess, error) {
+	return forge.UserAccess{}, nil
 }
 
 type duplicateError struct{}

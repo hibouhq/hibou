@@ -307,6 +307,10 @@ func (f *Forgejo) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo,
 	return &user, nil
 }
 
+func (f *Forgejo) ListUserAccess(context.Context, *oauth2.Token) (UserAccess, error) {
+	return UserAccess{}, nil
+}
+
 func (f *Forgejo) newRequest(ctx context.Context, method, path string, body any) (*http.Request, error) {
 	endpoint := f.apiURL + path
 

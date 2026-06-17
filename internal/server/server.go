@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
+	"golang.org/x/oauth2"
 
 	"github.com/hibouhq/hibou/internal/api"
 	_ "github.com/hibouhq/hibou/internal/apidoc"
@@ -30,6 +31,7 @@ import (
 	"github.com/hibouhq/hibou/internal/notify"
 	"github.com/hibouhq/hibou/internal/objstore"
 	"github.com/hibouhq/hibou/internal/orgprovision"
+	"github.com/hibouhq/hibou/internal/permissionsync"
 	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/repoinventory"
@@ -57,6 +59,7 @@ type Server struct {
 	onboardingSvc     *repoconfig.OnboardingService
 	inventorySvc      *repoinventory.Service
 	orgProvisionSvc   *orgprovision.Service
+	permissionSyncSvc *permissionsync.Service
 	complianceSvc     *compliance.Service
 	toolCatalogSvc    *toolcatalog.Service
 	retentionWorker   *retention.Worker
@@ -144,8 +147,16 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.onboardingSvc = repoconfig.NewOnboardingService(s.forges, log)
 	s.inventorySvc = repoinventory.NewService(s.queries, s.forges, log)
 	s.orgProvisionSvc = orgprovision.NewService(orgprovision.NewStoreAdapter(s.queries), s.enforcer, s.forges, cfg.AutoProvisionOrgs, log)
+	s.permissionSyncSvc = permissionsync.NewService(permissionsync.NewStoreAdapter(s.queries), s.enforcer, s.forges, log)
 	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
 	s.toolCatalogSvc = toolcatalog.NewService(toolcatalog.NewStoreAdapter(s.queries))
+	if s.authMgr != nil && s.permissionSyncSvc != nil {
+		s.authMgr.AddLoginHook(func(ctx context.Context, user *store.User, providerID string, token *oauth2.Token) {
+			if err := s.permissionSyncSvc.SyncUser(ctx, user, providerID, token); err != nil {
+				s.log.Error().Err(err).Str("user_id", user.ID.String()).Str("provider", providerID).Msg("failed to sync forge permissions after login")
+			}
+		})
+	}
 	if s.objStore != nil {
 		s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, log, retention.DefaultPolicy())
 	}

@@ -216,25 +216,27 @@ func (s *Service) AuthorizeForgeOrgCreation(ctx context.Context, requester *stor
 	if err != nil {
 		return err
 	}
-	matchedAccount := ""
+	matchedSlug := slugifyAccount(slug)
+	foundMatch := false
 	for _, installation := range installations {
-		if slugifyAccount(installation.AccountName) == slugifyAccount(slug) {
-			matchedAccount = strings.TrimSpace(installation.AccountName)
-			break
+		if slugifyAccount(installation.AccountName) != matchedSlug {
+			continue
+		}
+		foundMatch = true
+		matchedAccount := strings.TrimSpace(installation.AccountName)
+
+		admin, err := s.store.GetForgeOrgAdmin(ctx, providerID, matchedAccount, requester.ProviderID)
+		if err != nil {
+			return err
+		}
+		if admin != nil {
+			return nil
 		}
 	}
-	if matchedAccount == "" {
+	if !foundMatch {
 		return ErrForgeOrgUnauthorized
 	}
-
-	admin, err := s.store.GetForgeOrgAdmin(ctx, providerID, matchedAccount, requester.ProviderID)
-	if err != nil {
-		return err
-	}
-	if admin == nil {
-		return ErrForgeOrgUnauthorized
-	}
-	return nil
+	return ErrForgeOrgUnauthorized
 }
 
 func (s *Service) ListOnboardableAccounts(ctx context.Context, user *store.User) ([]OnboardableAccount, error) {
@@ -311,18 +313,36 @@ func (s *Service) ensureOrgAdmin(ctx context.Context, orgID, userID uuid.UUID) e
 	if s.store == nil || orgID == uuid.Nil || userID == uuid.Nil {
 		return nil
 	}
-	role, err := s.store.GetOrgMemberRole(ctx, orgID, userID)
-	if err != nil {
-		return err
-	}
-	if role == "admin" {
-		return nil
-	}
 	return s.store.UpsertOrgMemberRole(ctx, orgID, userID, "admin")
 }
 
 func slugifyAccount(login string) string {
-	return strings.ToLower(strings.TrimSpace(login))
+	normalized := strings.ToLower(strings.TrimSpace(login))
+	if normalized == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(normalized))
+	lastWasHyphen := false
+	for _, r := range normalized {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastWasHyphen = false
+			continue
+		}
+		if lastWasHyphen {
+			continue
+		}
+		builder.WriteByte('-')
+		lastWasHyphen = true
+	}
+
+	slug := strings.Trim(builder.String(), "-")
+	if len(slug) > 63 {
+		slug = strings.TrimRight(slug[:63], "-")
+	}
+	return slug
 }
 
 func isUniqueViolation(err error) bool {

@@ -54,6 +54,11 @@ type Provider interface {
 
 	// UserInfo fetches the authenticated user's info using an OAuth2 token.
 	UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, error)
+
+	// ListUserAccess enumerates the authenticated user's accessible orgs/repos with forge-native
+	// permission levels, using their OAuth token transiently (for login-time permission mirroring).
+	// Providers without support return an empty UserAccess and nil error.
+	ListUserAccess(ctx context.Context, token *oauth2.Token) (UserAccess, error)
 }
 
 type Repository struct {
@@ -111,6 +116,25 @@ type UserInfo struct {
 	Email       string
 	DisplayName string
 	AvatarURL   string
+}
+
+type UserAccess struct {
+	Orgs  []UserOrgAccess
+	Repos []UserRepoAccess
+}
+
+type UserOrgAccess struct {
+	AccountLogin string
+	Level        string
+}
+
+type UserRepoAccess struct {
+	AccountLogin   string
+	ProviderRepoID string
+	Owner          string
+	Name           string
+	FullName       string
+	Level          string
 }
 
 type WebhookEvent interface {

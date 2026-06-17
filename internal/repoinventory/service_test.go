@@ -770,6 +770,10 @@ func (s *stubProvider) UserInfo(context.Context, *oauth2.Token) (*forge.UserInfo
 	return nil, forge.ErrNotImplemented
 }
 
+func (s *stubProvider) ListUserAccess(context.Context, *oauth2.Token) (forge.UserAccess, error) {
+	return forge.UserAccess{}, nil
+}
+
 func assertTransferState(t *testing.T, fakeStore *fakeStore, ctx context.Context, provider, providerRepoID, fullName string, removed bool) {
 	t.Helper()
 

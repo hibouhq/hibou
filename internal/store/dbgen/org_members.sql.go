@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const addOrgMember = `-- name: AddOrgMember :exec
@@ -69,6 +70,35 @@ func (q *Queries) GetOrgMemberRole(ctx context.Context, arg GetOrgMemberRolePara
 	var role string
 	err := row.Scan(&role)
 	return role, err
+}
+
+const listForgeOrgMemberIDs = `-- name: ListForgeOrgMemberIDs :many
+SELECT user_id
+FROM org_members
+WHERE org_id = $1 AND source = 'forge'
+`
+
+func (q *Queries) ListForgeOrgMemberIDs(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.QueryContext(ctx, listForgeOrgMemberIDs, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOrgMembers = `-- name: ListOrgMembers :many
@@ -138,6 +168,38 @@ func (q *Queries) ListOrgMembers(ctx context.Context, arg ListOrgMembersParams) 
 	return items, nil
 }
 
+const pruneForgeOrgMembers = `-- name: PruneForgeOrgMembers :exec
+DELETE FROM org_members
+WHERE org_id = $1
+    AND source = 'forge'
+    AND NOT (user_id = ANY($2::uuid[]))
+`
+
+type PruneForgeOrgMembersParams struct {
+	OrgID   uuid.UUID   `json:"org_id"`
+	Column2 []uuid.UUID `json:"column_2"`
+}
+
+func (q *Queries) PruneForgeOrgMembers(ctx context.Context, arg PruneForgeOrgMembersParams) error {
+	_, err := q.db.ExecContext(ctx, pruneForgeOrgMembers, arg.OrgID, pq.Array(arg.Column2))
+	return err
+}
+
+const pruneForgeOrgMembersForUser = `-- name: PruneForgeOrgMembersForUser :exec
+DELETE FROM org_members
+WHERE user_id = $1 AND source = 'forge' AND NOT (org_id = ANY($2::uuid[]))
+`
+
+type PruneForgeOrgMembersForUserParams struct {
+	UserID  uuid.UUID   `json:"user_id"`
+	Column2 []uuid.UUID `json:"column_2"`
+}
+
+func (q *Queries) PruneForgeOrgMembersForUser(ctx context.Context, arg PruneForgeOrgMembersForUserParams) error {
+	_, err := q.db.ExecContext(ctx, pruneForgeOrgMembersForUser, arg.UserID, pq.Array(arg.Column2))
+	return err
+}
+
 const removeOrgMember = `-- name: RemoveOrgMember :exec
 DELETE FROM org_members
 WHERE org_id = $1 AND user_id = $2
@@ -153,10 +215,30 @@ func (q *Queries) RemoveOrgMember(ctx context.Context, arg RemoveOrgMemberParams
 	return err
 }
 
+const upsertForgeOrgMember = `-- name: UpsertForgeOrgMember :exec
+INSERT INTO org_members (org_id, user_id, role, source, synced_at)
+VALUES ($1, $2, $3, 'forge', NOW())
+ON CONFLICT (org_id, user_id) DO UPDATE
+SET role = EXCLUDED.role,
+        synced_at = NOW()
+WHERE org_members.source = 'forge'
+`
+
+type UpsertForgeOrgMemberParams struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+	Role   string    `json:"role"`
+}
+
+func (q *Queries) UpsertForgeOrgMember(ctx context.Context, arg UpsertForgeOrgMemberParams) error {
+	_, err := q.db.ExecContext(ctx, upsertForgeOrgMember, arg.OrgID, arg.UserID, arg.Role)
+	return err
+}
+
 const upsertOrgMemberRole = `-- name: UpsertOrgMemberRole :exec
 INSERT INTO org_members (org_id, user_id, role)
 VALUES ($1, $2, $3)
-ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role
+ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, source = 'invite', synced_at = NULL
 `
 
 type UpsertOrgMemberRoleParams struct {

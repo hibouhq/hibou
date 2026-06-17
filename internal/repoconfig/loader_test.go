@@ -74,6 +74,9 @@ func (p *testForgeProvider) OAuth2Config(string) *oauth2.Config { return nil }
 func (p *testForgeProvider) UserInfo(context.Context, *oauth2.Token) (*forge.UserInfo, error) {
 	return nil, forge.ErrNotImplemented
 }
+func (p *testForgeProvider) ListUserAccess(context.Context, *oauth2.Token) (forge.UserAccess, error) {
+	return forge.UserAccess{}, nil
+}
 func (p *testForgeProvider) GetFileContent(_ context.Context, _, _, _, _ string) ([]byte, error) {
 	if p.fileErr != nil {
 		return nil, p.fileErr

@@ -5,7 +5,7 @@ VALUES ($1, $2, $3);
 -- name: UpsertOrgMemberRole :exec
 INSERT INTO org_members (org_id, user_id, role)
 VALUES ($1, $2, $3)
-ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role;
+ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, source = 'invite', synced_at = NULL;
 
 -- name: RemoveOrgMember :exec
 DELETE FROM org_members
@@ -32,3 +32,26 @@ WHERE org_id = $1 AND role = 'admin';
 SELECT role
 FROM org_members
 WHERE org_id = $1 AND user_id = $2;
+
+-- name: UpsertForgeOrgMember :exec
+INSERT INTO org_members (org_id, user_id, role, source, synced_at)
+VALUES ($1, $2, $3, 'forge', NOW())
+ON CONFLICT (org_id, user_id) DO UPDATE
+SET role = EXCLUDED.role,
+        synced_at = NOW()
+WHERE org_members.source = 'forge';
+
+-- name: PruneForgeOrgMembers :exec
+DELETE FROM org_members
+WHERE org_id = $1
+    AND source = 'forge'
+    AND NOT (user_id = ANY($2::uuid[]));
+
+-- name: PruneForgeOrgMembersForUser :exec
+DELETE FROM org_members
+WHERE user_id = $1 AND source = 'forge' AND NOT (org_id = ANY($2::uuid[]));
+
+-- name: ListForgeOrgMemberIDs :many
+SELECT user_id
+FROM org_members
+WHERE org_id = $1 AND source = 'forge';

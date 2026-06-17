@@ -19,6 +19,12 @@ type OrgMember struct {
 	User      *User     `json:"user,omitempty"`
 }
 
+type ForgeOrgMembership struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+	Role   string    `json:"role"`
+}
+
 func (q *Queries) AddOrgMember(ctx context.Context, orgID, userID uuid.UUID, role string) error {
 	return q.db.AddOrgMember(ctx, dbgen.AddOrgMemberParams{
 		OrgID:  orgID,
@@ -35,10 +41,40 @@ func (q *Queries) UpsertOrgMemberRole(ctx context.Context, orgID, userID uuid.UU
 	})
 }
 
+func (q *Queries) UpsertForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID, role string) error {
+	return q.db.UpsertForgeOrgMember(ctx, dbgen.UpsertForgeOrgMemberParams{
+		OrgID:  orgID,
+		UserID: userID,
+		Role:   role,
+	})
+}
+
 func (q *Queries) RemoveOrgMember(ctx context.Context, orgID, userID uuid.UUID) error {
 	return q.db.RemoveOrgMember(ctx, dbgen.RemoveOrgMemberParams{
 		OrgID:  orgID,
 		UserID: userID,
+	})
+}
+
+func (q *Queries) PruneForgeOrgMembers(ctx context.Context, orgID uuid.UUID, keepUserIDs []uuid.UUID) error {
+	if keepUserIDs == nil {
+		keepUserIDs = []uuid.UUID{}
+	}
+
+	return q.db.PruneForgeOrgMembers(ctx, dbgen.PruneForgeOrgMembersParams{
+		OrgID:   orgID,
+		Column2: keepUserIDs,
+	})
+}
+
+func (q *Queries) PruneForgeOrgMembersForUser(ctx context.Context, userID uuid.UUID, keepOrgIDs []uuid.UUID) error {
+	if keepOrgIDs == nil {
+		keepOrgIDs = []uuid.UUID{}
+	}
+
+	return q.db.PruneForgeOrgMembersForUser(ctx, dbgen.PruneForgeOrgMembersForUserParams{
+		UserID:  userID,
+		Column2: keepOrgIDs,
 	})
 }
 
@@ -93,6 +129,37 @@ func (q *Queries) GetOrgMemberRole(ctx context.Context, orgID, userID uuid.UUID)
 	}
 
 	return role, nil
+}
+
+func (q *Queries) ListForgeOrgMemberIDs(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	return q.db.ListForgeOrgMemberIDs(ctx, orgID)
+}
+
+func (q *Queries) ListForgeOrgMembershipsByUser(ctx context.Context, userID uuid.UUID) ([]ForgeOrgMembership, error) {
+	rows, err := q.sqlDB.QueryContext(ctx, `
+		SELECT org_id, user_id, role
+		FROM org_members
+		WHERE user_id = $1 AND source = 'forge'
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	memberships := make([]ForgeOrgMembership, 0)
+	for rows.Next() {
+		var membership ForgeOrgMembership
+		if err := rows.Scan(&membership.OrgID, &membership.UserID, &membership.Role); err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, membership)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return memberships, nil
 }
 
 func (q *Queries) CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int, error) {

@@ -216,38 +216,50 @@ Backend ready: secret scanning (`internal/secretscan`, on-push). No UI.
 This is the backend foundation for the P0 "Forge permission mirroring" section. It supersedes
 manual membership as the primary model.
 
-- [ ] **Transient token use at login** — the OAuth callback currently discards the user token
-  ([internal/auth/auth.go](internal/auth/auth.go)). Use it **transiently** (no persistence) to enumerate
-  the user's accessible installations/orgs/repos and permission levels:
-  - GitHub: `GET /user/installations`, `GET /user/installations/{id}/repositories` (returns each repo's
-    `permissions`), `GET /user/memberships/orgs/{org}` (org role).
-  - GitLab: `GET /groups?min_access_level=...`, `GET /projects?membership=true` (with `access_level`).
-  - Forgejo/Gitea: `GET /user/orgs`, `GET /user/repos` (repo `permissions`).
-- [ ] **Forge→role mapping** — admin/owner(50)/maintainer(40) → `admin`; push/developer(30) → `write`;
-  pull/reporter(20)/guest(10) → `read`. Centralize in one mapper.
-- [ ] **Permission-sync service** — projects forge permissions into derived membership:
-  - New/updated tables: `org_members` rows tagged `source=forge` + `synced_at`; a per-user repo-access
-    table (`user_id, repo_id, role, source, synced_at`).
-  - Triggers: on login (refresh the user's projection), background reconcile (drift), and webhook events.
-  - Revocation: forge-derived rows removed when the forge no longer grants access — **the prune MUST be
-    scoped to `source=forge` only** so invited/non-forge grants (auditors etc.) are never deleted (tested invariant).
-- [ ] **Webhook-driven invalidation** — extend the dispatcher
+- [x] **Transient token use at login** ✅ — the OAuth callback now fires an async, best-effort login
+  hook with the user's transient token ([internal/auth/auth.go](internal/auth/auth.go), `context.WithoutCancel`
+  + panic recovery so sync never blocks or fails login). GitHub enumerates real access via
+  `GET /user/installations`, `GET /user/installations/{id}/repositories` (per-repo `permissions`), and
+  best-effort `GET /user/memberships/orgs/{login}` (org-admin fallback capped at `write`, never granted
+  from repo permission). GitLab/Forgejo `ListUserAccess` are graceful multi-forge no-ops for now. No token
+  is ever persisted. ([internal/forge/forge.go](internal/forge/forge.go), [internal/forge/github.go](internal/forge/github.go))
+- [x] **Forge→role mapping** ✅ — admin/owner(50)/maintainer(40) → `admin`; push/developer(30) → `write`;
+  pull/reporter(20)/guest(10) → `read`. Centralized in one multi-forge mapper:
+  [internal/forge/rolemap.go](internal/forge/rolemap.go) `MapForgeRole(providerID, level)` (GitHub/GitLab
+  numeric+textual/Gitea+Forgejo), unit-tested. Consumed by the permission-sync service (below).
+- [x] **Permission-sync service** ✅ (core) — [internal/permissionsync/service.go](internal/permissionsync/service.go)
+  `SyncUser` projects forge permissions into derived membership at login:
+  - Schema (migration `00007_two_source_membership`): `org_members` gains `source` (CHECK `forge|invite`,
+    default `invite`), `synced_at`, `expires_at`; new `user_repo_access (user_id, repo_id, role, source, synced_at)`.
+  - Projects org access **only into orgs that already exist** (never auto-creates orgs) and repo access
+    only for enrolled repos; tier→`member_role` translated (`admin→admin`, `write→developer`, `read→viewer`).
+  - RBAC updated add-before-remove (a failed add never strips existing access; same-role is a no-op).
+  - Revocation prune is **scoped to `source=forge` only** (`PruneForgeOrgMembersForUser` /
+    `PruneForgeUserRepoAccess`); explicit/manual/claimed grants re-assert `source=invite` so they survive
+    every forge prune — tested DB invariant. Trigger: login. _Background reconcile of offline users deferred._
+- [x] **Token strategy decision** ✅ — **chosen: login-transient sync, no token persistence** (option a).
+  Active users are reconciled on their next login; we explicitly avoid storing refresh tokens to keep the
+  security surface minimal. Background reconcile of offline users is deferred to a future job if needed.
+- [x] **List endpoints** ✅ — `GET /orgs` (`handleListOrgs`) and repo lists already filter by `org_members`
+  membership, so forge-projected members become auto-visible with no endpoint change required.
+- [ ] **Webhook-driven invalidation** _(deferred — Phase 4)_ — extend the dispatcher
   ([internal/server/webhooks.go](internal/server/webhooks.go)) to handle `installation_repositories`,
-  `member`, `membership`, `team`, `organization`, `repository` → invalidate/re-sync the affected scope
-  instead of polling.
-- [ ] **Efficiency** — short-TTL cache + **ETag/conditional requests** to stay under rate limits;
-  per-installation pagination; avoid N+1 by batching.
-- [ ] **Token strategy decision** — login-transient sync (no token persistence) covers active users;
-  for background reconcile of offline users either (a) refresh on their next login (simplest, no stored
-  tokens) or (b) persist an encrypted refresh token (bigger security surface — decide explicitly).
-- [ ] **List endpoints** — `GET /orgs` and repo lists filter by the synced projection (already
-  membership-based; membership just becomes auto-derived).
+  `member`, `membership`, `team`, `organization`, `repository` → re-sync the affected scope instead of
+  relying on next-login refresh.
+- [ ] **Efficiency** _(deferred)_ — short-TTL cache + **ETag/conditional requests** to stay under rate
+  limits; per-installation pagination; avoid N+1 by batching.
 
 ## Follow-ups beyond current backend (UX-driven backend work)
 
-- [ ] **Broaden onboarding beyond the installer** — today only the person who clicked
-  "Install App" gets a `forge_org_admins` row, so co-admins can't self-onboard. The permission-mirroring
-  model above subsumes this: any user with forge access to the installed account is auto-projected in,
-  using their transient token at login. Security-sensitive; scope carefully.
-- [ ] **Slugify non-`[a-z0-9-]` forge accounts** — `slugifyAccount` is lower+trim only, so
-  accounts with other characters silently can't auto-provision; offer a slug-edit step in the UI.
+- [x] **Broaden onboarding beyond the installer** ✅ (backend) — previously only the person who clicked
+  "Install App" got a `forge_org_admins` row, so co-admins couldn't self-onboard. The permission-mirroring
+  service above now subsumes this: any user with forge access to an **already-provisioned** org is
+  auto-projected into membership at login via their transient token (org admins → Hibou `admin`, capped),
+  so co-admins gain access without a manual invite. _Org **creation** still flows through installation
+  auto-provision / the installer-gated create; that gate is intentionally left in place._
+- [x] **Slugify non-`[a-z0-9-]` forge accounts** ✅ (backend) — `slugifyAccount`
+  ([internal/orgprovision/service.go](internal/orgprovision/service.go)) now normalizes any non-`[a-z0-9]`
+  run to a single `-`, trims/collapses hyphens, and caps at 63 chars, so accounts like `Foo_Bar`/`acme.io`
+  auto-provision instead of silently failing `api.IsValidSlug`. `AuthorizeForgeOrgCreation` scans all
+  installations whose account collides to the same slug (no false-negative deny). UI slug-edit affordance
+  already exists in the manual-create dialog (P0 above) for explicit disambiguation of rare collisions.

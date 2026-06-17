@@ -245,6 +245,10 @@ func (p *oauthCallbackTestProvider) UserInfo(context.Context, *oauth2.Token) (*f
 	return p.userInfo, nil
 }
 
+func (p *oauthCallbackTestProvider) ListUserAccess(context.Context, *oauth2.Token) (forge.UserAccess, error) {
+	return forge.UserAccess{}, nil
+}
+
 func hasCookieNamed(cookies []*http.Cookie, name string) bool {
 	for _, cookie := range cookies {
 		if cookie.Name == name {

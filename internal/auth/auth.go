@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
@@ -36,12 +38,20 @@ type Config struct {
 
 // Manager handles authentication flows.
 type Manager struct {
-	cfg     Config
-	queries *store.Queries
+	cfg        Config
+	queries    *store.Queries
+	loginHooks []func(ctx context.Context, user *store.User, providerID string, token *oauth2.Token)
 }
 
 func New(cfg Config, queries *store.Queries) *Manager {
 	return &Manager{cfg: cfg, queries: queries}
+}
+
+func (m *Manager) AddLoginHook(hook func(ctx context.Context, user *store.User, providerID string, token *oauth2.Token)) {
+	if hook == nil {
+		return
+	}
+	m.loginHooks = append(m.loginHooks, hook)
 }
 
 func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, providerID string) error {
@@ -138,7 +148,30 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 		return nil, errors.New("user disappeared during update")
 	}
 
+	m.invokeLoginHooks(r.Context(), providerUser, provider.ID(), token)
+
 	return providerUser, nil
+}
+
+func (m *Manager) invokeLoginHooks(ctx context.Context, user *store.User, providerID string, token *oauth2.Token) {
+	if len(m.loginHooks) == 0 || user == nil || token == nil {
+		return
+	}
+
+	baseCtx := context.WithoutCancel(ctx)
+	for _, hook := range m.loginHooks {
+		if hook == nil {
+			continue
+		}
+		h := hook
+		tokenCopy := *token
+		go func() {
+			defer func() {
+				_ = recover()
+			}()
+			h(baseCtx, user, providerID, &tokenCopy)
+		}()
+	}
 }
 
 func (m *Manager) SetSessionCookie(w http.ResponseWriter, user *store.User) {

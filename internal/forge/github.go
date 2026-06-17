@@ -451,6 +451,49 @@ func (g *GitHub) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 	return &user, nil
 }
 
+func (g *GitHub) ListUserAccess(ctx context.Context, token *oauth2.Token) (UserAccess, error) {
+	if !g.isAppMode() || token == nil || strings.TrimSpace(token.AccessToken) == "" {
+		return UserAccess{}, nil
+	}
+
+	installations, err := g.listUserInstallations(ctx, token.AccessToken)
+	if err != nil {
+		return UserAccess{}, err
+	}
+
+	access := UserAccess{
+		Orgs:  make([]UserOrgAccess, 0, len(installations)),
+		Repos: make([]UserRepoAccess, 0),
+	}
+	for _, installation := range installations {
+		accountLogin := strings.TrimSpace(installation.Account.Login)
+		if accountLogin == "" {
+			continue
+		}
+
+		repoAccess, fallbackOrgLevel, err := g.listUserInstallationRepositories(ctx, token.AccessToken, installation.ID, accountLogin)
+		if err != nil {
+			return UserAccess{}, err
+		}
+
+		orgLevel := "read"
+		membershipLevel, ok, err := g.userInstallationOrgLevel(ctx, token.AccessToken, accountLogin)
+		if err != nil {
+			return UserAccess{}, err
+		}
+		if ok {
+			orgLevel = membershipLevel
+		} else if fallbackOrgLevel != "" {
+			orgLevel = fallbackOrgLevel
+		}
+
+		access.Orgs = append(access.Orgs, UserOrgAccess{AccountLogin: accountLogin, Level: orgLevel})
+		access.Repos = append(access.Repos, repoAccess...)
+	}
+
+	return access, nil
+}
+
 func (g *GitHub) primaryEmail(ctx context.Context, accessToken string) (string, error) {
 	request, err := g.newRequest(ctx, http.MethodGet, "/user/emails", nil)
 	if err != nil {
@@ -483,6 +526,121 @@ func (g *GitHub) primaryEmail(ctx context.Context, accessToken string) (string, 
 
 func (g *GitHub) isAppMode() bool {
 	return g.appID > 0 && len(g.privateKey) > 0
+}
+
+func (g *GitHub) listUserInstallations(ctx context.Context, accessToken string) ([]githubInstallation, error) {
+	var all []githubInstallation
+	path := "/user/installations?per_page=100"
+	for path != "" {
+		req, err := g.newRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", githubBearerPrefix+accessToken)
+
+		var payload struct {
+			Installations []githubInstallation `json:"installations"`
+		}
+		resp, err := g.doWithResponse(req, &payload)
+		if err != nil {
+			return nil, fmt.Errorf("list user github installations: %w", err)
+		}
+		all = append(all, payload.Installations...)
+		path = nextPagePath(resp)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}
+
+	return all, nil
+}
+
+func (g *GitHub) listUserInstallationRepositories(ctx context.Context, accessToken string, installationID int64, accountLogin string) ([]UserRepoAccess, string, error) {
+	var all []UserRepoAccess
+	hasWrite := false
+	hasRead := false
+	path := fmt.Sprintf("/user/installations/%d/repositories?per_page=100", installationID)
+	for path != "" {
+		req, err := g.newRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, "", err
+		}
+		req.Header.Set("Authorization", githubBearerPrefix+accessToken)
+
+		var payload struct {
+			Repositories []githubUserAccessRepository `json:"repositories"`
+		}
+		resp, err := g.doWithResponse(req, &payload)
+		if err != nil {
+			return nil, "", fmt.Errorf("list user installation repositories: %w", err)
+		}
+		for _, repo := range payload.Repositories {
+			level := repo.highestPermissionLevel()
+			if level == "" {
+				continue
+			}
+			all = append(all, repo.toUserRepoAccess(accountLogin, level))
+			switch capGitHubRepoLevelForOrg(level) {
+			case "push":
+				hasWrite = true
+			case "pull":
+				hasRead = true
+			}
+		}
+		path = nextPagePath(resp)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+	}
+
+	switch {
+	case hasWrite:
+		return all, "push", nil
+	case hasRead:
+		return all, "pull", nil
+	default:
+		return all, "", nil
+	}
+}
+
+func (g *GitHub) userInstallationOrgLevel(ctx context.Context, accessToken, accountLogin string) (string, bool, error) {
+	path := "/user/memberships/orgs/" + url.PathEscape(accountLogin)
+	req, err := g.newRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Authorization", githubBearerPrefix+accessToken)
+
+	var payload struct {
+		Role string `json:"role"`
+	}
+	status, err := g.doWithStatus(req, &payload)
+	if err != nil {
+		if status > 0 {
+			return "", false, nil
+		}
+		return "", false, nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(payload.Role)) {
+	case "admin":
+		return "admin", true, nil
+	case "member":
+		return "read", true, nil
+	default:
+		return "read", true, nil
+	}
+}
+
+func capGitHubRepoLevelForOrg(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "admin", "maintain", "push":
+		return "push"
+	case "triage", "pull":
+		return "pull"
+	default:
+		return ""
+	}
 }
 
 // generateAppJWT creates a JWT signed with the App's private key.
@@ -846,6 +1004,14 @@ type githubInstallationToken struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+type githubRepositoryPermissions struct {
+	Admin    bool `json:"admin"`
+	Maintain bool `json:"maintain"`
+	Push     bool `json:"push"`
+	Triage   bool `json:"triage"`
+	Pull     bool `json:"pull"`
+}
+
 type githubPullRequestResource struct {
 	Number  int    `json:"number"`
 	Title   string `json:"title"`
@@ -950,6 +1116,49 @@ type githubInstallationRepository struct {
 	Name     string `json:"name"`
 	FullName string `json:"full_name"`
 	Private  bool   `json:"private"`
+}
+
+type githubUserAccessRepository struct {
+	ID          int64                       `json:"id"`
+	Name        string                      `json:"name"`
+	FullName    string                      `json:"full_name"`
+	Permissions githubRepositoryPermissions `json:"permissions"`
+	Owner       struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+}
+
+func (r githubUserAccessRepository) highestPermissionLevel() string {
+	switch {
+	case r.Permissions.Admin:
+		return "admin"
+	case r.Permissions.Maintain:
+		return "maintain"
+	case r.Permissions.Push:
+		return "push"
+	case r.Permissions.Triage:
+		return "triage"
+	case r.Permissions.Pull:
+		return "pull"
+	default:
+		return ""
+	}
+}
+
+func (r githubUserAccessRepository) toUserRepoAccess(accountLogin, level string) UserRepoAccess {
+	providerRepoID := ""
+	if r.ID > 0 {
+		providerRepoID = strconv.FormatInt(r.ID, 10)
+	}
+
+	return UserRepoAccess{
+		AccountLogin:   accountLogin,
+		ProviderRepoID: providerRepoID,
+		Owner:          strings.TrimSpace(r.Owner.Login),
+		Name:           strings.TrimSpace(r.Name),
+		FullName:       strings.TrimSpace(r.FullName),
+		Level:          level,
+	}
 }
 
 func (r githubInstallationRepository) toRepository(accountLogin string) Repository {

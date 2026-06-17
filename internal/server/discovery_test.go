@@ -183,6 +183,10 @@ func (p *discoveryTestForgeProvider) UserInfo(context.Context, *oauth2.Token) (*
 	return nil, forge.ErrNotImplemented
 }
 
+func (p *discoveryTestForgeProvider) ListUserAccess(context.Context, *oauth2.Token) (forge.UserAccess, error) {
+	return forge.UserAccess{}, nil
+}
+
 func discoveryProviderForTest(t *testing.T, srv *Server, providerID string) *discoveryTestForgeProvider {
 	if t != nil {
 		t.Helper()

@@ -1079,10 +1079,13 @@ type NotificationRule struct {
 }
 
 type OrgMember struct {
-	OrgID     uuid.UUID `json:"org_id"`
-	UserID    uuid.UUID `json:"user_id"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"created_at"`
+	OrgID     uuid.UUID    `json:"org_id"`
+	UserID    uuid.UUID    `json:"user_id"`
+	Role      string       `json:"role"`
+	CreatedAt time.Time    `json:"created_at"`
+	Source    string       `json:"source"`
+	SyncedAt  sql.NullTime `json:"synced_at"`
+	ExpiresAt sql.NullTime `json:"expires_at"`
 }
 
 type Organization struct {
@@ -1230,6 +1233,16 @@ type User struct {
 	ProviderID  string         `json:"provider_id"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
+}
+
+type UserRepoAccess struct {
+	UserID    uuid.UUID    `json:"user_id"`
+	RepoID    uuid.UUID    `json:"repo_id"`
+	Role      string       `json:"role"`
+	Source    string       `json:"source"`
+	SyncedAt  sql.NullTime `json:"synced_at"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
 // VEX statements. When repo_id is set, it must belong to org_id. The store layer validates this lineage on writes.

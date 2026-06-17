@@ -311,6 +311,10 @@ func (g *GitLab) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 	return &user, nil
 }
 
+func (g *GitLab) ListUserAccess(context.Context, *oauth2.Token) (UserAccess, error) {
+	return UserAccess{}, nil
+}
+
 func (g *GitLab) newRequest(ctx context.Context, method, path string, body any) (*http.Request, error) {
 	endpoint := g.apiURL + path
 
