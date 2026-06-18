@@ -281,13 +281,11 @@ func (a *AnnotatorStoreAdapter) GetSnapshotByID(ctx context.Context, id uuid.UUI
 		return dbgen.Snapshot{}, err
 	}
 	return dbgen.Snapshot{
-		ID:             snapshot.ID,
-		RefID:          snapshot.RefID,
-		CommitSha:      snapshot.CommitSHA,
-		Label:          stringToNull(snapshot.Label),
-		Status:         snapshot.Status,
-		RawArtifactUrl: stringToNull(snapshot.RawArtifactURL),
-		CreatedAt:      snapshot.CreatedAt,
+		ID:        snapshot.ID,
+		RefID:     snapshot.RefID,
+		CommitSha: snapshot.CommitSHA,
+		Status:    snapshot.Status,
+		CreatedAt: snapshot.CreatedAt,
 	}, nil
 }
 
@@ -315,13 +313,11 @@ func (a *AnnotatorStoreAdapter) GetLatestSnapshotByRef(ctx context.Context, refI
 		return dbgen.Snapshot{}, err
 	}
 	return dbgen.Snapshot{
-		ID:             snapshot.ID,
-		RefID:          snapshot.RefID,
-		CommitSha:      snapshot.CommitSHA,
-		Label:          stringToNull(snapshot.Label),
-		Status:         snapshot.Status,
-		RawArtifactUrl: stringToNull(snapshot.RawArtifactURL),
-		CreatedAt:      snapshot.CreatedAt,
+		ID:        snapshot.ID,
+		RefID:     snapshot.RefID,
+		CommitSha: snapshot.CommitSHA,
+		Status:    snapshot.Status,
+		CreatedAt: snapshot.CreatedAt,
 	}, nil
 }
 

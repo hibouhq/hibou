@@ -96,7 +96,7 @@ func (a *StoreAdapter) ListCoverageSnapshotStats(ctx context.Context, orgID uuid
 	stats := make([]CoverageSnapshotStat, 0, len(rows))
 	for _, row := range rows {
 		stats = append(stats, CoverageSnapshotStat{
-			Label:         strings.ToLower(interfaceStringValue(row.Label)),
+			Format:        strings.ToLower(interfaceStringValue(row.Format)),
 			LastSeenAt:    interfaceTimeValue(row.LastSeenAt),
 			SnapshotCount: row.SnapshotCount,
 			RepoCount:     row.RepoCount,

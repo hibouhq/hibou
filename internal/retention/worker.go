@@ -16,15 +16,19 @@ import (
 const batchSize int32 = 100
 
 type Worker struct {
-	store    WorkerStore
-	objStore objstore.Store
-	log      zerolog.Logger
-	policy   Policy
+	store         WorkerStore
+	objStore      objstore.Store
+	log           zerolog.Logger
+	policy        Policy
+	pendingWindow time.Duration
 }
 
 type WorkerStore interface {
 	ListExpiredSnapshots(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error)
+	ListStalePendingSnapshots(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error)
+	ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID uuid.UUID) ([]string, error)
 	ArchiveSnapshot(ctx context.Context, id uuid.UUID) error
+	MarkSnapshotFailed(ctx context.Context, id uuid.UUID) error
 	PurgeSnapshot(ctx context.Context, id uuid.UUID) error
 }
 
@@ -32,11 +36,15 @@ type archivedSnapshotStore interface {
 	ListArchivedSnapshotsForPurge(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error)
 }
 
-func NewWorker(store WorkerStore, objStore objstore.Store, log zerolog.Logger, policy Policy) *Worker {
-	return &Worker{store: store, objStore: objStore, log: log, policy: policy}
+func NewWorker(store WorkerStore, objStore objstore.Store, log zerolog.Logger, policy Policy, pendingWindow time.Duration) *Worker {
+	return &Worker{store: store, objStore: objStore, log: log, policy: policy, pendingWindow: pendingWindow}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
+	if w.store == nil {
+		return nil
+	}
+
 	hotCutoff := time.Now().Add(-w.policy.HotRetention)
 	expired, err := w.store.ListExpiredSnapshots(ctx, hotCutoff, batchSize)
 	if err != nil {
@@ -52,6 +60,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	if !w.policy.AutoPurge {
 		return nil
 	}
+	if w.objStore == nil {
+		return nil
+	}
 
 	archiveCutoff := time.Now().Add(-w.policy.ArchiveRetention)
 	archived, err := w.listArchivedSnapshots(ctx, archiveCutoff)
@@ -59,13 +70,39 @@ func (w *Worker) Run(ctx context.Context) error {
 		return err
 	}
 	for _, snapshot := range archived {
-		if err := w.deleteArtifact(ctx, snapshot.ArtifactKey); err != nil {
+		keys, err := w.store.ListSnapshotArtifactObjectKeys(ctx, snapshot.ID)
+		if err != nil {
 			return err
+		}
+		for _, key := range keys {
+			if err := w.deleteArtifact(ctx, key); err != nil {
+				return err
+			}
 		}
 		if err := w.store.PurgeSnapshot(ctx, snapshot.ID); err != nil {
 			return err
 		}
 		w.log.Info().Str("snapshot_id", snapshot.ID.String()).Msg("purged snapshot")
+	}
+
+	return nil
+}
+
+func (w *Worker) SweepStalePending(ctx context.Context) error {
+	if w.store == nil || w.pendingWindow <= 0 {
+		return nil
+	}
+
+	cutoff := time.Now().Add(-w.pendingWindow)
+	staleSnapshots, err := w.store.ListStalePendingSnapshots(ctx, cutoff, batchSize)
+	if err != nil {
+		return err
+	}
+	for _, snapshot := range staleSnapshots {
+		if err := w.store.MarkSnapshotFailed(ctx, snapshot.ID); err != nil {
+			return err
+		}
+		w.log.Info().Str("snapshot_id", snapshot.ID.String()).Msg("failed stale pending snapshot")
 	}
 
 	return nil

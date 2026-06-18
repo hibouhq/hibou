@@ -15,6 +15,14 @@ import (
 
 type RefType = dbgen.RefType
 
+type UpsertRefOptions struct {
+	ProviderID       *string
+	MergeTargetRefID *uuid.UUID
+	LatestCommitSHA  *string
+	PRTitle          string
+	PRSourceBranch   string
+}
+
 const (
 	RefTypeBranch      = dbgen.RefTypeBranch
 	RefTypeTag         = dbgen.RefTypeTag
@@ -141,16 +149,16 @@ func (q *Queries) UpdateRefLatestCommit(ctx context.Context, id uuid.UUID, lates
 	return refFromRow(row), nil
 }
 
-func (q *Queries) UpsertRef(ctx context.Context, repoID uuid.UUID, name string, refType RefType, providerID *string, mergeTargetRefID *uuid.UUID, latestCommitSHA *string) (*Ref, error) {
+func (q *Queries) UpsertRef(ctx context.Context, repoID uuid.UUID, name string, refType RefType, opts UpsertRefOptions) (*Ref, error) {
 	row, err := q.db.UpsertRef(ctx, dbgen.UpsertRefParams{
 		RepoID:           repoID,
 		Name:             name,
 		RefType:          refType,
-		ProviderID:       nullStringFromPtr(providerID),
-		MergeTargetRefID: nullUUIDFromPtr(mergeTargetRefID),
-		LatestCommitSha:  nullStringFromPtr(latestCommitSHA),
-		PrTitle:          "",
-		PrSourceBranch:   "",
+		ProviderID:       nullStringFromPtr(opts.ProviderID),
+		MergeTargetRefID: nullUUIDFromPtr(opts.MergeTargetRefID),
+		LatestCommitSha:  nullStringFromPtr(opts.LatestCommitSHA),
+		PrTitle:          opts.PRTitle,
+		PrSourceBranch:   opts.PRSourceBranch,
 	})
 	if err != nil {
 		return nil, err

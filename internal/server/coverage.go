@@ -99,9 +99,7 @@ func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, response)
 }
 
-func (s *Server) processCoverageUpload(snapshotID uuid.UUID, content []byte, format string) {
-	ctx := context.Background()
-
+func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID, content []byte, format string) {
 	report, err := coverageparser.Parse(content, format)
 	if err != nil {
 		s.failCoverageUpload(snapshotID, format, err)
@@ -151,10 +149,6 @@ func (s *Server) processCoverageUpload(snapshotID uuid.UUID, content []byte, for
 		}
 	}
 
-	if _, err := queries.UpdateSnapshotStatus(ctx, snapshotID, store.SnapshotStatusComplete); err != nil {
-		s.failCoverageUpload(snapshotID, report.Format, err)
-		return
-	}
 	if err := tx.Commit(); err != nil {
 		s.failCoverageUpload(snapshotID, report.Format, err)
 		return

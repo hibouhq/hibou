@@ -271,7 +271,7 @@ func createRepositoryWithSnapshot(t *testing.T, srv *Server, org *store.Organiza
 	if err != nil {
 		t.Fatalf("CreateRef(%s): %v", seed.name, err)
 	}
-	if _, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, seed.snapshotCommit, nil, store.SnapshotStatusComplete, nil); err != nil {
+	if _, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, seed.snapshotCommit, store.SnapshotStatusComplete); err != nil {
 		t.Fatalf("CreateSnapshot(%s): %v", seed.name, err)
 	}
 	return repo

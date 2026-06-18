@@ -1190,16 +1190,35 @@ type ScanProvider struct {
 }
 
 type Snapshot struct {
-	ID             uuid.UUID       `json:"id"`
-	RefID          uuid.UUID       `json:"ref_id"`
-	CommitSha      string          `json:"commit_sha"`
-	Label          sql.NullString  `json:"label"`
-	Status         SnapshotStatus  `json:"status"`
-	RawArtifactUrl sql.NullString  `json:"raw_artifact_url"`
-	ArtifactKey    string          `json:"artifact_key"`
-	Labels         json.RawMessage `json:"labels"`
-	ImageDigest    sql.NullString  `json:"image_digest"`
-	CreatedAt      time.Time       `json:"created_at"`
+	ID              uuid.UUID       `json:"id"`
+	RefID           uuid.UUID       `json:"ref_id"`
+	CommitSha       string          `json:"commit_sha"`
+	Status          SnapshotStatus  `json:"status"`
+	Labels          json.RawMessage `json:"labels"`
+	ImageDigest     sql.NullString  `json:"image_digest"`
+	CreatedAt       time.Time       `json:"created_at"`
+	BuildUrl        sql.NullString  `json:"build_url"`
+	RunID           sql.NullString  `json:"run_id"`
+	RunNumber       sql.NullString  `json:"run_number"`
+	PrNumber        sql.NullString  `json:"pr_number"`
+	PrTargetBranch  sql.NullString  `json:"pr_target_branch"`
+	Tag             sql.NullString  `json:"tag"`
+	ExpectedUploads sql.NullInt32   `json:"expected_uploads"`
+	ReceivedUploads int32           `json:"received_uploads"`
+	RunAttempt      sql.NullString  `json:"run_attempt"`
+}
+
+type SnapshotArtifact struct {
+	ID          uuid.UUID      `json:"id"`
+	SnapshotID  uuid.UUID      `json:"snapshot_id"`
+	Kind        string         `json:"kind"`
+	Format      sql.NullString `json:"format"`
+	ToolName    sql.NullString `json:"tool_name"`
+	ObjectKey   string         `json:"object_key"`
+	Sha256      sql.NullString `json:"sha256"`
+	SizeBytes   int64          `json:"size_bytes"`
+	ContentType sql.NullString `json:"content_type"`
+	CreatedAt   time.Time      `json:"created_at"`
 }
 
 type SnapshotComponent struct {

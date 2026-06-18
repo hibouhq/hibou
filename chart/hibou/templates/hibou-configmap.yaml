@@ -13,6 +13,7 @@ data:
   HIBOU_OSV_URL: {{ .Values.hibou.advisory.osv.url | quote }}
   HIBOU_CACHE_TTL: {{ .Values.hibou.advisory.cache.ttl | quote }}
   HIBOU_MAX_UPLOAD_SIZE: {{ .Values.hibou.maxUploadSize | quote }}
+  HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"true"{{ end }}
   {{- with (include "hibou.baseURL" .) }}
   HIBOU_BASE_URL: {{ . | quote }}
   {{- end }}

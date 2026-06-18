@@ -485,6 +485,10 @@ Comparisons are computed on demand from persisted snapshot data. The API accepts
 
 - Every collection endpoint supports pagination, sorting, filtering, and consistent response metadata.
 - Upload endpoints return a processing handle so clients can poll status.
+- Snapshots are keyed by `(ref, commit_sha, run_id, run_attempt)`. Uploads for one CI build attach to the same pending snapshot, which becomes complete only when the build explicitly completes or reaches its expected upload count.
+- GitHub Actions, Forgejo Actions, and Gitea Actions populate `run_attempt` natively via `GITHUB_RUN_ATTEMPT`, so retries stay distinct. GitLab has no native pipeline-attempt variable, so Hibou auto-creates a distinct retry snapshot when a new upload arrives after that build's latest snapshot is no longer `pending`; `HIBOU_RUN_ATTEMPT` remains an optional explicit override.
+- Pending snapshots that outlive `upload.window` auto-transition to `failed` after the global timeout window (default `10m`) and render red in the UI.
+- When object storage is configured, each uploaded raw artifact is persisted as an object and tracked in per-upload `snapshot_artifacts` child rows; snapshot records expose lifecycle metadata only, while raw-upload metadata lives on those child rows.
 - Expensive list endpoints should support narrow field selection or summarized response modes if needed.
 
 ### Example payloads
@@ -497,7 +501,9 @@ SBOM upload request:
   "repo": "payments-api",
   "ref": "refs/heads/main",
   "commit_sha": "a1b2c3d4e5f6...",
-  "snapshot_label": "build-1842",
+  "run_id": "1842",
+  "run_number": "1842",
+  "build_url": "https://github.example/acme/payments-api/actions/runs/1842",
   "format": "cyclonedx-json",
   "artifact": {
     "filename": "bom.json",
@@ -515,7 +521,9 @@ SARIF upload request:
   "repo": "payments-api",
   "ref": "refs/pull/42/head",
   "commit_sha": "f6e5d4c3b2a1...",
-  "snapshot_label": "pr-42-sast",
+  "pr_number": "42",
+  "pr_target_branch": "main",
+  "pr_source_branch": "feature/sast",
   "tool": "semgrep",
   "artifact": {
     "filename": "results.sarif",

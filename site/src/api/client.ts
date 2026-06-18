@@ -142,8 +142,13 @@ export interface Snapshot {
   id: string
   ref_id: string
   commit_sha: string
-  label?: string
   status: string
+  tag?: string
+  build_url?: string
+  run_id?: string
+  run_number?: string
+  pr_number?: string
+  pr_target_branch?: string
   created_at: string
 }
 

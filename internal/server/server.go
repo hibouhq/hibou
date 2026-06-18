@@ -92,6 +92,7 @@ type metricsResponse struct {
 }
 
 const retentionInterval = 24 * time.Hour
+const stalePendingInterval = 1 * time.Minute
 
 func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) *Server {
 	r := chi.NewRouter()
@@ -157,9 +158,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 			}
 		})
 	}
-	if s.objStore != nil {
-		s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, log, retention.DefaultPolicy())
-	}
+	s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, log, retention.DefaultPolicy(), cfg.UploadWindow)
 	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, log,
 		&notify.SlackSender{},
 		&notify.TeamsSender{},
@@ -422,6 +421,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.retentionWorker != nil {
 		go s.runRetentionLoop(ctx)
 	}
+	go s.runStalePendingLoop(ctx)
 	if s.staleScanChecker != nil {
 		go s.staleScanChecker.Start(ctx)
 	}
@@ -475,6 +475,30 @@ func (s *Server) runRetentionLoop(ctx context.Context) {
 		case <-ticker.C:
 			if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				s.log.Error().Err(err).Msg("retention pass failed")
+			}
+		}
+	}
+}
+
+func (s *Server) runStalePendingLoop(ctx context.Context) {
+	if s.retentionWorker == nil {
+		return
+	}
+
+	if err := s.retentionWorker.SweepStalePending(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		s.log.Error().Err(err).Msg("stale pending sweep failed")
+	}
+
+	ticker := time.NewTicker(stalePendingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.retentionWorker.SweepStalePending(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				s.log.Error().Err(err).Msg("stale pending sweep failed")
 			}
 		}
 	}

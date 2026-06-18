@@ -61,14 +61,11 @@ func (a *StoreAdapter) GetSnapshotAtDate(ctx context.Context, arg dbgen.GetSnaps
 		return dbgen.Snapshot{}, err
 	}
 	return dbgen.Snapshot{
-		ID:             snapshot.ID,
-		RefID:          snapshot.RefID,
-		CommitSha:      snapshot.CommitSHA,
-		Label:          stringToNull(snapshot.Label),
-		Status:         snapshot.Status,
-		RawArtifactUrl: stringToNull(snapshot.RawArtifactURL),
-		CreatedAt:      snapshot.CreatedAt,
-		ArtifactKey:    snapshot.ArtifactKey,
+		ID:        snapshot.ID,
+		RefID:     snapshot.RefID,
+		CommitSha: snapshot.CommitSHA,
+		Status:    snapshot.Status,
+		CreatedAt: snapshot.CreatedAt,
 	}, nil
 }
 

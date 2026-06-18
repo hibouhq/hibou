@@ -4656,6 +4656,9 @@ const docTemplate = `{
                 "artifact": {
                     "$ref": "#/definitions/server.uploadArtifact"
                 },
+                "build_url": {
+                    "type": "string"
+                },
                 "commit_sha": {
                     "type": "string"
                 },
@@ -4668,6 +4671,18 @@ const docTemplate = `{
                 "org": {
                     "type": "string"
                 },
+                "pr_number": {
+                    "type": "string"
+                },
+                "pr_source_branch": {
+                    "type": "string"
+                },
+                "pr_target_branch": {
+                    "type": "string"
+                },
+                "pr_title": {
+                    "type": "string"
+                },
                 "provider": {
                     "type": "string"
                 },
@@ -4677,7 +4692,16 @@ const docTemplate = `{
                 "repo": {
                     "type": "string"
                 },
-                "snapshot_label": {
+                "run_attempt": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "run_number": {
+                    "type": "string"
+                },
+                "tag": {
                     "type": "string"
                 },
                 "tool": {

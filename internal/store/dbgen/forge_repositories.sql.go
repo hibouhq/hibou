@@ -13,6 +13,43 @@ import (
 	"github.com/google/uuid"
 )
 
+const getForgeRepositoryByProviderKey = `-- name: GetForgeRepositoryByProviderKey :one
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+FROM forge_repositories
+WHERE provider = $1 AND provider_key = $2 AND removed_at IS NULL
+LIMIT 1
+`
+
+type GetForgeRepositoryByProviderKeyParams struct {
+	Provider    string `json:"provider"`
+	ProviderKey string `json:"provider_key"`
+}
+
+func (q *Queries) GetForgeRepositoryByProviderKey(ctx context.Context, arg GetForgeRepositoryByProviderKeyParams) (ForgeRepository, error) {
+	row := q.db.QueryRowContext(ctx, getForgeRepositoryByProviderKey, arg.Provider, arg.ProviderKey)
+	var i ForgeRepository
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.InstallationID,
+		&i.ProviderRepoID,
+		&i.AccountLogin,
+		&i.Owner,
+		&i.Name,
+		&i.FullName,
+		&i.ProviderKey,
+		&i.Private,
+		&i.DefaultBranch,
+		&i.HtmlUrl,
+		&i.Archived,
+		&i.LastSeenAt,
+		&i.RemovedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getForgeRepositoryByProviderRepoID = `-- name: GetForgeRepositoryByProviderRepoID :one
 SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
 FROM forge_repositories

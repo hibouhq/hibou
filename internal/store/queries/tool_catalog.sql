@@ -70,14 +70,15 @@ ORDER BY c.ecosystem;
 
 -- name: ListCoverageSnapshotStats :many
 SELECT
-    COALESCE(NULLIF(TRIM(s.label), ''), 'unknown') AS label,
+        COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown') AS format,
     MAX(s.created_at) AS last_seen_at,
     COUNT(*)::bigint AS snapshot_count,
     COUNT(DISTINCT repo.id)::bigint AS repo_count
 FROM snapshots s
+JOIN coverage_reports cr ON cr.snapshot_id = s.id
 JOIN refs r ON r.id = s.ref_id
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
-  AND LOWER(COALESCE(s.label, '')) IN ('cobertura', 'jacoco', 'clover', 'lcov', 'gocover')
-GROUP BY COALESCE(NULLIF(TRIM(s.label), ''), 'unknown')
-ORDER BY COALESCE(NULLIF(TRIM(s.label), ''), 'unknown');
+    AND LOWER(COALESCE(cr.format, '')) IN ('cobertura', 'jacoco', 'clover', 'lcov', 'gocover')
+GROUP BY COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown')
+ORDER BY COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown');

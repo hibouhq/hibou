@@ -2,7 +2,6 @@ package retention
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +26,14 @@ func (a *StoreAdapter) ListExpiredSnapshots(ctx context.Context, before time.Tim
 	return snapshotsToRows(rows), nil
 }
 
+func (a *StoreAdapter) ListStalePendingSnapshots(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error) {
+	rows, err := a.queries.ListStalePendingSnapshots(ctx, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotsToRows(rows), nil
+}
+
 func (a *StoreAdapter) ListArchivedSnapshotsForPurge(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error) {
 	rows, err := a.queries.ListArchivedSnapshotsForPurge(ctx, before, limit)
 	if err != nil {
@@ -43,26 +50,25 @@ func (a *StoreAdapter) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
 	return a.queries.PurgeSnapshot(ctx, id)
 }
 
+func (a *StoreAdapter) MarkSnapshotFailed(ctx context.Context, id uuid.UUID) error {
+	_, err := a.queries.MarkSnapshotFailedIfPending(ctx, id)
+	return err
+}
+
+func (a *StoreAdapter) ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID uuid.UUID) ([]string, error) {
+	return a.queries.ListSnapshotArtifactObjectKeys(ctx, snapshotID)
+}
+
 func snapshotsToRows(rows []store.Snapshot) []dbgen.Snapshot {
 	result := make([]dbgen.Snapshot, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, dbgen.Snapshot{
-			ID:             row.ID,
-			RefID:          row.RefID,
-			CommitSha:      row.CommitSHA,
-			Label:          stringToNull(row.Label),
-			Status:         row.Status,
-			RawArtifactUrl: stringToNull(row.RawArtifactURL),
-			CreatedAt:      row.CreatedAt,
-			ArtifactKey:    row.ArtifactKey,
+			ID:        row.ID,
+			RefID:     row.RefID,
+			CommitSha: row.CommitSHA,
+			Status:    row.Status,
+			CreatedAt: row.CreatedAt,
 		})
 	}
 	return result
-}
-
-func stringToNull(value *string) sql.NullString {
-	if value == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: *value, Valid: true}
 }

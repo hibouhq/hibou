@@ -186,6 +186,21 @@ func (q *Queries) GetForgeRepositoryByProviderRepoID(ctx context.Context, provid
 	return forgeRepositoryFromRow(row), nil
 }
 
+func (q *Queries) GetForgeRepositoryByProviderKey(ctx context.Context, provider, providerKey string) (*ForgeRepository, error) {
+	row, err := q.db.GetForgeRepositoryByProviderKey(ctx, dbgen.GetForgeRepositoryByProviderKeyParams{
+		Provider:    strings.TrimSpace(provider),
+		ProviderKey: normalizeForgeRepositoryKey(providerKey),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return forgeRepositoryFromRow(row), nil
+}
+
 func forgeRepositoryFromRow(row dbgen.ForgeRepository) *ForgeRepository {
 	return &ForgeRepository{
 		ID:             row.ID,

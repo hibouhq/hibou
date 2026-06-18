@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -32,11 +33,43 @@ type uploadBase struct {
 	org      string
 }
 
+type uploadCIContext struct {
+	ref            string
+	commitSHA      string
+	runID          string
+	runAttempt     string
+	runNumber      string
+	buildURL       string
+	prNumber       string
+	prTargetBranch string
+	prSourceBranch string
+	prTitle        string
+	tag            string
+}
+
 var uploadCmd = &cobra.Command{
 	Use:   "upload <file> [file...]",
 	Short: "Upload security artifacts to Hibou",
 	Long: `Upload SBOM, SARIF, or coverage artifacts to Hibou. The artifact type is auto-detected from file content.
 Accepts multiple files — each is uploaded separately.
+
+Supported CI auto-detection:
+	- GitHub Actions, Forgejo Actions, and Gitea Actions via GITHUB_* environment variables
+	- GitLab CI via GITLAB_CI=true plus CI_* merge/pipeline variables
+
+Retry handling (distinct snapshot per attempt):
+	- The server synthesizes a new attempt for every forge: an upload arriving after the
+	  build's latest snapshot is no longer pending starts a new attempt automatically.
+	- When the forge exposes a real attempt (GitHub/Forgejo/Gitea GITHUB_RUN_ATTEMPT), it is
+	  sent as the authoritative attempt, which keeps overlapping re-runs (same run_id) distinct.
+	- GitLab has no native pipeline-attempt variable; it relies on the server synthesis above.
+	  Set HIBOU_RUN_ATTEMPT to override the attempt explicitly on any forge.
+
+Generic CI overrides:
+	HIBOU_REF, HIBOU_SHA, HIBOU_RUN_ID, HIBOU_RUN_ATTEMPT, HIBOU_RUN_NUMBER, HIBOU_BUILD_URL,
+	HIBOU_PR_NUMBER, HIBOU_PR_TARGET_BRANCH, HIBOU_PR_SOURCE_BRANCH, HIBOU_PR_TITLE, HIBOU_TAG
+
+Precedence for upload context: explicit flag > HIBOU_* override > detected CI provider.
 
 With no files and --complete, closes the current snapshot for the given ref/sha and triggers gate evaluation.
 
@@ -111,10 +144,11 @@ func resolveUploadBase() (uploadBase, error) {
 	if uploadRepo == "" {
 		return uploadBase{}, errors.New("--repo is required")
 	}
-	if uploadRef == "" {
+	ci := resolveUploadContext()
+	if ci.ref == "" {
 		return uploadBase{}, errors.New("--ref is required")
 	}
-	if uploadCommitSHA == "" {
+	if ci.commitSHA == "" {
 		return uploadBase{}, errors.New("--sha is required")
 	}
 
@@ -124,6 +158,123 @@ func resolveUploadBase() (uploadBase, error) {
 	}
 
 	return uploadBase{provider: parts[0], org: parts[1]}, nil
+}
+
+func detectCIContext() uploadCIContext {
+	for _, detector := range []func() (uploadCIContext, bool){detectGitHubFamilyCIContext, detectGitLabCIContext} {
+		if ctx, matched := detector(); matched {
+			return ctx
+		}
+	}
+	return uploadCIContext{}
+}
+
+func resolveUploadContext() uploadCIContext {
+	ctx := applyHIBOUOverrides(detectCIContext())
+	if value := strings.TrimSpace(uploadRef); value != "" {
+		ctx.ref = value
+	}
+	if value := strings.TrimSpace(uploadCommitSHA); value != "" {
+		ctx.commitSHA = value
+	}
+	return ctx
+}
+
+func detectGitHubFamilyCIContext() (uploadCIContext, bool) {
+	if strings.TrimSpace(os.Getenv("GITHUB_ACTIONS")) != "true" && strings.TrimSpace(os.Getenv("GITHUB_SHA")) == "" && strings.TrimSpace(os.Getenv("GITHUB_RUN_ID")) == "" {
+		return uploadCIContext{}, false
+	}
+	ctx := uploadCIContext{
+		commitSHA:      strings.TrimSpace(os.Getenv("GITHUB_SHA")),
+		ref:            strings.TrimSpace(os.Getenv("GITHUB_REF")),
+		prTargetBranch: strings.TrimSpace(os.Getenv("GITHUB_BASE_REF")),
+		prSourceBranch: strings.TrimSpace(os.Getenv("GITHUB_HEAD_REF")),
+		runID:          strings.TrimSpace(os.Getenv("GITHUB_RUN_ID")),
+		runAttempt:     strings.TrimSpace(os.Getenv("GITHUB_RUN_ATTEMPT")),
+		runNumber:      strings.TrimSpace(os.Getenv("GITHUB_RUN_NUMBER")),
+	}
+	serverURL := strings.TrimSpace(os.Getenv("GITHUB_SERVER_URL"))
+	repository := strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY"))
+	if ctx.runID != "" && serverURL != "" && repository != "" {
+		ctx.buildURL = strings.TrimRight(serverURL, "/") + "/" + repository + "/actions/runs/" + ctx.runID
+	}
+	ctx.prNumber = parseGitHubPRNumber(ctx.ref)
+	if strings.HasPrefix(ctx.ref, "refs/tags/") {
+		ctx.tag = strings.TrimSpace(os.Getenv("GITHUB_REF_NAME"))
+	}
+	return ctx, true
+}
+
+func detectGitLabCIContext() (uploadCIContext, bool) {
+	if strings.TrimSpace(os.Getenv("GITLAB_CI")) != "true" {
+		return uploadCIContext{}, false
+	}
+	tag := strings.TrimSpace(os.Getenv("CI_COMMIT_TAG"))
+	ref := strings.TrimSpace(os.Getenv("CI_COMMIT_REF_NAME"))
+	if tag != "" {
+		ref = "refs/tags/" + tag
+	}
+	buildURL := strings.TrimSpace(os.Getenv("CI_PIPELINE_URL"))
+	if buildURL == "" {
+		buildURL = strings.TrimSpace(os.Getenv("CI_JOB_URL"))
+	}
+	return uploadCIContext{
+		commitSHA:      strings.TrimSpace(os.Getenv("CI_COMMIT_SHA")),
+		ref:            ref,
+		prTargetBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")),
+		prSourceBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")),
+		prNumber:       strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_IID")),
+		runID:          strings.TrimSpace(os.Getenv("CI_PIPELINE_ID")),
+		runNumber:      strings.TrimSpace(os.Getenv("CI_PIPELINE_IID")),
+		buildURL:       buildURL,
+		prTitle:        strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_TITLE")),
+		tag:            tag,
+	}, true
+}
+
+func applyHIBOUOverrides(ctx uploadCIContext) uploadCIContext {
+	if value := strings.TrimSpace(os.Getenv("HIBOU_REF")); value != "" {
+		ctx.ref = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_SHA")); value != "" {
+		ctx.commitSHA = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_RUN_ID")); value != "" {
+		ctx.runID = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_RUN_ATTEMPT")); value != "" {
+		ctx.runAttempt = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_RUN_NUMBER")); value != "" {
+		ctx.runNumber = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_BUILD_URL")); value != "" {
+		ctx.buildURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_PR_NUMBER")); value != "" {
+		ctx.prNumber = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_PR_TARGET_BRANCH")); value != "" {
+		ctx.prTargetBranch = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_PR_SOURCE_BRANCH")); value != "" {
+		ctx.prSourceBranch = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_PR_TITLE")); value != "" {
+		ctx.prTitle = value
+	}
+	if value := strings.TrimSpace(os.Getenv("HIBOU_TAG")); value != "" {
+		ctx.tag = value
+	}
+	return ctx
+}
+
+func parseGitHubPRNumber(ref string) string {
+	match := regexp.MustCompile(`^refs/pull/(\d+)/merge$`).FindStringSubmatch(strings.TrimSpace(ref))
+	if len(match) != 2 {
+		return ""
+	}
+	return match[1]
 }
 
 func submitUpload(client *cliclient.Client, endpoint string, payload any) error {
@@ -154,19 +305,21 @@ func runUploadAuto(file string, complete bool, expect int) error {
 	if err != nil {
 		return err
 	}
+	ci := resolveUploadContext()
 
 	payload := map[string]any{
 		"provider":   base.provider,
 		"org":        base.org,
 		"repo":       uploadRepo,
-		"ref":        uploadRef,
-		"commit_sha": uploadCommitSHA,
+		"ref":        ci.ref,
+		"commit_sha": ci.commitSHA,
 		"complete":   complete,
 		"artifact": map[string]string{
 			"filename":       filepath.Base(file),
 			"content_base64": base64.StdEncoding.EncodeToString(data),
 		},
 	}
+	setOptionalUploadContextFields(payload, ci)
 	if expect > 0 {
 		payload["expect"] = expect
 	}
@@ -184,18 +337,50 @@ func runUploadComplete() error {
 	if err != nil {
 		return err
 	}
+	ci := resolveUploadContext()
 
 	payload := map[string]any{
 		"provider":   base.provider,
 		"org":        base.org,
 		"repo":       uploadRepo,
-		"ref":        uploadRef,
-		"commit_sha": uploadCommitSHA,
+		"ref":        ci.ref,
+		"commit_sha": ci.commitSHA,
 		"complete":   true,
 	}
+	setOptionalUploadContextFields(payload, ci)
 
 	fmt.Println("--- Completing snapshot")
 	return submitUpload(client, "/upload", payload)
+}
+
+func setOptionalUploadContextFields(payload map[string]any, ctx uploadCIContext) {
+	if ctx.runID != "" {
+		payload["run_id"] = ctx.runID
+	}
+	if ctx.runAttempt != "" {
+		payload["run_attempt"] = ctx.runAttempt
+	}
+	if ctx.runNumber != "" {
+		payload["run_number"] = ctx.runNumber
+	}
+	if ctx.buildURL != "" {
+		payload["build_url"] = ctx.buildURL
+	}
+	if ctx.prNumber != "" {
+		payload["pr_number"] = ctx.prNumber
+	}
+	if ctx.prTargetBranch != "" {
+		payload["pr_target_branch"] = ctx.prTargetBranch
+	}
+	if ctx.prSourceBranch != "" {
+		payload["pr_source_branch"] = ctx.prSourceBranch
+	}
+	if ctx.prTitle != "" {
+		payload["pr_title"] = ctx.prTitle
+	}
+	if ctx.tag != "" {
+		payload["tag"] = ctx.tag
+	}
 }
 
 func init() {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type webhookResponse struct {
@@ -174,7 +175,7 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 
 	refType := refTypeFromName(event.Ref)
 	refName := normalizeStoredRefName(event.Ref)
-	_, err = s.queries.UpsertRef(r.Context(), repo.ID, refName, refType, nil, nil, stringPtr(event.After))
+	_, err = s.queries.UpsertRef(r.Context(), repo.ID, refName, refType, store.UpsertRefOptions{LatestCommitSHA: stringPtr(event.After)})
 	return err
 }
 
@@ -199,7 +200,7 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 
 	var mergeTargetRefID *uuid.UUID
 	if targetBranch := strings.TrimSpace(event.TargetBranch); targetBranch != "" {
-		targetRef, err := s.queries.UpsertRef(r.Context(), repo.ID, targetBranch, refTypeFromName(targetBranch), nil, nil, nil)
+		targetRef, err := s.queries.UpsertRef(r.Context(), repo.ID, targetBranch, refTypeFromName(targetBranch), store.UpsertRefOptions{})
 		if err != nil {
 			return err
 		}
@@ -209,7 +210,12 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 	}
 
 	refName := pullRequestRefName(forgeType, event.Number)
-	ref, err := s.queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), nil, mergeTargetRefID, stringPtr(event.HeadSHA))
+	ref, err := s.queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), store.UpsertRefOptions{
+		MergeTargetRefID: mergeTargetRefID,
+		LatestCommitSHA:  stringPtr(event.HeadSHA),
+		PRTitle:          event.Title,
+		PRSourceBranch:   event.SourceBranch,
+	})
 	if err != nil {
 		return err
 	}

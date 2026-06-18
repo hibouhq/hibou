@@ -506,7 +506,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 				return fmt.Errorf("creating ref for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
 
-			snapshot, err := queries.CreateSnapshot(ctx, branchRef.ID, commitSHA, &repoSeed.label, store.SnapshotStatusComplete, nil)
+			snapshot, err := queries.CreateSnapshot(ctx, branchRef.ID, commitSHA, store.SnapshotStatusComplete)
 			if err != nil {
 				return fmt.Errorf("creating snapshot for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}

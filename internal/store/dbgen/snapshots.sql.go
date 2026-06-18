@@ -23,6 +23,38 @@ func (q *Queries) ArchiveSnapshot(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const completeSnapshot = `-- name: CompleteSnapshot :one
+UPDATE snapshots
+SET status = 'complete'
+WHERE id = $1
+	AND status = 'pending'
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
+`
+
+func (q *Queries) CompleteSnapshot(ctx context.Context, id uuid.UUID) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, completeSnapshot, id)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
 const countComponentsBySnapshot = `-- name: CountComponentsBySnapshot :one
 SELECT COUNT(*)::bigint FROM snapshot_components WHERE snapshot_id = $1
 `
@@ -45,67 +77,81 @@ func (q *Queries) CountSnapshotsByRef(ctx context.Context, refID uuid.UUID) (int
 	return column_1, err
 }
 
+const countSnapshotsForBuild = `-- name: CountSnapshotsForBuild :one
+SELECT COUNT(*)::bigint FROM snapshots
+WHERE ref_id = $1
+	AND commit_sha = $2
+	AND COALESCE(run_id, '') = COALESCE($3, '')
+`
+
+type CountSnapshotsForBuildParams struct {
+	RefID     uuid.UUID      `json:"ref_id"`
+	CommitSha string         `json:"commit_sha"`
+	RunID     sql.NullString `json:"run_id"`
+}
+
+func (q *Queries) CountSnapshotsForBuild(ctx context.Context, arg CountSnapshotsForBuildParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSnapshotsForBuild, arg.RefID, arg.CommitSha, arg.RunID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createSnapshot = `-- name: CreateSnapshot :one
-INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
+INSERT INTO snapshots (ref_id, commit_sha, status)
+VALUES ($1, $2, $3)
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
 `
 
 type CreateSnapshotParams struct {
-	RefID          uuid.UUID      `json:"ref_id"`
-	CommitSha      string         `json:"commit_sha"`
-	Label          sql.NullString `json:"label"`
-	Status         SnapshotStatus `json:"status"`
-	RawArtifactUrl sql.NullString `json:"raw_artifact_url"`
+	RefID     uuid.UUID      `json:"ref_id"`
+	CommitSha string         `json:"commit_sha"`
+	Status    SnapshotStatus `json:"status"`
 }
 
 func (q *Queries) CreateSnapshot(ctx context.Context, arg CreateSnapshotParams) (Snapshot, error) {
-	row := q.db.QueryRowContext(ctx, createSnapshot,
-		arg.RefID,
-		arg.CommitSha,
-		arg.Label,
-		arg.Status,
-		arg.RawArtifactUrl,
-	)
+	row := q.db.QueryRowContext(ctx, createSnapshot, arg.RefID, arg.CommitSha, arg.Status)
 	var i Snapshot
 	err := row.Scan(
 		&i.ID,
 		&i.RefID,
 		&i.CommitSha,
-		&i.Label,
 		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
 		&i.Labels,
 		&i.ImageDigest,
 		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
 	)
 	return i, err
 }
 
 const createSnapshotWithLabels = `-- name: CreateSnapshotWithLabels :one
-INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url, labels, image_digest)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
+INSERT INTO snapshots (ref_id, commit_sha, status, labels, image_digest)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
 `
 
 type CreateSnapshotWithLabelsParams struct {
-	RefID          uuid.UUID       `json:"ref_id"`
-	CommitSha      string          `json:"commit_sha"`
-	Label          sql.NullString  `json:"label"`
-	Status         SnapshotStatus  `json:"status"`
-	RawArtifactUrl sql.NullString  `json:"raw_artifact_url"`
-	Labels         json.RawMessage `json:"labels"`
-	ImageDigest    sql.NullString  `json:"image_digest"`
+	RefID       uuid.UUID       `json:"ref_id"`
+	CommitSha   string          `json:"commit_sha"`
+	Status      SnapshotStatus  `json:"status"`
+	Labels      json.RawMessage `json:"labels"`
+	ImageDigest sql.NullString  `json:"image_digest"`
 }
 
 func (q *Queries) CreateSnapshotWithLabels(ctx context.Context, arg CreateSnapshotWithLabelsParams) (Snapshot, error) {
 	row := q.db.QueryRowContext(ctx, createSnapshotWithLabels,
 		arg.RefID,
 		arg.CommitSha,
-		arg.Label,
 		arg.Status,
-		arg.RawArtifactUrl,
 		arg.Labels,
 		arg.ImageDigest,
 	)
@@ -114,19 +160,53 @@ func (q *Queries) CreateSnapshotWithLabels(ctx context.Context, arg CreateSnapsh
 		&i.ID,
 		&i.RefID,
 		&i.CommitSha,
-		&i.Label,
 		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
 		&i.Labels,
 		&i.ImageDigest,
 		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
+const getLatestCompleteSnapshotByRef = `-- name: GetLatestCompleteSnapshotByRef :one
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots WHERE ref_id = $1 AND status IN ('complete', 'active') ORDER BY created_at DESC LIMIT 1
+`
+
+func (q *Queries) GetLatestCompleteSnapshotByRef(ctx context.Context, refID uuid.UUID) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getLatestCompleteSnapshotByRef, refID)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
 	)
 	return i, err
 }
 
 const getLatestSnapshotByRef = `-- name: GetLatestSnapshotByRef :one
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (Snapshot, error) {
@@ -136,19 +216,64 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 		&i.ID,
 		&i.RefID,
 		&i.CommitSha,
-		&i.Label,
 		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
 		&i.Labels,
 		&i.ImageDigest,
 		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
+const getLatestSnapshotForBuild = `-- name: GetLatestSnapshotForBuild :one
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots
+WHERE ref_id = $1
+	AND commit_sha = $2
+	AND COALESCE(run_id, '') = COALESCE($3, '')
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetLatestSnapshotForBuildParams struct {
+	RefID     uuid.UUID      `json:"ref_id"`
+	CommitSha string         `json:"commit_sha"`
+	RunID     sql.NullString `json:"run_id"`
+}
+
+func (q *Queries) GetLatestSnapshotForBuild(ctx context.Context, arg GetLatestSnapshotForBuildParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getLatestSnapshotForBuild, arg.RefID, arg.CommitSha, arg.RunID)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
 	)
 	return i, err
 }
 
 const getSnapshotAtDate = `-- name: GetSnapshotAtDate :one
-SELECT s.id, s.ref_id, s.commit_sha, s.label, s.status, s.raw_artifact_url, s.artifact_key, s.labels, s.image_digest, s.created_at FROM snapshots s
+SELECT s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt FROM snapshots s
 JOIN refs r ON r.id = s.ref_id
 WHERE r.repo_id = $1
 	AND r.name = $2
@@ -171,19 +296,72 @@ func (q *Queries) GetSnapshotAtDate(ctx context.Context, arg GetSnapshotAtDatePa
 		&i.ID,
 		&i.RefID,
 		&i.CommitSha,
-		&i.Label,
 		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
 		&i.Labels,
 		&i.ImageDigest,
 		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
+const getSnapshotByBuildIdentity = `-- name: GetSnapshotByBuildIdentity :one
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
+FROM snapshots
+WHERE ref_id = $1
+	AND commit_sha = $2
+	AND COALESCE(run_id, '') = COALESCE($3, '')
+	AND COALESCE(run_attempt, '') = COALESCE($4, '')
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+type GetSnapshotByBuildIdentityParams struct {
+	RefID      uuid.UUID      `json:"ref_id"`
+	CommitSha  string         `json:"commit_sha"`
+	RunID      sql.NullString `json:"run_id"`
+	RunAttempt sql.NullString `json:"run_attempt"`
+}
+
+func (q *Queries) GetSnapshotByBuildIdentity(ctx context.Context, arg GetSnapshotByBuildIdentityParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotByBuildIdentity,
+		arg.RefID,
+		arg.CommitSha,
+		arg.RunID,
+		arg.RunAttempt,
+	)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
 	)
 	return i, err
 }
 
 const getSnapshotByID = `-- name: GetSnapshotByID :one
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE id = $1
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots WHERE id = $1
 `
 
 func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, error) {
@@ -193,19 +371,89 @@ func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, 
 		&i.ID,
 		&i.RefID,
 		&i.CommitSha,
-		&i.Label,
 		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
 		&i.Labels,
 		&i.ImageDigest,
 		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
+const getSnapshotByRefCommit = `-- name: GetSnapshotByRefCommit :one
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots WHERE ref_id = $1 AND commit_sha = $2
+`
+
+type GetSnapshotByRefCommitParams struct {
+	RefID     uuid.UUID `json:"ref_id"`
+	CommitSha string    `json:"commit_sha"`
+}
+
+func (q *Queries) GetSnapshotByRefCommit(ctx context.Context, arg GetSnapshotByRefCommitParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotByRefCommit, arg.RefID, arg.CommitSha)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
+const incrementSnapshotReceivedUploads = `-- name: IncrementSnapshotReceivedUploads :one
+UPDATE snapshots
+SET received_uploads = received_uploads + 1
+WHERE id = $1
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
+`
+
+func (q *Queries) IncrementSnapshotReceivedUploads(ctx context.Context, id uuid.UUID) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, incrementSnapshotReceivedUploads, id)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
 	)
 	return i, err
 }
 
 const listArchivedSnapshotsForPurge = `-- name: ListArchivedSnapshotsForPurge :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots
 WHERE created_at < $1
 	AND status = 'archived'
 ORDER BY created_at ASC
@@ -230,13 +478,19 @@ func (q *Queries) ListArchivedSnapshotsForPurge(ctx context.Context, arg ListArc
 			&i.ID,
 			&i.RefID,
 			&i.CommitSha,
-			&i.Label,
 			&i.Status,
-			&i.RawArtifactUrl,
-			&i.ArtifactKey,
 			&i.Labels,
 			&i.ImageDigest,
 			&i.CreatedAt,
+			&i.BuildUrl,
+			&i.RunID,
+			&i.RunNumber,
+			&i.PrNumber,
+			&i.PrTargetBranch,
+			&i.Tag,
+			&i.ExpectedUploads,
+			&i.ReceivedUploads,
+			&i.RunAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -342,7 +596,7 @@ func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapsho
 }
 
 const listExpiredSnapshots = `-- name: ListExpiredSnapshots :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots
 WHERE created_at < $1
 	AND status IN ('complete', 'active')
 ORDER BY created_at ASC
@@ -367,13 +621,19 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnaps
 			&i.ID,
 			&i.RefID,
 			&i.CommitSha,
-			&i.Label,
 			&i.Status,
-			&i.RawArtifactUrl,
-			&i.ArtifactKey,
 			&i.Labels,
 			&i.ImageDigest,
 			&i.CreatedAt,
+			&i.BuildUrl,
+			&i.RunID,
+			&i.RunNumber,
+			&i.PrNumber,
+			&i.PrTargetBranch,
+			&i.Tag,
+			&i.ExpectedUploads,
+			&i.ReceivedUploads,
+			&i.RunAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -389,7 +649,7 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnaps
 }
 
 const listSnapshotsByRef = `-- name: ListSnapshotsByRef :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListSnapshotsByRefParams struct {
@@ -411,13 +671,19 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 			&i.ID,
 			&i.RefID,
 			&i.CommitSha,
-			&i.Label,
 			&i.Status,
-			&i.RawArtifactUrl,
-			&i.ArtifactKey,
 			&i.Labels,
 			&i.ImageDigest,
 			&i.CreatedAt,
+			&i.BuildUrl,
+			&i.RunID,
+			&i.RunNumber,
+			&i.PrNumber,
+			&i.PrTargetBranch,
+			&i.Tag,
+			&i.ExpectedUploads,
+			&i.ReceivedUploads,
+			&i.RunAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -433,7 +699,7 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 }
 
 const listSnapshotsByRefWithLabels = `-- name: ListSnapshotsByRefWithLabels :many
-SELECT id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4
 `
 
 type ListSnapshotsByRefWithLabelsParams struct {
@@ -461,13 +727,19 @@ func (q *Queries) ListSnapshotsByRefWithLabels(ctx context.Context, arg ListSnap
 			&i.ID,
 			&i.RefID,
 			&i.CommitSha,
-			&i.Label,
 			&i.Status,
-			&i.RawArtifactUrl,
-			&i.ArtifactKey,
 			&i.Labels,
 			&i.ImageDigest,
 			&i.CreatedAt,
+			&i.BuildUrl,
+			&i.RunID,
+			&i.RunNumber,
+			&i.PrNumber,
+			&i.PrTargetBranch,
+			&i.Tag,
+			&i.ExpectedUploads,
+			&i.ReceivedUploads,
+			&i.RunAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -482,6 +754,71 @@ func (q *Queries) ListSnapshotsByRefWithLabels(ctx context.Context, arg ListSnap
 	return items, nil
 }
 
+const listStalePendingSnapshots = `-- name: ListStalePendingSnapshots :many
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt FROM snapshots
+WHERE status = 'pending'
+	AND created_at < $1
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListStalePendingSnapshotsParams struct {
+	CreatedAt time.Time `json:"created_at"`
+	Limit     int32     `json:"limit"`
+}
+
+func (q *Queries) ListStalePendingSnapshots(ctx context.Context, arg ListStalePendingSnapshotsParams) ([]Snapshot, error) {
+	rows, err := q.db.QueryContext(ctx, listStalePendingSnapshots, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Snapshot{}
+	for rows.Next() {
+		var i Snapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.RefID,
+			&i.CommitSha,
+			&i.Status,
+			&i.Labels,
+			&i.ImageDigest,
+			&i.CreatedAt,
+			&i.BuildUrl,
+			&i.RunID,
+			&i.RunNumber,
+			&i.PrNumber,
+			&i.PrTargetBranch,
+			&i.Tag,
+			&i.ExpectedUploads,
+			&i.ReceivedUploads,
+			&i.RunAttempt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markSnapshotFailedIfPending = `-- name: MarkSnapshotFailedIfPending :execrows
+UPDATE snapshots SET status = 'failed' WHERE id = $1 AND status = 'pending'
+`
+
+func (q *Queries) MarkSnapshotFailedIfPending(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSnapshotFailedIfPending, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const purgeSnapshot = `-- name: PurgeSnapshot :exec
 UPDATE snapshots SET status = 'purged' WHERE id = $1
 `
@@ -491,35 +828,8 @@ func (q *Queries) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const setSnapshotArtifactKey = `-- name: SetSnapshotArtifactKey :one
-UPDATE snapshots SET artifact_key = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
-`
-
-type SetSnapshotArtifactKeyParams struct {
-	ID          uuid.UUID `json:"id"`
-	ArtifactKey string    `json:"artifact_key"`
-}
-
-func (q *Queries) SetSnapshotArtifactKey(ctx context.Context, arg SetSnapshotArtifactKeyParams) (Snapshot, error) {
-	row := q.db.QueryRowContext(ctx, setSnapshotArtifactKey, arg.ID, arg.ArtifactKey)
-	var i Snapshot
-	err := row.Scan(
-		&i.ID,
-		&i.RefID,
-		&i.CommitSha,
-		&i.Label,
-		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
-		&i.Labels,
-		&i.ImageDigest,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const updateSnapshotStatus = `-- name: UpdateSnapshotStatus :one
-UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, label, status, raw_artifact_url, artifact_key, labels, image_digest, created_at
+UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
 `
 
 type UpdateSnapshotStatusParams struct {
@@ -534,13 +844,96 @@ func (q *Queries) UpdateSnapshotStatus(ctx context.Context, arg UpdateSnapshotSt
 		&i.ID,
 		&i.RefID,
 		&i.CommitSha,
-		&i.Label,
 		&i.Status,
-		&i.RawArtifactUrl,
-		&i.ArtifactKey,
 		&i.Labels,
 		&i.ImageDigest,
 		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+	)
+	return i, err
+}
+
+const upsertSnapshotForBuild = `-- name: UpsertSnapshotForBuild :one
+INSERT INTO snapshots (
+	ref_id,
+	commit_sha,
+	status,
+	build_url,
+	run_id,
+	run_attempt,
+	run_number,
+	pr_number,
+	pr_target_branch,
+	tag,
+	expected_uploads
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (ref_id, commit_sha, COALESCE(run_id, ''), COALESCE(run_attempt, '')) DO UPDATE SET
+	build_url = COALESCE(snapshots.build_url, EXCLUDED.build_url),
+	run_id = COALESCE(snapshots.run_id, EXCLUDED.run_id),
+	run_attempt = COALESCE(snapshots.run_attempt, EXCLUDED.run_attempt),
+	run_number = COALESCE(snapshots.run_number, EXCLUDED.run_number),
+	pr_number = COALESCE(snapshots.pr_number, EXCLUDED.pr_number),
+	pr_target_branch = COALESCE(snapshots.pr_target_branch, EXCLUDED.pr_target_branch),
+	tag = COALESCE(snapshots.tag, EXCLUDED.tag),
+	expected_uploads = COALESCE(snapshots.expected_uploads, EXCLUDED.expected_uploads)
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt
+`
+
+type UpsertSnapshotForBuildParams struct {
+	RefID           uuid.UUID      `json:"ref_id"`
+	CommitSha       string         `json:"commit_sha"`
+	Status          SnapshotStatus `json:"status"`
+	BuildUrl        sql.NullString `json:"build_url"`
+	RunID           sql.NullString `json:"run_id"`
+	RunAttempt      sql.NullString `json:"run_attempt"`
+	RunNumber       sql.NullString `json:"run_number"`
+	PrNumber        sql.NullString `json:"pr_number"`
+	PrTargetBranch  sql.NullString `json:"pr_target_branch"`
+	Tag             sql.NullString `json:"tag"`
+	ExpectedUploads sql.NullInt32  `json:"expected_uploads"`
+}
+
+func (q *Queries) UpsertSnapshotForBuild(ctx context.Context, arg UpsertSnapshotForBuildParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, upsertSnapshotForBuild,
+		arg.RefID,
+		arg.CommitSha,
+		arg.Status,
+		arg.BuildUrl,
+		arg.RunID,
+		arg.RunAttempt,
+		arg.RunNumber,
+		arg.PrNumber,
+		arg.PrTargetBranch,
+		arg.Tag,
+		arg.ExpectedUploads,
+	)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
 	)
 	return i, err
 }

@@ -89,7 +89,7 @@ type ComponentEcosystemStat struct {
 }
 
 type CoverageSnapshotStat struct {
-	Label         string
+	Format        string
 	LastSeenAt    time.Time
 	SnapshotCount int64
 	RepoCount     int64
@@ -140,7 +140,7 @@ func (s *Service) Catalog(ctx context.Context, orgID uuid.UUID, orgName string) 
 		return Catalog{}, err
 	}
 	for _, stat := range coverageStats {
-		tools = append(tools, activityEntry(normalizeName(stat.Label), CategoryCoverage, stat.LastSeenAt, stat.LastSeenAt, time.Time{}, "", stat.SnapshotCount, stat.RepoCount, generatedAt))
+		tools = append(tools, activityEntry(normalizeName(stat.Format), CategoryCoverage, stat.LastSeenAt, stat.LastSeenAt, time.Time{}, "", stat.SnapshotCount, stat.RepoCount, generatedAt))
 	}
 
 	sort.Slice(tools, func(i, j int) bool {

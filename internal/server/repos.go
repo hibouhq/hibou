@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -131,6 +132,8 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	provider := chi.URLParam(r, "provider")
+	input.ProviderID = s.canonicalEnrollProviderID(r.Context(), provider, org.Slug, input.ProviderID)
 
 	repo, err := s.queries.CreateRepository(
 		r.Context(),
@@ -138,7 +141,7 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 		input.TeamID,
 		input.Name,
 		input.Slug,
-		chi.URLParam(r, "provider"),
+		provider,
 		input.ProviderID,
 		input.DefaultBranch,
 		"enrolled",
@@ -153,6 +156,42 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 	})
 
 	api.JSON(w, http.StatusCreated, repo)
+}
+
+func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider, account, providerID string) string {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return providerID
+	}
+
+	inv, err := s.queries.GetForgeRepositoryByProviderRepoID(ctx, provider, providerID)
+	if err == nil && inv != nil && strings.TrimSpace(inv.ProviderKey) != "" {
+		return inv.ProviderKey
+	}
+
+	// Account-independent canonical key match handles owner/name inputs even
+	// when the org slug differs from the forge account login.
+	if inv, err := s.queries.GetForgeRepositoryByProviderKey(ctx, provider, providerID); err == nil && inv != nil && strings.TrimSpace(inv.ProviderKey) != "" {
+		return inv.ProviderKey
+	}
+
+	inventory, err := s.queries.ListForgeRepositoriesByAccount(ctx, provider, account)
+	if err != nil {
+		return providerID
+	}
+
+	target := normalizeInventoryRepoKey(providerID)
+	for i := range inventory {
+		inv := inventory[i]
+		if strings.TrimSpace(inv.ProviderKey) == "" {
+			continue
+		}
+		if normalizeInventoryRepoKey(inv.ProviderKey) == target || normalizeInventoryRepoKey(inv.FullName) == target {
+			return inv.ProviderKey
+		}
+	}
+
+	return providerID
 }
 
 func (s *Server) loadAdminOrgForEnrollment(w http.ResponseWriter, r *http.Request) (*store.User, *store.Organization, bool) {

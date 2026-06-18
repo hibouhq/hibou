@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strconv"
@@ -492,12 +493,24 @@ func (s *Server) resolveSnapshotForRepo(r *http.Request, repo *store.Repository,
 		return ref, nil, err
 	}
 
-	snapshot, err := s.queries.GetLatestSnapshotByRef(r.Context(), ref.ID)
+	snapshot, err := s.resolveDefaultSnapshotForDataView(r.Context(), ref.ID)
 	if err != nil {
 		return ref, nil, err
 	}
 
 	return ref, snapshot, nil
+}
+
+func (s *Server) resolveDefaultSnapshotForDataView(ctx context.Context, refID uuid.UUID) (*store.Snapshot, error) {
+	snapshot, err := s.queries.GetLatestCompleteSnapshotByRef(ctx, refID)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot != nil {
+		return snapshot, nil
+	}
+
+	return s.queries.GetLatestSnapshotByRef(ctx, refID)
 }
 
 func (s *Server) lookupRepoRef(r *http.Request, repo *store.Repository, name string, refType store.RefType) (*store.Ref, error) {

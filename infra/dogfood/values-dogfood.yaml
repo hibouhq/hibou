@@ -17,6 +17,7 @@ hibou:
     level: info
     format: json
   sessionSecretExistingSecret: hibou-session
+  autoProvisionOrgs: true
   # Example GitHub forge wiring.
   # Create Secret "hibou-forge-github" with env-style keys such as:
   #   HIBOU_FORGE_0_TYPE=github

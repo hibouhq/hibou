@@ -1,10 +1,37 @@
 -- name: CreateSnapshot :one
-INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO snapshots (ref_id, commit_sha, status)
+VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: GetSnapshotByID :one
 SELECT * FROM snapshots WHERE id = $1;
+
+-- name: GetSnapshotByRefCommit :one
+SELECT * FROM snapshots WHERE ref_id = $1 AND commit_sha = $2;
+
+-- name: GetSnapshotByBuildIdentity :one
+SELECT *
+FROM snapshots
+WHERE ref_id = $1
+	AND commit_sha = $2
+	AND COALESCE(run_id, '') = COALESCE($3, '')
+	AND COALESCE(run_attempt, '') = COALESCE($4, '')
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
+-- name: GetLatestSnapshotForBuild :one
+SELECT * FROM snapshots
+WHERE ref_id = $1
+	AND commit_sha = $2
+	AND COALESCE(run_id, '') = COALESCE($3, '')
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
+-- name: CountSnapshotsForBuild :one
+SELECT COUNT(*)::bigint FROM snapshots
+WHERE ref_id = $1
+	AND commit_sha = $2
+	AND COALESCE(run_id, '') = COALESCE($3, '');
 
 -- name: GetSnapshotAtDate :one
 SELECT s.* FROM snapshots s
@@ -26,6 +53,13 @@ WHERE created_at < $1
 ORDER BY created_at ASC
 LIMIT $2;
 
+-- name: ListStalePendingSnapshots :many
+SELECT * FROM snapshots
+WHERE status = 'pending'
+	AND created_at < $1
+ORDER BY created_at ASC
+LIMIT $2;
+
 -- name: ListArchivedSnapshotsForPurge :many
 SELECT * FROM snapshots
 WHERE created_at < $1
@@ -39,8 +73,21 @@ SELECT COUNT(*)::bigint FROM snapshots WHERE ref_id = $1;
 -- name: UpdateSnapshotStatus :one
 UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING *;
 
--- name: SetSnapshotArtifactKey :one
-UPDATE snapshots SET artifact_key = $2 WHERE id = $1 RETURNING *;
+-- name: MarkSnapshotFailedIfPending :execrows
+UPDATE snapshots SET status = 'failed' WHERE id = $1 AND status = 'pending';
+
+-- name: IncrementSnapshotReceivedUploads :one
+UPDATE snapshots
+SET received_uploads = received_uploads + 1
+WHERE id = $1
+RETURNING *;
+
+-- name: CompleteSnapshot :one
+UPDATE snapshots
+SET status = 'complete'
+WHERE id = $1
+	AND status = 'pending'
+RETURNING *;
 
 -- name: ArchiveSnapshot :exec
 UPDATE snapshots SET status = 'archived' WHERE id = $1;
@@ -50,6 +97,9 @@ UPDATE snapshots SET status = 'purged' WHERE id = $1;
 
 -- name: GetLatestSnapshotByRef :one
 SELECT * FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1;
+
+-- name: GetLatestCompleteSnapshotByRef :one
+SELECT * FROM snapshots WHERE ref_id = $1 AND status IN ('complete', 'active') ORDER BY created_at DESC LIMIT 1;
 
 -- name: ListComponentsBySnapshot :many
 SELECT c.* FROM components c
@@ -69,8 +119,34 @@ ORDER BY c.name, c.version;
 SELECT COUNT(*)::bigint FROM snapshot_components WHERE snapshot_id = $1;
 
 -- name: CreateSnapshotWithLabels :one
-INSERT INTO snapshots (ref_id, commit_sha, label, status, raw_artifact_url, labels, image_digest)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO snapshots (ref_id, commit_sha, status, labels, image_digest)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: UpsertSnapshotForBuild :one
+INSERT INTO snapshots (
+	ref_id,
+	commit_sha,
+	status,
+	build_url,
+	run_id,
+	run_attempt,
+	run_number,
+	pr_number,
+	pr_target_branch,
+	tag,
+	expected_uploads
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (ref_id, commit_sha, COALESCE(run_id, ''), COALESCE(run_attempt, '')) DO UPDATE SET
+	build_url = COALESCE(snapshots.build_url, EXCLUDED.build_url),
+	run_id = COALESCE(snapshots.run_id, EXCLUDED.run_id),
+	run_attempt = COALESCE(snapshots.run_attempt, EXCLUDED.run_attempt),
+	run_number = COALESCE(snapshots.run_number, EXCLUDED.run_number),
+	pr_number = COALESCE(snapshots.pr_number, EXCLUDED.pr_number),
+	pr_target_branch = COALESCE(snapshots.pr_target_branch, EXCLUDED.pr_target_branch),
+	tag = COALESCE(snapshots.tag, EXCLUDED.tag),
+	expected_uploads = COALESCE(snapshots.expected_uploads, EXCLUDED.expected_uploads)
 RETURNING *;
 
 -- name: ListSnapshotsByRefWithLabels :many

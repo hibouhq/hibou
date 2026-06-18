@@ -27,6 +27,11 @@ hibou:
   baseURL: ""
   # -- Maximum upload size in bytes (default 100 MiB).
   maxUploadSize: "104857600"
+  # -- Auto-provision an organization when a forge app installation webhook is received.
+  # When true, installing the GitHub/GitLab/Forgejo app on an account creates the matching
+  # Hibou org and grants the installer admin. Set false in multi-tenant deployments where
+  # app installs should not automatically create tenants.
+  autoProvisionOrgs: true
   # -- Session secret for cookie encryption (required in production).
   # Prefer sessionSecretExistingSecret in production to avoid storing the value in Helm release metadata.
   sessionSecret: ""

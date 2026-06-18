@@ -26,6 +26,7 @@ type Config struct {
 	OSVURL            string
 	CacheTTL          time.Duration
 	ArtifactPath      string
+	UploadWindow      time.Duration
 	MaxUploadSize     int64
 	SessionSecret     string
 	AutoProvisionOrgs bool
@@ -126,6 +127,7 @@ func Load() (Config, error) {
 	v.SetDefault("osv.url", "https://api.osv.dev")
 	v.SetDefault("cache.ttl", "6h")
 	v.SetDefault("artifact.path", "/data/artifacts")
+	v.SetDefault("upload.window", "10m")
 	v.SetDefault("max.upload.size", int64(104857600))
 	v.SetDefault("session.secret", "change-me-in-production")
 	v.SetDefault("auto.provision.orgs", false)
@@ -151,6 +153,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing cache_ttl: %w", err)
 	}
+	uploadWindow, err := parseUploadWindow(v.GetString("upload.window"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing upload.window: %w", err)
+	}
 
 	cfg := Config{
 		Host:              v.GetString("host"),
@@ -165,6 +171,7 @@ func Load() (Config, error) {
 		OSVURL:            v.GetString("osv.url"),
 		CacheTTL:          cacheTTL,
 		ArtifactPath:      v.GetString("artifact.path"),
+		UploadWindow:      uploadWindow,
 		MaxUploadSize:     v.GetInt64("max.upload.size"),
 		SessionSecret:     v.GetString("session.secret"),
 		AutoProvisionOrgs: v.GetBool("auto.provision.orgs"),
@@ -220,6 +227,25 @@ func loadForgeConfigs() []ForgeConfig {
 	}
 
 	return configs
+}
+
+func parseUploadWindow(value string) (time.Duration, error) {
+	const defaultUploadWindow = 10 * time.Minute
+
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return defaultUploadWindow, nil
+	}
+
+	duration, err := time.ParseDuration(trimmed)
+	if err != nil {
+		return 0, err
+	}
+	if duration <= 0 {
+		return defaultUploadWindow, nil
+	}
+
+	return duration, nil
 }
 
 func parseForgeInt64(envKey string) int64 {

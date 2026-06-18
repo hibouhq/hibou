@@ -30,6 +30,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ArtifactPath != "/data/artifacts" {
 		t.Errorf("expected default artifact path /data/artifacts, got %s", cfg.ArtifactPath)
 	}
+	if cfg.UploadWindow != 10*time.Minute {
+		t.Errorf("expected default upload window 10m, got %s", cfg.UploadWindow)
+	}
 	if cfg.SecretScan.Enabled {
 		t.Fatal("expected secret scanning disabled by default")
 	}
@@ -42,6 +45,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("HIBOU_OSV_URL", "http://osv.internal")
 	t.Setenv("HIBOU_CACHE_TTL", "30m")
 	t.Setenv("HIBOU_ARTIFACT_PATH", "/tmp/hibou-artifacts")
+	t.Setenv("HIBOU_UPLOAD_WINDOW", "25m")
 	t.Setenv("HIBOU_SECRET_SCAN_ENABLED", "true")
 	t.Setenv("HIBOU_SECRET_SCAN_PROVIDERS", "gitleaks,github")
 	t.Setenv("HIBOU_SECRET_SCAN_TEMP_DIR", "/tmp/hibou-secrets")
@@ -69,6 +73,9 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.ArtifactPath != "/tmp/hibou-artifacts" {
 		t.Errorf("expected artifact path override, got %s", cfg.ArtifactPath)
 	}
+	if cfg.UploadWindow != 25*time.Minute {
+		t.Errorf("expected upload window override, got %s", cfg.UploadWindow)
+	}
 	if !cfg.SecretScan.Enabled {
 		t.Fatal("expected secret scan enabled from env")
 	}
@@ -84,6 +91,18 @@ func TestLoadFromEnv(t *testing.T) {
 
 	// Clean up is handled by t.Setenv automatically
 	_ = os.Getenv("HIBOU_PORT") // suppress unused import
+}
+
+func TestLoadDefaultsUploadWindowWhenNonPositive(t *testing.T) {
+	t.Setenv("HIBOU_UPLOAD_WINDOW", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.UploadWindow != 10*time.Minute {
+		t.Errorf("expected non-positive upload window to fall back to 10m, got %s", cfg.UploadWindow)
+	}
 }
 
 func TestLoadForgeConfigs(t *testing.T) {
