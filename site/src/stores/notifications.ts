@@ -1,12 +1,15 @@
 import { defineStore } from 'pinia'
 import { onScopeDispose, ref } from 'vue'
 
-import { api } from '@/api/client'
+import { api, type Notification } from '@/api/client'
 
 const MAX_RECONNECT_MS = 30_000
 
 export const useNotificationsStore = defineStore('notifications', () => {
   const unreadCount = ref(0)
+  const items = ref<Notification[]>([])
+  const loading = ref(false)
+  let hasFetched = false
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectAttempt = 0
@@ -23,6 +26,57 @@ export const useNotificationsStore = defineStore('notifications', () => {
       unreadCount.value = res.data.count
     } catch {
       unreadCount.value = 0
+    }
+  }
+
+  async function fetchItems(force = false) {
+    if (loading.value || (hasFetched && !force)) {
+      return
+    }
+
+    loading.value = true
+    try {
+      const res = await api.listNotifications({ per_page: 30 })
+      items.value = res.data
+      unreadCount.value = res.data.filter((item) => item.status === 'unread').length
+      hasFetched = true
+    } catch {
+      // leave existing items in place on failure
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function markRead(id: string) {
+    const target = items.value.find((item) => item.id === id)
+    if (!target || target.status === 'read') {
+      return
+    }
+
+    target.status = 'read'
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+    try {
+      await api.markNotificationRead(id)
+    } catch {
+      target.status = 'unread'
+      unreadCount.value += 1
+    }
+  }
+
+  async function markAllRead() {
+    if (items.value.every((item) => item.status === 'read')) {
+      return
+    }
+
+    const snapshot = items.value.map((item) => item.status)
+    const previousCount = unreadCount.value
+    items.value.forEach((item) => { item.status = 'read' })
+    unreadCount.value = 0
+    try {
+      await api.markAllNotificationsRead()
+    } catch {
+      items.value.forEach((item, index) => { item.status = snapshot[index] })
+      unreadCount.value = previousCount
     }
   }
 
@@ -59,6 +113,8 @@ export const useNotificationsStore = defineStore('notifications', () => {
 
     if (message.type === 'notification.new') {
       unreadCount.value += 1
+      // Invalidate cached list so the next panel open pulls the new item.
+      hasFetched = false
     }
   }
 
@@ -130,5 +186,5 @@ export const useNotificationsStore = defineStore('notifications', () => {
     disconnect()
   })
 
-  return { unreadCount, fetchUnreadCount, connect, disconnect }
+  return { unreadCount, items, loading, fetchUnreadCount, fetchItems, markRead, markAllRead, connect, disconnect }
 })

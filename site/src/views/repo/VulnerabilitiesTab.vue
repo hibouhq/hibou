@@ -46,7 +46,7 @@
                   Description
                 </th>
                 <th class="px-3 py-2 font-medium">
-                  Tool
+                  Source
                 </th>
                 <th class="px-3 py-2 font-medium">
                   Status
@@ -162,7 +162,7 @@ const filterDefs = computed(() => [
   { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected,confirmed' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
-  { key: 'tool', label: 'Tool', options: toolOptions.value, multi: true },
+  { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
 ])
 const sortOptions = [
@@ -244,7 +244,7 @@ watch(
 )
 
 watch(
-  [provider, slug, repoSlug, () => route.query.ref, activeFilters, searchQuery, currentSort, currentSortDirection, () => pagination.value.page],
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, currentSort, currentSortDirection, () => pagination.value.page],
   async () => {
     if (!provider.value || !slug.value || !repoSlug.value) {
       vulnerabilities.value = []
@@ -255,6 +255,7 @@ watch(
     try {
       const res = await api.listRefVulnerabilities(provider.value, slug.value, repoSlug.value, {
         ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
+        snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
         type: activeFilters.value.type || undefined,
         severity: activeFilters.value.severity || undefined,
         status: activeFilters.value.status || undefined,

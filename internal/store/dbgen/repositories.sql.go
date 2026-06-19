@@ -8,6 +8,7 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -37,7 +38,7 @@ func (q *Queries) CountRepositoriesByTeam(ctx context.Context, teamID uuid.NullU
 const createRepository = `-- name: CreateRepository :one
 INSERT INTO repositories (org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 `
 
 type CreateRepositoryParams struct {
@@ -51,7 +52,22 @@ type CreateRepositoryParams struct {
 	SyncState     string        `json:"sync_state"`
 }
 
-func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryParams) (Repository, error) {
+type CreateRepositoryRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryParams) (CreateRepositoryRow, error) {
 	row := q.db.QueryRowContext(ctx, createRepository,
 		arg.OrgID,
 		arg.TeamID,
@@ -62,7 +78,7 @@ func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryPara
 		arg.DefaultBranch,
 		arg.SyncState,
 	)
-	var i Repository
+	var i CreateRepositoryRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
@@ -73,6 +89,7 @@ func (q *Queries) CreateRepository(ctx context.Context, arg CreateRepositoryPara
 		&i.ProviderID,
 		&i.DefaultBranch,
 		&i.SyncState,
+		&i.RetentionArtifactBytes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -89,14 +106,29 @@ func (q *Queries) DeleteRepository(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRepositoryByID = `-- name: GetRepositoryByID :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE id = $1
 `
 
-func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (Repository, error) {
+type GetRepositoryByIDRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (GetRepositoryByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getRepositoryByID, id)
-	var i Repository
+	var i GetRepositoryByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
@@ -107,6 +139,7 @@ func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (Reposito
 		&i.ProviderID,
 		&i.DefaultBranch,
 		&i.SyncState,
+		&i.RetentionArtifactBytes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -114,7 +147,7 @@ func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (Reposito
 }
 
 const getRepositoryByProviderID = `-- name: GetRepositoryByProviderID :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE org_id = $1 AND provider = $2 AND provider_id = $3
 `
@@ -125,9 +158,24 @@ type GetRepositoryByProviderIDParams struct {
 	ProviderID string    `json:"provider_id"`
 }
 
-func (q *Queries) GetRepositoryByProviderID(ctx context.Context, arg GetRepositoryByProviderIDParams) (Repository, error) {
+type GetRepositoryByProviderIDRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) GetRepositoryByProviderID(ctx context.Context, arg GetRepositoryByProviderIDParams) (GetRepositoryByProviderIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getRepositoryByProviderID, arg.OrgID, arg.Provider, arg.ProviderID)
-	var i Repository
+	var i GetRepositoryByProviderIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
@@ -138,6 +186,7 @@ func (q *Queries) GetRepositoryByProviderID(ctx context.Context, arg GetReposito
 		&i.ProviderID,
 		&i.DefaultBranch,
 		&i.SyncState,
+		&i.RetentionArtifactBytes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -145,7 +194,7 @@ func (q *Queries) GetRepositoryByProviderID(ctx context.Context, arg GetReposito
 }
 
 const getRepositoryBySlug = `-- name: GetRepositoryBySlug :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE org_id = $1 AND slug = $2
 `
@@ -155,9 +204,24 @@ type GetRepositoryBySlugParams struct {
 	Slug  string    `json:"slug"`
 }
 
-func (q *Queries) GetRepositoryBySlug(ctx context.Context, arg GetRepositoryBySlugParams) (Repository, error) {
+type GetRepositoryBySlugRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) GetRepositoryBySlug(ctx context.Context, arg GetRepositoryBySlugParams) (GetRepositoryBySlugRow, error) {
 	row := q.db.QueryRowContext(ctx, getRepositoryBySlug, arg.OrgID, arg.Slug)
-	var i Repository
+	var i GetRepositoryBySlugRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
@@ -168,6 +232,7 @@ func (q *Queries) GetRepositoryBySlug(ctx context.Context, arg GetRepositoryBySl
 		&i.ProviderID,
 		&i.DefaultBranch,
 		&i.SyncState,
+		&i.RetentionArtifactBytes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -175,7 +240,7 @@ func (q *Queries) GetRepositoryBySlug(ctx context.Context, arg GetRepositoryBySl
 }
 
 const getRepositoryBySlugAndOrg = `-- name: GetRepositoryBySlugAndOrg :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE slug = $1 AND org_id = $2
 `
@@ -185,9 +250,24 @@ type GetRepositoryBySlugAndOrgParams struct {
 	OrgID uuid.UUID `json:"org_id"`
 }
 
-func (q *Queries) GetRepositoryBySlugAndOrg(ctx context.Context, arg GetRepositoryBySlugAndOrgParams) (Repository, error) {
+type GetRepositoryBySlugAndOrgRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) GetRepositoryBySlugAndOrg(ctx context.Context, arg GetRepositoryBySlugAndOrgParams) (GetRepositoryBySlugAndOrgRow, error) {
 	row := q.db.QueryRowContext(ctx, getRepositoryBySlugAndOrg, arg.Slug, arg.OrgID)
-	var i Repository
+	var i GetRepositoryBySlugAndOrgRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
@@ -198,6 +278,7 @@ func (q *Queries) GetRepositoryBySlugAndOrg(ctx context.Context, arg GetReposito
 		&i.ProviderID,
 		&i.DefaultBranch,
 		&i.SyncState,
+		&i.RetentionArtifactBytes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -205,7 +286,7 @@ func (q *Queries) GetRepositoryBySlugAndOrg(ctx context.Context, arg GetReposito
 }
 
 const listRepositoriesByOrg = `-- name: ListRepositoriesByOrg :many
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE org_id = $1
 ORDER BY name ASC
@@ -218,15 +299,30 @@ type ListRepositoriesByOrgParams struct {
 	Offset int32     `json:"offset"`
 }
 
-func (q *Queries) ListRepositoriesByOrg(ctx context.Context, arg ListRepositoriesByOrgParams) ([]Repository, error) {
+type ListRepositoriesByOrgRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) ListRepositoriesByOrg(ctx context.Context, arg ListRepositoriesByOrgParams) ([]ListRepositoriesByOrgRow, error) {
 	rows, err := q.db.QueryContext(ctx, listRepositoriesByOrg, arg.OrgID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Repository{}
+	items := []ListRepositoriesByOrgRow{}
 	for rows.Next() {
-		var i Repository
+		var i ListRepositoriesByOrgRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrgID,
@@ -237,6 +333,7 @@ func (q *Queries) ListRepositoriesByOrg(ctx context.Context, arg ListRepositorie
 			&i.ProviderID,
 			&i.DefaultBranch,
 			&i.SyncState,
+			&i.RetentionArtifactBytes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -254,7 +351,7 @@ func (q *Queries) ListRepositoriesByOrg(ctx context.Context, arg ListRepositorie
 }
 
 const listRepositoriesByTeam = `-- name: ListRepositoriesByTeam :many
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE team_id = $1
 ORDER BY name ASC
@@ -267,15 +364,30 @@ type ListRepositoriesByTeamParams struct {
 	Offset int32         `json:"offset"`
 }
 
-func (q *Queries) ListRepositoriesByTeam(ctx context.Context, arg ListRepositoriesByTeamParams) ([]Repository, error) {
+type ListRepositoriesByTeamRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) ListRepositoriesByTeam(ctx context.Context, arg ListRepositoriesByTeamParams) ([]ListRepositoriesByTeamRow, error) {
 	rows, err := q.db.QueryContext(ctx, listRepositoriesByTeam, arg.TeamID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Repository{}
+	items := []ListRepositoriesByTeamRow{}
 	for rows.Next() {
-		var i Repository
+		var i ListRepositoriesByTeamRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrgID,
@@ -286,6 +398,125 @@ func (q *Queries) ListRepositoriesByTeam(ctx context.Context, arg ListRepositori
 			&i.ProviderID,
 			&i.DefaultBranch,
 			&i.SyncState,
+			&i.RetentionArtifactBytes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRepositoriesForRetention = `-- name: ListRepositoriesForRetention :many
+SELECT DISTINCT repo.id, repo.org_id, repo.team_id, repo.name, repo.slug, repo.provider, repo.provider_id, repo.default_branch, repo.sync_state, repo.retention_artifact_bytes, repo.created_at, repo.updated_at
+FROM repositories repo
+JOIN refs r ON r.repo_id = repo.id
+JOIN snapshots s ON s.ref_id = r.id
+WHERE s.status != 'purged'
+ORDER BY repo.id ASC
+`
+
+type ListRepositoriesForRetentionRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) ListRepositoriesForRetention(ctx context.Context) ([]ListRepositoriesForRetentionRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRepositoriesForRetention)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRepositoriesForRetentionRow{}
+	for rows.Next() {
+		var i ListRepositoriesForRetentionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.TeamID,
+			&i.Name,
+			&i.Slug,
+			&i.Provider,
+			&i.ProviderID,
+			&i.DefaultBranch,
+			&i.SyncState,
+			&i.RetentionArtifactBytes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRepositoryRetentionUsage = `-- name: ListRepositoryRetentionUsage :many
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
+FROM repositories
+WHERE retention_artifact_bytes > 0
+ORDER BY retention_artifact_bytes DESC, id ASC
+`
+
+type ListRepositoryRetentionUsageRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) ListRepositoryRetentionUsage(ctx context.Context) ([]ListRepositoryRetentionUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRepositoryRetentionUsage)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRepositoryRetentionUsageRow{}
+	for rows.Next() {
+		var i ListRepositoryRetentionUsageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.TeamID,
+			&i.Name,
+			&i.Slug,
+			&i.Provider,
+			&i.ProviderID,
+			&i.DefaultBranch,
+			&i.SyncState,
+			&i.RetentionArtifactBytes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -365,7 +596,7 @@ const updateRepository = `-- name: UpdateRepository :one
 UPDATE repositories
 SET name = $2, slug = $3, default_branch = $4, sync_state = $5, team_id = $6, updated_at = NOW()
 WHERE id = $1
-RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 `
 
 type UpdateRepositoryParams struct {
@@ -377,7 +608,22 @@ type UpdateRepositoryParams struct {
 	TeamID        uuid.NullUUID `json:"team_id"`
 }
 
-func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryParams) (Repository, error) {
+type UpdateRepositoryRow struct {
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+}
+
+func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryParams) (UpdateRepositoryRow, error) {
 	row := q.db.QueryRowContext(ctx, updateRepository,
 		arg.ID,
 		arg.Name,
@@ -386,7 +632,7 @@ func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryPara
 		arg.SyncState,
 		arg.TeamID,
 	)
-	var i Repository
+	var i UpdateRepositoryRow
 	err := row.Scan(
 		&i.ID,
 		&i.OrgID,
@@ -397,6 +643,7 @@ func (q *Queries) UpdateRepository(ctx context.Context, arg UpdateRepositoryPara
 		&i.ProviderID,
 		&i.DefaultBranch,
 		&i.SyncState,
+		&i.RetentionArtifactBytes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

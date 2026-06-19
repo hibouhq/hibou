@@ -14,144 +14,195 @@
       {{ error }}
     </div>
 
-    <div
-      v-else-if="!summary || !summary.snapshot_date"
-      class="rounded-2xl border border-dashed border-surface-border-subtle bg-surface-overlay/40 px-5 py-10 text-center text-sm text-gray-400"
-    >
-      No analysis data available for this ref.
-    </div>
-
-    <template v-else>
-      <div class="space-y-3">
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div class="flex flex-wrap items-end gap-3 text-sm">
-            <div class="flex items-end gap-1.5">
-              <span class="text-lg font-semibold text-white">{{ vulnerabilitiesTotal }}</span>
-              <span class="text-xs text-gray-400">vulnerabilities</span>
-            </div>
-            <span class="h-1 w-1 rounded-full bg-gray-600" />
-            <div class="flex items-end gap-1.5">
-              <span class="text-lg font-semibold text-white">{{ summary.components_total }}</span>
-              <span class="text-xs text-gray-400">components</span>
-            </div>
-          </div>
-
-          <span class="text-xs text-gray-500">{{ formatSnapshotDate(summary.snapshot_date) }}</span>
-        </div>
-
-        <div class="space-y-2">
-          <div class="flex h-1.5 overflow-hidden rounded-full bg-surface-border-subtle">
-            <div
-              v-for="segment in vulnerabilityBarSegments"
-              :key="`vulnerabilities-bar-${String(segment.key)}`"
-              :class="segment.barClass"
-              :style="{ width: `${segment.width}%` }"
-            />
-          </div>
-
-          <div class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-medium">
-            <span
-              v-for="item in vulnerabilityCells"
-              :key="`vulnerability-label-${String(item.key)}`"
-              :class="item.valueClass"
-            >
-              {{ item.value }} {{ item.label }}
-            </span>
+    <div class="grid gap-5 lg:grid-cols-[1fr_18rem]">
+      <!-- Main column -->
+      <div class="min-w-0 space-y-4 lg:order-1">
+        <div
+          v-if="scanFailed"
+          class="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
+        >
+          <span class="mt-0.5 text-base leading-none">⚠</span>
+          <div>
+            <p class="font-medium">
+              Latest scan for this ref failed.
+            </p>
+            <p class="mt-0.5 text-xs text-red-300/80">
+              Figures below come from a failed snapshot and may be incomplete or empty. Pick a
+              different snapshot above, or check the build logs.
+            </p>
           </div>
         </div>
-      </div>
 
-      <div class="grid gap-3 lg:grid-cols-2">
-        <section class="flex min-h-[148px] flex-col rounded-lg bg-surface-overlay/30 p-3">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <h2 class="text-[11px] font-medium uppercase tracking-[0.18em] text-gray-500">
-                Vulnerabilities
+        <div
+          v-if="!summary || !summary.snapshot_date"
+          class="rounded-xl border border-dashed border-surface-border bg-surface-overlay/40 px-5 py-12 text-center text-sm text-gray-400"
+        >
+          No analysis data available for this ref yet.
+        </div>
+
+        <template v-else>
+          <!-- Security posture card -->
+          <section class="rounded-xl border border-surface-border bg-surface-raised/40">
+            <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-2.5">
+              <h2 class="flex items-center gap-2 text-sm font-semibold text-white">
+                <ShieldAlert class="h-4 w-4 text-gray-500" />
+                Security posture
               </h2>
-              <p class="mt-1 text-xl font-semibold text-white">
-                {{ vulnerabilitiesTotal }}
-              </p>
+              <span class="text-xs text-gray-500">{{ formatSnapshotDate(summary.snapshot_date) }}</span>
             </div>
-            <span class="rounded-md bg-sev-critical/10 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-sev-critical">
-              priority
-            </span>
-          </div>
 
-          <div class="mt-4 flex h-1 overflow-hidden rounded-full bg-surface-border-subtle">
-            <div
-              v-for="segment in vulnerabilityBarSegments"
-              :key="`vulnerability-card-${String(segment.key)}`"
-              :class="segment.barClass"
-              :style="{ width: `${segment.width}%` }"
-            />
-          </div>
+            <div class="space-y-4 px-4 py-4">
+              <div class="flex items-end gap-2">
+                <span class="text-3xl font-semibold text-white">{{ vulnerabilitiesTotal }}</span>
+                <span class="pb-1 text-sm text-gray-400">open vulnerabilities</span>
+              </div>
 
-          <div class="mt-3 grid grid-cols-5 gap-2 text-[11px]">
-            <div
-              v-for="item in vulnerabilityCells"
-              :key="`vulnerability-${String(item.key)}`"
-              class="space-y-1"
+              <div class="h-2 overflow-hidden rounded-full bg-surface-border-subtle">
+                <div class="flex h-full">
+                  <div
+                    v-for="segment in vulnerabilityBarSegments"
+                    :key="`bar-${String(segment.key)}`"
+                    :class="segment.barClass"
+                    :style="{ width: `${segment.width}%` }"
+                  />
+                </div>
+              </div>
+
+              <div class="grid grid-cols-5 gap-2">
+                <RouterLink
+                  v-for="item in vulnerabilityCells"
+                  :key="`cell-${String(item.key)}`"
+                  :to="severityLink(item.key)"
+                  class="rounded-lg border border-surface-border-subtle bg-surface-overlay/40 px-2 py-2 text-center transition hover:border-accent/40"
+                >
+                  <div
+                    class="text-lg font-semibold"
+                    :class="item.valueClass"
+                  >
+                    {{ item.value }}
+                  </div>
+                  <div class="text-[10px] uppercase tracking-[0.14em] text-gray-500">
+                    {{ item.label }}
+                  </div>
+                </RouterLink>
+              </div>
+            </div>
+          </section>
+
+          <!-- Quick stat cards -->
+          <div class="grid gap-4 sm:grid-cols-2">
+            <RouterLink
+              :to="tabLink('repo-dependencies')"
+              class="group rounded-xl border border-surface-border bg-surface-raised/40 p-4 transition hover:border-accent/40"
             >
-              <div
-                :class="item.valueClass"
-                class="font-semibold"
-              >
-                {{ item.value }}
-              </div>
-              <div class="uppercase tracking-[0.14em] text-gray-500">
-                {{ item.label }}
-              </div>
-            </div>
-          </div>
-
-          <RouterLink
-            :to="tabLink('repo-vulnerabilities')"
-            class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
-          >
-            View ->
-          </RouterLink>
-        </section>
-
-        <section class="flex min-h-[148px] flex-col rounded-lg bg-surface-overlay/30 p-3">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <h2 class="text-[11px] font-medium uppercase tracking-[0.18em] text-gray-500">
+              <div class="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-gray-500">
+                <Package class="h-4 w-4" />
                 Components
-              </h2>
-              <p class="mt-1 text-xl font-semibold text-white">
+              </div>
+              <p class="mt-2 text-2xl font-semibold text-white">
                 {{ summary.components_total }}
               </p>
-            </div>
-            <span class="rounded-md bg-accent-muted px-1.5 py-0.5 text-[10px] uppercase tracking-[0.14em] text-accent">
-              inventory
-            </span>
-          </div>
+              <p class="mt-0.5 text-xs text-gray-500">
+                packages tracked in the SBOM
+              </p>
+              <span class="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
+                View dependencies
+                <ArrowRight class="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
+              </span>
+            </RouterLink>
 
-          <div class="mt-4 h-1 overflow-hidden rounded-full bg-surface-border-subtle">
-            <div class="h-full w-full bg-accent/60" />
+            <RouterLink
+              :to="tabLink('repo-coverage')"
+              class="group rounded-xl border border-surface-border bg-surface-raised/40 p-4 transition hover:border-accent/40"
+            >
+              <div class="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-gray-500">
+                <Activity class="h-4 w-4" />
+                Coverage
+              </div>
+              <p class="mt-2 text-2xl font-semibold text-white">
+                {{ coverageLabel }}
+              </p>
+              <p class="mt-0.5 text-xs text-gray-500">
+                latest reported line coverage
+              </p>
+              <span class="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
+                View coverage
+                <ArrowRight class="h-3.5 w-3.5 transition group-hover:translate-x-0.5" />
+              </span>
+            </RouterLink>
           </div>
+        </template>
+      </div>
 
-          <p class="mt-3 text-sm text-gray-300">
-            packages tracked
+      <!-- About sidebar -->
+      <aside class="space-y-3 lg:order-2">
+        <section class="rounded-xl border border-surface-border bg-surface-raised/40 p-4">
+          <h2 class="text-sm font-semibold text-white">
+            About
+          </h2>
+          <p
+            v-if="repo?.description"
+            class="mt-2 text-sm text-gray-300"
+          >
+            {{ repo.description }}
+          </p>
+          <p
+            v-else
+            class="mt-2 text-sm text-gray-500"
+          >
+            No description provided.
           </p>
 
-          <RouterLink
-            :to="tabLink('repo-dependencies')"
-            class="mt-auto self-end text-[11px] font-medium text-accent transition hover:text-white"
+          <dl class="mt-4 space-y-2.5 text-sm">
+            <div class="flex items-center gap-2 text-gray-400">
+              <component
+                :is="repo?.private ? Lock : Globe"
+                class="h-4 w-4 shrink-0 text-gray-500"
+              />
+              <span>{{ repo?.private ? 'Private' : 'Public' }} repository</span>
+            </div>
+            <div class="flex items-center gap-2 text-gray-400">
+              <GitBranch class="h-4 w-4 shrink-0 text-gray-500" />
+              <span>Default branch <span class="font-mono text-gray-300">{{ repo?.default_branch || '—' }}</span></span>
+            </div>
+            <div class="flex items-center gap-2 text-gray-400">
+              <Clock class="h-4 w-4 shrink-0 text-gray-500" />
+              <span>Last scanned {{ lastScannedLabel }}</span>
+            </div>
+            <div
+              v-if="latestSnapshot"
+              class="flex items-center gap-2 text-gray-400"
+            >
+              <span
+                class="h-2 w-2 shrink-0 rounded-full"
+                :class="statusDot(latestSnapshot.status)"
+              />
+              <span>Latest snapshot <span class="capitalize text-gray-300">{{ latestSnapshot.status }}</span></span>
+            </div>
+          </dl>
+
+          <a
+            v-if="repo?.html_url"
+            :href="repo.html_url"
+            target="_blank"
+            rel="noopener"
+            class="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-accent transition hover:text-accent-hover"
           >
-            View ->
-          </RouterLink>
+            <ExternalLink class="h-3.5 w-3.5" />
+            Open on forge
+          </a>
         </section>
-      </div>
-    </template>
+      </aside>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { Activity, ArrowRight, Clock, ExternalLink, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
+import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type RefSummary, type SeverityCounts } from '@/api/client'
+import { api, type RefSummary, type Repository, type SeverityCounts, type Snapshot } from '@/api/client'
 
 type SeverityKey = keyof SeverityCounts
 
@@ -163,6 +214,9 @@ type SeveritySegment = {
 
 const route = useRoute()
 
+const repo = inject<Ref<Repository | null>>('repo', ref(null))
+const latestSnapshot = inject<Ref<Snapshot | null>>('latestSnapshot', ref(null))
+
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
@@ -170,6 +224,7 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 const loading = ref(true)
 const error = ref('')
 const summary = ref<RefSummary | null>(null)
+const coverageRate = ref<number | null>(null)
 
 const severityMeta: Array<{ key: SeverityKey; label: string; valueClass: string; barClass: string }> = [
   { key: 'critical', label: 'crit', valueClass: 'text-sev-critical', barClass: 'bg-sev-critical' },
@@ -180,18 +235,24 @@ const severityMeta: Array<{ key: SeverityKey; label: string; valueClass: string;
 ]
 
 const vulnerabilitiesTotal = computed(() => totalCounts(summary.value?.vulnerabilities))
-
 const vulnerabilityCells = computed(() => severityMeta.map((item) => ({
   ...item,
   value: summary.value?.vulnerabilities[item.key] ?? 0,
 })))
-
 const vulnerabilityBarSegments = computed(() => buildSeveritySegments(summary.value?.vulnerabilities))
+const scanFailed = computed(() => summary.value?.snapshot_status === 'failed')
+
+const coverageLabel = computed(() => coverageRate.value === null ? '—' : `${Math.round(coverageRate.value * 100)}%`)
+const lastScannedLabel = computed(() => {
+  const value = repo?.value?.last_scanned
+  return value ? relativeTime(value) : 'never'
+})
 
 watch(
-  [provider, slug, repoSlug, () => route.query.ref],
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot],
   () => {
     void loadSummary()
+    void loadCoverage()
   },
   { immediate: true },
 )
@@ -208,6 +269,7 @@ async function loadSummary() {
   try {
     const response = await api.getRefSummary(provider.value, slug.value, repoSlug.value, {
       ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
+      snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
     })
     summary.value = response.data
   } catch {
@@ -218,21 +280,35 @@ async function loadSummary() {
   }
 }
 
+async function loadCoverage() {
+  if (!provider.value || !slug.value || !repoSlug.value) {
+    coverageRate.value = null
+    return
+  }
+
+  try {
+    const response = await api.getCoverage(provider.value, slug.value, repoSlug.value, {
+      ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
+      snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
+    })
+    coverageRate.value = response.data?.line_rate ?? null
+  } catch {
+    coverageRate.value = null
+  }
+}
+
 function totalCounts(counts?: SeverityCounts) {
   if (!counts) {
     return 0
   }
-
   return counts.critical + counts.high + counts.medium + counts.low + counts.info
 }
 
 function buildSeveritySegments(counts?: SeverityCounts): SeveritySegment[] {
   const total = totalCounts(counts)
-
   if (!counts || total === 0) {
     return [{ key: 'empty', width: 100, barClass: 'bg-surface-border-subtle' }]
   }
-
   return severityMeta
     .filter((item) => counts[item.key] > 0)
     .map((item) => ({
@@ -243,18 +319,53 @@ function buildSeveritySegments(counts?: SeverityCounts): SeveritySegment[] {
 }
 
 function tabLink(name: string) {
+  return { name, params: route.params, query: route.query }
+}
+
+function severityLink(key: SeverityKey) {
   return {
-    name,
+    name: 'repo-vulnerabilities',
     params: route.params,
-    query: route.query,
+    query: { ...route.query, severity: key },
+  }
+}
+
+function statusDot(status: string) {
+  switch ((status || '').toLowerCase()) {
+    case 'active':
+    case 'complete':
+      return 'bg-emerald-400'
+    case 'failed':
+      return 'bg-danger'
+    case 'pending':
+    case 'processing':
+      return 'bg-warning'
+    default:
+      return 'bg-gray-500'
   }
 }
 
 function formatSnapshotDate(value: string) {
-  return new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(value))
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value))
+}
+
+function relativeTime(input: string) {
+  const target = new Date(input)
+  if (Number.isNaN(target.getTime())) {
+    return 'unknown'
+  }
+  const diffSeconds = Math.round((target.getTime() - Date.now()) / 1000)
+  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
+  const abs = Math.abs(diffSeconds)
+  if (abs >= 86400) {
+    return formatter.format(Math.round(diffSeconds / 86400), 'day')
+  }
+  if (abs >= 3600) {
+    return formatter.format(Math.round(diffSeconds / 3600), 'hour')
+  }
+  if (abs >= 60) {
+    return formatter.format(Math.round(diffSeconds / 60), 'minute')
+  }
+  return formatter.format(diffSeconds, 'second')
 }
 </script>

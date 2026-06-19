@@ -11,6 +11,14 @@ LDFLAGS   := -X github.com/hibouhq/hibou/internal/version.Version=$(VERSION) \
 			 -X github.com/hibouhq/hibou/internal/version.Date=$(DATE)
 GO_BUILD_FLAGS := -buildvcs=false -trimpath
 
+# Reproducible release build (callers append: -o <out> .)
+GO_BUILD  := CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)'
+# psql inside the dev postgres container
+PSQL      := docker compose exec -T postgres psql -U hibou -d hibou
+# Dedicated test database — keeps integration tests out of the dev database.
+TEST_DB       := hibou_test
+TEST_DATABASE_URL := postgres://hibou:hibou@localhost:5432/$(TEST_DB)?sslmode=disable
+
 # Build targets: linux/amd64, linux/arm64, windows/amd64, windows/arm64, darwin/arm64
 PLATFORMS := linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64
 
@@ -38,9 +46,9 @@ down: ## Stop Docker Compose services
 	docker compose down
 
 .PHONY: setup
-setup: up ## Quick dev setup: start postgres + seed sample data
+setup: up dev-bin ## Quick dev setup: start postgres + seed sample data
 	@echo "==> Running migrations and seeding data..."
-	go run . seed
+	tmp/dev/hibou-server seed
 	@echo ""
 	@echo "==> Setup complete! Run 'make dev' to start the app."
 	@echo "    Then open http://localhost:3000 and click 'Dev Login'."
@@ -59,13 +67,13 @@ start-quick: setup build-frontend ## Quick start with fake seed data
 	@$(MAKE) dev
 
 .PHONY: seed
-seed: ## Re-seed the database with sample data
-	go run . seed
+seed: dev-bin ## Re-seed the database with sample data
+	tmp/dev/hibou-server seed
 
 .PHONY: reset
-reset: ## Reset database and re-seed
-	docker compose exec -T postgres psql -U hibou -d hibou -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
-	go run . seed
+reset: dev-bin ## Reset database and re-seed
+	$(PSQL) -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+	tmp/dev/hibou-server seed
 	@echo "Database reset and reseeded."
 
 .PHONY: lint
@@ -74,14 +82,28 @@ lint: ## Run linters
 	golangci-lint run ./...
 	cd $(FRONTEND) && npx eslint . --max-warnings=0
 
+.PHONY: test-db
+test-db: ## Create a pristine test database (drops + recreates $(TEST_DB))
+	@docker compose exec -T postgres psql -U hibou -d postgres -v ON_ERROR_STOP=1 \
+		-c "DROP DATABASE IF EXISTS $(TEST_DB) WITH (FORCE)" \
+		-c "CREATE DATABASE $(TEST_DB)" >/dev/null 2>&1 \
+		&& echo "Test database $(TEST_DB) ready." \
+		|| echo "WARN: postgres not reachable via docker compose — Go integration tests will skip."
+
 .PHONY: test
-test: ## Run Go and frontend tests
-	go test -race -count=1 ./...
+test: test-db ## Run Go and frontend tests (Go tests use $(TEST_DB), not the dev db)
+	HIBOU_DATABASE_URL='$(TEST_DATABASE_URL)' go test -race -count=1 ./...
 	cd $(FRONTEND) && npx vitest run
 
 .PHONY: coverage
-coverage: ## Run Go tests with coverage report
-	go test -race -count=1 -coverprofile=coverage.out ./internal/...
+coverage: test-db ## Run Go tests with coverage + JUnit report (uses $(TEST_DB))
+	@if command -v gotestsum >/dev/null 2>&1; then \
+		HIBOU_DATABASE_URL='$(TEST_DATABASE_URL)' gotestsum --junitfile junit-go.xml --format pkgname \
+			-- -race -count=1 -coverprofile=coverage.out ./internal/...; \
+	else \
+		echo "gotestsum not found; running plain go test (no JUnit report)"; \
+		HIBOU_DATABASE_URL='$(TEST_DATABASE_URL)' go test -race -count=1 -coverprofile=coverage.out ./internal/...; \
+	fi
 	go tool cover -func=coverage.out | tail -1
 	@echo "HTML report: go tool cover -html=coverage.out"
 
@@ -93,7 +115,7 @@ build-frontend: ## Build the Vue SPA
 .PHONY: build
 build: generate build-frontend ## Build the hibou binary for the current platform
 	mkdir -p $(DIST)
-	CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(DIST)/$(BINARY) .
+	$(GO_BUILD) -o $(DIST)/$(BINARY) .
 
 .PHONY: check-reproducible
 check-reproducible: ## Verify build reproducibility (rebuilds frontend + Go binary, compares with dist/)
@@ -105,7 +127,7 @@ check-reproducible: ## Verify build reproducibility (rebuilds frontend + Go bina
 	 echo "==> Rebuilding frontend..."; \
 	 cd $(FRONTEND) && npm run build > /dev/null 2>&1 && cd ..; \
 	 echo "==> Rebuilding Go binary..."; \
-	 CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o /tmp/hibou-repro .; \
+	 $(GO_BUILD) -o /tmp/hibou-repro .; \
 	 hash1=$$(sha256sum "$$REPRO_BIN" | cut -d' ' -f1); \
 	 hash2=$$(sha256sum /tmp/hibou-repro | cut -d' ' -f1); \
 	 rm -f /tmp/hibou-repro; \
@@ -172,8 +194,7 @@ build-all: generate build-frontend ## Cross-compile for all target platforms
 	for platform in $(PLATFORMS); do \
 		goos=$${platform%%/*}; goarch=$${platform##*/}; \
 		ext=; [ "$$goos" = "windows" ] && ext=.exe; \
-		( GOOS=$$goos GOARCH=$$goarch CGO_ENABLED=0 \
-			go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)' \
+		( GOOS=$$goos GOARCH=$$goarch $(GO_BUILD) \
 			-o $(DIST)/$(BINARY)-$$goos-$$goarch$$ext . && \
 		  if [ "$$goos" = "linux" ]; then \
 			ln -sf $(BINARY)-$$goos-$$goarch$$ext $(DIST)/$(BINARY)-server-$$goarch; \
@@ -182,11 +203,17 @@ build-all: generate build-frontend ## Cross-compile for all target platforms
 	for pid in $$pids; do wait $$pid || fail=1; done; \
 	[ $$fail -eq 0 ]
 
+.PHONY: dev-bin
+dev-bin: ## Build dev binary + hibou-server symlink (tmp/dev)
+	@mkdir -p tmp/dev
+	go build $(GO_BUILD_FLAGS) -o tmp/dev/$(BINARY) .
+	@ln -sf $(BINARY) tmp/dev/hibou-server
+
 .PHONY: dev
-dev: ## Run backend + Vite dev server concurrently
+dev: dev-bin ## Run backend + Vite dev server concurrently
 	@trap 'kill 0' EXIT; \
 		set -a; [ -f .env ] && . ./.env; set +a; \
-		HIBOU_ARTIFACT_PATH=tmp/artifacts go run . serve & \
+		HIBOU_DEVELOPMENT=true HIBOU_ARTIFACT_PATH=tmp/artifacts tmp/dev/hibou-server serve & \
 		cd $(FRONTEND) && npx vite --host 0.0.0.0 & \
 		wait
 

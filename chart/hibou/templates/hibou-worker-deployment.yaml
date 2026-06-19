@@ -1,0 +1,117 @@
+{{- if .Values.hibou.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hibou.fullname" . }}-worker
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.hibou.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.hibou.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.hibou.rollingUpdate.maxUnavailable }}
+  template:
+    metadata:
+      labels:
+        {{- include "hibou.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.hibou.shutdown.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "hibou.podAntiAffinity" (dict "root" . "component" "worker") | nindent 6 }}
+      containers:
+        - name: hibou
+          image: {{ printf "%s:%s" .Values.hibou.image.repository .Values.hibou.image.tag | quote }}
+          imagePullPolicy: {{ .Values.hibou.image.pullPolicy }}
+          args:
+            - serve
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "hibou.fullname" . }}
+            - secretRef:
+                name: {{ include "hibou.sessionSecretName" . }}
+            {{- range $i, $forge := .Values.hibou.forges }}
+            - secretRef:
+                name: {{ $forge.existingSecret | default (printf "%s-forge-%d" (include "hibou.fullname" $) $i) }}
+            {{- end }}
+          env:
+            - name: HIBOU_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.postgresqlSecretName" . }}
+                  key: {{ include "hibou.postgresqlSecretKey" . }}
+            {{- if eq (include "hibou.artifactBackend" .) "s3" }}
+            - name: HIBOU_ARTIFACT_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.artifactS3CredentialsSecretName" . }}
+                  key: accessKeyID
+            - name: HIBOU_ARTIFACT_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.artifactS3CredentialsSecretName" . }}
+                  key: secretAccessKey
+            {{- end }}
+            - name: HIBOU_BACKGROUND_ARTIFACT_PROCESSING_ENABLED
+              value: {{ .Values.hibou.worker.background.artifactProcessing | quote }}
+            - name: HIBOU_BACKGROUND_RETENTION_ENABLED
+              value: {{ .Values.hibou.worker.background.retention | quote }}
+            - name: HIBOU_BACKGROUND_STALE_SCAN_ENABLED
+              value: {{ .Values.hibou.worker.background.staleScan | quote }}
+            - name: HIBOU_BACKGROUND_STALE_PENDING_ENABLED
+              value: {{ .Values.hibou.worker.background.stalePending | quote }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.hibou.probes.liveness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.hibou.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.hibou.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.hibou.probes.readiness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.hibou.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.hibou.probes.readiness.periodSeconds }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep {{ .Values.hibou.shutdown.preStopSleepSeconds }}
+          resources:
+            {{- toYaml .Values.hibou.worker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+          volumeMounts:
+            - name: artifact-filesystem
+              mountPath: {{ include "hibou.artifactFilesystemPath" . | quote }}
+          {{- end }}
+      {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+      volumes:
+        - name: artifact-filesystem
+          persistentVolumeClaim:
+            claimName: {{ include "hibou.artifactFilesystemPVCName" . }}
+      {{- end }}
+{{- end }}

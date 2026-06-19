@@ -45,6 +45,7 @@ export interface Repository {
   sync_state?: string
   full_name?: string
   html_url?: string
+  description?: string
   private?: boolean
   enrolled?: boolean
   status?: RepoLifecycleStatus
@@ -127,6 +128,8 @@ export interface EnhancedRef {
   provider_id?: string
   merge_target_ref_id?: string
   merge_target_ref_name?: string
+  pr_ref_kind?: string
+  pr_number?: string
   pr_state?: string
   pr_title?: string
   pr_source_branch?: string
@@ -222,6 +225,14 @@ export interface Advisory {
   cvss_score?: number
   is_malware: boolean
   malware_type?: string
+  // Optional enriched fields — populated once the backend exposes them
+  // (see TODO-BACKEND-deps-nodata.md). Rendered with graceful fallbacks.
+  cwe?: string
+  cwe_name?: string
+  summary?: string
+  fixed_versions?: string[]
+  references?: string[]
+  source?: string
 }
 
 export interface ComponentWithVulns {
@@ -233,6 +244,10 @@ export interface ComponentWithVulns {
   vuln_count: number
   highest_severity?: string
   advisories?: Advisory[]
+  // Optional enriched fields (backend TODO). Graceful when absent.
+  sources?: string[]
+  fixed_versions?: string[]
+  usage_paths?: string[][]
 }
 
 export interface ComponentEntry {
@@ -241,6 +256,36 @@ export interface ComponentEntry {
   ecosystem: string
   purl: string
   vuln_count: number
+}
+
+export interface ComponentGraphNode {
+  ref: string
+  name: string
+  version: string
+  ecosystem: string
+  vuln_count: number
+}
+
+export interface ComponentGraphEdge {
+  ref: string
+  depends_on: string[]
+}
+
+export interface ComponentGraph {
+  root_ref: string
+  nodes: ComponentGraphNode[]
+  edges: ComponentGraphEdge[]
+}
+
+// Org-wide aggregated vulnerability: a vulnerability annotated with its repo.
+export interface OrgVulnerability extends Vulnerability {
+  repo_slug: string
+  repo_name: string
+}
+
+// Org-wide aggregated component: a component plus the repos it appears in.
+export interface OrgComponent extends ComponentWithVulns {
+  repos: string[]
 }
 
 export interface RefSummary {
@@ -298,6 +343,7 @@ export interface CoverageReport {
   branches_covered: number
   format: string
   files: CoverageFile[]
+  reports?: CoverageReport[]
 }
 
 export interface CoverageFile {
@@ -308,6 +354,27 @@ export interface CoverageFile {
   lines_covered: number
   branches_valid: number
   branches_covered: number
+}
+
+export interface TestCase {
+  suite: string
+  name: string
+  classname: string
+  status: 'passed' | 'failed' | 'skipped' | 'error'
+  duration_seconds: number
+  message: string
+  file_path: string
+}
+
+export interface TestReport {
+  format: string
+  total: number
+  passed: number
+  failed: number
+  skipped: number
+  errors: number
+  duration_seconds: number
+  cases: TestCase[]
 }
 
 export interface PRSummary {
@@ -364,6 +431,17 @@ export interface SyncReposResponse {
 export function forgeCommitUrl(forgeUrl: string | undefined, providerID: string | undefined, sha: string): string | null {
   if (!forgeUrl || !providerID) return null
   return `${forgeUrl}/${providerID}/commit/${sha}`
+}
+
+export interface Notification {
+  id: string
+  type: string
+  title: string
+  body: string
+  link: string
+  severity?: string
+  status: 'unread' | 'read'
+  created_at: string
 }
 
 export interface AuthProvider {
@@ -742,6 +820,7 @@ class ApiClient {
     repoSlug: string,
     params?: {
       ref?: string
+      snapshot?: string
       type?: string
       severity?: string
       status?: string
@@ -759,6 +838,9 @@ class ApiClient {
 
     if (params?.ref) {
       query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
     }
     if (params?.type) {
       query.set('type', params.type)
@@ -800,10 +882,13 @@ class ApiClient {
     )
   }
 
-  listRefComponents(provider: string, slug: string, repoSlug: string, params?: { ref?: string }) {
+  listRefComponents(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
     const query = new URLSearchParams()
     if (params?.ref) {
       query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
     }
 
     const qs = query.toString()
@@ -812,10 +897,13 @@ class ApiClient {
     )
   }
 
-  getRefSummary(provider: string, slug: string, repoSlug: string, params?: { ref?: string }) {
+  getRefSummary(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
     const query = new URLSearchParams()
     if (params?.ref) {
       query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
     }
 
     const qs = query.toString()
@@ -824,10 +912,13 @@ class ApiClient {
     )
   }
 
-  getCoverage(provider: string, slug: string, repoSlug: string, params?: { ref?: string }) {
+  getCoverage(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
     const query = new URLSearchParams()
     if (params?.ref) {
       query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
     }
     const qs = query.toString()
     return this.request<ApiResponse<CoverageReport | null>>(
@@ -835,12 +926,102 @@ class ApiClient {
     )
   }
 
+  getComponentGraph(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) {
+      query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<ComponentGraph>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/components/graph${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  getTests(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) {
+      query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<TestReport | null>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/tests${qs ? `?${qs}` : ''}`,
+    )
+  }
+
   getOrgDashboard(provider: string, slug: string) {
     return this.request<ApiResponse<OrgDashboard>>(`/orgs/${provider}/${slug}/dashboard`)
   }
 
+  listOrgVulnerabilities(
+    provider: string,
+    slug: string,
+    params?: {
+      type?: string
+      severity?: string
+      status?: string
+      tool?: string
+      search?: string
+      sort?: string
+      page?: number
+      per_page?: number
+    },
+  ) {
+    const query = new URLSearchParams()
+    for (const key of ['type', 'severity', 'status', 'tool', 'search', 'sort'] as const) {
+      const value = params?.[key]
+      if (value) {
+        query.set(key, value)
+      }
+    }
+    if (params?.page) {
+      query.set('page', String(params.page))
+    }
+    if (params?.per_page) {
+      query.set('per_page', String(params.per_page))
+    }
+
+    const qs = query.toString()
+    return this.request<PaginatedResponse<OrgVulnerability>>(
+      `/orgs/${provider}/${slug}/vulnerabilities${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  listOrgComponents(provider: string, slug: string) {
+    return this.request<ApiResponse<OrgComponent[]>>(`/orgs/${provider}/${slug}/components`)
+  }
+
   getUnreadNotificationCount() {
     return this.request<ApiResponse<{ count: number }>>('/notifications/unread-count')
+  }
+
+  listNotifications(params?: { status?: string; page?: number; per_page?: number }) {
+    const query = new URLSearchParams()
+    if (params?.status) {
+      query.set('status', params.status)
+    }
+    if (params?.page) {
+      query.set('page', String(params.page))
+    }
+    if (params?.per_page) {
+      query.set('per_page', String(params.per_page))
+    }
+
+    const qs = query.toString()
+    return this.request<PaginatedResponse<Notification>>(`/notifications${qs ? `?${qs}` : ''}`)
+  }
+
+  markNotificationRead(id: string) {
+    return this.request<ApiResponse<Notification>>(`/notifications/${id}/read`, { method: 'POST' })
+  }
+
+  markAllNotificationsRead() {
+    return this.request<ApiResponse<{ updated: number }>>('/notifications/read-all', { method: 'POST' })
   }
 }
 

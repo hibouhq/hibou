@@ -16,6 +16,7 @@ type Queries struct {
 }
 
 type ListComponentsBySnapshotWithVulnsRow = dbgen.ListComponentsBySnapshotWithVulnsRow
+type ListComponentDependencyEdgesBySnapshotRow = dbgen.ListComponentDependencyEdgesBySnapshotRow
 
 func NewQueries(db *sql.DB) *Queries {
 	return &Queries{db: dbgen.New(db), sqlDB: db}
@@ -53,6 +54,21 @@ func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapsho
 	return q.db.ListComponentsBySnapshotWithVulns(ctx, snapshotID)
 }
 
+func (q *Queries) ListComponentDependencyEdgesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListComponentDependencyEdgesBySnapshotRow, error) {
+	return q.db.ListComponentDependencyEdgesBySnapshot(ctx, snapshotID)
+}
+
+func (q *Queries) GetSnapshotDependencyRoot(ctx context.Context, snapshotID uuid.UUID) (*string, error) {
+	rootRef, err := q.db.GetSnapshotDependencyRoot(ctx, snapshotID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &rootRef, nil
+}
+
 func (q *Queries) CountComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
 	return q.db.CountComponentsBySnapshot(ctx, snapshotID)
 }
@@ -77,6 +93,10 @@ func (q *Queries) UpsertAdvisoryAlias(ctx context.Context, arg dbgen.UpsertAdvis
 	return q.db.UpsertAdvisoryAlias(ctx, arg)
 }
 
+func (q *Queries) ListAliasesByAdvisoryIDs(ctx context.Context, advisoryIDs []uuid.UUID) ([]dbgen.AdvisoryAlias, error) {
+	return q.db.ListAliasesByAdvisoryIDs(ctx, advisoryIDs)
+}
+
 func (q *Queries) UpsertAdvisorySource(ctx context.Context, arg dbgen.UpsertAdvisorySourceParams) error {
 	return q.db.UpsertAdvisorySource(ctx, arg)
 }
@@ -85,8 +105,16 @@ func (q *Queries) ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUI
 	return q.db.ListSourcesByAdvisory(ctx, advisoryID)
 }
 
+func (q *Queries) ListSourcesByAdvisoryIDs(ctx context.Context, advisoryIDs []uuid.UUID) ([]dbgen.AdvisorySource, error) {
+	return q.db.ListSourcesByAdvisoryIDs(ctx, advisoryIDs)
+}
+
 func (q *Queries) CreateAffectedRange(ctx context.Context, arg dbgen.CreateAffectedRangeParams) (dbgen.AffectedRange, error) {
 	return q.db.CreateAffectedRange(ctx, arg)
+}
+
+func (q *Queries) ListAffectedRangesByAdvisoryIDs(ctx context.Context, advisoryIDs []uuid.UUID) ([]dbgen.AffectedRange, error) {
+	return q.db.ListAffectedRangesByAdvisoryIDs(ctx, advisoryIDs)
 }
 
 func (q *Queries) DeleteAffectedRangesByAdvisoryAndSource(ctx context.Context, arg dbgen.DeleteAffectedRangesByAdvisoryAndSourceParams) error {

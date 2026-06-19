@@ -1,5 +1,5 @@
 name: hibou-upload
-description: "Upload SBOM, SARIF, or coverage artifacts to Hibou. Works with GitHub Actions and Forgejo Actions."
+description: "Upload SBOM, SARIF, coverage, or JUnit test-result artifacts to Hibou. Works with GitHub Actions and Forgejo Actions."
 
 inputs:
   server:

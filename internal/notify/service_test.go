@@ -97,8 +97,8 @@ func TestHandleScanCompletedCreatesNotifications(t *testing.T) {
 		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api"},
 		members:  []store.OrgMember{{UserID: userID}},
 	}
-	hub := ws.NewHub(zerolog.Nop())
-	service := NewService(store, hub, events.New(zerolog.Nop()), zerolog.Nop())
+	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())
+	service := NewService(store, fanout, events.New(zerolog.Nop()), zerolog.Nop())
 
 	service.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": store.snapshot.ID.String()})
 
@@ -118,7 +118,8 @@ func TestHandleVulnDiscoveredCreatesCriticalNotification(t *testing.T) {
 		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api"},
 		members:  []store.OrgMember{{UserID: userID}},
 	}
-	service := NewService(store, ws.NewHub(zerolog.Nop()), events.New(zerolog.Nop()), zerolog.Nop())
+	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())
+	service := NewService(store, fanout, events.New(zerolog.Nop()), zerolog.Nop())
 
 	service.handleVulnDiscovered(context.Background(), map[string]any{"snapshot_id": store.snapshot.ID.String(), "severity": "critical", "cve": "CVE-2026-0001"})
 

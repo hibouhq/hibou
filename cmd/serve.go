@@ -37,6 +37,9 @@ var serveCmd = &cobra.Command{
 		}
 
 		log := newLogger(cfg)
+		if err := cfg.ValidateStartup(log); err != nil {
+			return err
+		}
 
 		db, err := store.New(cfg.DatabaseURL)
 		if err != nil {
@@ -98,7 +101,10 @@ var serveCmd = &cobra.Command{
 			Providers:     forges,
 		}, queries)
 
-		srv := server.New(cfg, log, db, enforcer, authMgr, forges, siteFS)
+		srv, err := server.New(cfg, log, db, enforcer, authMgr, forges, siteFS)
+		if err != nil {
+			return err
+		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -116,7 +122,7 @@ var serveCmd = &cobra.Command{
 			mcpHTTP := hiboumcp.NewHTTPServer(mcpSrv, queries, cfg.MCPPort, log)
 			services++
 			go func() {
-				errCh <- runMCPServer(ctx, mcpHTTP, cfg.MCPListenAddr(), log)
+				errCh <- runMCPServer(ctx, mcpHTTP, cfg.MCPListenAddr(), cfg.ShutdownTimeout, log)
 			}()
 		}
 
@@ -134,7 +140,7 @@ var serveCmd = &cobra.Command{
 func runMCPServer(ctx context.Context, srv interface {
 	Start(addr string) error
 	Shutdown(ctx context.Context) error
-}, addr string, log zerolog.Logger) error {
+}, addr string, shutdownTimeout time.Duration, log zerolog.Logger) error {
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -148,7 +154,7 @@ func runMCPServer(ctx context.Context, srv interface {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err

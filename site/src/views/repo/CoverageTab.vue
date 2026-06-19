@@ -78,7 +78,7 @@
       </p>
     </div>
 
-    <template v-else>
+    <template v-else-if="activeReport">
       <section class="rounded-xl border border-surface-border bg-surface-raised p-5">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -89,13 +89,31 @@
               </h2>
             </div>
             <p class="mt-1 text-sm text-gray-400">
-              {{ sortedFiles.length }} files in {{ report.format || 'unknown' }} format
+              {{ sortedFiles.length }} files in {{ activeReport.format || 'unknown' }} format
             </p>
           </div>
 
-          <span class="inline-flex items-center rounded-full border border-surface-border bg-surface-overlay px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-gray-300">
-            {{ report.format || 'unknown' }}
-          </span>
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <div
+              v-if="reportOptions.length > 1"
+              class="flex flex-wrap items-center gap-2"
+            >
+              <button
+                v-for="formatReport in reportOptions"
+                :key="formatReport.format"
+                type="button"
+                class="inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] transition"
+                :class="selectedFormat === formatReport.format ? 'border-accent bg-accent/15 text-white' : 'border-surface-border bg-surface-overlay text-gray-300 hover:border-surface-border-subtle hover:text-white'"
+                @click="selectedFormat = formatReport.format"
+              >
+                {{ formatReport.format || 'unknown' }}
+              </button>
+            </div>
+
+            <span class="inline-flex items-center rounded-full border border-surface-border bg-surface-overlay px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-gray-300">
+              {{ activeReport.format || 'unknown' }}
+            </span>
+          </div>
         </div>
 
         <div class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
@@ -108,15 +126,15 @@
                 </div>
                 <span
                   class="text-sm font-semibold"
-                  :style="{ color: rateColorValue(report.line_rate) }"
+                  :style="{ color: rateColorValue(activeReport.line_rate) }"
                 >
-                  {{ formatRate(report.line_rate) }}
+                  {{ formatRate(activeReport.line_rate) }}
                 </span>
               </div>
               <div class="h-2 w-full rounded-full bg-surface-overlay">
                 <div
                   class="h-2 rounded-full transition-all"
-                  :style="coverageBarStyle(report.line_rate)"
+                  :style="coverageBarStyle(activeReport.line_rate)"
                 />
               </div>
             </div>
@@ -129,15 +147,15 @@
                 </div>
                 <span
                   class="text-sm font-semibold"
-                  :style="{ color: rateColorValue(report.branch_rate) }"
+                  :style="{ color: rateColorValue(activeReport.branch_rate) }"
                 >
-                  {{ formatRate(report.branch_rate) }}
+                  {{ formatRate(activeReport.branch_rate) }}
                 </span>
               </div>
               <div class="h-2 w-full rounded-full bg-surface-overlay">
                 <div
                   class="h-2 rounded-full transition-all"
-                  :style="coverageBarStyle(report.branch_rate)"
+                  :style="coverageBarStyle(activeReport.branch_rate)"
                 />
               </div>
             </div>
@@ -149,7 +167,7 @@
                 Lines
               </div>
               <div class="mt-2 text-lg font-semibold text-white">
-                {{ report.lines_covered }}/{{ report.lines_valid }}
+                {{ activeReport.lines_covered }}/{{ activeReport.lines_valid }}
               </div>
               <div class="mt-1 text-xs text-gray-500">
                 covered / total
@@ -160,7 +178,7 @@
                 Branches
               </div>
               <div class="mt-2 text-lg font-semibold text-white">
-                {{ report.branches_covered }}/{{ report.branches_valid }}
+                {{ activeReport.branches_covered }}/{{ activeReport.branches_valid }}
               </div>
               <div class="mt-1 text-xs text-gray-500">
                 covered / total
@@ -316,6 +334,13 @@
         </div>
       </section>
     </template>
+
+    <div
+      v-else
+      class="rounded-xl border border-dashed border-surface-border-subtle bg-surface-overlay/40 px-6 py-10 text-center text-sm text-gray-400"
+    >
+      Coverage data is temporarily unavailable for the selected format.
+    </div>
   </div>
 </template>
 
@@ -335,15 +360,42 @@ const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 const refParam = computed(() => route.query.ref as string | undefined)
+const snapshotParam = computed(() => route.query.snapshot as string | undefined)
 
 const loading = ref(true)
 const error = ref('')
 const report = ref<CoverageReport | null>(null)
+const selectedFormat = ref<string | null>(null)
 const sortField = ref<SortField>('line_rate')
 const sortDirection = ref<SortDirection>('asc')
 
+const reportOptions = computed(() => {
+  if (!report.value) {
+    return []
+  }
+
+  if (Array.isArray(report.value.reports) && report.value.reports.length > 0) {
+    return report.value.reports
+  }
+
+  return [report.value]
+})
+
+const activeReport = computed(() => {
+  const primaryReport = report.value
+  if (!primaryReport) {
+    return null
+  }
+
+  if (!selectedFormat.value) {
+    return primaryReport
+  }
+
+  return reportOptions.value.find((entry) => entry.format === selectedFormat.value) ?? primaryReport
+})
+
 const sortedFiles = computed(() => {
-  const files = [...(report.value?.files ?? [])]
+  const files = [...(activeReport.value?.files ?? [])]
 
   files.sort((left, right) => {
     if (sortField.value === 'file_path') {
@@ -364,7 +416,7 @@ const sortedFiles = computed(() => {
 })
 
 const highestLineRate = computed(() => {
-  const rates = (report.value?.files ?? [])
+  const rates = (activeReport.value?.files ?? [])
     .map((file) => file.line_rate)
     .filter((rate): rate is number => typeof rate === 'number')
 
@@ -375,10 +427,10 @@ const highestLineRate = computed(() => {
   return Math.max(...rates)
 })
 
-const filesWithLineData = computed(() => (report.value?.files ?? []).filter((file) => file.line_rate !== null).length)
+const filesWithLineData = computed(() => (activeReport.value?.files ?? []).filter((file) => file.line_rate !== null).length)
 
 watch(
-  [provider, slug, repoSlug, refParam],
+  [provider, slug, repoSlug, refParam, snapshotParam],
   () => {
     void loadCoverage()
   },
@@ -396,10 +448,12 @@ async function loadCoverage() {
   error.value = ''
 
   try {
-    const response = await api.getCoverage(provider.value, slug.value, repoSlug.value, { ref: refParam.value })
+    const response = await api.getCoverage(provider.value, slug.value, repoSlug.value, { ref: refParam.value, snapshot: snapshotParam.value })
     report.value = response.data ?? null
+    selectedFormat.value = response.data?.format ?? null
   } catch {
     report.value = null
+    selectedFormat.value = null
     error.value = 'Failed to load coverage data. Please try again later.'
   } finally {
     loading.value = false

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -24,20 +25,30 @@ const (
 )
 
 type Snapshot struct {
-	ID              uuid.UUID      `json:"id"`
-	RefID           uuid.UUID      `json:"ref_id"`
-	CommitSHA       string         `json:"commit_sha"`
-	Status          SnapshotStatus `json:"status"`
-	BuildURL        *string        `json:"build_url,omitempty"`
-	RunID           *string        `json:"run_id,omitempty"`
-	RunAttempt      *string        `json:"run_attempt,omitempty"`
-	RunNumber       *string        `json:"run_number,omitempty"`
-	PRNumber        *string        `json:"pr_number,omitempty"`
-	PRTargetBranch  *string        `json:"pr_target_branch,omitempty"`
-	Tag             *string        `json:"tag,omitempty"`
-	ExpectedUploads *int           `json:"expected_uploads,omitempty"`
-	ReceivedUploads int            `json:"received_uploads"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID                               uuid.UUID      `json:"id"`
+	RefID                            uuid.UUID      `json:"ref_id"`
+	CommitSHA                        string         `json:"commit_sha"`
+	Status                           SnapshotStatus `json:"status"`
+	Labels                           []string       `json:"labels,omitempty"`
+	Pinned                           bool           `json:"pinned"`
+	RetentionHold                    bool           `json:"retention_hold"`
+	ArtifactBytes                    int64          `json:"artifact_bytes"`
+	BuildURL                         *string        `json:"build_url,omitempty"`
+	RunID                            *string        `json:"run_id,omitempty"`
+	RunAttempt                       *string        `json:"run_attempt,omitempty"`
+	RunNumber                        *string        `json:"run_number,omitempty"`
+	PRNumber                         *string        `json:"pr_number,omitempty"`
+	PRTargetBranch                   *string        `json:"pr_target_branch,omitempty"`
+	Tag                              *string        `json:"tag,omitempty"`
+	ExpectedUploads                  *int           `json:"expected_uploads,omitempty"`
+	ReceivedUploads                  int            `json:"received_uploads"`
+	ArtifactProcessingClaimedBy      *string        `json:"artifact_processing_claimed_by,omitempty"`
+	ArtifactProcessingClaimExpiresAt *time.Time     `json:"artifact_processing_claim_expires_at,omitempty"`
+	ArtifactProcessingStartedAt      *time.Time     `json:"artifact_processing_started_at,omitempty"`
+	ArtifactProcessingFinishedAt     *time.Time     `json:"artifact_processing_finished_at,omitempty"`
+	ArtifactProcessingAttempts       int            `json:"artifact_processing_attempts"`
+	ArtifactProcessingLastError      *string        `json:"artifact_processing_last_error,omitempty"`
+	CreatedAt                        time.Time      `json:"created_at"`
 }
 
 type SnapshotBuildMeta struct {
@@ -52,6 +63,7 @@ type SnapshotBuildMeta struct {
 }
 
 var ErrSnapshotNotCompletable = errors.New("snapshot already finalized or timed out")
+var ErrArtifactProcessingClaimLost = errors.New("artifact processing claim lost")
 
 func (q *Queries) CreateSnapshot(ctx context.Context, refID uuid.UUID, commitSHA string, status SnapshotStatus) (*Snapshot, error) {
 	row, err := q.db.CreateSnapshot(ctx, dbgen.CreateSnapshotParams{
@@ -173,6 +185,23 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, refID uuid.UUID, limit
 	return snapshots, int(total), nil
 }
 
+func (q *Queries) ListSnapshotsForRetentionTimeline(ctx context.Context, repoID, refID uuid.UUID) ([]Snapshot, error) {
+	rows, err := q.db.ListSnapshotsForRetentionTimeline(ctx, dbgen.ListSnapshotsForRetentionTimelineParams{
+		RepoID: repoID,
+		RefID:  refID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	snapshots := make([]Snapshot, len(rows))
+	for i, row := range rows {
+		snapshots[i] = *snapshotFromRow(row)
+	}
+
+	return snapshots, nil
+}
+
 func (q *Queries) UpdateSnapshotStatus(ctx context.Context, id uuid.UUID, status SnapshotStatus) (*Snapshot, error) {
 	row, err := q.db.UpdateSnapshotStatus(ctx, dbgen.UpdateSnapshotStatusParams{
 		ID:     id,
@@ -225,6 +254,21 @@ func (q *Queries) IncrementSnapshotReceivedUploads(ctx context.Context, id uuid.
 	return snapshotFromRow(row), nil
 }
 
+func (q *Queries) AddSnapshotArtifactBytes(ctx context.Context, snapshotID uuid.UUID, deltaBytes int64) error {
+	return q.db.AddSnapshotArtifactBytes(ctx, dbgen.AddSnapshotArtifactBytesParams{
+		ID:                     snapshotID,
+		RetentionArtifactBytes: deltaBytes,
+	})
+}
+
+func (q *Queries) LockSnapshotForUpdate(ctx context.Context, snapshotID uuid.UUID) error {
+	_, err := q.db.LockSnapshotForUpdate(ctx, snapshotID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	return err
+}
+
 func (q *Queries) CompleteSnapshot(ctx context.Context, id uuid.UUID) (*Snapshot, error) {
 	row, err := q.db.CompleteSnapshot(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -235,6 +279,88 @@ func (q *Queries) CompleteSnapshot(ctx context.Context, id uuid.UUID) (*Snapshot
 	}
 
 	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) ClaimNextArtifactProcessingSnapshot(ctx context.Context, workerID string, claimExpiresAt time.Time, maxAttempts int32) (*Snapshot, error) {
+	row, err := q.db.ClaimNextArtifactProcessingSnapshot(ctx, dbgen.ClaimNextArtifactProcessingSnapshotParams{
+		MaxAttempts: maxAttempts,
+		WorkerID:    sql.NullString{String: workerID, Valid: workerID != ""},
+		ClaimExpiresAt: sql.NullTime{
+			Time:  claimExpiresAt,
+			Valid: !claimExpiresAt.IsZero(),
+		},
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) CompleteArtifactProcessingSnapshot(ctx context.Context, snapshotID uuid.UUID, workerID string) (*Snapshot, error) {
+	row, err := q.db.CompleteArtifactProcessingSnapshot(ctx, dbgen.CompleteArtifactProcessingSnapshotParams{
+		SnapshotID: snapshotID,
+		WorkerID:   sql.NullString{String: workerID, Valid: workerID != ""},
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) CompleteArtifactProcessingSnapshotWithWarning(ctx context.Context, snapshotID uuid.UUID, workerID, lastError string) (*Snapshot, error) {
+	row, err := q.db.CompleteArtifactProcessingSnapshotWithWarning(ctx, dbgen.CompleteArtifactProcessingSnapshotWithWarningParams{
+		SnapshotID: snapshotID,
+		WorkerID:   sql.NullString{String: workerID, Valid: workerID != ""},
+		LastError:  sql.NullString{String: lastError, Valid: lastError != ""},
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) RenewArtifactProcessingSnapshotClaim(ctx context.Context, snapshotID uuid.UUID, workerID string, claimExpiresAt time.Time) (int64, error) {
+	return q.db.RenewArtifactProcessingSnapshotClaim(ctx, dbgen.RenewArtifactProcessingSnapshotClaimParams{
+		SnapshotID: snapshotID,
+		WorkerID:   sql.NullString{String: workerID, Valid: workerID != ""},
+		ClaimExpiresAt: sql.NullTime{
+			Time:  claimExpiresAt,
+			Valid: !claimExpiresAt.IsZero(),
+		},
+	})
+}
+
+func (q *Queries) FailArtifactProcessingSnapshot(ctx context.Context, snapshotID uuid.UUID, workerID string, markFinished bool, lastError string) (*Snapshot, error) {
+	row, err := q.db.FailArtifactProcessingSnapshot(ctx, dbgen.FailArtifactProcessingSnapshotParams{
+		SnapshotID:   snapshotID,
+		WorkerID:     sql.NullString{String: workerID, Valid: workerID != ""},
+		MarkFinished: markFinished,
+		LastError:    sql.NullString{String: lastError, Valid: lastError != ""},
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) ReleaseArtifactProcessingClaims(ctx context.Context, workerID string) (int64, error) {
+	return q.db.ReleaseArtifactProcessingClaims(ctx, sql.NullString{String: workerID, Valid: workerID != ""})
 }
 
 func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (*Snapshot, error) {
@@ -249,8 +375,204 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 	return snapshotFromRow(row), nil
 }
 
+func (q *Queries) GetLatestNonPurgedSnapshotByRef(ctx context.Context, refID uuid.UUID) (*Snapshot, error) {
+	const query = `
+		SELECT
+			id,
+			ref_id,
+			commit_sha,
+			status,
+			labels,
+			image_digest,
+			created_at,
+			build_url,
+			run_id,
+			run_number,
+			pr_number,
+			pr_target_branch,
+			tag,
+			expected_uploads,
+			received_uploads,
+			run_attempt,
+			pinned,
+			retention_hold,
+			artifact_bytes
+		FROM snapshots s
+		WHERE s.ref_id = $1
+		  AND s.status != 'purged'
+		ORDER BY s.created_at DESC, s.id DESC
+		LIMIT 1
+	`
+
+	return q.getSnapshotByRefLookup(ctx, query, refID)
+}
+
 func (q *Queries) GetLatestCompleteSnapshotByRef(ctx context.Context, refID uuid.UUID) (*Snapshot, error) {
 	row, err := q.db.GetLatestCompleteSnapshotByRef(ctx, refID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) GetLatestSnapshotWithAnalysisDataByRef(ctx context.Context, refID uuid.UUID) (*Snapshot, error) {
+	const query = `
+		SELECT
+			id,
+			ref_id,
+			commit_sha,
+			status,
+			labels,
+			image_digest,
+			created_at,
+			build_url,
+			run_id,
+			run_number,
+			pr_number,
+			pr_target_branch,
+			tag,
+			expected_uploads,
+			received_uploads,
+			run_attempt,
+			pinned,
+			retention_hold,
+			artifact_bytes
+		FROM snapshots s
+		WHERE s.ref_id = $1
+		  AND s.status != 'purged'
+		  AND (
+			EXISTS (SELECT 1 FROM snapshot_components sc WHERE sc.snapshot_id = s.id)
+			OR EXISTS (SELECT 1 FROM vulnerabilities v WHERE v.snapshot_id = s.id)
+		  )
+		ORDER BY s.created_at DESC, s.id DESC
+		LIMIT 1
+	`
+
+	var row dbgen.Snapshot
+	err := q.sqlDB.QueryRowContext(ctx, query, refID).Scan(
+		&row.ID,
+		&row.RefID,
+		&row.CommitSha,
+		&row.Status,
+		&row.Labels,
+		&row.ImageDigest,
+		&row.CreatedAt,
+		&row.BuildUrl,
+		&row.RunID,
+		&row.RunNumber,
+		&row.PrNumber,
+		&row.PrTargetBranch,
+		&row.Tag,
+		&row.ExpectedUploads,
+		&row.ReceivedUploads,
+		&row.RunAttempt,
+		&row.Pinned,
+		&row.RetentionHold,
+		&row.ArtifactBytes,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
+func (q *Queries) GetLatestSnapshotWithComponentsByRef(ctx context.Context, refID uuid.UUID) (*Snapshot, error) {
+	const query = `
+		SELECT
+			id,
+			ref_id,
+			commit_sha,
+			status,
+			labels,
+			image_digest,
+			created_at,
+			build_url,
+			run_id,
+			run_number,
+			pr_number,
+			pr_target_branch,
+			tag,
+			expected_uploads,
+			received_uploads,
+			run_attempt,
+			pinned,
+			retention_hold,
+			artifact_bytes
+		FROM snapshots s
+		WHERE s.ref_id = $1
+		  AND s.status != 'purged'
+		  AND EXISTS (SELECT 1 FROM snapshot_components sc WHERE sc.snapshot_id = s.id)
+		ORDER BY s.created_at DESC, s.id DESC
+		LIMIT 1
+	`
+
+	return q.getSnapshotByRefLookup(ctx, query, refID)
+}
+
+func (q *Queries) GetLatestSnapshotWithVulnerabilitiesByRef(ctx context.Context, refID uuid.UUID) (*Snapshot, error) {
+	const query = `
+		SELECT
+			id,
+			ref_id,
+			commit_sha,
+			status,
+			labels,
+			image_digest,
+			created_at,
+			build_url,
+			run_id,
+			run_number,
+			pr_number,
+			pr_target_branch,
+			tag,
+			expected_uploads,
+			received_uploads,
+			run_attempt,
+			pinned,
+			retention_hold,
+			artifact_bytes
+		FROM snapshots s
+		WHERE s.ref_id = $1
+		  AND s.status != 'purged'
+		  AND EXISTS (SELECT 1 FROM vulnerabilities v WHERE v.snapshot_id = s.id)
+		ORDER BY s.created_at DESC, s.id DESC
+		LIMIT 1
+	`
+
+	return q.getSnapshotByRefLookup(ctx, query, refID)
+}
+
+func (q *Queries) getSnapshotByRefLookup(ctx context.Context, query string, refID uuid.UUID) (*Snapshot, error) {
+	var row dbgen.Snapshot
+	err := q.sqlDB.QueryRowContext(ctx, query, refID).Scan(
+		&row.ID,
+		&row.RefID,
+		&row.CommitSha,
+		&row.Status,
+		&row.Labels,
+		&row.ImageDigest,
+		&row.CreatedAt,
+		&row.BuildUrl,
+		&row.RunID,
+		&row.RunNumber,
+		&row.PrNumber,
+		&row.PrTargetBranch,
+		&row.Tag,
+		&row.ExpectedUploads,
+		&row.ReceivedUploads,
+		&row.RunAttempt,
+		&row.Pinned,
+		&row.RetentionHold,
+		&row.ArtifactBytes,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -320,6 +642,22 @@ func (q *Queries) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
 	return q.db.PurgeSnapshot(ctx, id)
 }
 
+func (q *Queries) UpdateSnapshotRetentionFlags(ctx context.Context, id uuid.UUID, pinned, retentionHold bool) (*Snapshot, error) {
+	row, err := q.db.UpdateSnapshotRetentionFlags(ctx, dbgen.UpdateSnapshotRetentionFlagsParams{
+		ID:            id,
+		Pinned:        pinned,
+		RetentionHold: retentionHold,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
 func snapshotFromRow(row dbgen.Snapshot) *Snapshot {
 	var expectedUploads *int
 	if row.ExpectedUploads.Valid {
@@ -328,19 +666,40 @@ func snapshotFromRow(row dbgen.Snapshot) *Snapshot {
 	}
 
 	return &Snapshot{
-		ID:              row.ID,
-		RefID:           row.RefID,
-		CommitSHA:       row.CommitSha,
-		Status:          row.Status,
-		BuildURL:        stringPtrFromNull(row.BuildUrl),
-		RunID:           stringPtrFromNull(row.RunID),
-		RunAttempt:      stringPtrFromNull(row.RunAttempt),
-		RunNumber:       stringPtrFromNull(row.RunNumber),
-		PRNumber:        stringPtrFromNull(row.PrNumber),
-		PRTargetBranch:  stringPtrFromNull(row.PrTargetBranch),
-		Tag:             stringPtrFromNull(row.Tag),
-		ExpectedUploads: expectedUploads,
-		ReceivedUploads: int(row.ReceivedUploads),
-		CreatedAt:       row.CreatedAt,
+		ID:                               row.ID,
+		RefID:                            row.RefID,
+		CommitSHA:                        row.CommitSha,
+		Status:                           row.Status,
+		Labels:                           parseSnapshotLabels(row.Labels),
+		Pinned:                           row.Pinned,
+		RetentionHold:                    row.RetentionHold,
+		ArtifactBytes:                    row.ArtifactBytes,
+		BuildURL:                         stringPtrFromNull(row.BuildUrl),
+		RunID:                            stringPtrFromNull(row.RunID),
+		RunAttempt:                       stringPtrFromNull(row.RunAttempt),
+		RunNumber:                        stringPtrFromNull(row.RunNumber),
+		PRNumber:                         stringPtrFromNull(row.PrNumber),
+		PRTargetBranch:                   stringPtrFromNull(row.PrTargetBranch),
+		Tag:                              stringPtrFromNull(row.Tag),
+		ExpectedUploads:                  expectedUploads,
+		ReceivedUploads:                  int(row.ReceivedUploads),
+		ArtifactProcessingClaimedBy:      stringPtrFromNull(row.ArtifactProcessingClaimedBy),
+		ArtifactProcessingClaimExpiresAt: timePtrFromNull(row.ArtifactProcessingClaimExpiresAt),
+		ArtifactProcessingStartedAt:      timePtrFromNull(row.ArtifactProcessingStartedAt),
+		ArtifactProcessingFinishedAt:     timePtrFromNull(row.ArtifactProcessingFinishedAt),
+		ArtifactProcessingAttempts:       int(row.ArtifactProcessingAttempts),
+		ArtifactProcessingLastError:      stringPtrFromNull(row.ArtifactProcessingLastError),
+		CreatedAt:                        row.CreatedAt,
 	}
+}
+
+func parseSnapshotLabels(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var labels []string
+	if err := json.Unmarshal(raw, &labels); err != nil {
+		return nil
+	}
+	return labels
 }

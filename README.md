@@ -56,11 +56,15 @@ An Open Security Intelligence Platform for the Software Lifecycle. Unify depende
    ```bash
    cp .env.example .env
    ```
-5. Start the dev servers:
+5. Seed sample data (snapshots, coverage, tags, PRs, advisories):
+   ```bash
+   make seed
+   ```
+6. Start the dev servers:
    ```bash
    make dev
    ```
-6. Open http://localhost:8080 (frontend) or http://localhost:8585 (API)
+7. Open http://localhost:8080 (frontend) or http://localhost:8585 (API)
 
 ### Manual setup
 
@@ -83,7 +87,9 @@ An Open Security Intelligence Platform for the Software Lifecycle. Unify depende
 | Target | Description |
 |--------|-------------|
 | `make` | Lint, test, and build |
-| `make dev` | Run backend (air) + frontend (vite) concurrently |
+| `make dev` | Run backend + Vite frontend concurrently (hot reload) |
+| `make seed` | (Re-)seed the database with sample data |
+| `make reset` | Drop the schema and re-seed from scratch |
 | `make generate` | Run sqlc code generation |
 | `make lint` | Run Go and frontend linters + check generated code |
 | `make test` | Run Go and frontend tests |

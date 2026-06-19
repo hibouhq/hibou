@@ -1,0 +1,18 @@
+{{- if .Values.seaweedfs.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hibou.seaweedfsServiceName" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "hibou.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: s3
+      protocol: TCP
+{{- end }}

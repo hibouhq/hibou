@@ -54,8 +54,11 @@ func (q *Queries) CreateCoverageReport(ctx context.Context, snapshotID uuid.UUID
 	return coverageReportFromRow(row), nil
 }
 
-func (q *Queries) GetCoverageReportBySnapshot(ctx context.Context, snapshotID uuid.UUID) (*CoverageReport, error) {
-	row, err := q.db.GetCoverageReportBySnapshot(ctx, snapshotID)
+func (q *Queries) GetCoverageReportBySnapshotFormat(ctx context.Context, snapshotID uuid.UUID, format string) (*CoverageReport, error) {
+	row, err := q.db.GetCoverageReportBySnapshotFormat(ctx, dbgen.GetCoverageReportBySnapshotFormatParams{
+		SnapshotID: snapshotID,
+		Format:     format,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -98,8 +101,22 @@ func (q *Queries) ListCoverageFilesByReport(ctx context.Context, coverageReportI
 	return files, nil
 }
 
-func (q *Queries) GetLatestCoverageByRef(ctx context.Context, refID uuid.UUID) (*CoverageReport, error) {
-	row, err := q.db.GetLatestCoverageByRef(ctx, refID)
+func (q *Queries) ListCoverageReportsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]CoverageReport, error) {
+	rows, err := q.db.ListCoverageReportsBySnapshot(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+
+	reports := make([]CoverageReport, len(rows))
+	for i, row := range rows {
+		reports[i] = *coverageReportFromRow(row)
+	}
+
+	return reports, nil
+}
+
+func (q *Queries) GetLatestCoverageSnapshotIDByRef(ctx context.Context, refID uuid.UUID) (*uuid.UUID, error) {
+	id, err := q.db.GetLatestCoverageSnapshotIDByRef(ctx, refID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -107,7 +124,7 @@ func (q *Queries) GetLatestCoverageByRef(ctx context.Context, refID uuid.UUID) (
 		return nil, err
 	}
 
-	return coverageReportFromRow(row), nil
+	return &id, nil
 }
 
 func (q *Queries) ListCoverageFilesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]CoverageFile, error) {

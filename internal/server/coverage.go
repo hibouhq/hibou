@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
 	coverageparser "github.com/hibouhq/hibou/internal/coverage"
@@ -13,6 +16,18 @@ import (
 )
 
 type coverageSummaryResponse struct {
+	LineRate        *float64               `json:"line_rate"`
+	BranchRate      *float64               `json:"branch_rate"`
+	LinesValid      int                    `json:"lines_valid"`
+	LinesCovered    int                    `json:"lines_covered"`
+	BranchesValid   int                    `json:"branches_valid"`
+	BranchesCovered int                    `json:"branches_covered"`
+	Format          string                 `json:"format"`
+	Files           []coverageFileResponse `json:"files"`
+	Reports         []coverageFormatReport `json:"reports"`
+}
+
+type coverageFormatReport struct {
 	LineRate        *float64               `json:"line_rate"`
 	BranchRate      *float64               `json:"branch_rate"`
 	LinesValid      int                    `json:"lines_valid"`
@@ -58,42 +73,58 @@ func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report, err := s.queries.GetLatestCoverageByRef(r.Context(), ref.ID)
+	snapshotID, err := s.queries.GetLatestCoverageSnapshotIDByRef(r.Context(), ref.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load coverage report")
 		return
 	}
-	if report == nil {
+	if snapshotID == nil {
 		api.JSON(w, http.StatusOK, nil)
 		return
 	}
 
-	files, err := s.queries.ListCoverageFilesBySnapshot(r.Context(), report.SnapshotID)
+	reports, err := s.queries.ListCoverageReportsBySnapshot(r.Context(), *snapshotID)
 	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load coverage files")
+		api.JSONError(w, http.StatusInternalServerError, "failed to load coverage reports")
+		return
+	}
+	if len(reports) == 0 {
+		api.JSON(w, http.StatusOK, nil)
 		return
 	}
 
-	response := coverageSummaryResponse{
-		LineRate:        report.LineRate,
-		BranchRate:      report.BranchRate,
-		LinesValid:      report.LinesValid,
-		LinesCovered:    report.LinesCovered,
-		BranchesValid:   report.BranchesValid,
-		BranchesCovered: report.BranchesCovered,
-		Format:          report.Format,
-		Files:           make([]coverageFileResponse, len(files)),
-	}
-	for i, file := range files {
-		response.Files[i] = coverageFileResponse{
-			FilePath:        file.FilePath,
-			LineRate:        file.LineRate,
-			BranchRate:      file.BranchRate,
-			LinesValid:      file.LinesValid,
-			LinesCovered:    file.LinesCovered,
-			BranchesValid:   file.BranchesValid,
-			BranchesCovered: file.BranchesCovered,
+	responseReports := make([]coverageFormatReport, 0, len(reports))
+	for _, report := range reports {
+		files, fileErr := s.queries.ListCoverageFilesByReport(r.Context(), report.ID)
+		if fileErr != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to load coverage files")
+			return
 		}
+		responseReports = append(responseReports, coverageFormatReport{
+			LineRate:        report.LineRate,
+			BranchRate:      report.BranchRate,
+			LinesValid:      report.LinesValid,
+			LinesCovered:    report.LinesCovered,
+			BranchesValid:   report.BranchesValid,
+			BranchesCovered: report.BranchesCovered,
+			Format:          report.Format,
+			Files:           coverageFilesResponse(files),
+		})
+	}
+
+	orderedReports := orderCoverageReports(responseReports)
+	primary := orderedReports[0]
+
+	response := coverageSummaryResponse{
+		LineRate:        primary.LineRate,
+		BranchRate:      primary.BranchRate,
+		LinesValid:      primary.LinesValid,
+		LinesCovered:    primary.LinesCovered,
+		BranchesValid:   primary.BranchesValid,
+		BranchesCovered: primary.BranchesCovered,
+		Format:          primary.Format,
+		Files:           primary.Files,
+		Reports:         orderedReports,
 	}
 
 	api.JSON(w, http.StatusOK, response)
@@ -116,29 +147,88 @@ func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID
 	}()
 
 	queries := s.queries.WithTx(tx)
-	storedReport, err := queries.CreateCoverageReport(
-		ctx,
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO coverage_reports (
+			snapshot_id,
+			format,
+			line_rate,
+			branch_rate,
+			lines_valid,
+			lines_covered,
+			branches_valid,
+			branches_covered
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (snapshot_id, format) DO UPDATE
+		SET
+			line_rate = EXCLUDED.line_rate,
+			branch_rate = EXCLUDED.branch_rate,
+			lines_valid = EXCLUDED.lines_valid,
+			lines_covered = EXCLUDED.lines_covered,
+			branches_valid = EXCLUDED.branches_valid,
+			branches_covered = EXCLUDED.branches_covered
+	`,
 		snapshotID,
 		report.Format,
-		coverageRatePtr(report.LineRate, report.LinesValid),
-		coverageRatePtr(report.BranchRate, report.BranchesValid),
+		coverageRateValue(coverageRatePtr(report.LineRate, report.LinesValid)),
+		coverageRateValue(coverageRatePtr(report.BranchRate, report.BranchesValid)),
 		report.LinesValid,
 		report.LinesCovered,
 		report.BranchesValid,
 		report.BranchesCovered,
-	)
+	); err != nil {
+		s.failCoverageUpload(snapshotID, report.Format, err)
+		return
+	}
+	storedReport, err := queries.GetCoverageReportBySnapshotFormat(ctx, snapshotID, report.Format)
 	if err != nil {
+		s.failCoverageUpload(snapshotID, report.Format, err)
+		return
+	}
+	if storedReport == nil {
+		s.failCoverageUpload(snapshotID, report.Format, sql.ErrNoRows)
+		return
+	}
+
+	filePaths := make([]string, len(report.Files))
+	for i, file := range report.Files {
+		filePaths[i] = file.Path
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM coverage_files
+		WHERE coverage_report_id = $1
+		  AND NOT (file_path = ANY($2::text[]))
+	`, storedReport.ID, pq.Array(filePaths)); err != nil {
 		s.failCoverageUpload(snapshotID, report.Format, err)
 		return
 	}
 
 	for _, file := range report.Files {
-		if _, err := queries.CreateCoverageFile(
-			ctx,
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO coverage_files (
+				coverage_report_id,
+				file_path,
+				line_rate,
+				branch_rate,
+				lines_valid,
+				lines_covered,
+				branches_valid,
+				branches_covered
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (coverage_report_id, file_path) DO UPDATE
+			SET
+				line_rate = EXCLUDED.line_rate,
+				branch_rate = EXCLUDED.branch_rate,
+				lines_valid = EXCLUDED.lines_valid,
+				lines_covered = EXCLUDED.lines_covered,
+				branches_valid = EXCLUDED.branches_valid,
+				branches_covered = EXCLUDED.branches_covered
+		`,
 			storedReport.ID,
 			file.Path,
-			coverageRatePtr(file.LineRate, file.LinesValid),
-			coverageRatePtr(file.BranchRate, file.BranchesValid),
+			coverageRateValue(coverageRatePtr(file.LineRate, file.LinesValid)),
+			coverageRateValue(coverageRatePtr(file.BranchRate, file.BranchesValid)),
 			file.LinesValid,
 			file.LinesCovered,
 			file.BranchesValid,
@@ -168,4 +258,39 @@ func coverageRatePtr(value float64, valid int) *float64 {
 	}
 	result := value
 	return &result
+}
+
+func coverageRateValue(value *float64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func coverageFilesResponse(files []store.CoverageFile) []coverageFileResponse {
+	response := make([]coverageFileResponse, len(files))
+	for i, file := range files {
+		response[i] = coverageFileResponse{
+			FilePath:        file.FilePath,
+			LineRate:        file.LineRate,
+			BranchRate:      file.BranchRate,
+			LinesValid:      file.LinesValid,
+			LinesCovered:    file.LinesCovered,
+			BranchesValid:   file.BranchesValid,
+			BranchesCovered: file.BranchesCovered,
+		}
+	}
+
+	return response
+}
+
+func orderCoverageReports(reports []coverageFormatReport) []coverageFormatReport {
+	ordered := append([]coverageFormatReport(nil), reports...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].LinesValid != ordered[j].LinesValid {
+			return ordered[i].LinesValid > ordered[j].LinesValid
+		}
+		return ordered[i].Format < ordered[j].Format
+	})
+	return ordered
 }

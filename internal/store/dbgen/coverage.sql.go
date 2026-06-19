@@ -99,12 +99,17 @@ func (q *Queries) CreateCoverageReport(ctx context.Context, arg CreateCoverageRe
 	return i, err
 }
 
-const getCoverageReportBySnapshot = `-- name: GetCoverageReportBySnapshot :one
-SELECT id, snapshot_id, format, line_rate, branch_rate, lines_valid, lines_covered, branches_valid, branches_covered, created_at FROM coverage_reports WHERE snapshot_id = $1
+const getCoverageReportBySnapshotFormat = `-- name: GetCoverageReportBySnapshotFormat :one
+SELECT id, snapshot_id, format, line_rate, branch_rate, lines_valid, lines_covered, branches_valid, branches_covered, created_at FROM coverage_reports WHERE snapshot_id = $1 AND format = $2
 `
 
-func (q *Queries) GetCoverageReportBySnapshot(ctx context.Context, snapshotID uuid.UUID) (CoverageReport, error) {
-	row := q.db.QueryRowContext(ctx, getCoverageReportBySnapshot, snapshotID)
+type GetCoverageReportBySnapshotFormatParams struct {
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	Format     string    `json:"format"`
+}
+
+func (q *Queries) GetCoverageReportBySnapshotFormat(ctx context.Context, arg GetCoverageReportBySnapshotFormatParams) (CoverageReport, error) {
+	row := q.db.QueryRowContext(ctx, getCoverageReportBySnapshotFormat, arg.SnapshotID, arg.Format)
 	var i CoverageReport
 	err := row.Scan(
 		&i.ID,
@@ -121,31 +126,20 @@ func (q *Queries) GetCoverageReportBySnapshot(ctx context.Context, snapshotID uu
 	return i, err
 }
 
-const getLatestCoverageByRef = `-- name: GetLatestCoverageByRef :one
-SELECT cr.id, cr.snapshot_id, cr.format, cr.line_rate, cr.branch_rate, cr.lines_valid, cr.lines_covered, cr.branches_valid, cr.branches_covered, cr.created_at FROM coverage_reports cr
-JOIN snapshots s ON s.id = cr.snapshot_id
+const getLatestCoverageSnapshotIDByRef = `-- name: GetLatestCoverageSnapshotIDByRef :one
+SELECT s.id FROM snapshots s
+JOIN coverage_reports cr ON cr.snapshot_id = s.id
 WHERE s.ref_id = $1
   AND s.status != 'purged'
 ORDER BY s.created_at DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestCoverageByRef(ctx context.Context, refID uuid.UUID) (CoverageReport, error) {
-	row := q.db.QueryRowContext(ctx, getLatestCoverageByRef, refID)
-	var i CoverageReport
-	err := row.Scan(
-		&i.ID,
-		&i.SnapshotID,
-		&i.Format,
-		&i.LineRate,
-		&i.BranchRate,
-		&i.LinesValid,
-		&i.LinesCovered,
-		&i.BranchesValid,
-		&i.BranchesCovered,
-		&i.CreatedAt,
-	)
-	return i, err
+func (q *Queries) GetLatestCoverageSnapshotIDByRef(ctx context.Context, refID uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRowContext(ctx, getLatestCoverageSnapshotIDByRef, refID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const listCoverageFilesByReport = `-- name: ListCoverageFilesByReport :many
@@ -211,6 +205,44 @@ func (q *Queries) ListCoverageFilesBySnapshot(ctx context.Context, snapshotID uu
 			&i.LinesCovered,
 			&i.BranchesValid,
 			&i.BranchesCovered,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCoverageReportsBySnapshot = `-- name: ListCoverageReportsBySnapshot :many
+SELECT id, snapshot_id, format, line_rate, branch_rate, lines_valid, lines_covered, branches_valid, branches_covered, created_at FROM coverage_reports WHERE snapshot_id = $1 ORDER BY format
+`
+
+func (q *Queries) ListCoverageReportsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]CoverageReport, error) {
+	rows, err := q.db.QueryContext(ctx, listCoverageReportsBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CoverageReport{}
+	for rows.Next() {
+		var i CoverageReport
+		if err := rows.Scan(
+			&i.ID,
+			&i.SnapshotID,
+			&i.Format,
+			&i.LineRate,
+			&i.BranchRate,
+			&i.LinesValid,
+			&i.LinesCovered,
+			&i.BranchesValid,
+			&i.BranchesCovered,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

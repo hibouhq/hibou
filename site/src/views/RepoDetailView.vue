@@ -8,44 +8,96 @@
     </div>
 
     <template v-else-if="repo">
-      <div class="flex items-center justify-between gap-3 px-4 pt-4">
-        <div class="min-w-0 sm:min-w-[280px]">
-          <BranchPRSelector
-            :refs="refs"
-            :selected-ref-name="selectedRefName"
-            :default-branch="repo.default_branch"
-            :loading="loading"
-            @select="selectRef"
-          />
+      <!-- Repo header (GitHub-style) -->
+      <div class="px-4 pt-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h1 class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xl">
+              <BookMarked class="h-5 w-5 shrink-0 text-gray-500" />
+              <RouterLink
+                :to="`/orgs/${provider}/${orgSlug}`"
+                class="text-accent transition hover:underline"
+              >
+                {{ orgSlug }}
+              </RouterLink>
+              <span class="text-gray-600">/</span>
+              <span class="font-semibold text-white">{{ repo.name }}</span>
+              <span
+                class="ml-1 rounded-full border px-2 py-0.5 text-[11px] font-medium"
+                :class="repo.private
+                  ? 'border-surface-border text-gray-400'
+                  : 'border-ok/40 text-ok'"
+              >
+                {{ repo.private ? 'Private' : 'Public' }}
+              </span>
+            </h1>
+            <p
+              v-if="repoDescription"
+              class="mt-1.5 max-w-2xl text-sm text-gray-400"
+            >
+              {{ repoDescription }}
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <RouterLink
+              v-if="selectedPRNumber"
+              class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
+              :to="{ name: 'pr-review', params: { ...route.params, number: selectedPRNumber }, query: { ref: selectedRefName } }"
+            >
+              <GitPullRequest class="h-3.5 w-3.5" />
+              PR Review
+            </RouterLink>
+            <a
+              v-if="repo.html_url"
+              :href="repo.html_url"
+              target="_blank"
+              rel="noopener"
+              class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
+            >
+              <ExternalLink class="h-3.5 w-3.5" />
+              <span class="hidden sm:inline">Open on forge</span>
+            </a>
+          </div>
         </div>
-        <RouterLink
-          v-if="selectedPRNumber"
-          class="inline-flex items-center justify-center rounded-xl border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
-          :to="{ name: 'pr-review', params: { ...route.params, number: selectedPRNumber }, query: { ref: selectedRefName } }"
-        >
-          View PR Review
-        </RouterLink>
       </div>
 
-      <div class="mt-4 border-b border-surface-border-subtle px-4">
-        <nav class="flex gap-1 overflow-x-auto">
+      <!-- Tabs (GitHub-style) -->
+      <div class="mt-4 border-b border-surface-border px-2">
+        <nav class="flex gap-0.5 overflow-x-auto">
           <RouterLink
             v-for="tab in tabs"
             :key="tab.name"
             :to="tab.to"
-            class="flex items-center gap-1.5 border-b-2 px-3 pb-2.5 pt-1 text-[13px] font-medium transition"
-            :class="isActiveTab(tab.name) ? 'border-accent text-accent' : 'border-transparent text-gray-400 hover:text-gray-200'"
+            class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
+            :class="isActiveTab(tab.name)
+              ? 'border-accent font-semibold text-white'
+              : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
           >
+            <component
+              :is="tab.icon"
+              class="h-4 w-4 shrink-0"
+              :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
+            />
             {{ tab.label }}
             <span
               v-if="tabCount(tab.name) !== null"
-              class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-surface-overlay px-1.5 text-[10px] leading-[18px]"
-              :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+              class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
+              :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
             >
               {{ tabCount(tab.name) }}
             </span>
           </RouterLink>
         </nav>
+      </div>
+
+      <div class="px-4 pt-3">
+        <BranchPRSelector
+          :refs="refs"
+          :selected-ref-name="selectedRefName"
+          :default-branch="repo.default_branch"
+          :loading="loading"
+          @select="selectRef"
+        />
       </div>
 
       <div
@@ -106,6 +158,16 @@
 </template>
 
 <script setup lang="ts">
+import {
+  Activity,
+  BookMarked,
+  ExternalLink,
+  FlaskConical,
+  GitPullRequest,
+  LayoutDashboard,
+  Package,
+  ShieldAlert,
+} from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
@@ -131,6 +193,7 @@ const forgeUrl = computed(() => orgStore.currentOrg?.forge_url || '')
 const repoProviderID = computed(() => repo.value?.provider_id || '')
 provide('forgeUrl', forgeUrl)
 provide('repoProviderID', repoProviderID)
+provide('repo', repo)
 
 const provider = computed(() => route.params.provider as string)
 const orgSlug = computed(() => route.params.slug as string)
@@ -145,6 +208,7 @@ const selectedRefName = computed(() => {
 })
 const selectedRef = computed(() => refs.value.find((item) => item.name === selectedRefName.value) ?? null)
 const latestSnapshot = computed(() => snapshots.value.find(isFinishedSnapshot) ?? snapshots.value[0] ?? null)
+provide('latestSnapshot', latestSnapshot)
 const selectedPRNumber = computed(() => {
   if (selectedRef.value?.ref_type !== 'pull_request') {
     return ''
@@ -162,12 +226,15 @@ const tabs = computed(() => {
     : undefined
 
   return [
-    { label: 'Overview', name: 'repo-overview', to: { name: 'repo-overview', params: route.params, query } },
-    { label: 'Vulnerabilities', name: 'repo-vulnerabilities', to: { name: 'repo-vulnerabilities', params: route.params, query } },
-    { label: 'Coverage', name: 'repo-coverage', to: { name: 'repo-coverage', params: route.params, query } },
-    { label: 'Dependencies', name: 'repo-dependencies', to: { name: 'repo-dependencies', params: route.params, query } },
+    { label: 'Overview', name: 'repo-overview', icon: LayoutDashboard, to: { name: 'repo-overview', params: route.params, query } },
+    { label: 'Vulnerabilities', name: 'repo-vulnerabilities', icon: ShieldAlert, to: { name: 'repo-vulnerabilities', params: route.params, query } },
+    { label: 'Coverage', name: 'repo-coverage', icon: Activity, to: { name: 'repo-coverage', params: route.params, query } },
+    { label: 'Tests', name: 'repo-tests', icon: FlaskConical, to: { name: 'repo-tests', params: route.params, query } },
+    { label: 'Dependencies', name: 'repo-dependencies', icon: Package, to: { name: 'repo-dependencies', params: route.params, query } },
   ]
 })
+
+const repoDescription = computed(() => repo.value?.description || '')
 
 const prevParams = ref({ provider: '', slug: '', repoSlug: '' })
 const latestSnapshotTitle = computed(() => snapshotTitle(latestSnapshot.value, 'Latest snapshot'))

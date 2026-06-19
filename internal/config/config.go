@@ -10,12 +10,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
+
+	"github.com/hibouhq/hibou/internal/retention"
 )
+
+const DefaultSessionSecret = "change-me-in-production"
 
 type Config struct {
 	Host              string
 	Port              int
+	Development       bool
 	MCPEnabled        bool
 	MCPPort           int
 	BaseURL           string
@@ -25,14 +31,42 @@ type Config struct {
 	TriviURL          string
 	OSVURL            string
 	CacheTTL          time.Duration
+	ArtifactBackend   string
 	ArtifactPath      string
+	ArtifactS3        ArtifactS3Config
 	UploadWindow      time.Duration
+	ShutdownTimeout   time.Duration
 	MaxUploadSize     int64
 	SessionSecret     string
 	AutoProvisionOrgs bool
+	RetentionPolicy   retention.RetentionPolicy
+	Background        BackgroundConfig
+	Worker            WorkerConfig
 	SecretScan        SecretScanConfig
 
 	Forges []ForgeConfig
+}
+
+type BackgroundConfig struct {
+	ArtifactProcessingEnabled bool
+	RetentionEnabled          bool
+	StaleScanEnabled          bool
+	StalePendingEnabled       bool
+}
+
+type WorkerConfig struct {
+	LeaseDuration     time.Duration
+	HeartbeatInterval time.Duration
+}
+
+type ArtifactS3Config struct {
+	Endpoint        string
+	Region          string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+	UsePathStyle    bool
+	UseSSL          bool
 }
 
 type SecretScanConfig struct {
@@ -117,6 +151,7 @@ func Load() (Config, error) {
 
 	v.SetDefault("host", "0.0.0.0")
 	v.SetDefault("port", 8585)
+	v.SetDefault("development", false)
 	v.SetDefault("mcp.enabled", true)
 	v.SetDefault("mcp.port", 8081)
 	v.SetDefault("base.url", "")
@@ -126,11 +161,28 @@ func Load() (Config, error) {
 	v.SetDefault("trivy.url", "http://localhost:4954")
 	v.SetDefault("osv.url", "https://api.osv.dev")
 	v.SetDefault("cache.ttl", "6h")
+	v.SetDefault("artifact.backend", "filesystem")
 	v.SetDefault("artifact.path", "/data/artifacts")
+	v.SetDefault("artifact.s3.endpoint", "")
+	v.SetDefault("artifact.s3.region", "")
+	v.SetDefault("artifact.s3.bucket", "")
+	v.SetDefault("artifact.s3.access_key_id", "")
+	v.SetDefault("artifact.s3.secret_access_key", "")
+	v.SetDefault("artifact.s3.use_path_style", true)
+	v.SetDefault("artifact.s3.use_ssl", true)
 	v.SetDefault("upload.window", "10m")
+	v.SetDefault("shutdown.timeout", "20s")
 	v.SetDefault("max.upload.size", int64(104857600))
-	v.SetDefault("session.secret", "change-me-in-production")
+	v.SetDefault("session.secret", DefaultSessionSecret)
 	v.SetDefault("auto.provision.orgs", false)
+	v.SetDefault("background.artifact_processing.enabled", true)
+	v.SetDefault("background.retention.enabled", true)
+	v.SetDefault("background.stale_scan.enabled", true)
+	v.SetDefault("background.stale_pending.enabled", true)
+	v.SetDefault("worker.lease.duration", "5m")
+	v.SetDefault("worker.heartbeat.interval", "100s")
+	v.SetDefault("retention.preset", "envelope")
+	v.SetDefault("retention.auto_purge", false)
 	v.SetDefault("secret_scan.enabled", false)
 	v.SetDefault("secret_scan.providers", []string{})
 	v.SetDefault("secret_scan.temp_dir", "")
@@ -157,24 +209,75 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing upload.window: %w", err)
 	}
+	shutdownTimeout, err := time.ParseDuration(v.GetString("shutdown.timeout"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing shutdown.timeout: %w", err)
+	}
+	if shutdownTimeout <= 0 {
+		return Config{}, errors.New("parsing shutdown.timeout: duration must be greater than zero")
+	}
+	workerLeaseDuration, err := time.ParseDuration(v.GetString("worker.lease.duration"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing worker.lease.duration: %w", err)
+	}
+	if workerLeaseDuration <= 0 {
+		return Config{}, errors.New("parsing worker.lease.duration: duration must be greater than zero")
+	}
+	workerHeartbeatInterval, err := time.ParseDuration(v.GetString("worker.heartbeat.interval"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing worker.heartbeat.interval: %w", err)
+	}
+	if workerHeartbeatInterval <= 0 {
+		return Config{}, errors.New("parsing worker.heartbeat.interval: duration must be greater than zero")
+	}
+	if workerHeartbeatInterval >= workerLeaseDuration {
+		return Config{}, errors.New("parsing worker heartbeat: worker.heartbeat.interval must be shorter than worker.lease.duration")
+	}
+	retentionPolicy, err := loadRetentionPolicy(v)
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing retention policy: %w", err)
+	}
 
 	cfg := Config{
-		Host:              v.GetString("host"),
-		Port:              v.GetInt("port"),
-		MCPEnabled:        v.GetBool("mcp.enabled"),
-		MCPPort:           v.GetInt("mcp.port"),
-		BaseURL:           v.GetString("base.url"),
-		DatabaseURL:       v.GetString("database.url"),
-		LogLevel:          v.GetString("log.level"),
-		LogFormat:         v.GetString("log.format"),
-		TriviURL:          v.GetString("trivy.url"),
-		OSVURL:            v.GetString("osv.url"),
-		CacheTTL:          cacheTTL,
-		ArtifactPath:      v.GetString("artifact.path"),
+		Host:            v.GetString("host"),
+		Port:            v.GetInt("port"),
+		Development:     v.GetBool("development"),
+		MCPEnabled:      v.GetBool("mcp.enabled"),
+		MCPPort:         v.GetInt("mcp.port"),
+		BaseURL:         v.GetString("base.url"),
+		DatabaseURL:     v.GetString("database.url"),
+		LogLevel:        v.GetString("log.level"),
+		LogFormat:       v.GetString("log.format"),
+		TriviURL:        v.GetString("trivy.url"),
+		OSVURL:          v.GetString("osv.url"),
+		CacheTTL:        cacheTTL,
+		ArtifactBackend: v.GetString("artifact.backend"),
+		ArtifactPath:    v.GetString("artifact.path"),
+		ArtifactS3: ArtifactS3Config{
+			Endpoint:        strings.TrimSpace(v.GetString("artifact.s3.endpoint")),
+			Region:          strings.TrimSpace(v.GetString("artifact.s3.region")),
+			Bucket:          strings.TrimSpace(v.GetString("artifact.s3.bucket")),
+			AccessKeyID:     strings.TrimSpace(v.GetString("artifact.s3.access_key_id")),
+			SecretAccessKey: strings.TrimSpace(v.GetString("artifact.s3.secret_access_key")),
+			UsePathStyle:    v.GetBool("artifact.s3.use_path_style"),
+			UseSSL:          v.GetBool("artifact.s3.use_ssl"),
+		},
 		UploadWindow:      uploadWindow,
+		ShutdownTimeout:   shutdownTimeout,
 		MaxUploadSize:     v.GetInt64("max.upload.size"),
 		SessionSecret:     v.GetString("session.secret"),
 		AutoProvisionOrgs: v.GetBool("auto.provision.orgs"),
+		RetentionPolicy:   retentionPolicy,
+		Background: BackgroundConfig{
+			ArtifactProcessingEnabled: v.GetBool("background.artifact_processing.enabled"),
+			RetentionEnabled:          v.GetBool("background.retention.enabled"),
+			StaleScanEnabled:          v.GetBool("background.stale_scan.enabled"),
+			StalePendingEnabled:       v.GetBool("background.stale_pending.enabled"),
+		},
+		Worker: WorkerConfig{
+			LeaseDuration:     workerLeaseDuration,
+			HeartbeatInterval: workerHeartbeatInterval,
+		},
 		SecretScan: SecretScanConfig{
 			Enabled:   v.GetBool("secret_scan.enabled"),
 			Providers: normalizeList(v.GetStringSlice("secret_scan.providers")),
@@ -185,6 +288,310 @@ func Load() (Config, error) {
 
 	cfg.Forges = loadForgeConfigs()
 	return cfg, nil
+}
+
+func (c Config) IsDevelopment() bool {
+	return c.Development
+}
+
+func (c Config) ValidateStartup(log zerolog.Logger) error {
+	secret := strings.TrimSpace(c.SessionSecret)
+	if secret != "" && secret != DefaultSessionSecret {
+		return nil
+	}
+
+	if c.IsDevelopment() {
+		log.Warn().Msg("HIBOU_SESSION_SECRET is empty or using the default development signing secret; replace it with a stable shared secret before any production or multi-replica deployment because rotating it invalidates existing hibou_session and hibou_oauth_state cookies")
+		return nil
+	}
+
+	return errors.New("invalid session.secret: set HIBOU_SESSION_SECRET/session.secret to a stable random value shared by every replica; empty values and the shipped development default are rejected unless HIBOU_DEVELOPMENT/development is explicitly set for local development")
+}
+
+func loadRetentionPolicy(v *viper.Viper) (retention.RetentionPolicy, error) {
+	overrides := retention.PolicyOverrides{}
+
+	if duration, ok, err := durationOverride(v, "retention.keep_all"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.KeepAll = &duration
+	}
+	if budget, ok, err := bytesOverride(v, "retention.storage.budget"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Storage.Budget = &budget
+	}
+	if warnAt, ok, err := ratioOverride(v, "retention.storage.warn_at"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Storage.WarnAt = &warnAt
+	}
+	if target, ok, err := ratioOverride(v, "retention.storage.target"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Storage.Target = &target
+	}
+	if order, ok, err := evictOrderOverride(v, "retention.storage.evict_order"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Storage.EvictOrder = &order
+	}
+	if enabled, ok := boolOverride(v, "retention.tiers.enabled"); ok {
+		overrides.Tiers.Enabled = &enabled
+	}
+	if anchor, ok, err := weekdayOverride(v, "retention.tiers.week_anchor"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Tiers.WeekAnchor = &anchor
+	}
+	if rep, ok, err := representativeOverride(v, "retention.tiers.representative"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Tiers.Representative = &rep
+	}
+	if keep, ok, err := intOverride(v, "retention.tiers.daily.keep"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Tiers.DailyKeep = &keep
+	}
+	if keep, ok, err := intOverride(v, "retention.tiers.weekly.keep"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Tiers.WeeklyKeep = &keep
+	}
+	if keep, ok, err := intOverride(v, "retention.tiers.monthly.keep"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Tiers.MonthlyKeep = &keep
+	}
+	if keep, ok, err := intOverride(v, "retention.tiers.yearly.keep"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.Tiers.YearlyKeep = &keep
+	}
+	if action, ok, err := thinActionOverride(v, "retention.on_thin.artifacts"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.OnThin.Artifacts = &action
+	}
+	if action, ok, err := thinActionOverride(v, "retention.on_thin.summary"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.OnThin.Summary = &action
+	}
+	if enabled, ok := boolOverride(v, "retention.pin.tags"); ok {
+		overrides.Pin.Tags = &enabled
+	}
+	if enabled, ok := boolOverride(v, "retention.pin.latest_per_ref"); ok {
+		overrides.Pin.LatestPerRef = &enabled
+	}
+	if enabled, ok := boolOverride(v, "retention.pin.referenced_by_open_findings"); ok {
+		overrides.Pin.ReferencedByOpenFindings = &enabled
+	}
+	if labels, ok := stringSliceOverride(v, "retention.pin.labels"); ok {
+		overrides.Pin.Labels = &labels
+	} else if labels, ok := stringSliceOverride(v, "retention.pin.labeled"); ok {
+		overrides.Pin.Labels = &labels
+	}
+	if duration, ok, err := durationOverride(v, "retention.pr.keep_all"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.PRSnapshots.KeepAll = &duration
+	} else if duration, ok, err := durationOverride(v, "retention.pr_snapshots.keep_all"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.PRSnapshots.KeepAll = &duration
+	}
+	if action, ok, err := thinActionOverride(v, "retention.pr.after_close"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.PRSnapshots.AfterClose = &action
+	} else if action, ok, err := thinActionOverride(v, "retention.pr_snapshots.after_close"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.PRSnapshots.AfterClose = &action
+	}
+	if duration, ok, err := durationOverride(v, "retention.failed_retention"); err != nil {
+		return retention.RetentionPolicy{}, err
+	} else if ok {
+		overrides.FailedRetention = &duration
+	}
+	if enabled, ok := boolOverride(v, "retention.auto_purge"); ok {
+		overrides.AutoPurge = &enabled
+	}
+	if enabled, ok := boolOverride(v, "retention.dry_run"); ok {
+		overrides.DryRun = &enabled
+	}
+
+	return retention.Resolve(v.GetString("retention.preset"), overrides), nil
+}
+
+func durationOverride(v *viper.Viper, key string) (time.Duration, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return 0, false, nil
+	}
+	parsed, err := parseRetentionDuration(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return parsed, true, nil
+}
+
+func bytesOverride(v *viper.Viper, key string) (int64, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return 0, false, nil
+	}
+	parsed, err := parseByteSize(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return parsed, true, nil
+}
+
+func ratioOverride(v *viper.Viper, key string) (float64, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return 0, false, nil
+	}
+	parsed, err := parseRatio(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return parsed, true, nil
+}
+
+func evictOrderOverride(v *viper.Viper, key string) (retention.EvictOrder, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return "", false, nil
+	}
+	parsed := retention.EvictOrder(raw)
+	switch parsed {
+	case retention.EvictSpread, retention.EvictOldest, retention.EvictWorstFirst:
+		return parsed, true, nil
+	default:
+		return "", false, fmt.Errorf("invalid evict order %q", raw)
+	}
+}
+
+func representativeOverride(v *viper.Viper, key string) (retention.RepresentativeChoice, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return "", false, nil
+	}
+	parsed := retention.RepresentativeChoice(raw)
+	switch parsed {
+	case retention.RepresentativeLast, retention.RepresentativeFirst, retention.RepresentativeWorst:
+		return parsed, true, nil
+	default:
+		return "", false, fmt.Errorf("invalid representative %q", raw)
+	}
+}
+
+func weekdayOverride(v *viper.Viper, key string) (time.Weekday, bool, error) {
+	raw := strings.ToLower(strings.TrimSpace(v.GetString(key)))
+	if raw == "" {
+		return 0, false, nil
+	}
+	weekdays := map[string]time.Weekday{
+		"sunday":    time.Sunday,
+		"monday":    time.Monday,
+		"tuesday":   time.Tuesday,
+		"wednesday": time.Wednesday,
+		"thursday":  time.Thursday,
+		"friday":    time.Friday,
+		"saturday":  time.Saturday,
+	}
+	weekday, ok := weekdays[raw]
+	if !ok {
+		return 0, false, fmt.Errorf("invalid week anchor %q", raw)
+	}
+	return weekday, true, nil
+}
+
+func thinActionOverride(v *viper.Viper, key string) (retention.ThinAction, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return "", false, nil
+	}
+	parsed := retention.ThinAction(raw)
+	switch parsed {
+	case retention.ThinKeep, retention.ThinPurge:
+		return parsed, true, nil
+	default:
+		return "", false, fmt.Errorf("invalid thin action %q", raw)
+	}
+}
+
+func intOverride(v *viper.Viper, key string) (int, bool, error) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return 0, false, nil
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return parsed, true, nil
+}
+
+func boolOverride(v *viper.Viper, key string) (bool, bool) {
+	raw := strings.TrimSpace(v.GetString(key))
+	if raw == "" {
+		return false, false
+	}
+	return v.GetBool(key), true
+}
+
+func stringSliceOverride(v *viper.Viper, key string) ([]string, bool) {
+	values := normalizeList(v.GetStringSlice(key))
+	if len(values) == 0 {
+		return nil, false
+	}
+	return values, true
+}
+
+func parseByteSize(value string) (int64, error) {
+	trimmed := strings.ToUpper(strings.TrimSpace(value))
+	multiplier := int64(1)
+	for suffix, candidate := range map[string]int64{"KB": 1 << 10, "MB": 1 << 20, "GB": 1 << 30, "TB": 1 << 40} {
+		if strings.HasSuffix(trimmed, suffix) {
+			multiplier = candidate
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, suffix))
+			break
+		}
+	}
+	parsed, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, err
+	}
+	return int64(parsed * float64(multiplier)), nil
+}
+
+func parseRatio(value string) (float64, error) {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasSuffix(trimmed, "%") {
+		parsed, err := strconv.ParseFloat(strings.TrimSuffix(trimmed, "%"), 64)
+		if err != nil {
+			return 0, err
+		}
+		return parsed / 100, nil
+	}
+	return strconv.ParseFloat(trimmed, 64)
+}
+
+func parseRetentionDuration(value string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasSuffix(strings.ToLower(trimmed), "d") {
+		days, err := strconv.ParseFloat(strings.TrimSpace(trimmed[:len(trimmed)-1]), 64)
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(days * float64(24*time.Hour)), nil
+	}
+	return time.ParseDuration(trimmed)
 }
 
 // loadForgeConfigs reads indexed HIBOU_FORGE_N_* environment variables.

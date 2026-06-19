@@ -209,6 +209,7 @@ print_credentials() {
   echo ""
   echo "Add the following to your .env file:"
   echo ""
+  echo "  HIBOU_DEVELOPMENT=true"
   echo "  HIBOU_FORGE_0_TYPE=forgejo"
   echo "  HIBOU_FORGE_0_ID=forgejo"
   echo "  HIBOU_FORGE_0_URL=$FORGEJO_URL"
@@ -228,6 +229,7 @@ print_credentials() {
 
   if [ -f .env ]; then
     echo "==> Auto-updating .env..."
+    grep -q "^HIBOU_DEVELOPMENT=" .env && sed -i "s|^HIBOU_DEVELOPMENT=.*|HIBOU_DEVELOPMENT=true|" .env
     grep -q "^HIBOU_FORGE_0_TYPE=" .env && sed -i "s|^HIBOU_FORGE_0_TYPE=.*|HIBOU_FORGE_0_TYPE=forgejo|" .env
     grep -q "^HIBOU_FORGE_0_ID=" .env && sed -i "s|^HIBOU_FORGE_0_ID=.*|HIBOU_FORGE_0_ID=forgejo|" .env
     grep -q "^HIBOU_FORGE_0_URL=" .env && sed -i "s|^HIBOU_FORGE_0_URL=.*|HIBOU_FORGE_0_URL=$FORGEJO_URL|" .env
@@ -240,11 +242,17 @@ print_credentials() {
     if ! grep -q "^HIBOU_FORGE_0_WEBHOOK_SECRET=" .env; then
       echo "HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> .env
     fi
+    if ! grep -q "^HIBOU_DEVELOPMENT=" .env; then
+      echo "HIBOU_DEVELOPMENT=true" >> .env
+    fi
     echo "    .env updated."
   fi
 
   if ! grep -q "^HIBOU_FORGE_0_TYPE=" .env 2>/dev/null; then
     cat >> .env <<FORGE_EOF
+
+# Local Hibou development mode
+HIBOU_DEVELOPMENT=true
 
 # Forge: local Forgejo
 HIBOU_FORGE_0_TYPE=forgejo

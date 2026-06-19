@@ -11,15 +11,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/objstore"
+	"github.com/hibouhq/hibou/internal/retention"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/vex"
+	"github.com/hibouhq/hibou/internal/ws"
 )
 
 type failingPutObjStore struct {
@@ -45,6 +53,11 @@ type uploadArtifactExpectation struct {
 	wantContentType string
 }
 
+type retentionNudgeStoreStub struct {
+	started chan context.Context
+	release chan struct{}
+}
+
 func (s *failingPutObjStore) Put(context.Context, string, io.Reader, string) error { return s.putErr }
 func (s *failingPutObjStore) Get(context.Context, string) (io.ReadCloser, error)   { return nil, nil }
 func (s *failingPutObjStore) Exists(context.Context, string) (bool, error)         { return false, nil }
@@ -67,6 +80,51 @@ func (s *recordingObjStore) Exists(_ context.Context, key string) (bool, error) 
 func (s *recordingObjStore) Delete(_ context.Context, key string) error {
 	s.deleted = append(s.deleted, key)
 	return s.deleteErr
+}
+
+func (s *retentionNudgeStoreStub) ListRepositoriesForRetention(ctx context.Context) ([]store.Repository, error) {
+	select {
+	case s.started <- ctx:
+	default:
+	}
+	select {
+	case <-s.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (*retentionNudgeStoreStub) ListRefsByRepo(context.Context, uuid.UUID, int, int) ([]store.Ref, int, error) {
+	panic("unexpected ListRefsByRepo call")
+}
+
+func (*retentionNudgeStoreStub) ListSnapshotsForRetentionTimeline(context.Context, uuid.UUID, uuid.UUID) ([]store.Snapshot, error) {
+	panic("unexpected ListSnapshotsForRetentionTimeline call")
+}
+
+func (*retentionNudgeStoreStub) ListVulnerabilitySummaryBySnapshot(context.Context, uuid.UUID) ([]dbgen.ListVulnerabilitySummaryBySnapshotRow, error) {
+	panic("unexpected ListVulnerabilitySummaryBySnapshot call")
+}
+
+func (*retentionNudgeStoreStub) ListStalePendingSnapshots(context.Context, time.Time, int32) ([]dbgen.Snapshot, error) {
+	panic("unexpected ListStalePendingSnapshots call")
+}
+
+func (*retentionNudgeStoreStub) ListSnapshotArtifactObjectKeys(context.Context, uuid.UUID) ([]string, error) {
+	panic("unexpected ListSnapshotArtifactObjectKeys call")
+}
+
+func (*retentionNudgeStoreStub) ArchiveSnapshot(context.Context, uuid.UUID) error {
+	panic("unexpected ArchiveSnapshot call")
+}
+
+func (*retentionNudgeStoreStub) MarkSnapshotFailed(context.Context, uuid.UUID) error {
+	panic("unexpected MarkSnapshotFailed call")
+}
+
+func (*retentionNudgeStoreStub) PurgeSnapshot(context.Context, uuid.UUID) error {
+	panic("unexpected PurgeSnapshot call")
 }
 
 func TestUploadAutoReusesSnapshotForSameRefCommit(t *testing.T) {
@@ -248,6 +306,36 @@ func TestUploadAutoAttachesWithinPendingBuild(t *testing.T) {
 	}
 }
 
+func TestPRRefDerivationHelpers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		refName   string
+		wantKind  string
+		wantPRNum string
+	}{
+		{name: "github merge", refName: "refs/pull/1/merge", wantKind: "merge", wantPRNum: "1"},
+		{name: "github head", refName: "refs/pull/1/head", wantKind: "head", wantPRNum: "1"},
+		{name: "gitlab merge", refName: "refs/merge-requests/2/merge", wantKind: "merge", wantPRNum: "2"},
+		{name: "branch ref", refName: "refs/heads/main", wantKind: "", wantPRNum: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := prRefKindFromName(tt.refName); got != tt.wantKind {
+				t.Fatalf("prRefKindFromName(%q) = %q, want %q", tt.refName, got, tt.wantKind)
+			}
+			if got := prNumberFromName(tt.refName); got != tt.wantPRNum {
+				t.Fatalf("prNumberFromName(%q) = %q, want %q", tt.refName, got, tt.wantPRNum)
+			}
+		})
+	}
+}
+
 func TestUploadAutoAttachesWithinPendingSyntheticRetryAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -400,6 +488,82 @@ func TestUploadAutoCompleteTrueTransitionsSnapshot(t *testing.T) {
 	}
 }
 
+func TestUploadAutoCompleteTriggersAsyncRetentionNudge(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
+	t.Cleanup(shutdownCancel)
+	srv.lifecycleCtx = lifecycleCtx
+	srv.shutdownCancel = shutdownCancel
+
+	workerStore := &retentionNudgeStoreStub{
+		started: make(chan context.Context, 1),
+		release: make(chan struct{}),
+	}
+	srv.retentionWorker = retention.NewWorker(workerStore, nil, nil, nil, zerolog.New(io.Discard), retention.Preset("envelope"), 0)
+
+	body, err := json.Marshal(uploadPayloadForTest(org.Slug, repo.Slug, minimalSBOMForTest(), map[string]any{
+		"ref":        "refs/heads/main",
+		"commit_sha": "retention-nudge",
+		"complete":   true,
+	}))
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/upload", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(internalauth.WithUser(req.Context(), admin))
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+
+	go func() {
+		srv.handleUploadAuto(recorder, req)
+		close(done)
+	}()
+
+	var runCtx context.Context
+	select {
+	case runCtx = <-workerStore.started:
+	case <-time.After(2 * time.Second):
+		close(workerStore.release)
+		t.Fatal("retention nudge did not start")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		close(workerStore.release)
+		t.Fatal("upload response blocked on retention nudge")
+	}
+
+	if recorder.Code != http.StatusAccepted {
+		close(workerStore.release)
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, recorder.Code, recorder.Body.String())
+	}
+	if runCtx != srv.lifecycleCtx {
+		close(workerStore.release)
+		t.Fatal("retention nudge context = request-scoped or unexpected context, want server lifecycle context")
+	}
+	select {
+	case <-runCtx.Done():
+		close(workerStore.release)
+		t.Fatal("retention nudge context canceled before shutdown")
+	default:
+	}
+
+	shutdownCancel()
+	select {
+	case <-runCtx.Done():
+	case <-time.After(2 * time.Second):
+		close(workerStore.release)
+		t.Fatal("retention nudge context did not stop on shutdown")
+	}
+	close(workerStore.release)
+	<-done
+}
+
 func TestUploadAutoCoverageStaysPendingWithoutCompletionSignal(t *testing.T) {
 	t.Parallel()
 
@@ -414,6 +578,385 @@ func TestUploadAutoCoverageStaysPendingWithoutCompletionSignal(t *testing.T) {
 
 	if response.Status != string(store.SnapshotStatusPending) {
 		t.Fatalf("status = %s, want pending", response.Status)
+	}
+}
+
+func TestProcessCoverageUploadIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, "main", store.RefTypeBranch, nil, nil, stringPtrForTest(uniqueName(t, "sha")))
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, uniqueName(t, "coverage-commit"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	content := richerCoberturaForTest()
+	srv.processCoverageUpload(context.Background(), snapshot.ID, content, "cobertura")
+	firstState := captureCoverageProcessorState(t, srv, snapshot.ID)
+	srv.processCoverageUpload(context.Background(), snapshot.ID, content, "cobertura")
+	secondState := captureCoverageProcessorState(t, srv, snapshot.ID)
+	if !reflect.DeepEqual(firstState, secondState) {
+		t.Fatalf("coverage state changed on replay\nfirst: %#v\nsecond: %#v", firstState, secondState)
+	}
+
+	if len(secondState.Reports) != 1 {
+		t.Fatalf("coverage report count = %d, want 1", len(secondState.Reports))
+	}
+	report := secondState.Reports[0]
+	files := secondState.Files[report.Format]
+	if len(files) != 1 {
+		t.Fatalf("coverage file count = %d, want 1", len(files))
+	}
+	if files[0].FilePath != "main.go" {
+		t.Fatalf("coverage file_path = %q, want main.go", files[0].FilePath)
+	}
+
+	var reportCount int
+	if err := srv.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM coverage_reports WHERE snapshot_id = $1`, snapshot.ID).Scan(&reportCount); err != nil {
+		t.Fatalf("count coverage_reports: %v", err)
+	}
+	if reportCount != 1 {
+		t.Fatalf("coverage report rows = %d, want 1", reportCount)
+	}
+	var fileCount int
+	if err := srv.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM coverage_files WHERE coverage_report_id = $1`, report.ID).Scan(&fileCount); err != nil {
+		t.Fatalf("count coverage_files: %v", err)
+	}
+	if fileCount != 1 {
+		t.Fatalf("coverage file rows = %d, want 1", fileCount)
+	}
+	if report.LinesValid != 2 || report.LinesCovered != 1 {
+		t.Fatalf("coverage summary = %+v, want stable parsed values", report)
+	}
+	if files[0].LinesValid != 2 || files[0].LinesCovered != 1 {
+		t.Fatalf("coverage file = %+v, want stable parsed values", files[0])
+	}
+}
+
+func TestProcessCoverageUploadPersistsMultipleFormatsAndCoverageEndpointReturnsAllReports(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, member := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, "main", store.RefTypeBranch, nil, nil, stringPtrForTest(uniqueName(t, "multi-format-sha")))
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, uniqueName(t, "coverage-multi-format"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	srv.processCoverageUpload(context.Background(), snapshot.ID, []byte(`mode: set
+github.com/example/project/alpha.go:1.1,10.1 10 1
+github.com/example/project/beta.go:1.1,5.1 5 0`), "gocover")
+	srv.processCoverageUpload(context.Background(), snapshot.ID, []byte(`TN:
+SF:/repo/alpha.go
+LF:10
+LH:5
+BRF:4
+BRH:2
+end_of_record`), "lcov")
+
+	state := captureCoverageProcessorState(t, srv, snapshot.ID)
+	if len(state.Reports) != 2 {
+		t.Fatalf("coverage report count = %d, want 2", len(state.Reports))
+	}
+	if len(state.Files["gocover"]) != 2 {
+		t.Fatalf("gocover file count = %d, want 2", len(state.Files["gocover"]))
+	}
+	if len(state.Files["lcov"]) != 1 {
+		t.Fatalf("lcov file count = %d, want 1", len(state.Files["lcov"]))
+	}
+
+	srv.router = chi.NewRouter()
+	srv.wsHub = ws.NewHub(zerolog.New(io.Discard))
+	configureRouter(srv.router, zerolog.New(io.Discard))
+	srv.routes(nil)
+
+	recorder := httptest.NewRecorder()
+	srv.router.ServeHTTP(recorder, newAuthenticatedRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/repos/"+repo.Slug+"/coverage?ref=main"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /coverage status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var response coverageSummaryAPIResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Data == nil {
+		t.Fatal("expected coverage response data")
+	}
+	if response.Data.Format != "gocover" {
+		t.Fatalf("primary format = %q, want gocover", response.Data.Format)
+	}
+	if response.Data.LinesValid != 15 {
+		t.Fatalf("primary lines_valid = %d, want 15", response.Data.LinesValid)
+	}
+	if len(response.Data.Files) != 2 {
+		t.Fatalf("primary file count = %d, want 2", len(response.Data.Files))
+	}
+	if len(response.Data.Reports) != 2 {
+		t.Fatalf("reports count = %d, want 2", len(response.Data.Reports))
+	}
+	if response.Data.Reports[0].Format != "gocover" || response.Data.Reports[1].Format != "lcov" {
+		t.Fatalf("report formats = %#v, want [gocover lcov]", []string{response.Data.Reports[0].Format, response.Data.Reports[1].Format})
+	}
+	if len(response.Data.Reports[0].Files) != 2 {
+		t.Fatalf("gocover response file count = %d, want 2", len(response.Data.Reports[0].Files))
+	}
+	if len(response.Data.Reports[1].Files) != 1 {
+		t.Fatalf("lcov response file count = %d, want 1", len(response.Data.Reports[1].Files))
+	}
+}
+
+func TestCoverageEndpointSingleFormatRemainsBackwardCompatible(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, member := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, "main", store.RefTypeBranch, nil, nil, stringPtrForTest(uniqueName(t, "single-format-sha")))
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, uniqueName(t, "coverage-single-format"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	srv.processCoverageUpload(context.Background(), snapshot.ID, richerCoberturaForTest(), "cobertura")
+
+	srv.router = chi.NewRouter()
+	srv.wsHub = ws.NewHub(zerolog.New(io.Discard))
+	configureRouter(srv.router, zerolog.New(io.Discard))
+	srv.routes(nil)
+
+	recorder := httptest.NewRecorder()
+	srv.router.ServeHTTP(recorder, newAuthenticatedRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/repos/"+repo.Slug+"/coverage?ref=main"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /coverage status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var response coverageSummaryAPIResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Data == nil {
+		t.Fatal("expected coverage response data")
+	}
+	if response.Data.Format != "cobertura" {
+		t.Fatalf("format = %q, want cobertura", response.Data.Format)
+	}
+	if len(response.Data.Files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(response.Data.Files))
+	}
+	if len(response.Data.Reports) != 1 {
+		t.Fatalf("reports count = %d, want 1", len(response.Data.Reports))
+	}
+	if response.Data.Reports[0].Format != response.Data.Format {
+		t.Fatalf("reports[0].format = %q, want %q", response.Data.Reports[0].Format, response.Data.Format)
+	}
+	if !reflect.DeepEqual(response.Data.Reports[0].Files, response.Data.Files) {
+		t.Fatalf("reports[0].files = %#v, want %#v", response.Data.Reports[0].Files, response.Data.Files)
+	}
+}
+
+func TestImportUploadedVEXIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	seedVEXAdvisoryForTest(t, srv)
+	repo := createUploadTestRepository(t, srv, org)
+	content := minimalOpenVEXForTest()
+	request := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	artifact := &uploadArtifact{Filename: "artifact.openvex.json"}
+	input := uploadRequest{
+		Provider:  "github",
+		Org:       org.Slug,
+		Repo:      repo.Slug,
+		Ref:       "refs/heads/main",
+		CommitSHA: uniqueName(t, "vex-commit"),
+	}
+
+	if err := srv.importUploadedVEX(request, admin.ID, input, artifact, "openvex", content); err != nil {
+		t.Fatalf("first importUploadedVEX: %v", err)
+	}
+	firstState := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	if err := srv.importUploadedVEX(request, admin.ID, input, artifact, "openvex", content); err != nil {
+		t.Fatalf("second importUploadedVEX: %v", err)
+	}
+	secondState := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	if !reflect.DeepEqual(firstState, secondState) {
+		t.Fatalf("imported VEX state changed on replay\nfirst: %#v\nsecond: %#v", firstState, secondState)
+	}
+
+	statements := secondState
+	if len(statements) != 1 {
+		t.Fatalf("vex statement count = %d, want 1", len(statements))
+	}
+	if statements[0].Source != string(dbgen.VexSourceImported) {
+		t.Fatalf("vex source = %q, want imported", statements[0].Source)
+	}
+	if statements[0].SourceDocumentURL != "artifact.openvex.json" {
+		t.Fatalf("source_document_url = %q, want document identity", statements[0].SourceDocumentURL)
+	}
+	if statements[0].ComponentPURL.String != "pkg:golang/example/one@1.0.0" {
+		t.Fatalf("component_purl = %q, want pkg:golang/example/one@1.0.0", statements[0].ComponentPURL.String)
+	}
+	if statements[0].Status != string(dbgen.VexStatusAffected) {
+		t.Fatalf("status = %q, want affected", statements[0].Status)
+	}
+	var count int
+	if err := srv.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM vex_statements WHERE org_id = $1 AND repo_id = $2`, org.ID, repo.ID).Scan(&count); err != nil {
+		t.Fatalf("count vex_statements: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("vex rows = %d, want 1", count)
+	}
+}
+
+func TestImportUploadedVEXSameDocumentRevisionConverges(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	seedVEXAdvisoryForTest(t, srv)
+	seedVEXAdvisoryForTestID(t, srv, "CVE-2026-0002")
+	repo := createUploadTestRepository(t, srv, org)
+	request := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	input := uploadRequest{
+		Provider:  "github",
+		Org:       org.Slug,
+		Repo:      repo.Slug,
+		Ref:       "refs/heads/main",
+		CommitSHA: uniqueName(t, "vex-commit"),
+	}
+
+	originalContent := openVEXForTest(openVEXDocumentForTest{
+		ID: "doc-1",
+		Statements: []openVEXStatementForTest{
+			{VulnerabilityID: "CVE-2026-0001", ComponentPURL: "pkg:golang/example/one@1.0.0", Status: vex.StatusAffected},
+			{VulnerabilityID: "CVE-2026-0002", ComponentPURL: "pkg:golang/example/two@2.0.0", Status: vex.StatusAffected},
+		},
+	})
+	if err := srv.importUploadedVEX(request, admin.ID, input, &uploadArtifact{Filename: "artifact.openvex.json"}, "openvex", originalContent); err != nil {
+		t.Fatalf("first importUploadedVEX: %v", err)
+	}
+	firstState := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	firstByScope := indexImportedVEXState(firstState)
+
+	revisedContent := openVEXForTest(openVEXDocumentForTest{
+		ID: "doc-2",
+		Statements: []openVEXStatementForTest{
+			{VulnerabilityID: "CVE-2026-0001", ComponentPURL: "pkg:golang/example/one@1.0.0", Status: vex.StatusFixed},
+		},
+	})
+	if err := srv.importUploadedVEX(request, admin.ID, input, &uploadArtifact{Filename: "artifact.openvex.json"}, "openvex", revisedContent); err != nil {
+		t.Fatalf("revision reupload importUploadedVEX: %v", err)
+	}
+	revisedState := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	if len(revisedState) != 1 {
+		t.Fatalf("revised state rows = %d, want 1", len(revisedState))
+	}
+	revisedRow := revisedState[0]
+	originalRow := firstByScope[vexStateScopeKey(importedVEXStateRow{AdvisoryID: revisedRow.AdvisoryID, ComponentPURL: revisedRow.ComponentPURL})]
+	if revisedRow.ID != originalRow.ID {
+		t.Fatalf("revised row id = %s, want preserved id %s", revisedRow.ID, originalRow.ID)
+	}
+	if revisedRow.Status != string(dbgen.VexStatusFixed) {
+		t.Fatalf("revised row status = %q, want fixed", revisedRow.Status)
+	}
+	if revisedRow.SourceDocumentURL != "artifact.openvex.json" {
+		t.Fatalf("revised row source_document_url = %q, want stable document identity", revisedRow.SourceDocumentURL)
+	}
+
+	if err := srv.importUploadedVEX(request, admin.ID, input, &uploadArtifact{Filename: "artifact.openvex.json"}, "openvex", revisedContent); err != nil {
+		t.Fatalf("replay revised importUploadedVEX: %v", err)
+	}
+	replayedRevisedState := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	if !reflect.DeepEqual(revisedState, replayedRevisedState) {
+		t.Fatalf("revised VEX state changed on replay\nfirst: %#v\nsecond: %#v", revisedState, replayedRevisedState)
+	}
+}
+
+func TestImportUploadedVEXDifferentDocumentsPreserveUniqueScopes(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	seedVEXAdvisoryForTest(t, srv)
+	seedVEXAdvisoryForTestID(t, srv, "CVE-2026-0002")
+	seedVEXAdvisoryForTestID(t, srv, "CVE-2026-0003")
+	repo := createUploadTestRepository(t, srv, org)
+	request := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	input := uploadRequest{
+		Provider:  "github",
+		Org:       org.Slug,
+		Repo:      repo.Slug,
+		Ref:       "refs/heads/main",
+		CommitSHA: uniqueName(t, "vex-commit"),
+	}
+
+	documentA := openVEXForTest(openVEXDocumentForTest{
+		ID: "doc-a",
+		Statements: []openVEXStatementForTest{
+			{VulnerabilityID: "CVE-2026-0001", ComponentPURL: "pkg:golang/example/one@1.0.0", Status: vex.StatusAffected},
+			{VulnerabilityID: "CVE-2026-0002", ComponentPURL: "pkg:golang/example/two@2.0.0", Status: vex.StatusAffected},
+		},
+	})
+	if err := srv.importUploadedVEX(request, admin.ID, input, &uploadArtifact{Filename: "artifact.openvex.json"}, "openvex", documentA); err != nil {
+		t.Fatalf("document A importUploadedVEX: %v", err)
+	}
+	stateAfterDocumentA := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	firstByScope := indexImportedVEXState(stateAfterDocumentA)
+
+	documentB := openVEXForTest(openVEXDocumentForTest{
+		ID: "doc-b",
+		Statements: []openVEXStatementForTest{
+			{VulnerabilityID: "CVE-2026-0001", ComponentPURL: "pkg:golang/example/one@1.0.0", Status: vex.StatusFixed},
+			{VulnerabilityID: "CVE-2026-0003", ComponentPURL: "pkg:golang/example/three@3.0.0", Status: vex.StatusAffected},
+		},
+	})
+	if err := srv.importUploadedVEX(request, admin.ID, input, &uploadArtifact{Filename: "renamed.openvex.json"}, "openvex", documentB); err != nil {
+		t.Fatalf("document B importUploadedVEX: %v", err)
+	}
+	stateAfterDocumentB := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	if len(stateAfterDocumentB) != 3 {
+		t.Fatalf("state rows after second document = %d, want 3", len(stateAfterDocumentB))
+	}
+
+	sharedRow := importedVEXStateRowByComponentPURL(t, stateAfterDocumentB, "pkg:golang/example/one@1.0.0")
+	sharedScope := vexStateScopeKey(sharedRow)
+	firstSharedRow := firstByScope[sharedScope]
+	if sharedRow.ID != firstSharedRow.ID {
+		t.Fatalf("shared row id changed across documents: %s -> %s", firstSharedRow.ID, sharedRow.ID)
+	}
+	if sharedRow.Status != string(dbgen.VexStatusFixed) {
+		t.Fatalf("shared row status = %q, want fixed", sharedRow.Status)
+	}
+	if sharedRow.SourceDocumentURL != "renamed.openvex.json" {
+		t.Fatalf("shared row source_document_url = %q, want renamed.openvex.json", sharedRow.SourceDocumentURL)
+	}
+
+	uniqueDocumentARow := importedVEXStateRowByComponentPURL(t, stateAfterDocumentB, "pkg:golang/example/two@2.0.0")
+	if uniqueDocumentARow.SourceDocumentURL != "artifact.openvex.json" {
+		t.Fatalf("document A unique row source_document_url = %q, want artifact.openvex.json", uniqueDocumentARow.SourceDocumentURL)
+	}
+
+	uniqueDocumentBRow := importedVEXStateRowByComponentPURL(t, stateAfterDocumentB, "pkg:golang/example/three@3.0.0")
+	if uniqueDocumentBRow.SourceDocumentURL != "renamed.openvex.json" {
+		t.Fatalf("document B unique row source_document_url = %q, want renamed.openvex.json", uniqueDocumentBRow.SourceDocumentURL)
+	}
+
+	if err := srv.importUploadedVEX(request, admin.ID, input, &uploadArtifact{Filename: "renamed.openvex.json"}, "openvex", documentB); err != nil {
+		t.Fatalf("replay document B importUploadedVEX: %v", err)
+	}
+	replayedStateAfterDocumentB := captureImportedVEXState(t, srv, org.ID, repo.ID)
+	if !reflect.DeepEqual(stateAfterDocumentB, replayedStateAfterDocumentB) {
+		t.Fatalf("different-document VEX state changed on replay\nfirst: %#v\nsecond: %#v", stateAfterDocumentB, replayedStateAfterDocumentB)
 	}
 }
 
@@ -758,23 +1301,20 @@ func TestUploadAutoPutFailureDoesNotIncrementReceivedUploads(t *testing.T) {
 	}
 }
 
-func TestAdvanceUploadSnapshotCleansUpOnlyNewBlobOnFinalizeFailure(t *testing.T) {
+func TestAdvanceUploadSnapshotLeavesBlobOnFinalizeFailure(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		preExisted      bool
-		wantDeleteCalls int
+		name       string
+		preExisted bool
 	}{
 		{
-			name:            "delete new blob",
-			preExisted:      false,
-			wantDeleteCalls: 1,
+			name:       "leave newly written blob orphaned",
+			preExisted: false,
 		},
 		{
-			name:            "keep shared existing blob",
-			preExisted:      true,
-			wantDeleteCalls: 0,
+			name:       "leave shared existing blob untouched",
+			preExisted: true,
 		},
 	}
 
@@ -789,30 +1329,116 @@ func TestAdvanceUploadSnapshotCleansUpOnlyNewBlobOnFinalizeFailure(t *testing.T)
 				t.Fatal("advanceUploadSnapshot error = nil, want finalize failure")
 			}
 
-			assertRecordingObjStoreCalls(t, srv.objStore.(*recordingObjStore), wantKey, tc.wantDeleteCalls)
+			assertRecordingObjStoreCalls(t, srv.objStore.(*recordingObjStore), wantKey)
 			assertSnapshotAdvanceFailedState(t, srv, snapshot.ID)
 		})
 	}
 }
 
-func TestUploadAutoSkipsSnapshotArtifactWhenObjectStoreNil(t *testing.T) {
+func TestUploadAutoRejectsArtifactWhenObjectStoreNil(t *testing.T) {
 	t.Parallel()
 
 	srv, org, admin, _ := newDiscoveryTestServer(t)
+	srv.objStore = nil
 	repo := createUploadTestRepository(t, srv, org)
 
-	response := performUploadAuto(t, srv, admin, uploadPayloadForTest(org.Slug, repo.Slug, minimalSBOMForTest(), map[string]any{
+	recorder := performUploadAutoRecorder(t, srv, admin, uploadPayloadForTest(org.Slug, repo.Slug, minimalSBOMForTest(), map[string]any{
 		"ref":        "refs/heads/main",
 		"commit_sha": "artifact456",
 		"complete":   true,
 	}))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	}
 
-	artifacts, err := srv.queries.ListSnapshotArtifactsBySnapshot(context.Background(), snapshotIDFromResponse(t, response))
+	refs, _, err := srv.queries.ListRefsByRepo(context.Background(), repo.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("ListRefsByRepo: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("refs = %d, want 1", len(refs))
+	}
+
+	snapshots, _, err := srv.queries.ListSnapshotsByRef(context.Background(), refs[0].ID, 10, 0)
+	if err != nil {
+		t.Fatalf("ListSnapshotsByRef: %v", err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("snapshots = %d, want 1 pending snapshot record", len(snapshots))
+	}
+
+	artifacts, err := srv.queries.ListSnapshotArtifactsBySnapshot(context.Background(), snapshots[0].ID)
 	if err != nil {
 		t.Fatalf("ListSnapshotArtifactsBySnapshot: %v", err)
 	}
 	if len(artifacts) != 0 {
 		t.Fatalf("artifact rows = %d, want 0", len(artifacts))
+	}
+}
+
+func TestUploadAutoDuplicateArtifactSameSnapshotDoesNotDoubleCountArtifactBytes(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	artifactDir := t.TempDir()
+	artifactStore, err := objstore.NewFilesystemStore(artifactDir)
+	if err != nil {
+		t.Fatalf("NewFilesystemStore: %v", err)
+	}
+	srv.objStore = artifactStore
+	repo := createUploadTestRepository(t, srv, org)
+	artifactContent := minimalSBOMForTest()
+
+	first := performUploadAuto(t, srv, admin, uploadPayloadForTest(org.Slug, repo.Slug, artifactContent, map[string]any{
+		"ref":        "refs/heads/main",
+		"commit_sha": "dedupe-same-snapshot",
+		"run_id":     "run-dedupe",
+		"expect":     2,
+		"complete":   false,
+	}))
+	second := performUploadAuto(t, srv, admin, uploadPayloadForTest(org.Slug, repo.Slug, artifactContent, map[string]any{
+		"ref":        "refs/heads/main",
+		"commit_sha": "dedupe-same-snapshot",
+		"run_id":     "run-dedupe",
+		"expect":     2,
+		"complete":   false,
+	}))
+
+	if first.SnapshotID != second.SnapshotID {
+		t.Fatalf("expected same snapshot id, got %s and %s", first.SnapshotID, second.SnapshotID)
+	}
+
+	snapshotID := snapshotIDFromResponse(t, first)
+	assertSnapshotReceivedUploads(t, srv, snapshotID, 2)
+
+	artifacts, err := srv.queries.ListSnapshotArtifactsBySnapshot(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("ListSnapshotArtifactsBySnapshot: %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact rows = %d, want 1", len(artifacts))
+	}
+
+	snapshot, err := srv.queries.GetSnapshotByID(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshotByID: %v", err)
+	}
+	if snapshot == nil {
+		t.Fatal("expected snapshot to exist")
+	}
+	if snapshot.ArtifactBytes != int64(len(artifactContent)) {
+		t.Fatalf("snapshot artifact_bytes = %d, want %d", snapshot.ArtifactBytes, len(artifactContent))
+	}
+
+	storedRepo, err := srv.queries.GetRepositoryByID(context.Background(), repo.ID)
+	if err != nil {
+		t.Fatalf("GetRepositoryByID: %v", err)
+	}
+	if storedRepo == nil {
+		t.Fatal("expected repository to exist")
+	}
+	if storedRepo.RetentionArtifactBytes != int64(len(artifactContent)) {
+		t.Fatalf("repository retention_artifact_bytes = %d, want %d", storedRepo.RetentionArtifactBytes, len(artifactContent))
 	}
 }
 
@@ -890,19 +1516,33 @@ func minimalCoberturaForTest() []byte {
 	return []byte(`<?xml version="1.0"?><coverage line-rate="0.5" branch-rate="0"><packages></packages></coverage>`)
 }
 
+func richerCoberturaForTest() []byte {
+	return []byte(`<?xml version="1.0"?>
+<coverage line-rate="0.5" branch-rate="0" lines-valid="2" lines-covered="1" branches-valid="0" branches-covered="0">
+	<packages>
+		<package name="main">
+			<classes>
+				<class name="main" filename="main.go" line-rate="0.5" branch-rate="0">
+					<lines>
+						<line number="1" hits="1"/>
+						<line number="2" hits="0"/>
+					</lines>
+				</class>
+			</classes>
+		</package>
+	</packages>
+</coverage>`)
+}
+
 func minimalOpenVEXForTest() []byte {
-	return []byte(`{
-	  "@context": "https://openvex.dev/ns/v0.2.0",
-	  "@id": "doc-1",
-	  "timestamp": "2026-05-29T10:00:00Z",
-	  "statements": [
-	    {
-	      "vulnerability": {"@id": "CVE-2026-0001"},
-	      "products": [{"@id": "pkg:golang/example/one@1.0.0"}],
-	      "status": "affected"
-	    }
-	  ]
-	}`)
+	return openVEXForTest(openVEXDocumentForTest{
+		ID: "doc-1",
+		Statements: []openVEXStatementForTest{{
+			VulnerabilityID: "CVE-2026-0001",
+			ComponentPURL:   "pkg:golang/example/one@1.0.0",
+			Status:          vex.StatusAffected,
+		}},
+	})
 }
 
 func assertSnapshotArtifactPersistedForUpload(t *testing.T, tc uploadArtifactExpectation) {
@@ -1008,20 +1648,17 @@ func setAdvanceUploadSnapshotFailingDB(t *testing.T, srv *Server) {
 	srv.db = failingDB
 }
 
-func assertRecordingObjStoreCalls(t *testing.T, objStore *recordingObjStore, wantKey string, wantDeleteCalls int) {
+func assertRecordingObjStoreCalls(t *testing.T, objStore *recordingObjStore, wantKey string) {
 	t.Helper()
 
-	if len(objStore.exists) != 1 || objStore.exists[0] != wantKey {
-		t.Fatalf("Exists calls = %v, want [%q]", objStore.exists, wantKey)
+	if len(objStore.exists) != 0 {
+		t.Fatalf("Exists calls = %v, want none", objStore.exists)
 	}
 	if len(objStore.puts) != 1 || objStore.puts[0] != wantKey {
 		t.Fatalf("Put calls = %v, want [%q]", objStore.puts, wantKey)
 	}
-	if len(objStore.deleted) != wantDeleteCalls {
-		t.Fatalf("Delete calls = %d, want %d", len(objStore.deleted), wantDeleteCalls)
-	}
-	if wantDeleteCalls == 1 && objStore.deleted[0] != wantKey {
-		t.Fatalf("Delete key = %q, want %q", objStore.deleted[0], wantKey)
+	if len(objStore.deleted) != 0 {
+		t.Fatalf("Delete calls = %v, want none", objStore.deleted)
 	}
 }
 
@@ -1062,12 +1699,18 @@ func assertSnapshotReceivedUploads(t *testing.T, srv *Server, snapshotID uuid.UU
 
 func seedVEXAdvisoryForTest(t *testing.T, srv *Server) {
 	t.Helper()
+	seedVEXAdvisoryForTestID(t, srv, "CVE-2026-0001")
+}
+
+func seedVEXAdvisoryForTestID(t *testing.T, srv *Server, canonicalID string) {
+	t.Helper()
 
 	if _, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
-		CanonicalID: "CVE-2026-0001",
+		CanonicalID: canonicalID,
 		Title:       "VEX test advisory",
 		Description: "test advisory for uploaded VEX import",
 		Severity:    dbgen.SeverityLevelLow,
+		CweIds:      []string{},
 		CvssScore:   sql.NullString{},
 		CvssVersion: dbgen.NullCvssVersion{},
 		PublishedAt: sql.NullTime{},
@@ -1075,6 +1718,149 @@ func seedVEXAdvisoryForTest(t *testing.T, srv *Server) {
 	}); err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}
+}
+
+type openVEXDocumentForTest struct {
+	ID         string
+	Statements []openVEXStatementForTest
+}
+
+type openVEXStatementForTest struct {
+	VulnerabilityID string
+	ComponentPURL   string
+	Status          string
+}
+
+type coverageProcessorState struct {
+	Reports []store.CoverageReport
+	Files   map[string][]store.CoverageFile
+}
+
+type coverageSummaryAPIResponse struct {
+	Data *coverageSummaryResponse `json:"data"`
+}
+
+type importedVEXStateRow struct {
+	ID                uuid.UUID
+	AdvisoryID        uuid.UUID
+	ComponentPURL     sql.NullString
+	Status            string
+	Justification     sql.NullString
+	ImpactStatement   string
+	ActionStatement   string
+	Source            string
+	SourceDocumentURL string
+	Supplier          string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+func openVEXForTest(document openVEXDocumentForTest) []byte {
+	payload := map[string]any{
+		"@context":  "https://openvex.dev/ns/v0.2.0",
+		"@id":       document.ID,
+		"timestamp": "2026-05-29T10:00:00Z",
+	}
+	statements := make([]map[string]any, 0, len(document.Statements))
+	for _, statement := range document.Statements {
+		statements = append(statements, map[string]any{
+			"vulnerability": map[string]any{"@id": statement.VulnerabilityID},
+			"products":      []map[string]any{{"@id": statement.ComponentPURL}},
+			"status":        statement.Status,
+		})
+	}
+	payload["statements"] = statements
+
+	content, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return content
+}
+
+func captureCoverageProcessorState(t *testing.T, srv *Server, snapshotID uuid.UUID) coverageProcessorState {
+	t.Helper()
+
+	reports, err := srv.queries.ListCoverageReportsBySnapshot(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("ListCoverageReportsBySnapshot: %v", err)
+	}
+	filesByFormat := make(map[string][]store.CoverageFile, len(reports))
+	for _, report := range reports {
+		files, fileErr := srv.queries.ListCoverageFilesByReport(context.Background(), report.ID)
+		if fileErr != nil {
+			t.Fatalf("ListCoverageFilesByReport(%s): %v", report.Format, fileErr)
+		}
+		filesByFormat[report.Format] = files
+	}
+	return coverageProcessorState{Reports: reports, Files: filesByFormat}
+}
+
+func captureImportedVEXState(t *testing.T, srv *Server, orgID, repoID uuid.UUID) []importedVEXStateRow {
+	t.Helper()
+
+	rows, err := srv.queries.ListVEXStatementsByRepo(context.Background(), dbgen.ListVEXStatementsByRepoParams{
+		OrgID:  orgID,
+		RepoID: uuid.NullUUID{UUID: repoID, Valid: true},
+		Limit:  100,
+		Offset: 0,
+	})
+	if err != nil {
+		t.Fatalf("ListVEXStatementsByRepo: %v", err)
+	}
+	state := make([]importedVEXStateRow, len(rows))
+	for i, row := range rows {
+		state[i] = importedVEXStateRow{
+			ID:                row.ID,
+			AdvisoryID:        row.AdvisoryID,
+			ComponentPURL:     row.ComponentPurl,
+			Status:            string(row.Status),
+			Justification:     nullStringFromJustification(row.Justification),
+			ImpactStatement:   row.ImpactStatement,
+			ActionStatement:   row.ActionStatement,
+			Source:            string(row.Source),
+			SourceDocumentURL: row.SourceDocumentUrl,
+			Supplier:          row.Supplier,
+			CreatedAt:         row.CreatedAt,
+			UpdatedAt:         row.UpdatedAt,
+		}
+	}
+	sort.Slice(state, func(i, j int) bool {
+		left := vexStateScopeKey(state[i])
+		right := vexStateScopeKey(state[j])
+		return left < right
+	})
+	return state
+}
+
+func indexImportedVEXState(rows []importedVEXStateRow) map[string]importedVEXStateRow {
+	indexed := make(map[string]importedVEXStateRow, len(rows))
+	for _, row := range rows {
+		indexed[vexStateScopeKey(row)] = row
+	}
+	return indexed
+}
+
+func vexStateScopeKey(row importedVEXStateRow) string {
+	return row.AdvisoryID.String() + "|" + row.ComponentPURL.String
+}
+
+func importedVEXStateRowByComponentPURL(t *testing.T, rows []importedVEXStateRow, componentPURL string) importedVEXStateRow {
+	t.Helper()
+	for _, row := range rows {
+		if row.ComponentPURL.Valid && row.ComponentPURL.String == componentPURL {
+			return row
+		}
+	}
+	t.Fatalf("missing row for component_purl %q", componentPURL)
+	return importedVEXStateRow{}
+}
+
+func nullStringFromJustification(value dbgen.NullVexJustification) sql.NullString {
+	if !value.Valid {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: string(value.VexJustification), Valid: true}
 }
 
 func assertOptionalStringEqual(t *testing.T, label string, got, want *string) {

@@ -17,6 +17,11 @@ type subscriptionPayload struct {
 
 func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if h.IsDraining() {
+			http.Error(w, "server draining", http.StatusServiceUnavailable)
+			return
+		}
+
 		if authMgr == nil {
 			http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
 			return

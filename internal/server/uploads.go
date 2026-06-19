@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/metrics"
@@ -92,6 +94,13 @@ const (
 	failedToLoadUploadStatus = "failed to load upload status"
 	refsHeadsPrefix          = "refs/heads/"
 	refsTagsPrefix           = "refs/tags/"
+	defaultMaxUploadSize     = int64(104857600)
+)
+
+var (
+	prMergeRefPattern = regexp.MustCompile(`^refs/(pull|merge-requests)/\d+/merge$`)
+	prHeadRefPattern  = regexp.MustCompile(`^refs/(pull|merge-requests)/\d+/head$`)
+	prNumberPattern   = regexp.MustCompile(`^refs/(pull|merge-requests)/(\d+)(?:/.*)?$`)
 )
 
 // detectArtifactType inspects the decoded content to determine the upload type and format.
@@ -177,6 +186,9 @@ func detectXMLArtifactType(prefix []byte) (string, string, string, bool) {
 	}
 	if bytes.Contains(prefixLower, []byte("<coverage")) && bytes.Contains(prefixLower, []byte("clover")) {
 		return "coverage", "clover", "", true
+	}
+	if bytes.Contains(prefixLower, []byte("<testsuites")) || bytes.Contains(prefixLower, []byte("<testsuite")) {
+		return "tests", "junit", "", true
 	}
 	return "", "", "", false
 }
@@ -281,7 +293,14 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) parseAutoUploadRequest(w http.ResponseWriter, r *http.Request) (*autoUploadRequest, []byte, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadSize)
+	// max.upload.size is the authoritative raw-artifact cap. Object-store writes
+	// only persist the already-bounded decoded bytes so backend selection does not
+	// introduce a second divergent limit.
+	maxUploadSize := s.cfg.MaxUploadSize
+	if maxUploadSize <= 0 {
+		maxUploadSize = defaultMaxUploadSize
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	var input autoUploadRequest
 	if !decodeUploadJSONBody(w, r, &input) {
 		return nil, nil, errors.New("")
@@ -329,6 +348,8 @@ func (s *Server) handleDetectedUploadType(w http.ResponseWriter, r *http.Request
 		return s.handleSARIFUpload(w, r, userID, upload.input, upload.content, upload.tool, upload.status)
 	case "coverage":
 		return s.handleCoverageUpload(w, r, userID, upload.input, upload.content, upload.format, upload.status)
+	case "tests":
+		return s.handleTestsUpload(w, r, userID, upload.input, upload.content, upload.format, upload.status)
 	case "vex":
 		return s.handleVEXUpload(w, r, userID, upload.input, upload.content, upload.format, upload.status)
 	default:
@@ -373,6 +394,30 @@ func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, us
 		return false
 	}
 	go s.processCoverageUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format)
+	snapshot, ok = s.completeUploadSnapshotIfNeeded(w, r, input, snapshot)
+	if !ok {
+		return false
+	}
+	*status = "accepted"
+	api.JSON(w, http.StatusAccepted, uploadResponse{
+		UploadID:   snapshot.ID.String(),
+		SnapshotID: snapshot.ID.String(),
+		Status:     string(snapshot.Status),
+	})
+	return true
+}
+
+func (s *Server) handleTestsUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
+	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, true, &rawArtifactPayload{
+		kind:    "tests",
+		format:  format,
+		tool:    input.Tool,
+		content: content,
+	})
+	if !ok {
+		return false
+	}
+	go s.processTestUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format)
 	snapshot, ok = s.completeUploadSnapshotIfNeeded(w, r, input, snapshot)
 	if !ok {
 		return false
@@ -472,11 +517,7 @@ func (s *Server) loadUploadSnapshotForCompletion(r *http.Request, userID uuid.UU
 	}
 
 	refName := normalizeStoredRefName(input.Ref)
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(input.Ref), store.UpsertRefOptions{
-		LatestCommitSHA: &input.CommitSHA,
-		PRTitle:         input.PRTitle,
-		PRSourceBranch:  input.PRSourceBranch,
-	})
+	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(input.Ref), buildUploadRefOptions(input))
 	if err != nil {
 		return nil, err
 	}
@@ -492,6 +533,9 @@ func (s *Server) loadUploadSnapshotForCompletion(r *http.Request, userID uuid.UU
 		return nil, err
 	}
 	if snapshot == nil {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
 		return nil, errNotFound("no pending snapshot for ref/commit")
 	}
 
@@ -504,25 +548,22 @@ func (s *Server) loadUploadSnapshotForCompletion(r *http.Request, userID uuid.UU
 
 func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID, artifact *rawArtifactPayload) (*store.Snapshot, error) {
 	var artifactParams *store.CreateSnapshotArtifactParams
-	preExisted := false
-	putDone := false
-	if s.objStore != nil && artifact != nil {
+	if artifact != nil {
+		if s.objStore == nil {
+			// Defensive only: server startup now fails if the configured artifact store cannot initialize.
+			return nil, errors.New("artifact store unavailable")
+		}
 		params := buildSnapshotArtifactParams(snapshotID, artifact.kind, artifact.format, artifact.tool, artifact.content)
 		contentType := ""
 		if params.ContentType != nil {
 			contentType = *params.ContentType
 		}
-		preExisted, _ = s.objStore.Exists(ctx, params.ObjectKey)
 		if err := s.objStore.Put(ctx, params.ObjectKey, bytes.NewReader(artifact.content), contentType); err != nil {
 			return nil, err
 		}
-		putDone = true
 		artifactParams = &params
 	}
 	if err := s.finalizeUploadSnapshotTx(ctx, snapshotID, artifactParams); err != nil {
-		if putDone && !preExisted {
-			_ = s.objStore.Delete(ctx, artifactParams.ObjectKey)
-		}
 		return nil, err
 	}
 	return s.loadSnapshotByID(ctx, snapshotID)
@@ -555,8 +596,17 @@ func (s *Server) finalizeUploadSnapshotTx(ctx context.Context, snapshotID uuid.U
 
 	queries := s.queries.WithTx(tx)
 	if artifactParams != nil {
-		if _, err := queries.CreateSnapshotArtifact(ctx, *artifactParams); err != nil {
+		if err := queries.LockSnapshotForUpdate(ctx, snapshotID); err != nil {
 			return err
+		}
+		created, err := queries.CreateSnapshotArtifact(ctx, *artifactParams)
+		if err != nil {
+			return err
+		}
+		if created != nil {
+			if err := queries.AddSnapshotArtifactBytes(ctx, snapshotID, artifactParams.SizeBytes); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := queries.IncrementSnapshotReceivedUploads(ctx, snapshotID); err != nil {
@@ -602,6 +652,8 @@ func rawArtifactContentType(kind, format string) string {
 		default:
 			return "application/xml"
 		}
+	case "tests":
+		return "application/xml"
 	default:
 		return "application/octet-stream"
 	}
@@ -646,6 +698,7 @@ func (s *Server) completeUploadSnapshotIfNeeded(w http.ResponseWriter, r *http.R
 		s.writeUploadError(w, errNotFound(uploadNotFoundMessage))
 		return nil, false
 	}
+	s.triggerRetentionPass()
 	return completedSnapshot, true
 }
 
@@ -741,11 +794,7 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 
 	refType := refTypeFromName(input.Ref)
 	refName := normalizeStoredRefName(input.Ref)
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, store.UpsertRefOptions{
-		LatestCommitSHA: &input.CommitSHA,
-		PRTitle:         input.PRTitle,
-		PRSourceBranch:  input.PRSourceBranch,
-	})
+	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, buildUploadRefOptions(input))
 	if err != nil {
 		return nil, err
 	}
@@ -837,11 +886,14 @@ func parseUploadedVEXStatements(format string, content []byte) ([]vex.Statement,
 	return parsed.Statements, nil
 }
 
-func resolveUploadedVEXSourceDocumentURL(artifact *uploadArtifact) string {
-	if artifact == nil {
-		return ""
+func resolveUploadedVEXSourceDocumentURL(artifact *uploadArtifact, content []byte) string {
+	if artifact != nil {
+		if filename := strings.TrimSpace(artifact.Filename); filename != "" {
+			return filename
+		}
 	}
-	return strings.TrimSpace(artifact.Filename)
+	sum := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func classifyUploadedVEXStatementError(index int, vulnerabilityID string, err error) error {
@@ -859,6 +911,11 @@ type uploadedVEXImportContext struct {
 	repoID            uuid.UUID
 	userID            uuid.UUID
 	sourceDocumentURL string
+}
+
+type uploadedVEXStatementScope struct {
+	advisoryID    uuid.UUID
+	componentPURL string
 }
 
 func buildUploadedVEXStatementParams(ctx uploadedVEXImportContext, advisoryID uuid.UUID, statement vex.Statement) (dbgen.CreateVEXStatementParams, error) {
@@ -879,28 +936,37 @@ func buildUploadedVEXStatementParams(ctx uploadedVEXImportContext, advisoryID uu
 	return params, nil
 }
 
-func (s *Server) importUploadedVEXStatement(r *http.Request, queries *store.Queries, ctx uploadedVEXImportContext, statement vex.Statement, index int) error {
+func (s *Server) importUploadedVEXStatement(r *http.Request, tx *sql.Tx, queries *store.Queries, ctx uploadedVEXImportContext, statement vex.Statement, index int) (uploadedVEXStatementScope, error) {
 	advisory, err := resolveVEXAdvisoryWithQueries(r.Context(), queries, statement.VulnerabilityID)
 	if err != nil {
-		return classifyUploadedVEXStatementError(index, statement.VulnerabilityID, err)
+		return uploadedVEXStatementScope{}, classifyUploadedVEXStatementError(index, statement.VulnerabilityID, err)
 	}
 
 	params, err := buildUploadedVEXStatementParams(ctx, advisory.ID, statement)
 	if err != nil {
-		return errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, err.Error()))
+		return uploadedVEXStatementScope{}, errBadRequest(fmt.Sprintf("invalid VEX statement %d: %s", index+1, err.Error()))
 	}
 
-	_, err = queries.CreateVEXStatement(r.Context(), params)
-	return err
+	if err := upsertImportedVEXStatement(r.Context(), tx, params); err != nil {
+		return uploadedVEXStatementScope{}, err
+	}
+
+	return uploadedVEXStatementScope{
+		advisoryID:    advisory.ID,
+		componentPURL: vexScopeComponentPURL(params.ComponentPurl),
+	}, nil
 }
 
-func (s *Server) importUploadedVEXStatements(r *http.Request, queries *store.Queries, ctx uploadedVEXImportContext, statements []vex.Statement) error {
+func (s *Server) importUploadedVEXStatements(r *http.Request, tx *sql.Tx, queries *store.Queries, ctx uploadedVEXImportContext, statements []vex.Statement) ([]uploadedVEXStatementScope, error) {
+	scopes := make([]uploadedVEXStatementScope, 0, len(statements))
 	for index, statement := range statements {
-		if err := s.importUploadedVEXStatement(r, queries, ctx, statement, index); err != nil {
-			return err
+		scope, err := s.importUploadedVEXStatement(r, tx, queries, ctx, statement, index)
+		if err != nil {
+			return nil, err
 		}
+		scopes = append(scopes, scope)
 	}
-	return nil
+	return scopes, nil
 }
 
 func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uploadRequest, artifact *uploadArtifact, format string, content []byte) error {
@@ -927,9 +993,13 @@ func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uplo
 		orgID:             org.ID,
 		repoID:            repo.ID,
 		userID:            userID,
-		sourceDocumentURL: resolveUploadedVEXSourceDocumentURL(artifact),
+		sourceDocumentURL: resolveUploadedVEXSourceDocumentURL(artifact, content),
 	}
-	if err := s.importUploadedVEXStatements(r, queries, importCtx, statements); err != nil {
+	scopes, err := s.importUploadedVEXStatements(r, tx, queries, importCtx, statements)
+	if err != nil {
+		return err
+	}
+	if err := pruneImportedVEXStatements(r.Context(), tx, importCtx, scopes); err != nil {
 		return err
 	}
 
@@ -937,6 +1007,116 @@ func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uplo
 		return err
 	}
 	return nil
+}
+
+func upsertImportedVEXStatement(ctx context.Context, tx *sql.Tx, params dbgen.CreateVEXStatementParams) error {
+	var statementID uuid.UUID
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO vex_statements (
+			org_id,
+			advisory_id,
+			repo_id,
+			component_purl,
+			status,
+			justification,
+			impact_statement,
+			action_statement,
+			source,
+			source_document_url,
+			supplier,
+			created_by,
+			expires_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (
+			org_id,
+			advisory_id,
+			COALESCE(repo_id, '00000000-0000-0000-0000-000000000000'::UUID),
+			COALESCE(component_purl, '')
+		) DO UPDATE
+		SET
+			repo_id = EXCLUDED.repo_id,
+			component_purl = EXCLUDED.component_purl,
+			status = EXCLUDED.status,
+			justification = EXCLUDED.justification,
+			impact_statement = EXCLUDED.impact_statement,
+			action_statement = EXCLUDED.action_statement,
+			source = EXCLUDED.source,
+			source_document_url = EXCLUDED.source_document_url,
+			supplier = EXCLUDED.supplier,
+			created_by = EXCLUDED.created_by,
+			expires_at = EXCLUDED.expires_at,
+			updated_at = CASE
+				WHEN vex_statements.repo_id IS DISTINCT FROM EXCLUDED.repo_id
+					OR vex_statements.component_purl IS DISTINCT FROM EXCLUDED.component_purl
+					OR vex_statements.status IS DISTINCT FROM EXCLUDED.status
+					OR vex_statements.justification IS DISTINCT FROM EXCLUDED.justification
+					OR vex_statements.impact_statement IS DISTINCT FROM EXCLUDED.impact_statement
+					OR vex_statements.action_statement IS DISTINCT FROM EXCLUDED.action_statement
+					OR vex_statements.source IS DISTINCT FROM EXCLUDED.source
+					OR vex_statements.source_document_url IS DISTINCT FROM EXCLUDED.source_document_url
+					OR vex_statements.supplier IS DISTINCT FROM EXCLUDED.supplier
+					OR vex_statements.created_by IS DISTINCT FROM EXCLUDED.created_by
+					OR vex_statements.expires_at IS DISTINCT FROM EXCLUDED.expires_at
+				THEN NOW()
+				ELSE vex_statements.updated_at
+			END
+		WHERE vex_statements.source = 'imported'
+		RETURNING id
+	`,
+		params.OrgID,
+		params.AdvisoryID,
+		params.RepoID,
+		params.ComponentPurl,
+		params.Status,
+		params.Justification,
+		params.ImpactStatement,
+		params.ActionStatement,
+		params.Source,
+		params.SourceDocumentUrl,
+		params.Supplier,
+		params.CreatedBy,
+		params.ExpiresAt,
+	).Scan(&statementID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errConflict("conflicting non-imported VEX statement already exists for this advisory/component scope")
+	}
+	return err
+}
+
+func pruneImportedVEXStatements(ctx context.Context, tx *sql.Tx, importCtx uploadedVEXImportContext, scopes []uploadedVEXStatementScope) error {
+	advisoryIDs := make([]uuid.UUID, len(scopes))
+	componentPURLs := make([]string, len(scopes))
+	for i, scope := range scopes {
+		advisoryIDs[i] = scope.advisoryID
+		componentPURLs[i] = scope.componentPURL
+	}
+
+	_, err := tx.ExecContext(ctx, `
+		WITH input_scopes AS (
+			SELECT advisory_id, component_purl
+			FROM unnest($3::uuid[], $4::text[]) AS scope(advisory_id, component_purl)
+		)
+		DELETE FROM vex_statements v
+		WHERE v.org_id = $1
+		  AND v.repo_id = $2
+		  AND v.source = 'imported'
+		  AND v.source_document_url = $5
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM input_scopes s
+			WHERE s.advisory_id = v.advisory_id
+			  AND s.component_purl = COALESCE(v.component_purl, '')
+		  )
+	`, importCtx.orgID, importCtx.repoID, pq.Array(advisoryIDs), pq.Array(componentPURLs), importCtx.sourceDocumentURL)
+	return err
+}
+
+func vexScopeComponentPURL(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }
 
 func parseUploadedVEXDocument(format string, content []byte) (*vex.ParseResult, error) {
@@ -967,6 +1147,24 @@ func normalizeUploadRequest(input *uploadRequest) {
 	input.Tag = strings.TrimSpace(input.Tag)
 }
 
+func buildUploadRefOptions(input uploadRequest) store.UpsertRefOptions {
+	refType := refTypeFromName(input.Ref)
+	options := store.UpsertRefOptions{
+		LatestCommitSHA: &input.CommitSHA,
+		PRTitle:         input.PRTitle,
+		PRSourceBranch:  input.PRSourceBranch,
+	}
+	if refType != store.RefTypePullRequest {
+		return options
+	}
+	options.PRRefKind = prRefKindFromName(input.Ref)
+	options.PRNumber = optionalTrimmedString(input.PRNumber)
+	if options.PRNumber == nil {
+		options.PRNumber = optionalTrimmedString(prNumberFromName(input.Ref))
+	}
+	return options
+}
+
 func validateUploadRequest(input uploadRequest) error {
 	if input.Provider == "" {
 		return errors.New("provider is required")
@@ -995,6 +1193,26 @@ func refTypeFromName(name string) store.RefType {
 		return store.RefTypeTag
 	}
 	return store.RefTypeBranch
+}
+
+func prRefKindFromName(name string) string {
+	name = strings.TrimSpace(name)
+	if prMergeRefPattern.MatchString(name) {
+		return "merge"
+	}
+	if prHeadRefPattern.MatchString(name) {
+		return "head"
+	}
+	return ""
+}
+
+func prNumberFromName(name string) string {
+	name = strings.TrimSpace(name)
+	matches := prNumberPattern.FindStringSubmatch(name)
+	if len(matches) != 3 {
+		return ""
+	}
+	return matches[2]
 }
 
 func normalizeStoredRefName(name string) string {

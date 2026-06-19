@@ -50,7 +50,7 @@ type uploadCIContext struct {
 var uploadCmd = &cobra.Command{
 	Use:   "upload <file> [file...]",
 	Short: "Upload security artifacts to Hibou",
-	Long: `Upload SBOM, SARIF, or coverage artifacts to Hibou. The artifact type is auto-detected from file content.
+	Long: `Upload SBOM, SARIF, coverage, or JUnit test-result artifacts to Hibou. The artifact type is auto-detected from file content.
 Accepts multiple files — each is uploaded separately.
 
 Supported CI auto-detection:

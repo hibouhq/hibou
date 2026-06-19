@@ -489,6 +489,11 @@ Comparisons are computed on demand from persisted snapshot data. The API accepts
 - GitHub Actions, Forgejo Actions, and Gitea Actions populate `run_attempt` natively via `GITHUB_RUN_ATTEMPT`, so retries stay distinct. GitLab has no native pipeline-attempt variable, so Hibou auto-creates a distinct retry snapshot when a new upload arrives after that build's latest snapshot is no longer `pending`; `HIBOU_RUN_ATTEMPT` remains an optional explicit override.
 - Pending snapshots that outlive `upload.window` auto-transition to `failed` after the global timeout window (default `10m`) and render red in the UI.
 - When object storage is configured, each uploaded raw artifact is persisted as an object and tracked in per-upload `snapshot_artifacts` child rows; snapshot records expose lifecycle metadata only, while raw-upload metadata lives on those child rows.
+- Snapshot retention is controlled by a resolved `retention` policy. The shipped default is the `envelope` preset with `auto_purge: false`, so Hibou computes warnings and reclaim candidates safely before operators enable destructive reclaim.
+- The retention worker runs in a deterministic order: failed-snapshot cleanup window, closed-PR cleanup window, optional GFS keep-set shaping per `(repo, ref)` timeline, then per-repository storage-envelope enforcement.
+- `on_thin` decides whether thinning archives a snapshot (`artifacts: purge`, `summary: keep`) or purges it completely (`summary: purge`). `dry_run: true` logs the exact decisions without mutating storage.
+- Protected snapshots are skipped by both thinning and envelope eviction when Hibou can evaluate that rule from stored fields: `pinned`, `retention_hold`, matching pin labels, tags, and `latest_per_ref`. The ADR's `referenced_by_open_findings` protection is accepted in config but currently documented-only because the present stored model cannot evaluate it yet.
+- The worker emits retention events for `warn_at`, budget-hit/eviction start, and protected-exceeds-budget through the existing event bus and notification dispatcher, and every destructive archive/purge action is audit-logged as a system action.
 - Expensive list endpoints should support narrow field selection or summarized response modes if needed.
 
 ### Example payloads

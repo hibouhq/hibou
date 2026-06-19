@@ -51,7 +51,7 @@ jobs:
             .github/scripts/parallel-run.sh \
               "lint"      "make lint" \
               "coverage"  "make coverage" \
-              "frontend"  "(cd site && npm run coverage)"
+              "frontend"  "(cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)"
             make check-reproducible
 
       - name: Get commit info
@@ -184,6 +184,8 @@ jobs:
           file: |
             coverage.out
             site/coverage/lcov.info
+            junit-go.xml
+            site/junit-front.xml
             gosec.sarif
             trivy-fs.sarif
             go-sbom.cdx.json

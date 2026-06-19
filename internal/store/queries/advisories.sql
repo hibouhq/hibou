@@ -55,6 +55,9 @@ ON CONFLICT (alias) DO NOTHING;
 -- name: ListAliasesByAdvisory :many
 SELECT * FROM advisory_aliases WHERE advisory_id = $1;
 
+-- name: ListAliasesByAdvisoryIDs :many
+SELECT * FROM advisory_aliases WHERE advisory_id = ANY($1::uuid[]);
+
 -- name: GetAdvisoryIDByAlias :one
 SELECT advisory_id FROM advisory_aliases WHERE alias = $1;
 
@@ -73,6 +76,9 @@ ON CONFLICT (advisory_id, provider) DO UPDATE SET
 -- name: ListSourcesByAdvisory :many
 SELECT * FROM advisory_sources WHERE advisory_id = $1;
 
+-- name: ListSourcesByAdvisoryIDs :many
+SELECT * FROM advisory_sources WHERE advisory_id = ANY($1::uuid[]);
+
 -- name: CreateAffectedRange :one
 INSERT INTO affected_ranges (advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -80,6 +86,9 @@ RETURNING *;
 
 -- name: ListAffectedRangesByAdvisory :many
 SELECT * FROM affected_ranges WHERE advisory_id = $1;
+
+-- name: ListAffectedRangesByAdvisoryIDs :many
+SELECT * FROM affected_ranges WHERE advisory_id = ANY($1::uuid[]);
 
 -- name: ListAffectedRangesByPackage :many
 SELECT * FROM affected_ranges WHERE ecosystem = $1 AND package_name = $2;

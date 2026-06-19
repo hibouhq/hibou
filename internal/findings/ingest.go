@@ -64,6 +64,10 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		startLine := finding.StartLine
 		endLine := finding.EndLine
 		locationHash := hashSegments(finding.Tool, finding.RuleID, finding.FilePath, strconv.Itoa(int(startLine)))
+		fingerprint := strings.TrimSpace(finding.Fingerprint)
+		if fingerprint == "" {
+			fingerprint = locationHash
+		}
 		identifier, err := json.Marshal(map[string]string{
 			"type":  "rule",
 			"value": strings.TrimSpace(finding.RuleID),
@@ -87,7 +91,7 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 			StartLine:         sql.NullInt32{Int32: startLine, Valid: startLine > 0},
 			EndLine:           sql.NullInt32{Int32: endLine, Valid: endLine > 0},
 			LocationHash:      nullString(locationHash),
-			Fingerprint:       locationHash,
+			Fingerprint:       fingerprint,
 			Metadata:          metadata,
 		})
 		if err != nil {

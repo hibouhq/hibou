@@ -1,0 +1,95 @@
+{{- if and .Values.seaweedfs.enabled (eq (include "hibou.artifactUsesBundledSeaweedFS" .) "true") }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "hibou.fullname" . }}-seaweedfs-bucket
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 240
+  template:
+    metadata:
+      labels:
+        {{- include "hibou.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: {{ printf "%s:%s" .Values.seaweedfs.bootstrap.image.repository .Values.seaweedfs.bootstrap.image.tag | quote }}
+          imagePullPolicy: {{ .Values.seaweedfs.bootstrap.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "Waiting for SeaweedFS S3 endpoint at $SEAWEEDFS_ENDPOINT"
+              attempt=1
+              max_attempts=36
+              until aws --endpoint-url "$SEAWEEDFS_ENDPOINT" s3api list-buckets >/dev/null 2>&1; do
+                if [ "$attempt" -ge "$max_attempts" ]; then
+                  echo "SeaweedFS S3 endpoint did not become ready after $max_attempts attempts" >&2
+                  exit 1
+                fi
+                echo "SeaweedFS not ready yet; retry $attempt/$max_attempts in 5s"
+                attempt=$((attempt + 1))
+                sleep 5
+              done
+              echo "SeaweedFS S3 endpoint is ready"
+
+              if aws --endpoint-url "$SEAWEEDFS_ENDPOINT" s3api head-bucket --bucket "$SEAWEEDFS_BUCKET" >/dev/null 2>&1; then
+                echo "Bucket $SEAWEEDFS_BUCKET already exists"
+                exit 0
+              fi
+
+              echo "Creating bucket $SEAWEEDFS_BUCKET"
+              if aws --endpoint-url "$SEAWEEDFS_ENDPOINT" s3api create-bucket --bucket "$SEAWEEDFS_BUCKET"; then
+                exit 0
+              fi
+
+              if aws --endpoint-url "$SEAWEEDFS_ENDPOINT" s3api head-bucket --bucket "$SEAWEEDFS_BUCKET" >/dev/null 2>&1; then
+                echo "Bucket $SEAWEEDFS_BUCKET was created concurrently; continuing"
+                exit 0
+              fi
+
+              echo "Failed to create bucket $SEAWEEDFS_BUCKET" >&2
+              exit 1
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.seaweedfsSecretName" . }}
+                  key: accessKeyID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.seaweedfsSecretName" . }}
+                  key: secretAccessKey
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.artifact.s3.region | quote }}
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: AWS_S3_ADDRESSING_STYLE
+              value: path
+            - name: SEAWEEDFS_ENDPOINT
+              value: {{ include "hibou.artifactS3Endpoint" . | quote }}
+            - name: SEAWEEDFS_BUCKET
+              value: {{ include "hibou.artifactS3Bucket" . | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+{{- end }}

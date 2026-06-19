@@ -3532,6 +3532,61 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/tests": {
+            "get": {
+                "description": "Returns the latest test report (JUnit) for a ref or snapshot.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get test results",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Ref name (defaults to the default branch)",
+                        "name": "ref",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Snapshot ID (overrides ref)",
+                        "name": "snapshot",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.testReportResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/search": {
             "get": {
                 "security": [
@@ -5310,6 +5365,64 @@ const docTemplate = `{
                 }
             }
         },
+        "server.testCaseResponse": {
+            "type": "object",
+            "properties": {
+                "classname": {
+                    "type": "string"
+                },
+                "duration_seconds": {
+                    "type": "number"
+                },
+                "file_path": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "suite": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.testReportResponse": {
+            "type": "object",
+            "properties": {
+                "cases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.testCaseResponse"
+                    }
+                },
+                "duration_seconds": {
+                    "type": "number"
+                },
+                "errors": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "format": {
+                    "type": "string"
+                },
+                "passed": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.updateClientRequest": {
             "type": "object",
             "properties": {
@@ -5829,6 +5942,12 @@ const docTemplate = `{
                 "pr_merged_at": {
                     "type": "string"
                 },
+                "pr_number": {
+                    "type": "string"
+                },
+                "pr_ref_kind": {
+                    "type": "string"
+                },
                 "pr_source_branch": {
                     "type": "string"
                 },
@@ -5938,6 +6057,9 @@ const docTemplate = `{
                 },
                 "provider_id": {
                     "type": "string"
+                },
+                "retention_artifact_bytes": {
+                    "type": "integer"
                 },
                 "slug": {
                     "type": "string"

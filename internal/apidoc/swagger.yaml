@@ -517,6 +517,44 @@ definitions:
       synced:
         type: boolean
     type: object
+  server.testCaseResponse:
+    properties:
+      classname:
+        type: string
+      duration_seconds:
+        type: number
+      file_path:
+        type: string
+      message:
+        type: string
+      name:
+        type: string
+      status:
+        type: string
+      suite:
+        type: string
+    type: object
+  server.testReportResponse:
+    properties:
+      cases:
+        items:
+          $ref: '#/definitions/server.testCaseResponse'
+        type: array
+      duration_seconds:
+        type: number
+      errors:
+        type: integer
+      failed:
+        type: integer
+      format:
+        type: string
+      passed:
+        type: integer
+      skipped:
+        type: integer
+      total:
+        type: integer
+    type: object
   server.updateClientRequest:
     properties:
       client_type:
@@ -860,6 +898,10 @@ definitions:
         type: string
       pr_merged_at:
         type: string
+      pr_number:
+        type: string
+      pr_ref_kind:
+        type: string
       pr_source_branch:
         type: string
       pr_state:
@@ -935,6 +977,8 @@ definitions:
         type: string
       provider_id:
         type: string
+      retention_artifact_bytes:
+        type: integer
       slug:
         type: string
       sync_state:
@@ -3116,6 +3160,43 @@ paths:
       summary: Create release
       tags:
       - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/tests:
+    get:
+      description: Returns the latest test report (JUnit) for a ref or snapshot.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Ref name (defaults to the default branch)
+        in: query
+        name: ref
+        type: string
+      - description: Snapshot ID (overrides ref)
+        in: query
+        name: snapshot
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.testReportResponse'
+      summary: Get test results
+      tags:
+      - analysis
   /orgs/{provider}/{slug}/repos/sync:
     post:
       description: Reconcile the forge repository inventory for an organization

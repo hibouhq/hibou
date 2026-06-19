@@ -78,6 +78,39 @@ func TestIngestCreatesFindingsAndComputesFingerprint(t *testing.T) {
 	}
 }
 
+func TestIngestPreservesProducerFingerprint(t *testing.T) {
+	snapshotID := uuid.New()
+	store := &mockIngestStore{}
+	ingester := NewIngester(store, zerolog.Nop())
+
+	count, err := ingester.Ingest(context.Background(), snapshotID, []GenericFinding{{
+		Tool:        "semgrep",
+		RuleID:      "rule-1",
+		Severity:    "high",
+		FilePath:    "main.go",
+		StartLine:   10,
+		EndLine:     11,
+		Message:     "Issue",
+		Fingerprint: "producer-stable",
+	}})
+	if err != nil {
+		t.Fatalf("Ingest returned error: %v", err)
+	}
+	if count != 1 || len(store.vulnerabilities) != 1 {
+		t.Fatalf("expected 1 created vulnerability, got count=%d len=%d", count, len(store.vulnerabilities))
+	}
+	vulnerability := store.vulnerabilities[0]
+	if vulnerability.Fingerprint != "producer-stable" {
+		t.Fatalf("expected producer fingerprint, got %q", vulnerability.Fingerprint)
+	}
+	if vulnerability.LocationHash == nil || *vulnerability.LocationHash == "" {
+		t.Fatal("expected location hash to remain populated")
+	}
+	if vulnerability.LocationHash != nil && *vulnerability.LocationHash == vulnerability.Fingerprint {
+		t.Fatalf("expected location hash to stay separate from fingerprint, got %q", *vulnerability.LocationHash)
+	}
+}
+
 func TestIngestSkipsDuplicates(t *testing.T) {
 	snapshotID := uuid.New()
 	store := &mockIngestStore{}

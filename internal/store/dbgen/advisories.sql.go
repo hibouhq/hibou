@@ -349,6 +349,43 @@ func (q *Queries) ListAffectedRangesByAdvisory(ctx context.Context, advisoryID u
 	return items, nil
 }
 
+const listAffectedRangesByAdvisoryIDs = `-- name: ListAffectedRangesByAdvisoryIDs :many
+SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at FROM affected_ranges WHERE advisory_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListAffectedRangesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]AffectedRange, error) {
+	rows, err := q.db.QueryContext(ctx, listAffectedRangesByAdvisoryIDs, pq.Array(dollar_1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AffectedRange{}
+	for rows.Next() {
+		var i AffectedRange
+		if err := rows.Scan(
+			&i.ID,
+			&i.AdvisoryID,
+			&i.Ecosystem,
+			&i.PackageName,
+			&i.Introduced,
+			&i.Fixed,
+			&i.LastAffected,
+			&i.Source,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAffectedRangesByPackage = `-- name: ListAffectedRangesByPackage :many
 SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at FROM affected_ranges WHERE ecosystem = $1 AND package_name = $2
 `
@@ -423,12 +460,83 @@ func (q *Queries) ListAliasesByAdvisory(ctx context.Context, advisoryID uuid.UUI
 	return items, nil
 }
 
+const listAliasesByAdvisoryIDs = `-- name: ListAliasesByAdvisoryIDs :many
+SELECT id, advisory_id, alias, created_at FROM advisory_aliases WHERE advisory_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListAliasesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]AdvisoryAlias, error) {
+	rows, err := q.db.QueryContext(ctx, listAliasesByAdvisoryIDs, pq.Array(dollar_1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdvisoryAlias{}
+	for rows.Next() {
+		var i AdvisoryAlias
+		if err := rows.Scan(
+			&i.ID,
+			&i.AdvisoryID,
+			&i.Alias,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSourcesByAdvisory = `-- name: ListSourcesByAdvisory :many
 SELECT id, advisory_id, provider, provider_id, severity, cvss_score, cvss_version, cvss_vector, raw_data, fetched_at, created_at FROM advisory_sources WHERE advisory_id = $1
 `
 
 func (q *Queries) ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUID) ([]AdvisorySource, error) {
 	rows, err := q.db.QueryContext(ctx, listSourcesByAdvisory, advisoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdvisorySource{}
+	for rows.Next() {
+		var i AdvisorySource
+		if err := rows.Scan(
+			&i.ID,
+			&i.AdvisoryID,
+			&i.Provider,
+			&i.ProviderID,
+			&i.Severity,
+			&i.CvssScore,
+			&i.CvssVersion,
+			&i.CvssVector,
+			&i.RawData,
+			&i.FetchedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSourcesByAdvisoryIDs = `-- name: ListSourcesByAdvisoryIDs :many
+SELECT id, advisory_id, provider, provider_id, severity, cvss_score, cvss_version, cvss_vector, raw_data, fetched_at, created_at FROM advisory_sources WHERE advisory_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListSourcesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]AdvisorySource, error) {
+	rows, err := q.db.QueryContext(ctx, listSourcesByAdvisoryIDs, pq.Array(dollar_1))
 	if err != nil {
 		return nil, err
 	}

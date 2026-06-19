@@ -19,6 +19,8 @@ type UpsertRefOptions struct {
 	ProviderID       *string
 	MergeTargetRefID *uuid.UUID
 	LatestCommitSHA  *string
+	PRRefKind        string
+	PRNumber         *string
 	PRTitle          string
 	PRSourceBranch   string
 }
@@ -37,6 +39,8 @@ type Ref struct {
 	ProviderID       *string    `json:"provider_id,omitempty"`
 	MergeTargetRefID *uuid.UUID `json:"merge_target_ref_id,omitempty"`
 	LatestCommitSHA  *string    `json:"latest_commit_sha,omitempty"`
+	PrRefKind        string     `json:"pr_ref_kind,omitempty"`
+	PrNumber         *string    `json:"pr_number,omitempty"`
 	PrState          *string    `json:"pr_state,omitempty"`
 	PrTitle          string     `json:"pr_title,omitempty"`
 	PrSourceBranch   string     `json:"pr_source_branch,omitempty"`
@@ -55,6 +59,8 @@ type EnhancedRef struct {
 	MergeTargetRefID     *uuid.UUID `json:"merge_target_ref_id,omitempty"`
 	MergeTargetRefName   *string    `json:"merge_target_ref_name,omitempty"`
 	LatestCommitSHA      *string    `json:"latest_commit_sha,omitempty"`
+	PrRefKind            string     `json:"pr_ref_kind,omitempty"`
+	PrNumber             *string    `json:"pr_number,omitempty"`
 	PrState              *string    `json:"pr_state,omitempty"`
 	PrTitle              string     `json:"pr_title,omitempty"`
 	PrSourceBranch       string     `json:"pr_source_branch,omitempty"`
@@ -157,6 +163,8 @@ func (q *Queries) UpsertRef(ctx context.Context, repoID uuid.UUID, name string, 
 		ProviderID:       nullStringFromPtr(opts.ProviderID),
 		MergeTargetRefID: nullUUIDFromPtr(opts.MergeTargetRefID),
 		LatestCommitSha:  nullStringFromPtr(opts.LatestCommitSHA),
+		PrRefKind:        opts.PRRefKind,
+		PrNumber:         nullStringFromPtr(opts.PRNumber),
 		PrTitle:          opts.PRTitle,
 		PrSourceBranch:   opts.PRSourceBranch,
 	})
@@ -240,6 +248,8 @@ func refFromRow(row dbgen.Ref) *Ref {
 		ProviderID:       stringPtrFromNull(row.ProviderID),
 		MergeTargetRefID: uuidPtrFromNull(row.MergeTargetRefID),
 		LatestCommitSHA:  stringPtrFromNull(row.LatestCommitSha),
+		PrRefKind:        row.PrRefKind,
+		PrNumber:         stringPtrFromNull(row.PrNumber),
 		PrState:          stringPtrFromNull(row.PrState),
 		PrTitle:          row.PrTitle,
 		PrSourceBranch:   row.PrSourceBranch,
@@ -251,90 +261,100 @@ func refFromRow(row dbgen.Ref) *Ref {
 }
 
 func enhancedRefFromListRefsEnhancedRow(row dbgen.ListRefsEnhancedRow) EnhancedRef {
-	return enhancedRefFromFields(
-		row.ID,
-		row.RepoID,
-		row.Name,
-		row.RefType,
-		row.ProviderID,
-		row.MergeTargetRefID,
-		row.MergeTargetRefName,
-		row.LatestCommitSha,
-		row.PrState,
-		row.PrTitle,
-		row.PrSourceBranch,
-		row.PrMergedAt,
-		row.PrClosedAt,
-		row.LatestSnapshotID,
-		row.LatestSnapshotStatus,
-		row.LatestSnapshotDate,
-		row.CreatedAt,
-		row.UpdatedAt,
-	)
+	return enhancedRefFromFields(enhancedRefFields{
+		id:                   row.ID,
+		repoID:               row.RepoID,
+		name:                 row.Name,
+		refType:              row.RefType,
+		providerID:           row.ProviderID,
+		mergeTargetRefID:     row.MergeTargetRefID,
+		mergeTargetRefName:   row.MergeTargetRefName,
+		latestCommitSHA:      row.LatestCommitSha,
+		prRefKind:            row.PrRefKind,
+		prNumber:             row.PrNumber,
+		prState:              row.PrState,
+		prTitle:              row.PrTitle,
+		prSourceBranch:       row.PrSourceBranch,
+		prMergedAt:           row.PrMergedAt,
+		prClosedAt:           row.PrClosedAt,
+		latestSnapshotID:     row.LatestSnapshotID,
+		latestSnapshotStatus: row.LatestSnapshotStatus,
+		latestSnapshotDate:   row.LatestSnapshotDate,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
 }
 
 func enhancedRefFromListPullRequestRefsRow(row dbgen.ListPullRequestRefsRow) EnhancedRef {
-	return enhancedRefFromFields(
-		row.ID,
-		row.RepoID,
-		row.Name,
-		row.RefType,
-		row.ProviderID,
-		row.MergeTargetRefID,
-		row.MergeTargetRefName,
-		row.LatestCommitSha,
-		row.PrState,
-		row.PrTitle,
-		row.PrSourceBranch,
-		row.PrMergedAt,
-		row.PrClosedAt,
-		row.LatestSnapshotID,
-		row.LatestSnapshotStatus,
-		row.LatestSnapshotDate,
-		row.CreatedAt,
-		row.UpdatedAt,
-	)
+	return enhancedRefFromFields(enhancedRefFields{
+		id:                   row.ID,
+		repoID:               row.RepoID,
+		name:                 row.Name,
+		refType:              row.RefType,
+		providerID:           row.ProviderID,
+		mergeTargetRefID:     row.MergeTargetRefID,
+		mergeTargetRefName:   row.MergeTargetRefName,
+		latestCommitSHA:      row.LatestCommitSha,
+		prRefKind:            row.PrRefKind,
+		prNumber:             row.PrNumber,
+		prState:              row.PrState,
+		prTitle:              row.PrTitle,
+		prSourceBranch:       row.PrSourceBranch,
+		prMergedAt:           row.PrMergedAt,
+		prClosedAt:           row.PrClosedAt,
+		latestSnapshotID:     row.LatestSnapshotID,
+		latestSnapshotStatus: row.LatestSnapshotStatus,
+		latestSnapshotDate:   row.LatestSnapshotDate,
+		createdAt:            row.CreatedAt,
+		updatedAt:            row.UpdatedAt,
+	})
 }
 
-func enhancedRefFromFields(
-	id uuid.UUID,
-	repoID uuid.UUID,
-	name string,
-	refType RefType,
-	providerID sql.NullString,
-	mergeTargetRefID uuid.NullUUID,
-	mergeTargetRefName string,
-	latestCommitSHA sql.NullString,
-	prState sql.NullString,
-	prTitle string,
-	prSourceBranch string,
-	prMergedAt sql.NullTime,
-	prClosedAt sql.NullTime,
-	latestSnapshotID any,
-	latestSnapshotStatus any,
-	latestSnapshotDate any,
-	createdAt time.Time,
-	updatedAt time.Time,
-) EnhancedRef {
+type enhancedRefFields struct {
+	id                   uuid.UUID
+	repoID               uuid.UUID
+	name                 string
+	refType              RefType
+	providerID           sql.NullString
+	mergeTargetRefID     uuid.NullUUID
+	mergeTargetRefName   string
+	latestCommitSHA      sql.NullString
+	prRefKind            string
+	prNumber             sql.NullString
+	prState              sql.NullString
+	prTitle              string
+	prSourceBranch       string
+	prMergedAt           sql.NullTime
+	prClosedAt           sql.NullTime
+	latestSnapshotID     any
+	latestSnapshotStatus any
+	latestSnapshotDate   any
+	createdAt            time.Time
+	updatedAt            time.Time
+}
+
+func enhancedRefFromFields(fields enhancedRefFields) EnhancedRef {
 	return EnhancedRef{
-		ID:                   id,
-		RepoID:               repoID,
-		Name:                 name,
-		RefType:              refType,
-		ProviderID:           stringPtrFromNull(providerID),
-		MergeTargetRefID:     uuidPtrFromNull(mergeTargetRefID),
-		MergeTargetRefName:   stringPtrIfNotEmpty(mergeTargetRefName),
-		LatestCommitSHA:      stringPtrFromNull(latestCommitSHA),
-		PrState:              stringPtrFromNull(prState),
-		PrTitle:              prTitle,
-		PrSourceBranch:       prSourceBranch,
-		PrMergedAt:           timePtrFromNull(prMergedAt),
-		PrClosedAt:           timePtrFromNull(prClosedAt),
-		LatestSnapshotID:     uuidPtrFromAny(latestSnapshotID),
-		LatestSnapshotStatus: stringPtrFromAny(latestSnapshotStatus),
-		LatestSnapshotDate:   timePtrFromAny(latestSnapshotDate),
-		CreatedAt:            createdAt,
-		UpdatedAt:            updatedAt,
+		ID:                   fields.id,
+		RepoID:               fields.repoID,
+		Name:                 fields.name,
+		RefType:              fields.refType,
+		ProviderID:           stringPtrFromNull(fields.providerID),
+		MergeTargetRefID:     uuidPtrFromNull(fields.mergeTargetRefID),
+		MergeTargetRefName:   stringPtrIfNotEmpty(fields.mergeTargetRefName),
+		LatestCommitSHA:      stringPtrFromNull(fields.latestCommitSHA),
+		PrRefKind:            fields.prRefKind,
+		PrNumber:             stringPtrFromNull(fields.prNumber),
+		PrState:              stringPtrFromNull(fields.prState),
+		PrTitle:              fields.prTitle,
+		PrSourceBranch:       fields.prSourceBranch,
+		PrMergedAt:           timePtrFromNull(fields.prMergedAt),
+		PrClosedAt:           timePtrFromNull(fields.prClosedAt),
+		LatestSnapshotID:     uuidPtrFromAny(fields.latestSnapshotID),
+		LatestSnapshotStatus: stringPtrFromAny(fields.latestSnapshotStatus),
+		LatestSnapshotDate:   timePtrFromAny(fields.latestSnapshotDate),
+		CreatedAt:            fields.createdAt,
+		UpdatedAt:            fields.updatedAt,
 	}
 }
 

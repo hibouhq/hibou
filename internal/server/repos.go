@@ -841,6 +841,8 @@ func (s *Server) newPRSummaryResponse(ref *store.Ref, targetRef *store.Ref, prSn
 		MergeTargetRefID:   ref.MergeTargetRefID,
 		MergeTargetRefName: targetRefName,
 		LatestCommitSHA:    ref.LatestCommitSHA,
+		PrRefKind:          ref.PrRefKind,
+		PrNumber:           ref.PrNumber,
 		PrState:            ref.PrState,
 		PrTitle:            ref.PrTitle,
 		PrSourceBranch:     ref.PrSourceBranch,

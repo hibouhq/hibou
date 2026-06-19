@@ -71,17 +71,21 @@ INSERT INTO refs (
 	provider_id,
 	merge_target_ref_id,
 	latest_commit_sha,
+	pr_ref_kind,
+	pr_number,
 	pr_state,
 	pr_title,
 	pr_source_branch,
 	pr_merged_at,
 	pr_closed_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (repo_id, name, ref_type) DO UPDATE SET
 	provider_id = COALESCE(EXCLUDED.provider_id, refs.provider_id),
 	merge_target_ref_id = COALESCE(EXCLUDED.merge_target_ref_id, refs.merge_target_ref_id),
 	latest_commit_sha = COALESCE(EXCLUDED.latest_commit_sha, refs.latest_commit_sha),
+	pr_ref_kind = EXCLUDED.pr_ref_kind,
+	pr_number = COALESCE(EXCLUDED.pr_number, refs.pr_number),
 	pr_state = COALESCE(EXCLUDED.pr_state, refs.pr_state),
 	pr_title = CASE WHEN EXCLUDED.pr_title != '' THEN EXCLUDED.pr_title ELSE refs.pr_title END,
 	pr_source_branch = CASE WHEN EXCLUDED.pr_source_branch != '' THEN EXCLUDED.pr_source_branch ELSE refs.pr_source_branch END,

@@ -15,7 +15,16 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/orgs' },
         { path: 'orgs', name: 'orgs', component: () => import('@/views/OrgsView.vue') },
-        { path: 'orgs/:provider/:slug', name: 'org-detail', component: () => import('@/views/OrgDetailView.vue') },
+        {
+          path: 'orgs/:provider/:slug',
+          component: () => import('@/views/OrgDetailView.vue'),
+          children: [
+            { path: '', name: 'org-detail', redirect: to => ({ name: 'org-overview', params: to.params }) },
+            { path: 'overview', name: 'org-overview', component: () => import('@/views/org/OverviewTab.vue') },
+            { path: 'vulnerabilities', name: 'org-vulnerabilities', component: () => import('@/views/org/VulnerabilitiesTab.vue') },
+            { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
+          ],
+        },
         { path: 'orgs/:provider/:slug/search', name: 'search', component: () => import('@/views/SearchView.vue') },
         { path: 'orgs/:provider/:slug/repos', name: 'repos', component: () => import('@/views/ReposView.vue') },
         { path: 'orgs/:provider/:slug/clients', name: 'clients', component: () => import('@/views/ClientsView.vue') },
@@ -58,6 +67,11 @@ const router = createRouter({
               path: 'coverage',
               name: 'repo-coverage',
               component: () => import('@/views/repo/CoverageTab.vue'),
+            },
+            {
+              path: 'tests',
+              name: 'repo-tests',
+              component: () => import('@/views/repo/TestsTab.vue'),
             },
           ],
         },

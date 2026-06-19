@@ -419,6 +419,9 @@ func isValidNotificationEventType(value string) bool {
 		string(events.VulnerabilityCreated),
 		string(events.GatePassed),
 		string(events.GateFailed),
+		string(events.RetentionWarnAt),
+		string(events.RetentionEviction),
+		string(events.RetentionProtected),
 		string(events.NotificationNew):
 		return true
 	default:

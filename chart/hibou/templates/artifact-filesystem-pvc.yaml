@@ -1,0 +1,18 @@
+{{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hibou.artifactFilesystemPVCName" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    app.kubernetes.io/component: artifact-filesystem
+spec:
+  accessModes:
+    - {{ .Values.artifact.filesystem.persistence.accessMode }}
+  {{- if .Values.artifact.filesystem.persistence.storageClass }}
+  storageClassName: {{ .Values.artifact.filesystem.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.artifact.filesystem.persistence.size }}
+{{- end }}

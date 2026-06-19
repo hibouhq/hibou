@@ -948,6 +948,14 @@ type Component struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+type ComponentDependency struct {
+	ID                   uuid.UUID `json:"id"`
+	SnapshotID           uuid.UUID `json:"snapshot_id"`
+	ComponentID          uuid.UUID `json:"component_id"`
+	DependsOnComponentID uuid.UUID `json:"depends_on_component_id"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
 type CoverageFile struct {
 	ID               uuid.UUID       `json:"id"`
 	CoverageReportID uuid.UUID       `json:"coverage_report_id"`
@@ -1130,6 +1138,8 @@ type Ref struct {
 	PrClosedAt       sql.NullTime   `json:"pr_closed_at"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
+	PrRefKind        string         `json:"pr_ref_kind"`
+	PrNumber         sql.NullString `json:"pr_number"`
 }
 
 type Release struct {
@@ -1149,17 +1159,18 @@ type Release struct {
 }
 
 type Repository struct {
-	ID            uuid.UUID     `json:"id"`
-	OrgID         uuid.UUID     `json:"org_id"`
-	TeamID        uuid.NullUUID `json:"team_id"`
-	Name          string        `json:"name"`
-	Slug          string        `json:"slug"`
-	Provider      string        `json:"provider"`
-	ProviderID    string        `json:"provider_id"`
-	DefaultBranch string        `json:"default_branch"`
-	SyncState     string        `json:"sync_state"`
-	CreatedAt     time.Time     `json:"created_at"`
-	UpdatedAt     time.Time     `json:"updated_at"`
+	ID                     uuid.UUID     `json:"id"`
+	OrgID                  uuid.UUID     `json:"org_id"`
+	TeamID                 uuid.NullUUID `json:"team_id"`
+	Name                   string        `json:"name"`
+	Slug                   string        `json:"slug"`
+	Provider               string        `json:"provider"`
+	ProviderID             string        `json:"provider_id"`
+	DefaultBranch          string        `json:"default_branch"`
+	SyncState              string        `json:"sync_state"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
+	RetentionArtifactBytes int64         `json:"retention_artifact_bytes"`
 }
 
 type Scan struct {
@@ -1190,22 +1201,31 @@ type ScanProvider struct {
 }
 
 type Snapshot struct {
-	ID              uuid.UUID       `json:"id"`
-	RefID           uuid.UUID       `json:"ref_id"`
-	CommitSha       string          `json:"commit_sha"`
-	Status          SnapshotStatus  `json:"status"`
-	Labels          json.RawMessage `json:"labels"`
-	ImageDigest     sql.NullString  `json:"image_digest"`
-	CreatedAt       time.Time       `json:"created_at"`
-	BuildUrl        sql.NullString  `json:"build_url"`
-	RunID           sql.NullString  `json:"run_id"`
-	RunNumber       sql.NullString  `json:"run_number"`
-	PrNumber        sql.NullString  `json:"pr_number"`
-	PrTargetBranch  sql.NullString  `json:"pr_target_branch"`
-	Tag             sql.NullString  `json:"tag"`
-	ExpectedUploads sql.NullInt32   `json:"expected_uploads"`
-	ReceivedUploads int32           `json:"received_uploads"`
-	RunAttempt      sql.NullString  `json:"run_attempt"`
+	ID                               uuid.UUID       `json:"id"`
+	RefID                            uuid.UUID       `json:"ref_id"`
+	CommitSha                        string          `json:"commit_sha"`
+	Status                           SnapshotStatus  `json:"status"`
+	Labels                           json.RawMessage `json:"labels"`
+	ImageDigest                      sql.NullString  `json:"image_digest"`
+	CreatedAt                        time.Time       `json:"created_at"`
+	BuildUrl                         sql.NullString  `json:"build_url"`
+	RunID                            sql.NullString  `json:"run_id"`
+	RunNumber                        sql.NullString  `json:"run_number"`
+	PrNumber                         sql.NullString  `json:"pr_number"`
+	PrTargetBranch                   sql.NullString  `json:"pr_target_branch"`
+	Tag                              sql.NullString  `json:"tag"`
+	ExpectedUploads                  sql.NullInt32   `json:"expected_uploads"`
+	ReceivedUploads                  int32           `json:"received_uploads"`
+	RunAttempt                       sql.NullString  `json:"run_attempt"`
+	Pinned                           bool            `json:"pinned"`
+	RetentionHold                    bool            `json:"retention_hold"`
+	ArtifactBytes                    int64           `json:"artifact_bytes"`
+	ArtifactProcessingClaimedBy      sql.NullString  `json:"artifact_processing_claimed_by"`
+	ArtifactProcessingClaimExpiresAt sql.NullTime    `json:"artifact_processing_claim_expires_at"`
+	ArtifactProcessingStartedAt      sql.NullTime    `json:"artifact_processing_started_at"`
+	ArtifactProcessingFinishedAt     sql.NullTime    `json:"artifact_processing_finished_at"`
+	ArtifactProcessingAttempts       int32           `json:"artifact_processing_attempts"`
+	ArtifactProcessingLastError      sql.NullString  `json:"artifact_processing_last_error"`
 }
 
 type SnapshotArtifact struct {
@@ -1227,6 +1247,12 @@ type SnapshotComponent struct {
 	Labels      json.RawMessage `json:"labels"`
 }
 
+type SnapshotDependencyRoot struct {
+	SnapshotID  uuid.UUID `json:"snapshot_id"`
+	ComponentID uuid.UUID `json:"component_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type Team struct {
 	ID        uuid.UUID `json:"id"`
 	OrgID     uuid.UUID `json:"org_id"`
@@ -1241,6 +1267,31 @@ type TeamMember struct {
 	UserID    uuid.UUID `json:"user_id"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type TestCase struct {
+	ID              uuid.UUID `json:"id"`
+	TestReportID    uuid.UUID `json:"test_report_id"`
+	Suite           string    `json:"suite"`
+	Name            string    `json:"name"`
+	Classname       string    `json:"classname"`
+	Status          string    `json:"status"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	Message         string    `json:"message"`
+	FilePath        string    `json:"file_path"`
+}
+
+type TestReport struct {
+	ID              uuid.UUID `json:"id"`
+	SnapshotID      uuid.UUID `json:"snapshot_id"`
+	Format          string    `json:"format"`
+	Total           int32     `json:"total"`
+	Passed          int32     `json:"passed"`
+	Failed          int32     `json:"failed"`
+	Skipped         int32     `json:"skipped"`
+	Errors          int32     `json:"errors"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type User struct {

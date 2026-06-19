@@ -132,6 +132,15 @@ func (d *Dispatcher) Subscribe() {
 	d.bus.Subscribe(events.ScanStale, func(ctx context.Context, event events.Event) {
 		d.handleEvent(ctx, event.Type, event.Payload)
 	})
+	d.bus.Subscribe(events.RetentionWarnAt, func(ctx context.Context, event events.Event) {
+		d.handleEvent(ctx, event.Type, event.Payload)
+	})
+	d.bus.Subscribe(events.RetentionEviction, func(ctx context.Context, event events.Event) {
+		d.handleEvent(ctx, event.Type, event.Payload)
+	})
+	d.bus.Subscribe(events.RetentionProtected, func(ctx context.Context, event events.Event) {
+		d.handleEvent(ctx, event.Type, event.Payload)
+	})
 }
 
 func (d *Dispatcher) handleEvent(_ context.Context, eventType events.Type, rawPayload any) {
@@ -625,6 +634,15 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 		lastScanAt := stringValue(data, "last_scan_completed_at", "unknown")
 		payload.Title = "Repository scan stale"
 		payload.Body = fmt.Sprintf("Repo %s has no completed scan since %s", payload.RepoName, lastScanAt)
+	case events.RetentionWarnAt:
+		payload.Title = "Retention budget warning"
+		payload.Body = fmt.Sprintf("Repo %s is approaching its retention storage budget", payload.RepoName)
+	case events.RetentionEviction:
+		payload.Title = "Retention reclaim started"
+		payload.Body = fmt.Sprintf("Retention reclaim started for repo %s", payload.RepoName)
+	case events.RetentionProtected:
+		payload.Title = "Protected snapshots exceed budget"
+		payload.Body = fmt.Sprintf("Protected snapshots keep repo %s above its retention budget", payload.RepoName)
 	default:
 		payload.Title = string(eventType)
 		payload.Body = stringValue(data, "message", string(eventType))
@@ -642,6 +660,12 @@ func defaultDispatchSeverity(eventType events.Type, data map[string]any) string 
 	}
 	if eventType == events.ScanStale {
 		return "medium"
+	}
+	if eventType == events.RetentionWarnAt {
+		return "medium"
+	}
+	if eventType == events.RetentionEviction || eventType == events.RetentionProtected {
+		return "high"
 	}
 	return "info"
 }

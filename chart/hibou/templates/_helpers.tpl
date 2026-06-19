@@ -28,6 +28,14 @@ app.kubernetes.io/name: {{ include "hibou.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{- define "hibou.sessionSecretName" -}}
+{{- if .Values.hibou.sessionSecretExistingSecret -}}
+{{- .Values.hibou.sessionSecretExistingSecret -}}
+{{- else -}}
+{{- printf "%s-session" (include "hibou.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "hibou.postgresqlServiceName" -}}
 {{- printf "%s-postgresql" (include "hibou.fullname" .) -}}
 {{- end -}}
@@ -52,6 +60,88 @@ url
 
 {{- define "hibou.trivyServiceName" -}}
 {{- printf "%s-trivy" (include "hibou.fullname" .) -}}
+{{- end -}}
+
+{{- define "hibou.seaweedfsServiceName" -}}
+{{- printf "%s-seaweedfs" (include "hibou.fullname" .) -}}
+{{- end -}}
+
+{{- define "hibou.seaweedfsSecretName" -}}
+{{- if .Values.seaweedfs.accessKeyExistingSecret -}}
+{{- .Values.seaweedfs.accessKeyExistingSecret -}}
+{{- else -}}
+{{- printf "%s-seaweedfs" (include "hibou.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactBackend" -}}
+{{- if .Values.artifact.backend -}}
+{{- .Values.artifact.backend -}}
+{{- else if .Values.seaweedfs.enabled -}}
+s3
+{{- else -}}
+filesystem
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactFilesystemPath" -}}
+{{- default "/data/artifacts" .Values.artifact.path -}}
+{{- end -}}
+
+{{- define "hibou.artifactFilesystemPVCName" -}}
+{{- printf "%s-artifact-filesystem" (include "hibou.fullname" .) -}}
+{{- end -}}
+
+{{- define "hibou.artifactFilesystemPersistenceEnabled" -}}
+{{- if and (eq (include "hibou.artifactBackend" .) "filesystem") .Values.artifact.filesystem.persistence.enabled -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactFilesystemPersistenceIsRWX" -}}
+{{- if and (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") (eq .Values.artifact.filesystem.persistence.accessMode "ReadWriteMany") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactUsesBundledSeaweedFS" -}}
+{{- if and (eq (include "hibou.artifactBackend" .) "s3") .Values.seaweedfs.enabled (eq (trim .Values.artifact.s3.endpoint) "") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactS3Endpoint" -}}
+{{- if eq (include "hibou.artifactBackend" .) "s3" -}}
+{{- if eq (include "hibou.artifactUsesBundledSeaweedFS" .) "true" -}}
+{{- printf "http://%s:8333" (include "hibou.seaweedfsServiceName" .) -}}
+{{- else -}}
+{{- required "artifact.s3.endpoint must be set when artifact.backend=s3 and bundled SeaweedFS is not in use" .Values.artifact.s3.endpoint -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactS3Bucket" -}}
+{{- if eq (include "hibou.artifactUsesBundledSeaweedFS" .) "true" -}}
+{{- default .Values.seaweedfs.bucket .Values.artifact.s3.bucket -}}
+{{- else -}}
+{{- required "artifact.s3.bucket must be set when artifact.backend=s3" .Values.artifact.s3.bucket -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.artifactS3CredentialsSecretName" -}}
+{{- if eq (include "hibou.artifactUsesBundledSeaweedFS" .) "true" -}}
+{{- include "hibou.seaweedfsSecretName" . -}}
+{{- else if .Values.artifact.s3.existingSecret -}}
+{{- .Values.artifact.s3.existingSecret -}}
+{{- else -}}
+{{- printf "%s-artifact-s3" (include "hibou.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "hibou.databaseURL" -}}
@@ -92,4 +182,59 @@ url
 
 {{- define "hibou.cnpgServiceName" -}}
 {{- printf "%s-pg-rw" (include "hibou.fullname" .) -}}
+{{- end -}}
+
+{{- define "hibou.totalReplicas" -}}
+{{- $workerReplicas := 0 -}}
+{{- if .Values.hibou.worker.enabled -}}
+{{- $workerReplicas = int .Values.hibou.worker.replicas -}}
+{{- end -}}
+{{- add (int .Values.hibou.replicas) $workerReplicas -}}
+{{- end -}}
+
+{{- define "hibou.validateStatelessness" -}}
+{{- $totalReplicas := int (include "hibou.totalReplicas" .) -}}
+{{- if gt $totalReplicas 1 -}}
+  {{- if eq (include "hibou.artifactBackend" .) "filesystem" -}}
+    {{- if ne (include "hibou.artifactFilesystemPersistenceIsRWX" .) "true" -}}
+      {{- fail "unsafe multi-replica configuration: filesystem artifact storage is single-replica only unless artifact.filesystem.persistence.enabled=true with artifact.filesystem.persistence.accessMode=ReadWriteMany. Enable the RWX PVC option, bundled SeaweedFS, or artifact.backend=s3 with a shared S3-compatible endpoint before scaling Hibou or worker replicas." -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if not .Values.hibou.sessionSecretExistingSecret -}}
+    {{- $sessionSecret := trim .Values.hibou.sessionSecret -}}
+    {{- if eq $sessionSecret "change-me-in-production" -}}
+      {{- fail "unsafe multi-replica configuration: hibou.sessionSecret is set to the shipped default. Use hibou.sessionSecretExistingSecret or set hibou.sessionSecret to a stable random value shared by every replica." -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $shutdown := .Values.hibou.shutdown -}}
+{{- if le (int $shutdown.terminationGracePeriodSeconds) (add (int $shutdown.timeoutSeconds) (int $shutdown.preStopSleepSeconds)) -}}
+  {{- fail "hibou.shutdown.terminationGracePeriodSeconds must be greater than hibou.shutdown.timeoutSeconds + hibou.shutdown.preStopSleepSeconds so pods outlive preStop and app drain time." -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "hibou.podAntiAffinity" -}}
+{{- $root := .root -}}
+{{- $component := .component -}}
+{{- if $root.Values.hibou.podAntiAffinity.enabled }}
+affinity:
+  podAntiAffinity:
+    {{- if eq $root.Values.hibou.podAntiAffinity.type "hard" }}
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            {{- include "hibou.selectorLabels" $root | nindent 12 }}
+            app.kubernetes.io/component: {{ $component }}
+        topologyKey: {{ $root.Values.hibou.podAntiAffinity.topologyKey | quote }}
+    {{- else }}
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: {{ $root.Values.hibou.podAntiAffinity.weight }}
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              {{- include "hibou.selectorLabels" $root | nindent 14 }}
+              app.kubernetes.io/component: {{ $component }}
+          topologyKey: {{ $root.Values.hibou.podAntiAffinity.topologyKey | quote }}
+    {{- end }}
+{{- end }}
 {{- end -}}

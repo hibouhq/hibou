@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -172,6 +173,83 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 		Search:     params.Search,
 	})
 	if err != nil {
+		return nil, 0, err
+	}
+
+	return vulnerabilities, int(total), nil
+}
+
+// ListVulnerabilitiesBySnapshots returns a paginated, filtered vulnerability list
+// across multiple snapshots (used for org-wide aggregation). It mirrors the
+// single-snapshot filter semantics over `snapshot_id = ANY($1)`.
+func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotIDs []uuid.UUID, opts VulnerabilityListOptions) ([]Vulnerability, int, error) {
+	if len(snapshotIDs) == 0 {
+		return []Vulnerability{}, 0, nil
+	}
+
+	conds := make([]string, 0, 6)
+	args := make([]interface{}, 0, 8)
+	addArg := func(value interface{}) int {
+		args = append(args, value)
+		return len(args)
+	}
+
+	conds = append(conds, fmt.Sprintf("snapshot_id = ANY($%d)", addArg(pq.Array(snapshotIDs))))
+
+	statuses := normalizeStringFilters(opts.Statuses)
+	if len(statuses) == 0 {
+		statuses = []string{"detected", "confirmed", "dismissed", "resolved"}
+	}
+	conds = append(conds, fmt.Sprintf("status = ANY($%d)", addArg(pq.Array(statuses))))
+
+	if types := normalizeStringFilters(opts.Types); len(types) > 0 {
+		conds = append(conds, fmt.Sprintf("type = ANY($%d)", addArg(pq.Array(types))))
+	}
+	if severities := normalizeStringFilters(opts.Severities); len(severities) > 0 {
+		conds = append(conds, fmt.Sprintf("severity = ANY($%d)", addArg(pq.Array(severities))))
+	}
+	if scanners := normalizeStringFilters(opts.Scanners); len(scanners) > 0 {
+		conds = append(conds, fmt.Sprintf("lower(scanner_name) = ANY($%d)", addArg(pq.Array(scanners))))
+	}
+	if search := escapeLikeFragment(opts.Search); search != "" {
+		idx := addArg("%" + search + "%")
+		conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\')`, idx, idx, idx))
+	}
+
+	where := strings.Join(conds, " AND ")
+
+	sort := normalizeVulnerabilitySort(opts.Sort)
+	sortParam := addArg(sort)
+	limitParam := addArg(int32(opts.Limit))   //nolint:gosec // G115: pagination values bounded by API parsing.
+	offsetParam := addArg(int32(opts.Offset)) //nolint:gosec // G115: pagination values bounded by API parsing.
+
+	//nolint:gosec // G201: validated sort + positional parameters only.
+	listSQL := fmt.Sprintf("SELECT %s FROM vulnerabilities\nWHERE %s\n%s\nLIMIT $%d OFFSET $%d",
+		vulnerabilitySelectColumns, where, vulnerabilityOrderByClause(sortParam), limitParam, offsetParam)
+
+	rows, err := q.sqlDB.QueryContext(ctx, listSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	vulnerabilities := []Vulnerability{}
+	for rows.Next() {
+		row, scanErr := scanVulnerabilityRow(rows)
+		if scanErr != nil {
+			return nil, 0, scanErr
+		}
+		vulnerabilities = append(vulnerabilities, *vulnerabilityFromRow(row))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	// total ignores limit/offset/sort args (the last three).
+	countArgs := args[:len(args)-3]
+	countSQL := "SELECT COUNT(*)::bigint FROM vulnerabilities\nWHERE " + where
+	var total int64
+	if err := q.sqlDB.QueryRowContext(ctx, countSQL, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 

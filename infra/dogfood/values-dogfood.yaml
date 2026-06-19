@@ -33,6 +33,15 @@ hibou:
       id: github
       existingSecret: hibou-forge-github
 
+artifact:
+  backend: s3
+
+seaweedfs:
+  enabled: true
+  bucket: hibou-artifacts
+  storage:
+    size: 10Gi
+
 postgresql:
   enabled: true
   auth:

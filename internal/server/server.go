@@ -9,12 +9,18 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
@@ -53,6 +59,8 @@ type Server struct {
 	bus               *events.Bus
 	objStore          objstore.Store
 	wsHub             *ws.Hub
+	wsFanout          ws.LiveDelivery
+	wsListener        closeableListener
 	notifySvc         *notify.Service
 	deltaSvc          *delta.Service
 	repoConfigLoader  *repoconfig.Loader
@@ -64,16 +72,22 @@ type Server struct {
 	toolCatalogSvc    *toolcatalog.Service
 	retentionWorker   *retention.Worker
 	dispatcher        *notify.Dispatcher
-	staleScanChecker  *notify.StaleScanChecker
+	staleScanChecker  backgroundStarter
 	annotator         *forge.Annotator
 	forgeIPAllowlists map[string]*forgeIPAllowlist
 	forgeLimiters     map[string]*ipRateLimiter
 	webhookHandlers   map[string][]forgeEventHandler
+	artifactWorkerID  string
 	lifecycleCtx      context.Context
 	shutdownCancel    context.CancelFunc
 	startedAt         time.Time
 	router            chi.Router
 	http              *http.Server
+	draining          atomic.Bool
+	artifactStateMu   sync.Mutex
+	artifactIdleCh    chan struct{}
+	artifactInFlight  map[uuid.UUID]struct{}
+	activeArtifacts   int
 }
 
 type healthResponse struct {
@@ -91,39 +105,56 @@ type metricsResponse struct {
 	GoVersion     string  `json:"go_version"`
 }
 
+type backgroundStarter interface {
+	Start(context.Context)
+}
+
+type closeableListener interface {
+	Close() error
+}
+
+var newBridgeListener = func(databaseURL, channel string, handler func(ws.Envelope), log zerolog.Logger) (closeableListener, error) {
+	return ws.NewPostgresListener(databaseURL, channel, handler, log)
+}
+
 const retentionInterval = 24 * time.Hour
 const stalePendingInterval = 1 * time.Minute
 
-func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) *Server {
+func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) (*Server, error) {
 	r := chi.NewRouter()
 	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
 	configureRouter(r, log)
 
 	s := &Server{
-		cfg:             cfg,
-		db:              db,
-		enforcer:        enforcer,
-		authMgr:         authMgr,
-		forges:          forges,
-		log:             log,
-		lifecycleCtx:    lifecycleCtx,
-		shutdownCancel:  shutdownCancel,
-		queries:         store.NewQueries(db),
-		bus:             events.New(log),
-		startedAt:       time.Now(),
-		router:          r,
-		webhookHandlers: make(map[string][]forgeEventHandler),
+		cfg:              cfg,
+		db:               db,
+		enforcer:         enforcer,
+		authMgr:          authMgr,
+		forges:           forges,
+		log:              log,
+		lifecycleCtx:     lifecycleCtx,
+		shutdownCancel:   shutdownCancel,
+		queries:          store.NewQueries(db),
+		bus:              events.New(log),
+		startedAt:        time.Now(),
+		router:           r,
+		artifactWorkerID: newArtifactWorkerID(),
+		webhookHandlers:  make(map[string][]forgeEventHandler),
 		http: &http.Server{
 			Handler:           r,
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		},
 	}
-	initializeServerServices(s, cfg, log, forges)
+	r.Use(s.shutdownMiddleware)
+	if err := initializeServerServices(s, cfg, log, forges); err != nil {
+		shutdownCancel()
+		return nil, err
+	}
 	configureForgeProtection(s, cfg, log)
 
 	s.routes(siteFS)
-	return s
+	return s, nil
 }
 
 func configureRouter(r chi.Router, log zerolog.Logger) {
@@ -133,15 +164,26 @@ func configureRouter(r chi.Router, log zerolog.Logger) {
 	r.Use(middleware.Recoverer)
 }
 
-func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, forges map[string]forge.Provider) {
-	s.wsHub = ws.NewHub(log)
-	artifactStore, err := objstore.NewFilesystemStore(cfg.ArtifactPath)
+func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, forges map[string]forge.Provider) error {
+	success := false
+	defer func() {
+		if success || s.wsListener == nil {
+			return
+		}
+		if err := s.wsListener.Close(); err != nil {
+			log.Warn().Err(err).Msg("close postgres websocket listener after startup failure")
+		}
+		s.wsListener = nil
+	}()
+
+	initializeWebsocketFanout(s, cfg, log)
+	backend := normalizeArtifactBackend(cfg.ArtifactBackend)
+	artifactStore, err := newArtifactStore(cfg, backend)
 	if err != nil {
-		log.Error().Err(err).Str("path", cfg.ArtifactPath).Msg("failed to initialize artifact store")
-	} else {
-		s.objStore = artifactStore
+		return fmt.Errorf("initialize artifact backend %q: %w", backend, err)
 	}
-	s.notifySvc = notify.NewService(s.queries, s.wsHub, s.bus, log)
+	s.objStore = artifactStore
+	s.notifySvc = notify.NewService(s.queries, s.wsFanout, s.bus, log)
 	deltaStore := delta.NewStoreAdapter(s.queries)
 	s.deltaSvc = delta.NewService(deltaStore, log, deltaStore)
 	s.repoConfigLoader = repoconfig.NewLoader(s.forges, log)
@@ -158,7 +200,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 			}
 		})
 	}
-	s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, log, retention.DefaultPolicy(), cfg.UploadWindow)
+	s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, s.queries, s.bus, log, cfg.RetentionPolicy, cfg.UploadWindow)
 	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, log,
 		&notify.SlackSender{},
 		&notify.TeamsSender{},
@@ -172,6 +214,57 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.dispatcher.Subscribe()
 	s.annotator.Subscribe()
 	s.registerDefaultWebhookHandlers()
+	success = true
+	return nil
+}
+
+func initializeWebsocketFanout(s *Server, cfg config.Config, log zerolog.Logger) {
+	s.wsHub = ws.NewHub(log)
+	dispatcher := ws.NewDispatcher(s.wsHub, log)
+	publisher, listener, bridgeActive := configureWebsocketBridge(s.db, cfg.DatabaseURL, dispatcher, log)
+	s.wsListener = listener
+	s.wsFanout = ws.NewFanout(publisher, dispatcher, bridgeActive, log)
+}
+
+func configureWebsocketBridge(db *sql.DB, databaseURL string, dispatcher *ws.Dispatcher, log zerolog.Logger) (ws.Publisher, closeableListener, bool) {
+	if databaseURL == "" || db == nil {
+		return nil, nil, false
+	}
+
+	listener, err := newBridgeListener(databaseURL, ws.DefaultChannel, dispatcher.Dispatch, log)
+	if err != nil {
+		log.Warn().Err(err).Msg("postgres websocket listener failed to start; using local-only live delivery on this replica")
+		return nil, nil, false
+	}
+
+	return ws.NewPostgresPublisher(db, ws.DefaultChannel), listener, true
+}
+
+func normalizeArtifactBackend(backend string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(backend))
+	if trimmed == "" {
+		return "filesystem"
+	}
+	return trimmed
+}
+
+func newArtifactStore(cfg config.Config, backend string) (objstore.Store, error) {
+	switch backend {
+	case "filesystem":
+		return objstore.NewFilesystemStore(cfg.ArtifactPath)
+	case "s3":
+		return objstore.NewS3Store(objstore.S3Config{
+			Endpoint:        cfg.ArtifactS3.Endpoint,
+			Region:          cfg.ArtifactS3.Region,
+			Bucket:          cfg.ArtifactS3.Bucket,
+			AccessKeyID:     cfg.ArtifactS3.AccessKeyID,
+			SecretAccessKey: cfg.ArtifactS3.SecretAccessKey,
+			UsePathStyle:    cfg.ArtifactS3.UsePathStyle,
+			UseSSL:          cfg.ArtifactS3.UseSSL,
+		})
+	default:
+		return nil, fmt.Errorf("unknown artifact backend %q", backend)
+	}
 }
 
 func configureForgeProtection(s *Server, cfg config.Config, log zerolog.Logger) {
@@ -267,6 +360,8 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Put("/", s.handleUpdateOrg)
 					r.Delete("/", s.handleDeleteOrg)
 					r.Get("/dashboard", s.handleGetOrgDashboard)
+					r.Get("/vulnerabilities", s.handleListOrgVulnerabilities)
+					r.Get("/components", s.handleListOrgComponents)
 					r.Get("/compliance/export", s.handleComplianceExport)
 					r.Get("/compliance/iso27001", s.handleISO27001Export)
 					r.Get("/compliance/soa", s.handleSoAExport)
@@ -354,10 +449,13 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/compare", s.handleCompareRefs)
 						r.Get("/{repoSlug}/trends", s.handleGetTrends)
 						r.Get("/{repoSlug}/pr/{number}", s.handleGetPRSummary)
+						r.Get("/{repoSlug}/findings", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
+						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
+					r.Get("/{repoSlug}/tests", s.handleGetTests)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
 						r.Route("/{repoSlug}/vex", func(r chi.Router) {
@@ -418,12 +516,22 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 
-	if s.retentionWorker != nil {
-		go s.runRetentionLoop(ctx)
+	runtimeCtx := s.lifecycleCtx
+	if runtimeCtx == nil {
+		runtimeCtx = context.Background()
 	}
-	go s.runStalePendingLoop(ctx)
-	if s.staleScanChecker != nil {
-		go s.staleScanChecker.Start(ctx)
+
+	if s.retentionWorker != nil && s.cfg.Background.RetentionEnabled {
+		go s.runRetentionLoop(runtimeCtx)
+	}
+	if s.cfg.Background.StalePendingEnabled {
+		go s.runStalePendingLoop(runtimeCtx)
+	}
+	if s.objStore != nil && s.cfg.Background.ArtifactProcessingEnabled {
+		go s.runArtifactProcessingLoop(runtimeCtx)
+	}
+	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
+		go s.staleScanChecker.Start(runtimeCtx)
 	}
 
 	s.log.Info().
@@ -442,7 +550,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		s.log.Info().Msg("shutting down server")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout())
 		defer cancel()
 		return s.Shutdown(shutdownCtx)
 	case err := <-errCh:
@@ -453,17 +561,232 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+func newArtifactWorkerID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "unknown-host"
+	}
+	return fmt.Sprintf("%s:%d:%s", hostname, os.Getpid(), uuid.NewString())
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.beginDrain()
+
+	httpErrCh := make(chan error, 1)
+	go func() {
+		httpErrCh <- s.http.Shutdown(ctx)
+	}()
+
+	artifactErr := s.waitForActiveArtifacts(ctx)
+	httpErr := <-httpErrCh
+
+	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), s.claimReleaseTimeout())
+	defer releaseCancel()
+	releaseErr := s.releaseArtifactClaims(releaseCtx)
+	wsErr := s.wsHubWaitForDrain(ctx)
+	if errors.Is(wsErr, context.DeadlineExceeded) || errors.Is(wsErr, context.Canceled) {
+		s.closeWebsockets()
+		wsErr = nil
+	} else {
+		s.closeWebsockets()
+	}
+
+	listenerErr := s.closeWebsocketListener()
 	if s.shutdownCancel != nil {
 		s.shutdownCancel()
 	}
-	return s.http.Shutdown(ctx)
+
+	return errors.Join(httpErr, artifactErr, releaseErr, wsErr, listenerErr)
+}
+
+func (s *Server) shutdownTimeout() time.Duration {
+	if s.cfg.ShutdownTimeout > 0 {
+		return s.cfg.ShutdownTimeout
+	}
+	return 20 * time.Second
+}
+
+func (s *Server) claimReleaseTimeout() time.Duration {
+	timeout := s.shutdownTimeout()
+	if timeout > 5*time.Second {
+		return 5 * time.Second
+	}
+	if timeout <= 0 {
+		return 5 * time.Second
+	}
+	return timeout
+}
+
+func (s *Server) beginDrain() {
+	first := false
+	s.artifactStateMu.Lock()
+	if !s.draining.Load() {
+		s.draining.Store(true)
+		first = true
+	}
+	s.artifactStateMu.Unlock()
+	if first {
+		s.log.Info().Dur("timeout", s.shutdownTimeout()).Msg("server entering drain mode")
+	}
+	if s.wsHub != nil {
+		s.wsHub.BeginDrain()
+	}
+}
+
+func (s *Server) isDraining() bool {
+	return s.draining.Load()
+}
+
+func (s *Server) waitForActiveArtifacts(ctx context.Context) error {
+	s.artifactStateMu.Lock()
+	if s.activeArtifacts == 0 {
+		s.artifactStateMu.Unlock()
+		return nil
+	}
+	idleCh := s.artifactIdleCh
+	s.artifactStateMu.Unlock()
+
+	select {
+	case <-idleCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Server) releaseArtifactClaims(ctx context.Context) error {
+	if s.queries == nil || strings.TrimSpace(s.artifactWorkerID) == "" {
+		return nil
+	}
+	inFlight := s.inFlightArtifactSnapshotIDs()
+	if len(inFlight) > 0 {
+		s.log.Warn().Int("in_flight_claims", len(inFlight)).Str("worker_id", s.artifactWorkerID).Msg("leaving in-flight artifact claims for lease recovery during shutdown")
+	}
+	count, err := s.releaseArtifactClaimsExcluding(ctx, inFlight)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		s.log.Info().Int64("released_claims", count).Str("worker_id", s.artifactWorkerID).Msg("released artifact processing claims during shutdown")
+	}
+	return nil
+}
+
+func (s *Server) releaseArtifactClaimsExcluding(ctx context.Context, excluded []uuid.UUID) (int64, error) {
+	if len(excluded) == 0 {
+		return s.queries.ReleaseArtifactProcessingClaims(ctx, s.artifactWorkerID)
+	}
+
+	excludedIDs := make([]string, 0, len(excluded))
+	for _, snapshotID := range excluded {
+		excludedIDs = append(excludedIDs, snapshotID.String())
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE snapshots
+		SET artifact_processing_claimed_by = NULL,
+			artifact_processing_claim_expires_at = NULL
+		WHERE artifact_processing_claimed_by = $1
+			AND artifact_processing_finished_at IS NULL
+			AND (status = 'complete' OR status = 'failed')
+			AND NOT (id = ANY($2::uuid[]))
+	`, s.artifactWorkerID, pq.Array(excludedIDs))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *Server) tryStartArtifactProcessing(snapshotID uuid.UUID) bool {
+	s.artifactStateMu.Lock()
+	defer s.artifactStateMu.Unlock()
+
+	if s.draining.Load() {
+		return false
+	}
+	if s.artifactInFlight == nil {
+		s.artifactInFlight = make(map[uuid.UUID]struct{})
+	}
+	if s.activeArtifacts == 0 {
+		s.artifactIdleCh = make(chan struct{})
+	}
+	s.artifactInFlight[snapshotID] = struct{}{}
+	s.activeArtifacts++
+	return true
+}
+
+func (s *Server) finishArtifactProcessing(snapshotID uuid.UUID) {
+	s.artifactStateMu.Lock()
+	defer s.artifactStateMu.Unlock()
+
+	if _, ok := s.artifactInFlight[snapshotID]; !ok {
+		return
+	}
+	delete(s.artifactInFlight, snapshotID)
+	if s.activeArtifacts > 0 {
+		s.activeArtifacts--
+	}
+	if s.activeArtifacts == 0 {
+		closeArtifactIdleSignal(s.artifactIdleCh)
+	}
+}
+
+func (s *Server) inFlightArtifactSnapshotIDs() []uuid.UUID {
+	s.artifactStateMu.Lock()
+	defer s.artifactStateMu.Unlock()
+
+	if len(s.artifactInFlight) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(s.artifactInFlight))
+	for snapshotID := range s.artifactInFlight {
+		ids = append(ids, snapshotID)
+	}
+	return ids
+}
+
+func (s *Server) wsHubWaitForDrain(ctx context.Context) error {
+	if s.wsHub == nil {
+		return nil
+	}
+	return s.wsHub.WaitForZero(ctx)
+}
+
+func (s *Server) closeWebsockets() {
+	if s.wsHub == nil {
+		return
+	}
+	s.wsHub.CloseAll(websocket.StatusGoingAway, "server shutting down")
+}
+
+func (s *Server) closeWebsocketListener() error {
+	if s.wsListener == nil {
+		return nil
+	}
+	err := s.wsListener.Close()
+	if err != nil {
+		s.log.Warn().Err(err).Msg("close postgres websocket listener")
+		s.wsListener = nil
+		return nil
+	}
+	s.wsListener = nil
+	return err
+}
+
+func closeArtifactIdleSignal(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+		return
+	default:
+		close(ch)
+	}
 }
 
 func (s *Server) runRetentionLoop(ctx context.Context) {
-	if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		s.log.Error().Err(err).Msg("retention pass failed")
-	}
+	s.runRetentionPass(ctx)
 
 	ticker := time.NewTicker(retentionInterval)
 	defer ticker.Stop()
@@ -473,11 +796,29 @@ func (s *Server) runRetentionLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				s.log.Error().Err(err).Msg("retention pass failed")
-			}
+			s.runRetentionPass(ctx)
 		}
 	}
+}
+
+func (s *Server) runRetentionPass(ctx context.Context) {
+	if s.retentionWorker == nil {
+		return
+	}
+	if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		s.log.Error().Err(err).Msg("retention pass failed")
+	}
+}
+
+func (s *Server) triggerRetentionPass() {
+	if s.retentionWorker == nil {
+		return
+	}
+	ctx := s.lifecycleCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go s.runRetentionPass(ctx)
 }
 
 func (s *Server) runStalePendingLoop(ctx context.Context) {
@@ -527,6 +868,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // @Failure      503  {object}  api.Response{data=server.readyResponse}
 // @Router       /ready [get]
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if s.isDraining() {
+		api.JSON(w, http.StatusServiceUnavailable, readyResponse{
+			Status: "not ready",
+			Reason: "server draining",
+		})
+		return
+	}
+
 	if s.db == nil || s.db.PingContext(r.Context()) != nil {
 		api.JSON(w, http.StatusServiceUnavailable, readyResponse{
 			Status: "not ready",
@@ -536,6 +885,20 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusOK, readyResponse{Status: "ready"})
+}
+
+func (s *Server) shutdownMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isDraining() || r.URL.Path == "/api/v1/health" || r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/api/v1/ready" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "server draining", http.StatusServiceUnavailable)
+	})
 }
 
 // @Summary      Metrics

@@ -67,15 +67,57 @@ Supported types: `github`, `forgejo`, `gitea`, `gitlab`.
 | Target | Description |
 |--------|-------------|
 | `make setup` | Start postgres + seed sample data for quick dev login |
-| `make start` | Start full stack, bootstrap Forgejo OAuth, seed data, run dev servers |
+| `make start` | Start full stack, bootstrap Forgejo OAuth, seed real data, run dev servers |
+| `make start-quick` | Like `start` but with fake seed data (no Forgejo bootstrap) |
 | `make up` | Start Docker Compose services only |
 | `make down` | Stop Docker Compose services |
 | `make dev` | Run Go backend + Vite frontend (hot reload) |
+| `make seed` | (Re-)seed the database with sample data |
+| `make reset` | Drop the schema and re-seed from scratch |
 | `make lint` | Run all linters (sqlc diff, golangci-lint, eslint) |
-| `make test` | Run all Go + frontend tests |
+| `make test` | Run all Go + frontend tests (Go tests use the `hibou_test` db) |
+| `make test-db` | (Re)create a pristine `hibou_test` database |
 | `make generate` | Regenerate sqlc + swagger docs |
 | `make build` | Build the hibou binary |
 | `make clean` | Remove build artifacts |
+
+> The server subcommands (`serve`, `seed`) only register under the `hibou-server`
+> personality. The dev targets build `tmp/dev/hibou` and symlink it to
+> `tmp/dev/hibou-server` (mirroring `make install`); run server commands through
+> that symlink rather than `go run . serve`.
+
+### Seed data
+
+`make seed` / `make reset` populate a dataset designed to exercise the whole UI —
+not just a flat list of findings:
+
+- **3 orgs** (GitHub + Forgejo providers), multiple teams and repos.
+- **Snapshot history** per repo's `main` branch: several backdated snapshots
+  (~weekly) including a **failed** build, so the snapshot selector, trends, and
+  the "latest scan failed" states all have data.
+- **Coverage** reports across formats (`gocover`, `lcov`, `cobertura`, `jacoco`)
+  with per-file rows and line rates that trend upward over the history.
+- **Tags** (release snapshots) and an **open pull request** (`refs/pull/42/head`)
+  with a still-`pending` snapshot, so the branch/tag/PR selector and PR review
+  views are populated.
+- **Advisories / malware** matched to components for the dependency + vuln views.
+
+Re-run `make reset` after changing `internal/seed/` to rebuild the dataset.
+
+### Test database isolation
+
+Integration tests need a real PostgreSQL. They run against a **dedicated
+`hibou_test` database**, never the dev `hibou` database — so running tests can't
+pollute your dev data with throwaway orgs/repos.
+
+- `make test` / `make coverage` recreate `hibou_test` (drop + create) and export
+  `HIBOU_DATABASE_URL` for the run, so each run starts pristine.
+- Running `go test ./...` directly uses the same `hibou_test` default (see the
+  `testDatabaseURL` consts), or override with `HIBOU_DATABASE_URL`.
+- Tests `t.Skip` when no database is reachable (e.g. CI without a postgres).
+
+Never point tests at the dev `hibou` database — many integration tests create
+orgs/repos and do not delete them, so they would accumulate as junk in your dev UI.
 
 ## Code Organization
 
@@ -173,3 +215,5 @@ Go integration tests (for example, store tests) require a running PostgreSQL ins
 ## Architecture Decisions
 
 Major decisions are documented as ADRs in `docs/adr/`. Consult existing ADRs before proposing changes to foundational choices.
+
+The in-memory event bus in `internal/events` is process-local only. `Subscribe` and `Publish` handlers run only on the replica that emits the event. If work must survive process loss or reach other replicas, persist the authoritative state in PostgreSQL and use a shared transport such as PostgreSQL `LISTEN/NOTIFY` for fan-out instead of relying on another replica to receive an in-memory event.

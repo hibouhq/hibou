@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hibouhq/hibou/internal/objstore"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -19,7 +21,9 @@ import (
 	"github.com/hibouhq/hibou/internal/store"
 )
 
-const testDatabaseURL = "postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable"
+// testDatabaseURL targets a dedicated test database so integration tests never
+// pollute the dev database (hibou). Override with HIBOU_DATABASE_URL.
+const testDatabaseURL = "postgres://hibou:hibou@localhost:5432/hibou_test?sslmode=disable"
 
 func TestEqualAccountTrimsAndMatchesCaseInsensitive(t *testing.T) {
 	t.Parallel()
@@ -73,11 +77,16 @@ func newDiscoveryTestServer(t *testing.T) (*Server, *store.Organization, *store.
 	}
 
 	forgeProvider := &discoveryTestForgeProvider{id: "github"}
+	artifactStore, err := objstore.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore: %v", err)
+	}
 	srv := &Server{
-		db:      db,
-		queries: queries,
-		forges:  map[string]forge.Provider{"github": forgeProvider},
-		log:     zerolog.New(io.Discard),
+		db:       db,
+		queries:  queries,
+		forges:   map[string]forge.Provider{"github": forgeProvider},
+		objStore: artifactStore,
+		log:      zerolog.New(io.Discard),
 	}
 
 	return srv, org, admin, member

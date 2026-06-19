@@ -1,30 +1,30 @@
 -- name: CreateRepository :one
 INSERT INTO repositories (org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at;
+RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at;
 
 -- name: GetRepositoryByID :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE id = $1;
 
 -- name: GetRepositoryBySlug :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE org_id = $1 AND slug = $2;
 
 -- name: GetRepositoryBySlugAndOrg :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE slug = $1 AND org_id = $2;
 
 -- name: GetRepositoryByProviderID :one
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE org_id = $1 AND provider = $2 AND provider_id = $3;
 
 -- name: ListRepositoriesByOrg :many
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE org_id = $1
 ORDER BY name ASC
@@ -51,7 +51,7 @@ ORDER BY last_scan_completed_at ASC, repo.name ASC;
 SELECT COUNT(*)::bigint FROM repositories WHERE org_id = $1;
 
 -- name: ListRepositoriesByTeam :many
-SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories
 WHERE team_id = $1
 ORDER BY name ASC
@@ -64,7 +64,21 @@ SELECT COUNT(*)::bigint FROM repositories WHERE team_id = $1;
 UPDATE repositories
 SET name = $2, slug = $3, default_branch = $4, sync_state = $5, team_id = $6, updated_at = NOW()
 WHERE id = $1
-RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at;
+RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at;
+
+-- name: ListRepositoryRetentionUsage :many
+SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
+FROM repositories
+WHERE retention_artifact_bytes > 0
+ORDER BY retention_artifact_bytes DESC, id ASC;
+
+-- name: ListRepositoriesForRetention :many
+SELECT DISTINCT repo.id, repo.org_id, repo.team_id, repo.name, repo.slug, repo.provider, repo.provider_id, repo.default_branch, repo.sync_state, repo.retention_artifact_bytes, repo.created_at, repo.updated_at
+FROM repositories repo
+JOIN refs r ON r.repo_id = repo.id
+JOIN snapshots s ON s.ref_id = r.id
+WHERE s.status != 'purged'
+ORDER BY repo.id ASC;
 
 -- name: DeleteRepository :exec
 DELETE FROM repositories WHERE id = $1;

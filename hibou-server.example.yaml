@@ -6,6 +6,9 @@
 host: 0.0.0.0
 port: 8585
 
+# Explicit local-development opt-in. Leave unset or false in production.
+# development: true
+
 # MCP server
 mcp:
   enabled: true
@@ -40,12 +43,75 @@ cache:
 artifact:
   path: /data/artifacts
 
+# Immediate request/webhook path work.
+# Keep low-latency checks such as push-time secret scanning here instead of
+# moving them onto delayed worker loops.
+secret_scan:
+  enabled: false
+  providers: []
+  temp_dir: ""
+  on_push: false
+
+# Delayed background loops.
+# Leave enabled for a single combined deployment. Disable on API-only pods and
+# enable on dedicated worker pods when you split roles.
+background:
+  artifact_processing:
+    enabled: true
+  retention:
+    enabled: true
+  stale_scan:
+    enabled: true
+  stale_pending:
+    enabled: true
+
+# Snapshot retention (ADR-014 resolved policy)
+retention:
+  preset: envelope
+  keep_all: 14d
+  storage:
+    budget: 5GB
+    warn_at: 80%
+    target: 85%
+    evict_order: spread
+  tiers:
+    enabled: true
+    week_anchor: friday
+    representative: last
+    daily:
+      keep: 30
+    weekly:
+      keep: 26
+    monthly:
+      keep: 12
+    yearly:
+      keep: 3
+  on_thin:
+    artifacts: purge
+    summary: keep
+  pin:
+    tags: true
+    latest_per_ref: true
+    referenced_by_open_findings: true
+    labels:
+      - baseline
+      - audit
+  pr:
+    keep_all: 7d
+    after_close: purge
+  failed_retention: 7d
+  auto_purge: false
+  dry_run: false
+
 # Max upload size in bytes (default: 100 MiB)
 max:
   upload:
     size: 104857600
 
-# Session secret (change in production!)
+# Session secret (production is strict by default: set a stable random value before production)
+# Local development may opt in with development: true or HIBOU_DEVELOPMENT=true.
+# Use the same value on every replica. Rotating it invalidates existing
+# hibou_session and hibou_oauth_state cookies and forces users to log in again.
 # session:
 #   secret: your-secure-secret-here
 

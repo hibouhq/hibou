@@ -65,4 +65,50 @@
     background: rgb(88 166 255 / 0.16);
     color: #58a6ff;
   }
+
+  /* Ecosystem badges — package registry / distro origin */
+  .eco-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 9999px;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
+    white-space: nowrap;
+  }
+  .eco-maven   { background: rgb(230 85 13 / 0.20); color: #e6550d; }
+  .eco-npm     { background: rgb(63 185 80 / 0.20); color: #3fb950; }
+  .eco-pypi    { background: rgb(88 166 255 / 0.20); color: #58a6ff; }
+  .eco-nuget   { background: rgb(188 140 255 / 0.20); color: #bc8cff; }
+  .eco-golang  { background: rgb(121 192 255 / 0.20); color: #79c0ff; }
+  .eco-cargo   { background: rgb(240 136 62 / 0.20); color: #f0883e; }
+  .eco-gem     { background: rgb(248 81 73 / 0.20); color: #f85149; }
+  .eco-deb     { background: rgb(214 51 132 / 0.20); color: #d6336c; }
+  .eco-rpm     { background: rgb(219 171 85 / 0.20); color: #dbab55; }
+  .eco-oci     { background: rgb(110 150 180 / 0.20); color: #6e96b4; }
+  .eco-unknown { background: #21262d; color: #8b949e; }
+
+  /* Source badges — advisory feed / scanner that detected the issue */
+  .source-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 0.25rem;
+    padding: 0.05rem 0.4rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  a.source-badge:hover { filter: brightness(1.3); }
+  .source-trivy      { background: rgb(63 185 80 / 0.12); color: #3fb950; }
+  .source-nvd        { background: rgb(240 136 62 / 0.12); color: #f0883e; }
+  .source-ghsa       { background: rgb(121 192 255 / 0.12); color: #79c0ff; }
+  .source-github     { background: rgb(121 192 255 / 0.12); color: #79c0ff; }
+  .source-osv        { background: rgb(210 153 34 / 0.14); color: #d29922; }
+  .source-sbom       { background: rgb(63 185 80 / 0.12); color: #3fb950; }
+  .source-unknown    { background: #21262d; color: #8b949e; }
 }

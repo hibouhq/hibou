@@ -9,10 +9,26 @@ data:
   HIBOU_PORT: "8080"
   HIBOU_LOG_LEVEL: {{ .Values.hibou.logging.level | quote }}
   HIBOU_LOG_FORMAT: {{ .Values.hibou.logging.format | quote }}
+  HIBOU_ARTIFACT_BACKEND: {{ include "hibou.artifactBackend" . | quote }}
+  {{- if eq (include "hibou.artifactBackend" .) "filesystem" }}
+  HIBOU_ARTIFACT_PATH: {{ include "hibou.artifactFilesystemPath" . | quote }}
+  {{- end }}
+  {{- if eq (include "hibou.artifactBackend" .) "s3" }}
+  HIBOU_ARTIFACT_S3_ENDPOINT: {{ include "hibou.artifactS3Endpoint" . | quote }}
+  HIBOU_ARTIFACT_S3_REGION: {{ .Values.artifact.s3.region | quote }}
+  HIBOU_ARTIFACT_S3_BUCKET: {{ include "hibou.artifactS3Bucket" . | quote }}
+  HIBOU_ARTIFACT_S3_USE_PATH_STYLE: {{ if eq (include "hibou.artifactUsesBundledSeaweedFS" .) "true" }}"true"{{ else }}{{ .Values.artifact.s3.usePathStyle | quote }}{{ end }}
+  HIBOU_ARTIFACT_S3_USE_SSL: {{ if eq (include "hibou.artifactUsesBundledSeaweedFS" .) "true" }}"false"{{ else }}{{ .Values.artifact.s3.useSSL | quote }}{{ end }}
+  {{- end }}
   HIBOU_TRIVY_URL: {{ include "hibou.trivyURL" . | quote }}
   HIBOU_OSV_URL: {{ .Values.hibou.advisory.osv.url | quote }}
   HIBOU_CACHE_TTL: {{ .Values.hibou.advisory.cache.ttl | quote }}
   HIBOU_MAX_UPLOAD_SIZE: {{ .Values.hibou.maxUploadSize | quote }}
+  HIBOU_SHUTDOWN_TIMEOUT: {{ printf "%ds" (int .Values.hibou.shutdown.timeoutSeconds) | quote }}
+  HIBOU_BACKGROUND_ARTIFACT_PROCESSING_ENABLED: {{ .Values.hibou.background.artifactProcessing | quote }}
+  HIBOU_BACKGROUND_RETENTION_ENABLED: {{ .Values.hibou.background.retention | quote }}
+  HIBOU_BACKGROUND_STALE_SCAN_ENABLED: {{ .Values.hibou.background.staleScan | quote }}
+  HIBOU_BACKGROUND_STALE_PENDING_ENABLED: {{ .Values.hibou.background.stalePending | quote }}
   HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"true"{{ end }}
   {{- with (include "hibou.baseURL" .) }}
   HIBOU_BASE_URL: {{ . | quote }}

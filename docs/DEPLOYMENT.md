@@ -185,6 +185,9 @@ https://hibou.example.com/api/v1/webhooks/github
 
 The forge key index (0, 1, ...) must match the forge's position in the `forges[]` array.
 
+Use one stable `HIBOU_SESSION_SECRET` value across every Hibou replica. Rotating that secret invalidates all existing `hibou_session` and `hibou_oauth_state` cookies, so active browser sessions are logged out and in-flight OAuth logins must restart.
+Production is strict by default: if `HIBOU_SESSION_SECRET` / `session.secret` is empty or left at the shipped `change-me-in-production` default, Hibou exits during startup unless you explicitly opt into local development with `HIBOU_DEVELOPMENT=true` or `development: true`. Do not set that flag in production.
+
 ## Step 3: Deploy Hibou
 
 ### Create namespace and secrets
@@ -206,6 +209,72 @@ kubectl create secret generic hibou-forge-github -n hibou \
 ### Install with Helm
 
 Keep the UI private if you want, but point your public ingress at the Hibou service.
+
+Supported chart combinations:
+
+- Single replica or local development: `artifact.backend=filesystem` is acceptable.
+- Multi-replica Hibou or worker deployments: use the bundled SeaweedFS default or another shared S3-compatible backend, and keep one shared session secret across all replicas.
+- Unsupported: more than one Hibou or worker replica with filesystem artifact storage on ephemeral pod disk or a non-RWX PVC.
+
+Probe defaults are split intentionally: liveness stays on `/api/v1/health`, while readiness uses `/api/v1/ready` so pods stop receiving traffic when PostgreSQL is unavailable without being killed for a transient dependency outage.
+
+### Artifact storage options
+
+Artifact bytes are never stored in PostgreSQL. PostgreSQL keeps control-plane state, coordination, and metadata only. Raw uploaded bytes live in one of three operator-selectable stores; see [ADR-015](adr/015-stateless-processing-and-worker-scaling.md) for the architecture rationale.
+
+Bundled default: SeaweedFS.
+
+- The chart enables bundled SeaweedFS by default.
+- SeaweedFS is Hibou's default shared artifact store for Helm and multi-replica deployments.
+- SeaweedFS uses its own ReadWriteOnce PVC, so it works on clusters that only provide block storage.
+
+External S3-compatible endpoint: configuration only.
+
+- Disable bundled SeaweedFS and set `artifact.backend=s3` plus `artifact.s3.*` values to target any S3-compatible endpoint with no code change.
+- Supported examples include Ceph RGW, AWS S3, RustFS, SeaweedFS, and other compatible APIs.
+- Policy: AWS is never the default, but operators may configure it.
+- Policy: MinIO is never bundled and never the default.
+- RustFS stays a watch-list option until stable GA.
+
+Optional shared filesystem: operator-managed RWX PVC.
+
+- Operators who already run a ReadWriteMany provisioner may keep `artifact.backend=filesystem` and enable `artifact.filesystem.persistence.enabled=true`.
+- Multi-replica filesystem is supported only when that PVC uses `artifact.filesystem.persistence.accessMode=ReadWriteMany`.
+- Leaving filesystem storage on ephemeral pod disk remains single-replica only.
+
+Example: external S3-compatible endpoint.
+
+```yaml
+seaweedfs:
+  enabled: false
+
+artifact:
+  backend: s3
+  s3:
+    endpoint: https://rgw.example.internal
+    region: us-east-1
+    bucket: hibou-artifacts
+    existingSecret: hibou-artifact-s3
+    usePathStyle: true
+    useSSL: true
+```
+
+Example: optional RWX filesystem backend.
+
+```yaml
+seaweedfs:
+  enabled: false
+
+artifact:
+  backend: filesystem
+  path: /data/artifacts
+  filesystem:
+    persistence:
+      enabled: true
+      accessMode: ReadWriteMany
+      size: 50Gi
+      storageClass: nfs-rwx
+```
 
 ```bash
 helm install hibou ./chart/hibou -n hibou \

@@ -1,3 +1,9 @@
+// Package events provides a process-local event bus for in-process fan-out inside one hibou replica.
+// Durable authoritative state must be persisted in PostgreSQL.
+// Cross-replica fan-out, such as live WebSocket delivery, must use a shared transport such as PostgreSQL
+// LISTEN/NOTIFY as described in ADR-015.
+// Publish and Subscribe are process-local only: handlers run in goroutines only in the same process that
+// publishes, and the bus provides no persistence.
 package events
 
 import (
@@ -23,6 +29,9 @@ const (
 	SecretDiscovered     Type = "secret.discovered"
 	GatePassed           Type = "gate.passed"
 	GateFailed           Type = "gate.failed"
+	RetentionWarnAt      Type = "retention.warn_at"
+	RetentionEviction    Type = "retention.eviction_started"
+	RetentionProtected   Type = "retention.protected_exceeds_budget"
 	NotificationNew      Type = "notification.new"
 )
 
@@ -34,6 +43,7 @@ type Event struct {
 
 type Handler func(ctx context.Context, event Event)
 
+// Bus fans events out to handlers registered in the current process only.
 type Bus struct {
 	mu       sync.RWMutex
 	handlers map[Type][]Handler

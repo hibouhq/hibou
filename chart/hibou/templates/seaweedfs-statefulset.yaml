@@ -1,0 +1,90 @@
+{{- if .Values.seaweedfs.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "hibou.seaweedfsServiceName" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seaweedfs
+spec:
+  serviceName: {{ include "hibou.seaweedfsServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs
+  template:
+    metadata:
+      labels:
+        {{- include "hibou.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: seaweedfs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seaweedfs
+          image: {{ printf "%s:%s" .Values.seaweedfs.image.repository .Values.seaweedfs.image.tag | quote }}
+          imagePullPolicy: {{ .Values.seaweedfs.image.pullPolicy }}
+          args:
+            - server
+            - -dir=/data
+            - -s3
+            - -s3.port=8333
+            - -ip.bind=0.0.0.0
+            - -s3.config=/etc/seaweedfs/s3-config.json
+          ports:
+            - name: s3
+              containerPort: 8333
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.seaweedfs.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/seaweedfs
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "hibou.seaweedfsSecretName" . }}
+            items:
+              - key: s3-config.json
+                path: s3-config.json
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "hibou.labels" . | nindent 10 }}
+          app.kubernetes.io/component: seaweedfs
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.seaweedfs.storage.storageClass }}
+        storageClassName: {{ .Values.seaweedfs.storage.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.seaweedfs.storage.size }}
+{{- end }}

@@ -45,6 +45,8 @@ const (
 	ActionRepoUpdate        = "repo.update"
 	ActionRepoDelete        = "repo.delete"
 	ActionSettingUpdate     = "setting.update"
+	ActionRetentionArchive  = "retention.archive"
+	ActionRetentionPurge    = "retention.purge"
 )
 
 // ActorType constants.

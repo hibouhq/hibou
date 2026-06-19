@@ -12,17 +12,33 @@ import (
 )
 
 type Repository struct {
-	ID            uuid.UUID  `json:"id"`
-	OrgID         uuid.UUID  `json:"org_id"`
-	TeamID        *uuid.UUID `json:"team_id,omitempty"`
-	Name          string     `json:"name"`
-	Slug          string     `json:"slug"`
-	Provider      string     `json:"provider"`
-	ProviderID    string     `json:"provider_id"`
-	DefaultBranch string     `json:"default_branch"`
-	SyncState     string     `json:"sync_state"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID                     uuid.UUID  `json:"id"`
+	OrgID                  uuid.UUID  `json:"org_id"`
+	TeamID                 *uuid.UUID `json:"team_id,omitempty"`
+	Name                   string     `json:"name"`
+	Slug                   string     `json:"slug"`
+	Provider               string     `json:"provider"`
+	ProviderID             string     `json:"provider_id"`
+	DefaultBranch          string     `json:"default_branch"`
+	SyncState              string     `json:"sync_state"`
+	RetentionArtifactBytes int64      `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
+}
+
+type RepositoryRetentionUsageRow struct {
+	ID                     uuid.UUID  `json:"id"`
+	OrgID                  uuid.UUID  `json:"org_id"`
+	TeamID                 *uuid.UUID `json:"team_id,omitempty"`
+	Name                   string     `json:"name"`
+	Slug                   string     `json:"slug"`
+	Provider               string     `json:"provider"`
+	ProviderID             string     `json:"provider_id"`
+	DefaultBranch          string     `json:"default_branch"`
+	SyncState              string     `json:"sync_state"`
+	RetentionArtifactBytes int64      `json:"retention_artifact_bytes"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 func (q *Queries) CreateRepository(ctx context.Context, orgID uuid.UUID, teamID *uuid.UUID, name, slug, provider, providerID, defaultBranch, syncState string) (*Repository, error) {
@@ -40,12 +56,25 @@ func (q *Queries) CreateRepository(ctx context.Context, orgID uuid.UUID, teamID 
 		return nil, err
 	}
 
-	return repositoryFromRow(row), nil
+	return repositoryFromFields(
+		row.ID,
+		row.OrgID,
+		row.TeamID,
+		row.Name,
+		row.Slug,
+		row.Provider,
+		row.ProviderID,
+		row.DefaultBranch,
+		row.SyncState,
+		row.RetentionArtifactBytes,
+		row.CreatedAt,
+		row.UpdatedAt,
+	), nil
 }
 
 func (q *Queries) GetRepositoryByProvider(ctx context.Context, provider, providerID string) (*Repository, error) {
 	const query = `
-		SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, created_at, updated_at
+		SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 		FROM repositories
 		WHERE provider = $1 AND provider_id = $2
 		LIMIT 1
@@ -63,6 +92,7 @@ func (q *Queries) GetRepositoryByProvider(ctx context.Context, provider, provide
 		&repository.ProviderID,
 		&repository.DefaultBranch,
 		&repository.SyncState,
+		&repository.RetentionArtifactBytes,
 		&repository.CreatedAt,
 		&repository.UpdatedAt,
 	); errors.Is(err, sql.ErrNoRows) {
@@ -83,7 +113,20 @@ func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (*Reposit
 		return nil, err
 	}
 
-	return repositoryFromRow(row), nil
+	return repositoryFromFields(
+		row.ID,
+		row.OrgID,
+		row.TeamID,
+		row.Name,
+		row.Slug,
+		row.Provider,
+		row.ProviderID,
+		row.DefaultBranch,
+		row.SyncState,
+		row.RetentionArtifactBytes,
+		row.CreatedAt,
+		row.UpdatedAt,
+	), nil
 }
 
 func (q *Queries) GetRepositoryBySlug(ctx context.Context, orgID uuid.UUID, slug string) (*Repository, error) {
@@ -98,7 +141,20 @@ func (q *Queries) GetRepositoryBySlug(ctx context.Context, orgID uuid.UUID, slug
 		return nil, err
 	}
 
-	return repositoryFromRow(row), nil
+	return repositoryFromFields(
+		row.ID,
+		row.OrgID,
+		row.TeamID,
+		row.Name,
+		row.Slug,
+		row.Provider,
+		row.ProviderID,
+		row.DefaultBranch,
+		row.SyncState,
+		row.RetentionArtifactBytes,
+		row.CreatedAt,
+		row.UpdatedAt,
+	), nil
 }
 
 func (q *Queries) GetRepositoryByProviderID(ctx context.Context, orgID uuid.UUID, provider, providerID string) (*Repository, error) {
@@ -114,7 +170,20 @@ func (q *Queries) GetRepositoryByProviderID(ctx context.Context, orgID uuid.UUID
 		return nil, err
 	}
 
-	return repositoryFromRow(row), nil
+	return repositoryFromFields(
+		row.ID,
+		row.OrgID,
+		row.TeamID,
+		row.Name,
+		row.Slug,
+		row.Provider,
+		row.ProviderID,
+		row.DefaultBranch,
+		row.SyncState,
+		row.RetentionArtifactBytes,
+		row.CreatedAt,
+		row.UpdatedAt,
+	), nil
 }
 
 func (q *Queries) ListRepositoriesByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]Repository, int, error) {
@@ -129,7 +198,20 @@ func (q *Queries) ListRepositoriesByOrg(ctx context.Context, orgID uuid.UUID, li
 
 	repositories := make([]Repository, len(rows))
 	for i, row := range rows {
-		repositories[i] = *repositoryFromRow(row)
+		repositories[i] = *repositoryFromFields(
+			row.ID,
+			row.OrgID,
+			row.TeamID,
+			row.Name,
+			row.Slug,
+			row.Provider,
+			row.ProviderID,
+			row.DefaultBranch,
+			row.SyncState,
+			row.RetentionArtifactBytes,
+			row.CreatedAt,
+			row.UpdatedAt,
+		)
 	}
 
 	total, err := q.db.CountRepositoriesByOrg(ctx, orgID)
@@ -156,7 +238,20 @@ func (q *Queries) ListRepositoriesByTeam(ctx context.Context, teamID uuid.UUID, 
 
 	repositories := make([]Repository, len(rows))
 	for i, row := range rows {
-		repositories[i] = *repositoryFromRow(row)
+		repositories[i] = *repositoryFromFields(
+			row.ID,
+			row.OrgID,
+			row.TeamID,
+			row.Name,
+			row.Slug,
+			row.Provider,
+			row.ProviderID,
+			row.DefaultBranch,
+			row.SyncState,
+			row.RetentionArtifactBytes,
+			row.CreatedAt,
+			row.UpdatedAt,
+		)
 	}
 
 	total, err := q.db.CountRepositoriesByTeam(ctx, nullUUIDFromPtr(&teamID))
@@ -183,25 +278,110 @@ func (q *Queries) UpdateRepository(ctx context.Context, id uuid.UUID, teamID *uu
 		return nil, err
 	}
 
-	return repositoryFromRow(row), nil
+	return repositoryFromFields(
+		row.ID,
+		row.OrgID,
+		row.TeamID,
+		row.Name,
+		row.Slug,
+		row.Provider,
+		row.ProviderID,
+		row.DefaultBranch,
+		row.SyncState,
+		row.RetentionArtifactBytes,
+		row.CreatedAt,
+		row.UpdatedAt,
+	), nil
 }
 
 func (q *Queries) DeleteRepository(ctx context.Context, id uuid.UUID) error {
 	return q.db.DeleteRepository(ctx, id)
 }
 
+func (q *Queries) ListRepositoryRetentionUsage(ctx context.Context) ([]RepositoryRetentionUsageRow, error) {
+	rows, err := q.db.ListRepositoryRetentionUsage(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	usage := make([]RepositoryRetentionUsageRow, len(rows))
+	for i, row := range rows {
+		usage[i] = RepositoryRetentionUsageRow{
+			ID:                     row.ID,
+			OrgID:                  row.OrgID,
+			TeamID:                 uuidPtrFromNull(row.TeamID),
+			Name:                   row.Name,
+			Slug:                   row.Slug,
+			Provider:               row.Provider,
+			ProviderID:             row.ProviderID,
+			DefaultBranch:          row.DefaultBranch,
+			SyncState:              row.SyncState,
+			RetentionArtifactBytes: row.RetentionArtifactBytes,
+			CreatedAt:              row.CreatedAt,
+			UpdatedAt:              row.UpdatedAt,
+		}
+	}
+
+	return usage, nil
+}
+
+func (q *Queries) ListRepositoriesForRetention(ctx context.Context) ([]Repository, error) {
+	rows, err := q.db.ListRepositoriesForRetention(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	repositories := make([]Repository, len(rows))
+	for i, row := range rows {
+		repositories[i] = *repositoryFromFields(
+			row.ID,
+			row.OrgID,
+			row.TeamID,
+			row.Name,
+			row.Slug,
+			row.Provider,
+			row.ProviderID,
+			row.DefaultBranch,
+			row.SyncState,
+			row.RetentionArtifactBytes,
+			row.CreatedAt,
+			row.UpdatedAt,
+		)
+	}
+
+	return repositories, nil
+}
+
 func repositoryFromRow(row dbgen.Repository) *Repository {
+	return repositoryFromFields(
+		row.ID,
+		row.OrgID,
+		row.TeamID,
+		row.Name,
+		row.Slug,
+		row.Provider,
+		row.ProviderID,
+		row.DefaultBranch,
+		row.SyncState,
+		row.RetentionArtifactBytes,
+		row.CreatedAt,
+		row.UpdatedAt,
+	)
+}
+
+func repositoryFromFields(id, orgID uuid.UUID, teamID uuid.NullUUID, name, slug, provider, providerID, defaultBranch, syncState string, retentionArtifactBytes int64, createdAt, updatedAt time.Time) *Repository {
 	return &Repository{
-		ID:            row.ID,
-		OrgID:         row.OrgID,
-		TeamID:        uuidPtrFromNull(row.TeamID),
-		Name:          row.Name,
-		Slug:          row.Slug,
-		Provider:      row.Provider,
-		ProviderID:    row.ProviderID,
-		DefaultBranch: row.DefaultBranch,
-		SyncState:     row.SyncState,
-		CreatedAt:     row.CreatedAt,
-		UpdatedAt:     row.UpdatedAt,
+		ID:                     id,
+		OrgID:                  orgID,
+		TeamID:                 uuidPtrFromNull(teamID),
+		Name:                   name,
+		Slug:                   slug,
+		Provider:               provider,
+		ProviderID:             providerID,
+		DefaultBranch:          defaultBranch,
+		SyncState:              syncState,
+		RetentionArtifactBytes: retentionArtifactBytes,
+		CreatedAt:              createdAt,
+		UpdatedAt:              updatedAt,
 	}
 }

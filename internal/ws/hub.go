@@ -33,10 +33,13 @@ type client struct {
 }
 
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[*client]bool
-	byUser  map[uuid.UUID]map[*client]bool
-	log     zerolog.Logger
+	mu        sync.RWMutex
+	clients   map[*client]bool
+	byUser    map[uuid.UUID]map[*client]bool
+	log       zerolog.Logger
+	idleCh    chan struct{}
+	draining  atomic.Bool
+	closeOnce sync.Once
 }
 
 func NewHub(log zerolog.Logger) *Hub {
@@ -44,6 +47,7 @@ func NewHub(log zerolog.Logger) *Hub {
 		clients: map[*client]bool{},
 		byUser:  map[uuid.UUID]map[*client]bool{},
 		log:     log.With().Str("component", "ws.hub").Logger(),
+		idleCh:  closedSignal(),
 	}
 }
 
@@ -56,6 +60,9 @@ func (h *Hub) Register(conn *websocket.Conn, userID uuid.UUID) *client {
 	}
 
 	h.mu.Lock()
+	if len(h.clients) == 0 {
+		h.idleCh = make(chan struct{})
+	}
 	h.clients[c] = true
 	if h.byUser[userID] == nil {
 		h.byUser[userID] = map[*client]bool{}
@@ -66,6 +73,14 @@ func (h *Hub) Register(conn *websocket.Conn, userID uuid.UUID) *client {
 
 	go h.writePump(c)
 	return c
+}
+
+func (h *Hub) BeginDrain() {
+	h.draining.Store(true)
+}
+
+func (h *Hub) IsDraining() bool {
+	return h.draining.Load()
 }
 
 func (h *Hub) Unregister(c *client) {
@@ -82,6 +97,9 @@ func (h *Hub) Unregister(c *client) {
 			delete(h.byUser, c.userID)
 		}
 	}
+	if len(h.clients) == 0 {
+		closeIdleSignal(h.idleCh)
+	}
 	h.mu.Unlock()
 	if removed {
 		metrics.WebSocketConnections.Dec()
@@ -93,6 +111,36 @@ func (h *Hub) Unregister(c *client) {
 		close(c.send)
 		c.sendMu.Unlock()
 	})
+}
+
+func (h *Hub) WaitForZero(ctx context.Context) error {
+	h.mu.RLock()
+	if len(h.clients) == 0 {
+		h.mu.RUnlock()
+		return nil
+	}
+	idleCh := h.idleCh
+	h.mu.RUnlock()
+
+	select {
+	case <-idleCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *Hub) CloseAll(code websocket.StatusCode, reason string) {
+	h.mu.RLock()
+	clients := make([]*client, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	for _, c := range clients {
+		_ = c.conn.Close(code, reason)
+	}
 }
 
 func (h *Hub) SendToUser(userID uuid.UUID, msg Message) {
@@ -180,4 +228,22 @@ func allowsTopic(c *client, topic string) bool {
 		return true
 	}
 	return c.topics[topic] || c.topics["*"]
+}
+
+func closedSignal() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func closeIdleSignal(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+		return
+	default:
+		close(ch)
+	}
 }

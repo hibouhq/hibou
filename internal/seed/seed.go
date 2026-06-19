@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -520,6 +521,18 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 				return fmt.Errorf("seeding findings for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
 
+			if err := seedRepoHistory(ctx, tx, queries, historyParams{
+				repoID:           repo.ID,
+				branchRefID:      branchRef.ID,
+				latestSnapshotID: snapshot.ID,
+				latestCreatedAt:  snapshot.CreatedAt,
+				repoSeed:         repoSeed,
+				orgIndex:         orgIndex,
+				repoIndex:        repoIndex,
+			}); err != nil {
+				return fmt.Errorf("seeding history for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
+			}
+
 			seededSnapshots[repoSeedKey(orgSeed.slug, repoSeed.slug)] = seededSnapshotState{
 				snapshotID:   snapshot.ID,
 				componentIDs: componentIDs,
@@ -701,6 +714,369 @@ func seedFindings(ctx context.Context, queries *store.Queries, snapshotID uuid.U
 
 func repoSeedKey(orgSlug, repoSlug string) string {
 	return orgSlug + "/" + repoSlug
+}
+
+// --- Snapshot history, coverage, and extra refs (snapshot/coverage test data) ---
+
+const defaultSeedTag = "v1.0.0"
+
+type coverageFileSpec struct {
+	path    string
+	valid   int
+	covered int
+}
+
+type coverageSpec struct {
+	format string
+	files  []coverageFileSpec
+}
+
+type snapshotMeta struct {
+	tag       *string
+	runNumber *string
+	createdAt time.Time
+}
+
+// historyParams bundles the per-repo context needed to seed snapshot history.
+type historyParams struct {
+	repoID           uuid.UUID
+	branchRefID      uuid.UUID
+	latestSnapshotID uuid.UUID
+	latestCreatedAt  time.Time
+	repoSeed         seededRepo
+	orgIndex         int
+	repoIndex        int
+}
+
+var historySteps = []struct {
+	daysAgo int
+	status  store.SnapshotStatus
+	rate    float64
+}{
+	{28, store.SnapshotStatusComplete, 0.61},
+	{21, store.SnapshotStatusComplete, 0.66},
+	{14, store.SnapshotStatusFailed, 0},
+	{7, store.SnapshotStatusComplete, 0.72},
+}
+
+// seedRepoHistory enriches a repo's main branch with coverage on the latest
+// snapshot, a backdated snapshot history (incl. a failed build), and — for the
+// first repo of each org — a release tag and an in-flight pull request. This is
+// what exercises the snapshot selector, coverage tab, trends, and PR views.
+func seedRepoHistory(ctx context.Context, tx *sql.Tx, queries *store.Queries, p historyParams) error {
+	if len(p.repoSeed.components) == 0 {
+		return nil // unscanned repo (e.g. discovered-only) — leave empty
+	}
+
+	// Coverage for the current/latest snapshot (highest rate of the series).
+	if err := seedCoverage(ctx, tx, p.latestSnapshotID, p.latestCreatedAt, coverageSpecForRepo(p.repoSeed, 0.78)); err != nil {
+		return err
+	}
+	// Test results for the current snapshot (one failing case for visibility).
+	if err := seedTests(ctx, tx, p.latestSnapshotID, p.latestCreatedAt, p.repoSeed, 1); err != nil {
+		return err
+	}
+
+	if err := seedMainBranchHistory(ctx, tx, queries, p); err != nil {
+		return err
+	}
+
+	// Only the first repo of each org grows a release tag + an open PR.
+	if p.repoIndex != 0 {
+		return nil
+	}
+	return seedExtraRefs(ctx, tx, queries, p)
+}
+
+// seedMainBranchHistory creates the backdated snapshots on the main branch.
+func seedMainBranchHistory(ctx context.Context, tx *sql.Tx, queries *store.Queries, p historyParams) error {
+	for i, step := range historySteps {
+		createdAt := p.latestCreatedAt.AddDate(0, 0, -step.daysAgo)
+		commitSHA := fakeHistorySHA(p.orgIndex, p.repoIndex, i)
+		runNumber := strconv.Itoa(40 + i)
+		snapshotID, err := insertSnapshotRaw(ctx, tx, p.branchRefID, commitSHA, step.status, snapshotMeta{runNumber: &runNumber, createdAt: createdAt})
+		if err != nil {
+			return err
+		}
+		if step.status == store.SnapshotStatusFailed {
+			continue // failed build ingested nothing
+		}
+		if _, err := seedComponentsForSnapshot(ctx, tx, snapshotID, p.repoSeed.components); err != nil {
+			return err
+		}
+		if err := seedFindings(ctx, queries, snapshotID, subsetFindings(p.repoSeed.findings, i+2)); err != nil {
+			return err
+		}
+		if err := seedCoverage(ctx, tx, snapshotID, createdAt, coverageSpecForRepo(p.repoSeed, step.rate)); err != nil {
+			return err
+		}
+		// Older snapshots had more failing tests (improving over time).
+		if err := seedTests(ctx, tx, snapshotID, createdAt, p.repoSeed, 4-i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedExtraRefs adds a release tag and an in-flight pull request to a repo.
+func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p historyParams) error {
+	tagName := p.repoSeed.label
+	if tagName == "" || tagName == "initial" {
+		tagName = defaultSeedTag
+	}
+	tagCommit := fakeHistorySHA(p.orgIndex, p.repoIndex, 90)
+	tagCreatedAt := p.latestCreatedAt.AddDate(0, 0, -3)
+	tagRef, err := queries.CreateRef(ctx, p.repoID, tagName, store.RefTypeTag, nil, nil, &tagCommit)
+	if err != nil {
+		return err
+	}
+	tagSnapshotID, err := insertSnapshotRaw(ctx, tx, tagRef.ID, tagCommit, store.SnapshotStatusComplete, snapshotMeta{tag: &tagName, createdAt: tagCreatedAt})
+	if err != nil {
+		return err
+	}
+	if _, err := seedComponentsForSnapshot(ctx, tx, tagSnapshotID, p.repoSeed.components); err != nil {
+		return err
+	}
+	if err := seedCoverage(ctx, tx, tagSnapshotID, tagCreatedAt, coverageSpecForRepo(p.repoSeed, 0.74)); err != nil {
+		return err
+	}
+
+	// In-flight pull request targeting main: its snapshot is still pending.
+	prCommit := fakeHistorySHA(p.orgIndex, p.repoIndex, 42)
+	prRef, err := queries.CreateRef(ctx, p.repoID, "refs/pull/42/head", store.RefTypePullRequest, nil, &p.branchRefID, &prCommit)
+	if err != nil {
+		return err
+	}
+	if err := setSeedPRMetadata(ctx, tx, prRef.ID, "open", "Add request rate limiting middleware", "feature/rate-limit"); err != nil {
+		return err
+	}
+	prSnapshotID, err := insertSnapshotRaw(ctx, tx, prRef.ID, prCommit, store.SnapshotStatusPending, snapshotMeta{createdAt: p.latestCreatedAt.Add(-2 * time.Hour)})
+	if err != nil {
+		return err
+	}
+	_, err = seedComponentsForSnapshot(ctx, tx, prSnapshotID, p.repoSeed.components)
+	return err
+}
+
+type seededTestCase struct {
+	suite     string
+	name      string
+	classname string
+	status    string
+	message   string
+	duration  float64
+}
+
+// seedTests inserts a JUnit-style test report for a snapshot. failures > 0 marks
+// the first `failures` cases as failed so the Tests tab shows mixed results.
+func seedTests(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, createdAt time.Time, repoSeed seededRepo, failures int) error {
+	cases := testCasesForRepo(repoSeed, failures)
+	if len(cases) == 0 {
+		return nil
+	}
+
+	total := len(cases)
+	passed, failed, skipped, errs := 0, 0, 0, 0
+	duration := 0.0
+	for _, c := range cases {
+		duration += c.duration
+		switch c.status {
+		case "failed":
+			failed++
+		case "error":
+			errs++
+		case "skipped":
+			skipped++
+		default:
+			passed++
+		}
+	}
+
+	const insertReport = `
+		INSERT INTO test_reports (snapshot_id, format, total, passed, failed, skipped, errors, duration_seconds, created_at)
+		VALUES ($1, 'junit', $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (snapshot_id) DO NOTHING
+		RETURNING id
+	`
+	var reportID uuid.UUID
+	if err := tx.QueryRowContext(ctx, insertReport, snapshotID, total, passed, failed, skipped, errs, duration, createdAt).Scan(&reportID); err != nil {
+		return err
+	}
+
+	const insertCase = `
+		INSERT INTO test_cases (test_report_id, suite, name, classname, status, duration_seconds, message)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+	for _, c := range cases {
+		if _, err := tx.ExecContext(ctx, insertCase, reportID, c.suite, c.name, c.classname, c.status, c.duration, c.message); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func testCasesForRepo(repoSeed seededRepo, failures int) []seededTestCase {
+	suite := repoSeed.slug
+	names := []string{
+		"TestHealthEndpoint", "TestAuthFlow", "TestConfigDefaults", "TestRequestValidation",
+		"TestPagination", "TestErrorMapping", "TestRetryBackoff", "TestSerialization",
+	}
+	cases := make([]seededTestCase, 0, len(names))
+	for i, name := range names {
+		c := seededTestCase{
+			suite:     suite,
+			name:      name,
+			classname: repoSeed.slug,
+			status:    "passed",
+			duration:  0.02 + float64(i%5)*0.013,
+		}
+		if i < failures {
+			c.status = "failed"
+			c.message = "assertion failed: expected 200 but got 500 (" + name + ")"
+			c.duration += 0.05
+		} else if i == failures {
+			// one skipped case after the failures
+			c.status = "skipped"
+			c.message = "flaky on CI"
+		}
+		cases = append(cases, c)
+	}
+	return cases
+}
+
+func insertSnapshotRaw(ctx context.Context, tx *sql.Tx, refID uuid.UUID, commitSHA string, status store.SnapshotStatus, meta snapshotMeta) (uuid.UUID, error) {
+	const insertSnapshot = `
+		INSERT INTO snapshots (ref_id, commit_sha, status, tag, run_number, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id
+	`
+	var snapshotID uuid.UUID
+	err := tx.QueryRowContext(ctx, insertSnapshot, refID, commitSHA, string(status), nullSeedString(deref(meta.tag)), nullSeedString(deref(meta.runNumber)), meta.createdAt).Scan(&snapshotID)
+	return snapshotID, err
+}
+
+func seedCoverage(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, createdAt time.Time, spec coverageSpec) error {
+	if len(spec.files) == 0 {
+		return nil
+	}
+
+	totalValid := 0
+	totalCovered := 0
+	for _, file := range spec.files {
+		totalValid += file.valid
+		totalCovered += file.covered
+	}
+
+	const insertReport = `
+		INSERT INTO coverage_reports (snapshot_id, format, line_rate, lines_valid, lines_covered, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (snapshot_id, format) DO NOTHING
+		RETURNING id
+	`
+	var reportID uuid.UUID
+	if err := tx.QueryRowContext(ctx, insertReport, snapshotID, spec.format, coverageRate(totalCovered, totalValid), totalValid, totalCovered, createdAt).Scan(&reportID); err != nil {
+		return err
+	}
+
+	const insertFile = `
+		INSERT INTO coverage_files (coverage_report_id, file_path, line_rate, lines_valid, lines_covered)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (coverage_report_id, file_path) DO NOTHING
+	`
+	for _, file := range spec.files {
+		if _, err := tx.ExecContext(ctx, insertFile, reportID, file.path, coverageRate(file.covered, file.valid), file.valid, file.covered); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func coverageSpecForRepo(repoSeed seededRepo, rate float64) coverageSpec {
+	format := "lcov"
+	if len(repoSeed.components) > 0 {
+		switch repoSeed.components[0].ecosystem {
+		case "go":
+			format = "gocover"
+		case "pypi":
+			format = "cobertura"
+		case "maven":
+			format = "jacoco"
+		default:
+			format = "lcov"
+		}
+	}
+
+	// Derive plausible file paths from the repo's findings, falling back to synthesized names.
+	paths := make([]string, 0, 6)
+	seen := make(map[string]struct{})
+	for _, f := range repoSeed.findings {
+		if f.filePath == "" {
+			continue
+		}
+		if _, ok := seen[f.filePath]; ok {
+			continue
+		}
+		seen[f.filePath] = struct{}{}
+		paths = append(paths, f.filePath)
+		if len(paths) == 6 {
+			break
+		}
+	}
+	for len(paths) < 4 {
+		paths = append(paths, fmt.Sprintf("src/module_%d.go", len(paths)+1))
+	}
+
+	files := make([]coverageFileSpec, 0, len(paths))
+	for i, path := range paths {
+		valid := 80 + (i*17)%60 // 80..139, deterministic spread
+		// Vary per-file rate around the target so the file table isn't uniform.
+		fileRate := rate + float64((i%3)-1)*0.07
+		if fileRate < 0 {
+			fileRate = 0
+		}
+		if fileRate > 1 {
+			fileRate = 1
+		}
+		covered := int(float64(valid)*fileRate + 0.5)
+		files = append(files, coverageFileSpec{path: path, valid: valid, covered: covered})
+	}
+
+	return coverageSpec{format: format, files: files}
+}
+
+func setSeedPRMetadata(ctx context.Context, tx *sql.Tx, refID uuid.UUID, state, title, sourceBranch string) error {
+	const update = `UPDATE refs SET pr_state = $2, pr_title = $3, pr_source_branch = $4 WHERE id = $1`
+	_, err := tx.ExecContext(ctx, update, refID, state, title, sourceBranch)
+	return err
+}
+
+func subsetFindings(findings []seededFinding, count int) []seededFinding {
+	if count <= 0 || count >= len(findings) {
+		return findings
+	}
+	return findings[:count]
+}
+
+func coverageRate(covered, valid int) float64 {
+	if valid <= 0 {
+		return 0
+	}
+	return float64(covered) / float64(valid)
+}
+
+func fakeHistorySHA(orgIndex, repoIndex, step int) string {
+	//nolint:gosec // G401: SHA1 is used only for deterministic fake git commit hashes in seed data.
+	sum := sha1.Sum([]byte(fmt.Sprintf("hist-%d-%d-%d", orgIndex, repoIndex, step)))
+	return hex.EncodeToString(sum[:])[:7]
+}
+
+func deref(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func component(purl, name, version, ecosystem string) seededComponent {

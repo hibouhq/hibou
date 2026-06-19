@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,13 +28,19 @@ type severityCounts struct {
 }
 
 type advisoryResponse struct {
-	ID          uuid.UUID `json:"id"`
-	CanonicalID string    `json:"canonical_id"`
-	Title       string    `json:"title"`
-	Severity    string    `json:"severity"`
-	CvssScore   *float64  `json:"cvss_score,omitempty"`
-	IsMalware   bool      `json:"is_malware"`
-	MalwareType *string   `json:"malware_type,omitempty"`
+	ID            uuid.UUID `json:"id"`
+	CanonicalID   string    `json:"canonical_id"`
+	Title         string    `json:"title"`
+	Severity      string    `json:"severity"`
+	CvssScore     *float64  `json:"cvss_score,omitempty"`
+	IsMalware     bool      `json:"is_malware"`
+	MalwareType   *string   `json:"malware_type,omitempty"`
+	Cwe           *string   `json:"cwe,omitempty"`
+	CweName       *string   `json:"cwe_name,omitempty"`
+	Summary       *string   `json:"summary,omitempty"`
+	FixedVersions []string  `json:"fixed_versions,omitempty"`
+	References    []string  `json:"references,omitempty"`
+	Source        *string   `json:"source,omitempty"`
 }
 
 type componentWithVulnsResponse struct {
@@ -44,6 +52,27 @@ type componentWithVulnsResponse struct {
 	VulnCount       int                `json:"vuln_count"`
 	HighestSeverity *string            `json:"highest_severity,omitempty"`
 	Advisories      []advisoryResponse `json:"advisories,omitempty"`
+	Sources         []string           `json:"sources,omitempty"`
+	FixedVersions   []string           `json:"fixed_versions,omitempty"`
+}
+
+type componentGraphNodeResponse struct {
+	Ref       string `json:"ref"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Ecosystem string `json:"ecosystem"`
+	VulnCount int    `json:"vuln_count"`
+}
+
+type componentGraphEdgeResponse struct {
+	Ref       string   `json:"ref"`
+	DependsOn []string `json:"depends_on"`
+}
+
+type componentGraphResponse struct {
+	RootRef string                       `json:"root_ref"`
+	Nodes   []componentGraphNodeResponse `json:"nodes"`
+	Edges   []componentGraphEdgeResponse `json:"edges"`
 }
 
 type refSummaryResponse struct {
@@ -73,6 +102,8 @@ type orgDashboardTotalsResponse struct {
 	ComponentsTotal int            `json:"components_total"`
 }
 
+type snapshotFallbackLookup func(context.Context, uuid.UUID) (*store.Snapshot, error)
+
 type orgDashboardResponse struct {
 	Repos    []repoDashboardEntryResponse `json:"repos"`
 	Totals   orgDashboardTotalsResponse   `json:"totals"`
@@ -85,7 +116,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithVulnerabilitiesByRef)
 	if !ok {
 		return
 	}
@@ -212,7 +243,7 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithComponentsByRef)
 	if !ok {
 		return
 	}
@@ -241,13 +272,56 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 	api.JSON(w, http.StatusOK, responses)
 }
 
+func (s *Server) handleGetRefComponentGraph(w http.ResponseWriter, r *http.Request) {
+	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithComponentsByRef)
+	if !ok {
+		return
+	}
+	if snapshot == nil {
+		api.JSON(w, http.StatusOK, componentGraphResponse{RootRef: "", Nodes: []componentGraphNodeResponse{}, Edges: []componentGraphEdgeResponse{}})
+		return
+	}
+
+	components, err := s.queries.ListComponentsBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list components")
+		return
+	}
+	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerability matches")
+		return
+	}
+	edges, err := s.queries.ListComponentDependencyEdgesBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list component dependencies")
+		return
+	}
+	declaredRootRef, err := s.queries.GetSnapshotDependencyRoot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load component dependency root")
+		return
+	}
+
+	response := buildComponentGraphResponse(components, vulnerabilities, edges, declaredRootRef)
+	api.JSON(w, http.StatusOK, response)
+}
+
 func (s *Server) handleGetRefSummary(w http.ResponseWriter, r *http.Request) {
 	_, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
 		return
 	}
 
-	snapshot, ok := s.resolveSnapshotForRequest(r, w, repo)
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo,
+		s.queries.GetLatestSnapshotWithComponentsByRef,
+		s.queries.GetLatestSnapshotWithVulnerabilitiesByRef,
+	)
 	if !ok {
 		return
 	}
@@ -457,6 +531,10 @@ func resolveRequestedRefName(r *http.Request, repo *store.Repository) string {
 }
 
 func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWriter, repo *store.Repository) (*store.Snapshot, bool) {
+	return s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestNonPurgedSnapshotByRef)
+}
+
+func (s *Server) resolveSnapshotForRequestWithFallback(r *http.Request, w http.ResponseWriter, repo *store.Repository, fallbacks ...snapshotFallbackLookup) (*store.Snapshot, bool) {
 	snapshotID := strings.TrimSpace(r.URL.Query().Get("snapshot"))
 	if snapshotID != "" {
 		snapshot, status, message := s.loadSnapshotForRepoByID(r, repo, snapshotID)
@@ -474,7 +552,7 @@ func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWrite
 	}
 
 	var err error
-	ref, snapshot, err := s.resolveSnapshotForRepo(r, repo, refName)
+	ref, snapshot, err := s.resolveSnapshotForRepoWithFallback(r, repo, refName, fallbacks...)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load repository reference")
 		return nil, false
@@ -488,12 +566,16 @@ func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWrite
 }
 
 func (s *Server) resolveSnapshotForRepo(r *http.Request, repo *store.Repository, refName string) (*store.Ref, *store.Snapshot, error) {
+	return s.resolveSnapshotForRepoWithFallback(r, repo, refName, s.queries.GetLatestNonPurgedSnapshotByRef)
+}
+
+func (s *Server) resolveSnapshotForRepoWithFallback(r *http.Request, repo *store.Repository, refName string, fallbacks ...snapshotFallbackLookup) (*store.Ref, *store.Snapshot, error) {
 	ref, err := s.resolveRefForRepo(r, repo, refName)
 	if err != nil || ref == nil {
 		return ref, nil, err
 	}
 
-	snapshot, err := s.resolveDefaultSnapshotForDataView(r.Context(), ref.ID)
+	snapshot, err := s.resolveDefaultSnapshotForDataView(r.Context(), ref.ID, fallbacks...)
 	if err != nil {
 		return ref, nil, err
 	}
@@ -501,7 +583,7 @@ func (s *Server) resolveSnapshotForRepo(r *http.Request, repo *store.Repository,
 	return ref, snapshot, nil
 }
 
-func (s *Server) resolveDefaultSnapshotForDataView(ctx context.Context, refID uuid.UUID) (*store.Snapshot, error) {
+func (s *Server) resolveDefaultSnapshotForDataView(ctx context.Context, refID uuid.UUID, fallbacks ...snapshotFallbackLookup) (*store.Snapshot, error) {
 	snapshot, err := s.queries.GetLatestCompleteSnapshotByRef(ctx, refID)
 	if err != nil {
 		return nil, err
@@ -510,7 +592,25 @@ func (s *Server) resolveDefaultSnapshotForDataView(ctx context.Context, refID uu
 		return snapshot, nil
 	}
 
-	return s.queries.GetLatestSnapshotByRef(ctx, refID)
+	for _, fallback := range fallbacks {
+		snapshot, err = fallback(ctx, refID)
+		if err != nil {
+			return nil, err
+		}
+		if snapshot != nil {
+			return snapshot, nil
+		}
+	}
+
+	snapshot, err = s.queries.GetLatestSnapshotWithAnalysisDataByRef(ctx, refID)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot != nil {
+		return snapshot, nil
+	}
+
+	return s.queries.GetLatestNonPurgedSnapshotByRef(ctx, refID)
 }
 
 func (s *Server) lookupRepoRef(r *http.Request, repo *store.Repository, name string, refType store.RefType) (*store.Ref, error) {
@@ -573,14 +673,14 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 		return nil, err
 	}
 
-	vulnsByComponent := make(map[uuid.UUID][]dbgen.Advisory)
+	vulnsByComponent := make(map[uuid.UUID][]countedVuln)
 	for _, item := range countedVulns {
-		vulnsByComponent[item.ComponentID] = append(vulnsByComponent[item.ComponentID], item.Advisory)
+		vulnsByComponent[item.ComponentID] = append(vulnsByComponent[item.ComponentID], item)
 	}
 
 	responses := make([]componentWithVulnsResponse, 0, len(components))
 	for _, component := range components {
-		advisories := vulnsByComponent[component.ID]
+		countedAdvisories := vulnsByComponent[component.ID]
 		response := componentWithVulnsResponse{
 			ID:        component.ID,
 			Name:      component.Name,
@@ -588,12 +688,20 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 			Ecosystem: component.Ecosystem,
 			Purl:      component.Purl,
 		}
-		if len(advisories) > 0 {
-			response.Advisories = make([]advisoryResponse, 0, len(advisories))
-			response.VulnCount = len(advisories)
-			for _, advisory := range advisories {
-				response.Advisories = append(response.Advisories, advisoryToResponse(advisory))
+		if len(countedAdvisories) > 0 {
+			response.Advisories = make([]advisoryResponse, 0, len(countedAdvisories))
+			response.VulnCount = len(countedAdvisories)
+			advisories := make([]dbgen.Advisory, 0, len(countedAdvisories))
+			componentSources := make([]string, 0, len(countedAdvisories))
+			componentFixedVersions := make([]string, 0, len(countedAdvisories))
+			for _, countedAdvisory := range countedAdvisories {
+				advisories = append(advisories, countedAdvisory.Advisory)
+				response.Advisories = append(response.Advisories, advisoryToResponse(countedAdvisory.Advisory, countedAdvisory.Enrichment))
+				componentSources = append(componentSources, countedAdvisory.Enrichment.Sources...)
+				componentFixedVersions = append(componentFixedVersions, countedAdvisory.Enrichment.FixedVersions...)
 			}
+			response.Sources = sortedUniqueNonEmptyStrings(componentSources)
+			response.FixedVersions = sortedUniqueNonEmptyStrings(componentFixedVersions)
 			highest := highestAdvisorySeverity(advisories)
 			if highest != "" {
 				response.HighestSeverity = &highest
@@ -614,9 +722,71 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 	return responses, nil
 }
 
+func buildComponentGraphResponse(components []dbgen.Component, vulnerabilities []store.Vulnerability, dependencyEdges []store.ListComponentDependencyEdgesBySnapshotRow, declaredRootRef *string) componentGraphResponse {
+	vulnCounts := countCountedVulnerabilitiesByComponent(vulnerabilities)
+	nodes := make([]componentGraphNodeResponse, 0, len(components))
+	for _, component := range components {
+		nodes = append(nodes, componentGraphNodeResponse{
+			Ref:       component.Purl,
+			Name:      component.Name,
+			Version:   component.Version,
+			Ecosystem: component.Ecosystem,
+			VulnCount: vulnCounts[component.ID],
+		})
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		return nodes[i].Ref < nodes[j].Ref
+	})
+
+	dependsOnByRef := make(map[string][]string)
+	inDegree := make(map[string]int)
+	adjacency := make(map[string][]string)
+	for _, edge := range dependencyEdges {
+		dependsOnByRef[edge.Ref] = append(dependsOnByRef[edge.Ref], edge.DependsOn)
+		adjacency[edge.Ref] = append(adjacency[edge.Ref], edge.DependsOn)
+		inDegree[edge.DependsOn]++
+		if _, ok := inDegree[edge.Ref]; !ok {
+			inDegree[edge.Ref] = inDegree[edge.Ref]
+		}
+	}
+	graphEdges := make([]componentGraphEdgeResponse, 0, len(dependsOnByRef))
+	for ref, dependsOn := range dependsOnByRef {
+		graphEdges = append(graphEdges, componentGraphEdgeResponse{Ref: ref, DependsOn: sortedUniqueNonEmptyStrings(dependsOn)})
+	}
+	sort.SliceStable(graphEdges, func(i, j int) bool {
+		return graphEdges[i].Ref < graphEdges[j].Ref
+	})
+	rootRef := ""
+	// Prefer the SBOM-declared root when persisted; fall back to a deterministic graph heuristic only when absent.
+	if declaredRootRef != nil {
+		rootRef = *declaredRootRef
+	} else {
+		rootRef = deriveComponentGraphRootRef(adjacency, inDegree)
+	}
+
+	return componentGraphResponse{
+		RootRef: rootRef,
+		Nodes:   nodes,
+		Edges:   graphEdges,
+	}
+}
+
 type countedVuln struct {
 	ComponentID uuid.UUID
 	Advisory    dbgen.Advisory
+	Enrichment  advisoryEnrichment
+}
+
+type countedVulnerabilityPair struct {
+	ComponentID uuid.UUID
+	AdvisoryID  uuid.UUID
+}
+
+type advisoryEnrichment struct {
+	FixedVersions []string
+	References    []string
+	Sources       []string
+	Source        *string
 }
 
 func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulnerability) ([]countedVuln, error) {
@@ -629,26 +799,146 @@ func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulne
 	if err != nil {
 		return nil, err
 	}
+	enrichmentByID, err := s.loadAdvisoryEnrichment(r.Context(), advisoryIDs, advisoryByID)
+	if err != nil {
+		return nil, err
+	}
 
-	counted := make([]countedVuln, 0, len(vulnerabilities))
+	pairs := collectCountedVulnerabilityPairs(vulnerabilities)
+	counted := make([]countedVuln, 0, len(pairs))
+	for _, pair := range pairs {
+		advisory, ok := advisoryByID[pair.AdvisoryID]
+		if !ok {
+			continue
+		}
+		counted = append(counted, countedVuln{
+			ComponentID: pair.ComponentID,
+			Advisory:    advisory,
+			Enrichment:  enrichmentByID[pair.AdvisoryID],
+		})
+	}
+
+	return counted, nil
+}
+
+func collectCountedVulnerabilityPairs(vulnerabilities []store.Vulnerability) []countedVulnerabilityPair {
+	pairs := make([]countedVulnerabilityPair, 0, len(vulnerabilities))
 	seenPairs := make(map[string]struct{})
 	for _, vulnerability := range vulnerabilities {
 		if !shouldCountVulnerability(vulnerability) {
 			continue
 		}
-		advisory, ok := advisoryByID[*vulnerability.AdvisoryID]
-		if !ok {
-			continue
+		pair := countedVulnerabilityPair{
+			ComponentID: *vulnerability.ComponentID,
+			AdvisoryID:  *vulnerability.AdvisoryID,
 		}
-		key := countedVulnPairKey(*vulnerability.ComponentID, *vulnerability.AdvisoryID)
+		key := countedVulnPairKey(pair.ComponentID, pair.AdvisoryID)
 		if _, ok := seenPairs[key]; ok {
 			continue
 		}
 		seenPairs[key] = struct{}{}
-		counted = append(counted, countedVuln{ComponentID: *vulnerability.ComponentID, Advisory: advisory})
+		pairs = append(pairs, pair)
+	}
+	return pairs
+}
+
+func countCountedVulnerabilitiesByComponent(vulnerabilities []store.Vulnerability) map[uuid.UUID]int {
+	pairs := collectCountedVulnerabilityPairs(vulnerabilities)
+	counts := make(map[uuid.UUID]int, len(pairs))
+	for _, pair := range pairs {
+		counts[pair.ComponentID]++
+	}
+	return counts
+}
+
+// When the SBOM root component bom-ref is not persisted, derive a stable root from the graph:
+// choose an in-degree-zero node, prefer the one with the largest reachable descendant set,
+// and tie-break lexicographically by purl. Flat graphs intentionally have no root_ref.
+func deriveComponentGraphRootRef(adjacency map[string][]string, inDegree map[string]int) string {
+	if len(adjacency) == 0 {
+		return ""
+	}
+	candidates := make([]string, 0, len(adjacency))
+	for ref := range adjacency {
+		if len(adjacency[ref]) == 0 {
+			continue
+		}
+		if inDegree[ref] == 0 {
+			candidates = append(candidates, ref)
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	sort.Strings(candidates)
+	best := candidates[0]
+	bestReachable := reachableDescendantCount(best, adjacency)
+	for _, candidate := range candidates[1:] {
+		reachable := reachableDescendantCount(candidate, adjacency)
+		if reachable > bestReachable {
+			best = candidate
+			bestReachable = reachable
+		}
+	}
+	return best
+}
+
+func reachableDescendantCount(root string, adjacency map[string][]string) int {
+	seen := map[string]struct{}{root: {}}
+	stack := append([]string(nil), adjacency[root]...)
+	count := 0
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := seen[current]; ok {
+			continue
+		}
+		seen[current] = struct{}{}
+		count++
+		stack = append(stack, adjacency[current]...)
+	}
+	return count
+}
+
+func (s *Server) loadAdvisoryEnrichment(ctx context.Context, advisoryIDs []uuid.UUID, advisoryByID map[uuid.UUID]dbgen.Advisory) (map[uuid.UUID]advisoryEnrichment, error) {
+	affectedRanges, err := s.queries.ListAffectedRangesByAdvisoryIDs(ctx, advisoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	sources, err := s.queries.ListSourcesByAdvisoryIDs(ctx, advisoryIDs)
+	if err != nil {
+		return nil, err
+	}
+	aliases, err := s.queries.ListAliasesByAdvisoryIDs(ctx, advisoryIDs)
+	if err != nil {
+		return nil, err
 	}
 
-	return counted, nil
+	rangesByAdvisory := make(map[uuid.UUID][]dbgen.AffectedRange, len(advisoryIDs))
+	for _, affectedRange := range affectedRanges {
+		rangesByAdvisory[affectedRange.AdvisoryID] = append(rangesByAdvisory[affectedRange.AdvisoryID], affectedRange)
+	}
+	sourcesByAdvisory := make(map[uuid.UUID][]dbgen.AdvisorySource, len(advisoryIDs))
+	for _, source := range sources {
+		sourcesByAdvisory[source.AdvisoryID] = append(sourcesByAdvisory[source.AdvisoryID], source)
+	}
+	aliasesByAdvisory := make(map[uuid.UUID][]dbgen.AdvisoryAlias, len(advisoryIDs))
+	for _, alias := range aliases {
+		aliasesByAdvisory[alias.AdvisoryID] = append(aliasesByAdvisory[alias.AdvisoryID], alias)
+	}
+
+	enrichmentByID := make(map[uuid.UUID]advisoryEnrichment, len(advisoryIDs))
+	for advisoryID, advisory := range advisoryByID {
+		normalizedSources := collectNormalizedProviders(sourcesByAdvisory[advisoryID])
+		enrichmentByID[advisoryID] = advisoryEnrichment{
+			FixedVersions: collectAffectedRangeFixedVersions(rangesByAdvisory[advisoryID]),
+			References:    collectAdvisoryReferences(advisory, aliasesByAdvisory[advisoryID], sourcesByAdvisory[advisoryID]),
+			Sources:       normalizedSources,
+			Source:        selectPrimaryProvider(normalizedSources),
+		}
+	}
+
+	return enrichmentByID, nil
 }
 
 func collectCountedAdvisoryIDs(vulnerabilities []store.Vulnerability) []uuid.UUID {
@@ -711,7 +1001,7 @@ func (s *Server) listAllReposByOrg(r *http.Request, orgID uuid.UUID) ([]store.Re
 	return all, nil
 }
 
-func advisoryToResponse(advisory dbgen.Advisory) advisoryResponse {
+func advisoryToResponse(advisory dbgen.Advisory, enrichment advisoryEnrichment) advisoryResponse {
 	var cvssScore *float64
 	if advisory.CvssScore.Valid {
 		if parsed, err := strconv.ParseFloat(advisory.CvssScore.String, 64); err == nil {
@@ -723,15 +1013,165 @@ func advisoryToResponse(advisory dbgen.Advisory) advisoryResponse {
 		value := string(advisory.MalwareType.MalwareType)
 		malwareType = &value
 	}
-	return advisoryResponse{
-		ID:          advisory.ID,
-		CanonicalID: advisory.CanonicalID,
-		Title:       advisory.Title,
-		Severity:    string(advisory.Severity),
-		CvssScore:   cvssScore,
-		IsMalware:   advisory.IsMalware,
-		MalwareType: malwareType,
+	var cwe *string
+	for _, candidate := range advisory.CweIds {
+		if value := strings.TrimSpace(candidate); value != "" {
+			cwe = &value
+			break
+		}
 	}
+	var summary *string
+	if value := strings.TrimSpace(advisory.Description); value != "" {
+		summary = &value
+	}
+	return advisoryResponse{
+		ID:            advisory.ID,
+		CanonicalID:   advisory.CanonicalID,
+		Title:         advisory.Title,
+		Severity:      string(advisory.Severity),
+		CvssScore:     cvssScore,
+		IsMalware:     advisory.IsMalware,
+		MalwareType:   malwareType,
+		Cwe:           cwe,
+		Summary:       summary,
+		FixedVersions: enrichment.FixedVersions,
+		References:    enrichment.References,
+		Source:        enrichment.Source,
+	}
+}
+
+func collectAffectedRangeFixedVersions(affectedRanges []dbgen.AffectedRange) []string {
+	values := make([]string, 0, len(affectedRanges))
+	for _, affectedRange := range affectedRanges {
+		values = append(values, affectedRange.Fixed)
+	}
+	return sortedUniqueNonEmptyStrings(values)
+}
+
+func collectNormalizedProviders(sources []dbgen.AdvisorySource) []string {
+	values := make([]string, 0, len(sources))
+	for _, source := range sources {
+		values = append(values, strings.ToLower(strings.TrimSpace(source.Provider)))
+	}
+	return sortedUniqueNonEmptyStrings(values)
+}
+
+func collectAdvisoryReferences(advisory dbgen.Advisory, aliases []dbgen.AdvisoryAlias, sources []dbgen.AdvisorySource) []string {
+	values := make([]string, 0, len(sources))
+	for _, source := range sources {
+		values = append(values, extractReferenceURLsFromRawData(source.RawData)...)
+	}
+	values = sortedUniqueNonEmptyStrings(values)
+	if len(values) > 0 {
+		return values
+	}
+	if referenceURL, ok := deriveAdvisoryReferenceURL(advisory.CanonicalID); ok {
+		values = append(values, referenceURL)
+	}
+	for _, alias := range aliases {
+		if referenceURL, ok := deriveAdvisoryReferenceURL(alias.Alias); ok {
+			values = append(values, referenceURL)
+		}
+	}
+	return sortedUniqueNonEmptyStrings(values)
+}
+
+func extractReferenceURLsFromRawData(rawData json.RawMessage) []string {
+	if len(rawData) == 0 {
+		return nil
+	}
+	var payload struct {
+		References []struct {
+			URL string `json:"url"`
+		} `json:"references"`
+	}
+	if err := json.Unmarshal(rawData, &payload); err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(payload.References))
+	for _, reference := range payload.References {
+		candidate := strings.TrimSpace(reference.URL)
+		if candidate == "" || !isWellFormedURL(candidate) {
+			continue
+		}
+		values = append(values, candidate)
+	}
+	return sortedUniqueNonEmptyStrings(values)
+}
+
+func deriveAdvisoryReferenceURL(identifier string) (string, bool) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return "", false
+	}
+	upperIdentifier := strings.ToUpper(identifier)
+	switch {
+	case strings.HasPrefix(upperIdentifier, "CVE-"):
+		return "https://nvd.nist.gov/vuln/detail/" + upperIdentifier, true
+	case strings.HasPrefix(upperIdentifier, "GHSA-"):
+		return "https://github.com/advisories/" + upperIdentifier, true
+	case strings.HasPrefix(upperIdentifier, "PYSEC-"), strings.HasPrefix(upperIdentifier, "GO-"), strings.HasPrefix(upperIdentifier, "RUSTSEC-"), strings.HasPrefix(upperIdentifier, "OSV-"), strings.HasPrefix(upperIdentifier, "GSD-"):
+		return "https://osv.dev/vulnerability/" + upperIdentifier, true
+	default:
+		return "", false
+	}
+}
+
+func selectPrimaryProvider(providers []string) *string {
+	if len(providers) == 0 {
+		return nil
+	}
+	priority := map[string]int{
+		"ghsa": 0,
+		"nvd":  1,
+		"osv":  2,
+	}
+	sortedProviders := append([]string(nil), providers...)
+	sort.SliceStable(sortedProviders, func(i, j int) bool {
+		leftPriority, leftKnown := priority[sortedProviders[i]]
+		rightPriority, rightKnown := priority[sortedProviders[j]]
+		switch {
+		case leftKnown && rightKnown && leftPriority != rightPriority:
+			return leftPriority < rightPriority
+		case leftKnown != rightKnown:
+			return leftKnown
+		default:
+			return sortedProviders[i] < sortedProviders[j]
+		}
+	})
+	return &sortedProviders[0]
+}
+
+func sortedUniqueNonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.TrimSpace(value)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		unique = append(unique, normalized)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+func isWellFormedURL(candidate string) bool {
+	parsed, err := url.ParseRequestURI(candidate)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme != "" && parsed.Host != ""
 }
 
 func paginateSlice[T any](items []T, offset, limit int) []T {

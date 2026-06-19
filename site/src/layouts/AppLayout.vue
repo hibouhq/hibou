@@ -4,19 +4,13 @@
       <div class="flex h-full items-center gap-3 px-4">
         <div class="flex items-center gap-3">
           <button
-            class="flex h-9 w-9 items-center justify-center rounded-lg border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/50 hover:text-white md:hidden"
+            class="flex h-9 w-9 items-center justify-center rounded-lg border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/50 hover:text-white"
             type="button"
-            aria-label="Toggle navigation"
-            @click="isMobileNavOpen = !isMobileNavOpen"
+            aria-label="Open navigation menu"
+            :aria-expanded="isDrawerOpen"
+            @click.stop="isDrawerOpen = !isDrawerOpen"
           >
-            <Menu
-              v-if="!isMobileNavOpen"
-              class="h-5 w-5"
-            />
-            <X
-              v-else
-              class="h-5 w-5"
-            />
+            <Menu class="h-5 w-5" />
           </button>
 
           <RouterLink
@@ -168,40 +162,51 @@
           </div>
         </div>
 
-        <div class="hidden min-w-0 flex-1 px-4 md:flex md:justify-center">
-          <label class="flex w-full max-w-xl items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-300 transition focus-within:border-accent/50 focus-within:text-white">
+        <div class="ml-auto hidden sm:block">
+          <label class="flex w-56 items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-sm text-gray-300 transition focus-within:w-72 focus-within:border-accent/50 focus-within:text-white lg:w-64">
             <Search class="h-4 w-4 shrink-0 text-gray-500" />
             <input
               ref="searchInputRef"
               v-model="searchDraft"
               type="search"
               :disabled="!searchOrgSlug || !searchOrgProvider"
-              :placeholder="searchPlaceholder"
-              class="w-full bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none disabled:cursor-not-allowed"
+              :placeholder="searchOrgSlug ? 'Search…' : 'Select an org'"
+              class="w-full min-w-0 bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none disabled:cursor-not-allowed"
               @input="handleSearchInput"
               @keydown.enter.prevent="submitSearch(true)"
             >
-            <span class="rounded-md border border-surface-border-subtle px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-gray-500">
-              Ctrl/Cmd K
-            </span>
+            <span class="hidden shrink-0 rounded border border-surface-border-subtle px-1 text-[10px] text-gray-500 lg:inline">⌘K</span>
           </label>
         </div>
 
         <div class="ml-auto flex items-center gap-3">
-          <button
-            class="relative flex h-9 w-9 items-center justify-center rounded-lg border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/50 hover:text-white"
-            type="button"
-            aria-label="Notifications"
-            title="Notifications"
+          <div
+            ref="notifMenuRef"
+            class="relative"
           >
-            <Bell class="h-5 w-5" />
-            <span
-              v-if="notificationsStore.unreadCount > 0"
-              class="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-semibold leading-5 text-white"
+            <button
+              class="relative flex h-9 w-9 items-center justify-center rounded-lg border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/50 hover:text-white"
+              :class="isNotifMenuOpen ? 'border-accent/50 text-white' : ''"
+              type="button"
+              aria-label="Notifications"
+              title="Notifications"
+              :aria-expanded="isNotifMenuOpen"
+              @click.stop="toggleNotifMenu"
             >
-              {{ Math.min(notificationsStore.unreadCount, 99) }}
-            </span>
-          </button>
+              <Bell class="h-5 w-5" />
+              <span
+                v-if="notificationsStore.unreadCount > 0"
+                class="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-semibold leading-5 text-white"
+              >
+                {{ Math.min(notificationsStore.unreadCount, 99) }}
+              </span>
+            </button>
+
+            <NotificationPanel
+              v-if="isNotifMenuOpen"
+              @close="isNotifMenuOpen = false"
+            />
+          </div>
 
           <div
             ref="userMenuRef"
@@ -261,74 +266,81 @@
       </div>
     </header>
 
-    <div
-      v-if="isMobile && isMobileNavOpen"
-      class="fixed inset-0 z-40 bg-black/60 md:hidden"
-      @click="isMobileNavOpen = false"
-    />
-
-    <aside
-      class="fixed bottom-0 left-0 top-14 z-40 flex flex-col border-r border-surface-border bg-surface-raised transition-transform duration-200"
-      :class="[
-        isMobile
-          ? isMobileNavOpen
-            ? 'translate-x-0 w-[200px]'
-            : '-translate-x-full w-[200px]'
-          : 'translate-x-0',
-        !isMobile && isRailCollapsed ? 'w-14' : !isMobile ? 'w-[200px]' : '',
-      ]"
+    <!-- Hidden, context-scoped navigation drawer -->
+    <Transition
+      enter-active-class="transition-opacity duration-150"
+      enter-from-class="opacity-0"
+      leave-active-class="transition-opacity duration-150"
+      leave-to-class="opacity-0"
     >
-      <nav class="flex-1 space-y-1 px-2 py-3">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.label"
-          :to="item.to"
-          class="group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-gray-400 transition hover:bg-white/5 hover:text-gray-100"
-          :class="isActive(item) ? 'bg-accent-muted text-accent' : ''"
-          @click="isMobileNavOpen = false"
-        >
-          <component
-            :is="item.icon"
-            class="h-5 w-5 shrink-0"
-          />
-          <span
-            v-if="!isRailCollapsed || isMobile"
-            class="truncate"
-          >{{ item.label }}</span>
-          <span
-            v-else
-            class="pointer-events-none absolute left-[calc(100%+0.75rem)] hidden rounded-lg border border-surface-border bg-surface-overlay px-2 py-1 text-xs text-gray-100 shadow-xl group-hover:flex"
-          >
-            {{ item.label }}
-          </span>
-        </RouterLink>
-      </nav>
-
       <div
-        v-if="!isMobile"
-        class="border-t border-surface-border-subtle p-2"
-      >
-        <button
-          class="flex w-full items-center justify-center rounded-xl px-3 py-2 text-gray-400 transition hover:bg-white/5 hover:text-white"
-          type="button"
-          @click="isRailCollapsed = !isRailCollapsed"
-        >
-          <ChevronRight
-            v-if="isRailCollapsed"
-            class="h-5 w-5"
-          />
-          <ChevronLeft
-            v-else
-            class="h-5 w-5"
-          />
-        </button>
-      </div>
-    </aside>
-
-    <main
-      class="min-h-screen px-4 pb-6 pt-[4.75rem] transition-[margin] duration-200 sm:px-6"
-      :style="mainContentStyle"
+        v-if="isDrawerOpen"
+        class="fixed inset-0 z-[60] bg-black/50"
+        @click="isDrawerOpen = false"
+      />
+    </Transition>
+    <Transition
+      enter-active-class="transition-transform duration-200 ease-out"
+      enter-from-class="-translate-x-full"
+      leave-active-class="transition-transform duration-150 ease-in"
+      leave-to-class="-translate-x-full"
     >
+      <aside
+        v-if="isDrawerOpen"
+        ref="drawerRef"
+        class="fixed bottom-0 left-0 top-0 z-[61] flex w-[18rem] max-w-[85vw] flex-col border-r border-surface-border bg-surface-raised"
+      >
+        <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-3">
+          <span class="text-sm font-semibold text-white">Menu</span>
+          <button
+            class="rounded-md p-1 text-gray-500 transition hover:bg-surface-overlay hover:text-white"
+            type="button"
+            aria-label="Close navigation menu"
+            @click="isDrawerOpen = false"
+          >
+            <X class="h-4 w-4" />
+          </button>
+        </div>
+
+        <nav class="flex-1 overflow-y-auto px-2 py-3">
+          <div
+            v-for="(section, sectionIndex) in navSections"
+            :key="sectionIndex"
+            class="mb-3"
+          >
+            <div
+              v-if="section.title"
+              class="px-3 pb-1 pt-2"
+            >
+              <div class="truncate text-xs font-semibold text-gray-200">
+                {{ section.title }}
+              </div>
+              <div
+                v-if="section.subtitle"
+                class="text-[10px] uppercase tracking-[0.16em] text-gray-600"
+              >
+                {{ section.subtitle }}
+              </div>
+            </div>
+            <RouterLink
+              v-for="item in section.items"
+              :key="item.label"
+              :to="item.to"
+              class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-400 transition hover:bg-white/5 hover:text-gray-100"
+              :class="isActive(item) ? 'bg-accent-muted text-accent' : ''"
+            >
+              <component
+                :is="item.icon"
+                class="h-4.5 w-4.5 shrink-0"
+              />
+              <span class="truncate">{{ item.label }}</span>
+            </RouterLink>
+          </div>
+        </nav>
+      </aside>
+    </Transition>
+
+    <main class="min-h-screen px-4 pb-6 pt-[4.75rem] sm:px-6">
       <div class="mx-auto max-w-7xl">
         <RouterView />
       </div>
@@ -338,17 +350,19 @@
 
 <script setup lang="ts">
 import {
+  Activity,
   Bell,
   Building2,
   BookOpen,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
+  FlaskConical,
   LayoutDashboard,
   Menu,
+  Package,
   Search,
   ScrollText,
   Settings,
+  ShieldAlert,
   Users,
   X,
 } from 'lucide-vue-next'
@@ -356,6 +370,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { api, type Repository } from '@/api/client'
+import NotificationPanel from '@/components/NotificationPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useOrgStore } from '@/stores/org'
@@ -366,11 +381,12 @@ const orgStore = useOrgStore()
 const route = useRoute()
 const router = useRouter()
 
-const isMobile = ref(false)
-const isMobileNavOpen = ref(false)
-const isRailCollapsed = ref(true)
+const isDrawerOpen = ref(false)
+const drawerRef = ref<HTMLElement | null>(null)
 const isUserMenuOpen = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
+const isNotifMenuOpen = ref(false)
+const notifMenuRef = ref<HTMLElement | null>(null)
 const isOrgMenuOpen = ref(false)
 const orgMenuRef = ref<HTMLElement | null>(null)
 const orgSearch = ref('')
@@ -416,11 +432,6 @@ const currentOrg = computed(() => {
 
 const searchOrgSlug = computed(() => currentOrgSlug.value || orgStore.currentOrg?.slug || '')
 const searchOrgProvider = computed(() => currentOrgProvider.value || orgStore.currentOrg?.provider || '')
-const searchPlaceholder = computed(() => (
-  searchOrgSlug.value && searchOrgProvider.value
-    ? 'Search vulnerabilities, components, findings, or clients'
-    : 'Select an organization to search'
-))
 
 const filteredRepoList = computed(() => {
   const query = repoSearch.value.trim().toLowerCase()
@@ -466,40 +477,69 @@ const userInitials = computed(() => {
     .join('')
 })
 
-const navItems = computed(() => {
-  const orgBase = currentOrgSlug.value && currentOrgProvider.value ? `/orgs/${currentOrgProvider.value}/${currentOrgSlug.value}` : '/orgs'
+interface NavItem { label: string; icon: unknown; to: string }
+interface NavSection { title: string; subtitle: string; items: NavItem[] }
 
-  return [
-    { label: 'Dashboard', icon: LayoutDashboard, to: orgBase },
-    { label: 'Repositories', icon: BookOpen, to: currentOrgSlug.value ? `${orgBase}/repos` : '/orgs' },
-    { label: 'Clients', icon: Users, to: currentOrgSlug.value ? `${orgBase}/clients` : '/orgs' },
-    { label: 'Teams', icon: Users, to: currentOrgSlug.value ? `${orgBase}/teams` : '/orgs' },
-    { label: 'Audit Logs', icon: ScrollText, to: currentOrgSlug.value ? `${orgBase}/audit` : '/orgs' },
-    { label: 'Settings', icon: Settings, to: '/settings' },
-  ]
+const navSections = computed<NavSection[]>(() => {
+  const sections: NavSection[] = []
+  const hasOrg = Boolean(currentOrgSlug.value && currentOrgProvider.value)
+
+  if (hasOrg) {
+    const orgBase = `/orgs/${currentOrgProvider.value}/${currentOrgSlug.value}`
+    sections.push({
+      title: currentOrgName.value,
+      subtitle: 'Organization',
+      items: [
+        { label: 'Overview', icon: LayoutDashboard, to: `${orgBase}/overview` },
+        { label: 'Vulnerabilities', icon: ShieldAlert, to: `${orgBase}/vulnerabilities` },
+        { label: 'Dependencies', icon: Package, to: `${orgBase}/dependencies` },
+        { label: 'Repositories', icon: BookOpen, to: `${orgBase}/repos` },
+        { label: 'Clients', icon: Users, to: `${orgBase}/clients` },
+        { label: 'Teams', icon: Users, to: `${orgBase}/teams` },
+        { label: 'Audit Logs', icon: ScrollText, to: `${orgBase}/audit` },
+      ],
+    })
+
+    if (currentRepoSlug.value) {
+      const repoBase = `${orgBase}/repos/${currentRepoSlug.value}`
+      sections.push({
+        title: currentRepoSlug.value,
+        subtitle: 'Repository',
+        items: [
+          { label: 'Overview', icon: LayoutDashboard, to: `${repoBase}/overview` },
+          { label: 'Vulnerabilities', icon: ShieldAlert, to: `${repoBase}/vulnerabilities` },
+          { label: 'Coverage', icon: Activity, to: `${repoBase}/coverage` },
+          { label: 'Tests', icon: FlaskConical, to: `${repoBase}/tests` },
+          { label: 'Dependencies', icon: Package, to: `${repoBase}/dependencies` },
+        ],
+      })
+    }
+  } else {
+    sections.push({
+      title: 'Hibou',
+      subtitle: '',
+      items: [{ label: 'Organizations', icon: Building2, to: '/orgs' }],
+    })
+  }
+
+  sections.push({ title: '', subtitle: '', items: [{ label: 'Settings', icon: Settings, to: '/settings' }] })
+  return sections
 })
-
-const mainContentStyle = computed(() => ({
-  marginLeft: isMobile.value ? '0' : isRailCollapsed.value ? '56px' : '200px',
-}))
 
 onMounted(async () => {
   if (orgStore.orgs.length === 0) {
     await orgStore.fetchOrgs()
   }
 
-  syncViewportState()
   syncCurrentOrg()
   await notificationsStore.fetchUnreadCount()
   notificationsStore.connect()
 
-  window.addEventListener('resize', syncViewportState)
   document.addEventListener('click', handleDocumentClick)
   window.addEventListener('keydown', handleGlobalKeydown)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', syncViewportState)
   document.removeEventListener('click', handleDocumentClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
   if (searchDebounce) {
@@ -512,7 +552,7 @@ watch(
   () => [route.params.provider, route.params.slug, route.params.repoSlug, route.query.q],
   () => {
     syncCurrentOrg()
-    isMobileNavOpen.value = false
+    isDrawerOpen.value = false
     orgSearch.value = ''
     isOrgMenuOpen.value = false
     repoList.value = []
@@ -536,19 +576,6 @@ watch(
   { deep: true },
 )
 
-function syncViewportState() {
-  const width = window.innerWidth
-
-  isMobile.value = width < 768
-  if (isMobile.value) {
-    isRailCollapsed.value = true
-    return
-  }
-
-  isMobileNavOpen.value = false
-  isRailCollapsed.value = width < 1024
-}
-
 function syncCurrentOrg() {
   const routeSlug = typeof route.params.slug === 'string' ? route.params.slug : ''
   const routeProvider = typeof route.params.provider === 'string' ? route.params.provider : ''
@@ -566,6 +593,10 @@ function syncCurrentOrg() {
 
 function toggleUserMenu() {
   isUserMenuOpen.value = !isUserMenuOpen.value
+}
+
+function toggleNotifMenu() {
+  isNotifMenuOpen.value = !isNotifMenuOpen.value
 }
 
 function toggleOrgMenu() {
@@ -602,6 +633,10 @@ function handleDocumentClick(event: MouseEvent) {
 
   if (target && repoMenuRef.value && !repoMenuRef.value.contains(target)) {
     isRepoMenuOpen.value = false
+  }
+
+  if (target && notifMenuRef.value && !notifMenuRef.value.contains(target)) {
+    isNotifMenuOpen.value = false
   }
 }
 
@@ -663,6 +698,9 @@ function handleGlobalKeydown(event: KeyboardEvent) {
     event.preventDefault()
     searchInputRef.value?.focus()
     searchInputRef.value?.select()
+  }
+  if (event.key === 'Escape' && isDrawerOpen.value) {
+    isDrawerOpen.value = false
   }
 }
 </script>

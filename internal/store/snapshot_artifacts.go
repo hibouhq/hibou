@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,6 +45,9 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, params CreateSnaps
 		SizeBytes:   params.SizeBytes,
 		ContentType: nullStringFromPtr(params.ContentType),
 	})
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

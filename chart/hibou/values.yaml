@@ -4,6 +4,13 @@ hibou:
     tag: latest
     pullPolicy: IfNotPresent
   replicas: 1
+  # -- Delayed background loops for the primary deployment. Leave enabled for
+  # combined mode, or disable them here when running dedicated worker pods.
+  background:
+    artifactProcessing: true
+    retention: true
+    staleScan: true
+    stalePending: true
   resources:
     requests:
       cpu: 100m
@@ -27,13 +34,44 @@ hibou:
   baseURL: ""
   # -- Maximum upload size in bytes (default 100 MiB).
   maxUploadSize: "104857600"
+  # -- Pod anti-affinity for stateless Hibou and worker replicas. Use soft by default so single-node clusters still schedule.
+  podAntiAffinity:
+    enabled: true
+    type: soft
+    topologyKey: kubernetes.io/hostname
+    weight: 100
+  # -- Rolling update settings for disposable stateless replicas.
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  # -- Health probe settings. Liveness stays process-local; readiness checks database connectivity.
+  probes:
+    liveness:
+      path: /api/v1/health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readiness:
+      path: /api/v1/ready
+      initialDelaySeconds: 5
+      periodSeconds: 10
+  # -- Ordered graceful shutdown settings. terminationGracePeriodSeconds must exceed timeoutSeconds + preStopSleepSeconds.
+  shutdown:
+    timeoutSeconds: 20
+    preStopSleepSeconds: 5
+    terminationGracePeriodSeconds: 30
+  # -- PodDisruptionBudget for Hibou and worker deployments. Renders only when the matching replica count is greater than 1.
+  pdb:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: ""
   # -- Auto-provision an organization when a forge app installation webhook is received.
   # When true, installing the GitHub/GitLab/Forgejo app on an account creates the matching
   # Hibou org and grants the installer admin. Set false in multi-tenant deployments where
   # app installs should not automatically create tenants.
   autoProvisionOrgs: true
-  # -- Session secret for cookie encryption (required in production).
+  # -- Session secret for cookie signing. Leave empty to generate and retain a stable chart-managed secret.
   # Prefer sessionSecretExistingSecret in production to avoid storing the value in Helm release metadata.
+  # Multi-replica deployments require one stable secret shared by every replica; rotating it invalidates existing hibou_session and hibou_oauth_state cookies.
   sessionSecret: ""
   # -- Existing Secret containing HIBOU_SESSION_SECRET key. Takes precedence over sessionSecret.
   sessionSecretExistingSecret: ""
@@ -53,6 +91,89 @@ hibou:
   #   ipAllowlist: false  # enable source IP allowlisting (GitHub: auto /meta, GitLab SaaS: built-in defaults)
   #   rateLimitRPS: 0     # per-IP rate limit (req/s) on webhooks. 0 = disabled
   #   allowedCIDRs: ""    # override default CIDRs (e.g., for self-hosted forges)
+  # -- Optional dedicated worker deployment. Same binary, separate replica set.
+  # Enable this and disable hibou.background.* on the primary deployment for an
+  # API-only plus worker-only split.
+  worker:
+    enabled: false
+    replicas: 1
+    background:
+      artifactProcessing: true
+      retention: true
+      staleScan: true
+      stalePending: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+artifact:
+  # -- Artifact storage backend. Leave empty to default to bundled SeaweedFS when enabled, otherwise filesystem.
+  # Operators have three artifact-store paths: bundled SeaweedFS by default, external S3-compatible storage via artifact.s3.*, or this filesystem backend with the optional RWX PVC below.
+  backend: ""
+  # -- Filesystem artifact path. Defaults to /data/artifacts when unset.
+  path: ""
+  filesystem:
+    persistence:
+      # -- Optional shared PVC for the filesystem backend. Keep disabled by default; enable only when backend=filesystem and your cluster provides RWX storage.
+      enabled: false
+      # -- Access mode for the filesystem PVC. Multi-replica filesystem is allowed only when this is ReadWriteMany.
+      accessMode: ReadWriteMany
+      # -- Persistent volume size for the filesystem artifact PVC.
+      size: 10Gi
+      # -- StorageClass name for the filesystem artifact PVC. Leave empty for the cluster default.
+      storageClass: ""
+  s3:
+    # -- External S3-compatible endpoint. Leave empty to use the bundled SeaweedFS service when enabled.
+    endpoint: ""
+    # -- S3 region. SeaweedFS defaults to us-east-1 for AWS SDK compatibility.
+    region: us-east-1
+    # -- External S3 bucket name. Leave empty to use seaweedfs.bucket when bundled SeaweedFS is active.
+    bucket: ""
+    # -- Existing Secret containing keys accessKeyID and secretAccessKey for external S3 credentials.
+    existingSecret: ""
+    # -- Access key ID for the managed external S3 Secret when existingSecret is not set.
+    accessKeyID: ""
+    # -- Secret access key for the managed external S3 Secret when existingSecret is not set.
+    secretAccessKey: ""
+    # -- Force path-style S3 addressing. Required for SeaweedFS and common for self-hosted S3 endpoints.
+    usePathStyle: true
+    # -- Use TLS for external S3 traffic.
+    useSSL: true
+
+seaweedfs:
+  # -- Deploy bundled SeaweedFS as the default shared artifact store.
+  # Use this bundled RWO-backed store by default, disable it and set artifact.s3.* for an external S3-compatible endpoint, or keep backend=filesystem with artifact.filesystem.persistence enabled for an operator-managed RWX filesystem.
+  enabled: true
+  image:
+    repository: ghcr.io/seaweedfs/seaweedfs
+    tag: "4.34.0"
+    pullPolicy: IfNotPresent
+  # -- Existing Secret containing keys accessKeyID, secretAccessKey, and s3-config.json.
+  # When empty, the chart generates and retains credentials for the bundled store.
+  accessKeyExistingSecret: ""
+  # -- Default bucket name for Hibou artifacts in the bundled SeaweedFS S3 API.
+  bucket: hibou-artifacts
+  storage:
+    # -- Persistent volume size for bundled SeaweedFS data.
+    size: 10Gi
+    # -- StorageClass name for bundled SeaweedFS. Leave empty for the cluster default.
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  bootstrap:
+    image:
+      repository: public.ecr.aws/aws-cli/aws-cli
+      tag: "2.28.5"
+      pullPolicy: IfNotPresent
 
 postgresql:
   enabled: true

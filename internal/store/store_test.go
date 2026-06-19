@@ -7,7 +7,9 @@ import (
 	"time"
 )
 
-const testDatabaseURL = "postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable"
+// testDatabaseURL targets a dedicated test database so integration tests never
+// pollute the dev database (hibou). Override with HIBOU_DATABASE_URL.
+const testDatabaseURL = "postgres://hibou:hibou@localhost:5432/hibou_test?sslmode=disable"
 
 func TestMigrate(t *testing.T) {
 	databaseURL := os.Getenv("HIBOU_DATABASE_URL")

@@ -17,7 +17,7 @@ import (
 
 type Service struct {
 	store NotifyStore
-	hub   *ws.Hub
+	live  ws.LiveDelivery
 	bus   *events.Bus
 	log   zerolog.Logger
 }
@@ -38,8 +38,8 @@ type recipientResolver interface {
 	ListOrgMembers(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]store.OrgMember, int, error)
 }
 
-func NewService(store NotifyStore, hub *ws.Hub, bus *events.Bus, log zerolog.Logger) *Service {
-	return &Service{store: store, hub: hub, bus: bus, log: log.With().Str("component", "notify.service").Logger()}
+func NewService(store NotifyStore, live ws.LiveDelivery, bus *events.Bus, log zerolog.Logger) *Service {
+	return &Service{store: store, live: live, bus: bus, log: log.With().Str("component", "notify.service").Logger()}
 }
 
 func (s *Service) Subscribe() {
@@ -61,6 +61,15 @@ func (s *Service) Subscribe() {
 	})
 	s.bus.Subscribe(events.VulnerabilityCreated, func(ctx context.Context, event events.Event) {
 		s.handleVulnerabilityCreated(ctx, event.Payload)
+	})
+	s.bus.Subscribe(events.RetentionWarnAt, func(ctx context.Context, event events.Event) {
+		s.handleRetentionWarnAt(ctx, event.Payload)
+	})
+	s.bus.Subscribe(events.RetentionEviction, func(ctx context.Context, event events.Event) {
+		s.handleRetentionEviction(ctx, event.Payload)
+	})
+	s.bus.Subscribe(events.RetentionProtected, func(ctx context.Context, event events.Event) {
+		s.handleRetentionProtected(ctx, event.Payload)
 	})
 }
 
@@ -160,6 +169,55 @@ func (s *Service) handleVulnerabilityCreated(ctx context.Context, payload any) {
 	})
 }
 
+func (s *Service) handleRetentionWarnAt(ctx context.Context, payload any) {
+	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	if err != nil {
+		s.log.Debug().Err(err).Msg("resolve recipients for retention warn_at")
+		return
+	}
+	data, _ := payload.(map[string]any)
+	body := fmt.Sprintf("Repo %s reached %.0f%% of its retention storage budget", repoName, floatValue(data, "usage_ratio", 0)*100)
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.RetentionWarnAt),
+		Title:    "Retention budget warning",
+		Body:     body,
+		Link:     repoLink(repoID),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelMedium, Valid: true},
+	})
+}
+
+func (s *Service) handleRetentionEviction(ctx context.Context, payload any) {
+	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	if err != nil {
+		s.log.Debug().Err(err).Msg("resolve recipients for retention eviction")
+		return
+	}
+	body := "Retention reclaim started for repo " + repoName
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.RetentionEviction),
+		Title:    "Retention reclaim started",
+		Body:     body,
+		Link:     repoLink(repoID),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
+	})
+}
+
+func (s *Service) handleRetentionProtected(ctx context.Context, payload any) {
+	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	if err != nil {
+		s.log.Debug().Err(err).Msg("resolve recipients for retention protected-exceeds-budget")
+		return
+	}
+	body := "Protected snapshots keep repo " + repoName + " above its retention budget"
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.RetentionProtected),
+		Title:    "Protected snapshots exceed budget",
+		Body:     body,
+		Link:     repoLink(repoID),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
+	})
+}
+
 func (s *Service) createForRecipients(ctx context.Context, recipients []uuid.UUID, base dbgen.CreateNotificationParams) {
 	for _, userID := range recipients {
 		params := base
@@ -169,10 +227,10 @@ func (s *Service) createForRecipients(ctx context.Context, recipients []uuid.UUI
 			s.log.Error().Err(err).Str("user_id", userID.String()).Msg("create notification")
 			continue
 		}
-		if s.hub != nil {
+		if s.live != nil {
 			payload, err := jsonNotification(notification)
 			if err == nil {
-				s.hub.SendToUser(userID, ws.Message{Type: string(events.NotificationNew), Payload: payload})
+				s.live.PublishToUsers(ctx, []uuid.UUID{userID}, ws.Message{Type: string(events.NotificationNew), Payload: payload})
 			}
 		}
 	}
@@ -289,4 +347,21 @@ func userIDsFromPayload(data map[string]any) []uuid.UUID {
 		}
 	}
 	return nil
+}
+
+func floatValue(data map[string]any, key string, fallback float64) float64 {
+	if data == nil {
+		return fallback
+	}
+	switch value := data[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	}
+	return fallback
 }

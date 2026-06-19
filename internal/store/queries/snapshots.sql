@@ -89,11 +89,164 @@ WHERE id = $1
 	AND status = 'pending'
 RETURNING *;
 
+-- name: ClaimNextArtifactProcessingSnapshot :one
+WITH candidate AS (
+	SELECT s.id
+	FROM snapshots s
+	WHERE (
+			s.status = 'complete'
+			OR (s.status = 'failed' AND s.artifact_processing_attempts > 0)
+		)
+		AND s.artifact_processing_finished_at IS NULL
+		AND s.artifact_processing_attempts < sqlc.arg(max_attempts)
+		AND (
+			s.artifact_processing_claim_expires_at IS NULL
+			OR s.artifact_processing_claim_expires_at < NOW()
+		)
+		AND EXISTS (
+			SELECT 1
+			FROM snapshot_artifacts sa
+			WHERE sa.snapshot_id = s.id
+				AND (
+					sa.kind = 'sarif'
+					OR (sa.kind = 'sbom' AND sa.format = 'cyclonedx-json')
+				)
+		)
+	ORDER BY s.created_at ASC, s.id ASC
+	FOR UPDATE SKIP LOCKED
+	LIMIT 1
+)
+UPDATE snapshots s
+SET artifact_processing_claimed_by = sqlc.arg(worker_id),
+	artifact_processing_claim_expires_at = sqlc.arg(claim_expires_at),
+	artifact_processing_started_at = NOW(),
+	artifact_processing_attempts = s.artifact_processing_attempts + 1,
+	artifact_processing_last_error = NULL
+FROM candidate
+WHERE s.id = candidate.id
+RETURNING s.*;
+
+-- name: CompleteArtifactProcessingSnapshot :one
+UPDATE snapshots
+SET status = 'complete',
+	artifact_processing_claimed_by = NULL,
+	artifact_processing_claim_expires_at = NULL,
+	artifact_processing_finished_at = NOW(),
+	artifact_processing_last_error = NULL
+WHERE id = sqlc.arg(snapshot_id)
+	AND artifact_processing_claimed_by = sqlc.arg(worker_id)
+RETURNING *;
+
+-- name: CompleteArtifactProcessingSnapshotWithWarning :one
+UPDATE snapshots
+SET status = 'complete',
+	artifact_processing_claimed_by = NULL,
+	artifact_processing_claim_expires_at = NULL,
+	artifact_processing_finished_at = NOW(),
+	artifact_processing_last_error = sqlc.arg(last_error)
+WHERE id = sqlc.arg(snapshot_id)
+	AND artifact_processing_claimed_by = sqlc.arg(worker_id)
+RETURNING *;
+
+-- name: RenewArtifactProcessingSnapshotClaim :execrows
+UPDATE snapshots
+SET artifact_processing_claim_expires_at = sqlc.arg(claim_expires_at)
+WHERE id = sqlc.arg(snapshot_id)
+	AND artifact_processing_claimed_by = sqlc.arg(worker_id)
+	AND artifact_processing_finished_at IS NULL;
+
+-- name: FailArtifactProcessingSnapshot :one
+UPDATE snapshots
+SET status = 'failed',
+	artifact_processing_claimed_by = NULL,
+	artifact_processing_claim_expires_at = NULL,
+	artifact_processing_finished_at = CASE WHEN sqlc.arg(mark_finished)::bool THEN NOW() ELSE NULL END,
+	artifact_processing_last_error = sqlc.arg(last_error)
+WHERE id = sqlc.arg(snapshot_id)
+	AND artifact_processing_claimed_by = sqlc.arg(worker_id)
+RETURNING *;
+
+-- name: ReleaseArtifactProcessingClaims :execrows
+UPDATE snapshots
+SET artifact_processing_claimed_by = NULL,
+	artifact_processing_claim_expires_at = NULL
+WHERE artifact_processing_claimed_by = sqlc.arg(worker_id)
+	AND artifact_processing_finished_at IS NULL
+	AND (status = 'complete' OR status = 'failed');
+
 -- name: ArchiveSnapshot :exec
-UPDATE snapshots SET status = 'archived' WHERE id = $1;
+WITH target AS (
+	SELECT s.id, s.ref_id, s.artifact_bytes
+	FROM snapshots s
+	WHERE s.id = $1
+	FOR UPDATE
+), snapshot_update AS (
+	UPDATE snapshots s
+	SET status = 'archived',
+		artifact_bytes = 0
+	FROM target t
+	WHERE s.id = t.id
+	RETURNING t.ref_id, t.artifact_bytes AS reclaimed_bytes
+)
+UPDATE repositories repo
+SET retention_artifact_bytes = GREATEST(0, repo.retention_artifact_bytes - su.reclaimed_bytes)
+FROM refs r
+JOIN snapshot_update su ON su.ref_id = r.id
+WHERE repo.id = r.repo_id;
 
 -- name: PurgeSnapshot :exec
-UPDATE snapshots SET status = 'purged' WHERE id = $1;
+WITH target AS (
+	SELECT s.id, s.ref_id, s.artifact_bytes
+	FROM snapshots s
+	WHERE s.id = $1
+	FOR UPDATE
+), snapshot_update AS (
+	UPDATE snapshots s
+	SET status = 'purged',
+		artifact_bytes = 0
+	FROM target t
+	WHERE s.id = t.id
+	RETURNING t.ref_id, t.artifact_bytes AS reclaimed_bytes
+)
+UPDATE repositories repo
+SET retention_artifact_bytes = GREATEST(0, repo.retention_artifact_bytes - su.reclaimed_bytes)
+FROM refs r
+JOIN snapshot_update su ON su.ref_id = r.id
+WHERE repo.id = r.repo_id;
+
+-- name: ListSnapshotsForRetentionTimeline :many
+SELECT s.*
+FROM snapshots s
+JOIN refs r ON r.id = s.ref_id
+WHERE r.repo_id = $1
+	AND s.ref_id = $2
+	AND s.status != 'purged'
+ORDER BY s.created_at ASC, s.id ASC;
+
+-- name: AddSnapshotArtifactBytes :exec
+WITH snapshot_update AS (
+	UPDATE snapshots s
+	SET artifact_bytes = artifact_bytes + $2
+	WHERE s.id = $1
+	RETURNING s.ref_id
+)
+UPDATE repositories repo
+SET retention_artifact_bytes = retention_artifact_bytes + $2
+FROM refs r
+JOIN snapshot_update su ON su.ref_id = r.id
+WHERE repo.id = r.repo_id;
+
+-- name: LockSnapshotForUpdate :one
+SELECT id FROM snapshots
+WHERE id = $1
+FOR UPDATE;
+
+-- name: UpdateSnapshotRetentionFlags :one
+UPDATE snapshots
+SET pinned = $2,
+	retention_hold = $3
+WHERE id = $1
+RETURNING *;
 
 -- name: GetLatestSnapshotByRef :one
 SELECT * FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1;

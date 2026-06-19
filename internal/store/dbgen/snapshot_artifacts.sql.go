@@ -23,7 +23,12 @@ INSERT INTO snapshot_artifacts (
 	size_bytes,
 	content_type
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+SELECT $1, $2, $3, $4, $5, $6, $7, $8
+WHERE NOT EXISTS (
+	SELECT 1
+	FROM snapshot_artifacts
+	WHERE snapshot_id = $1 AND object_key = $5
+)
 RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at
 `
 
