@@ -15,7 +15,7 @@ ARG SQLC_VERSION='1.31.1'
 # renovate: datasource=github-releases depName=swaggo/swag extractVersion=^v(?<version>.+)$
 ARG SWAG_VERSION='1.16.6'
 # renovate: datasource=github-releases depName=gotestyourself/gotestsum extractVersion=^v(?<version>.+)$
-ARG GOTESTSUM_VERSION='1.12.1'
+ARG GOTESTSUM_VERSION='1.13.0'
 # renovate: datasource=github-releases packageName=helm/helm
 ARG HELM_VERSION='4.2.0'
 # renovate: datasource=github-releases packageName=oras-project/oras
@@ -74,25 +74,37 @@ RUN <<EOF
 EOF
 
 RUN <<EOF
-    GOBIN=/usr/local/bin go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${GOLANGCI_LINT_VERSION}"
+    arch="$(echo "${TARGETARCH}" | sed 's/arm64/aarch64/' | sed 's/amd64/x86_64/')"
+    # swag release assets use x86_64/arm64 naming (not aarch64)
+    swag_arch="$(echo "${TARGETARCH}" | sed 's/amd64/x86_64/')"
+
+    # Install Go tools from prebuilt release binaries rather than `go install`.
+    # `go install` compiles from source under Go ${GO_VERSION}, and these pinned
+    # versions reference golang.org/x/tools v0.8.0-v0.25.0, which fail to build
+    # on Go 1.25+ (golang/go#74462: "invalid array length -delta * delta").
+    curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${TARGETARCH}.tar.gz" \
+        | tar -xzf - --strip-components=1 -C /usr/local/bin --wildcards '*/golangci-lint'
     golangci-lint --version
 
-    GOBIN=/usr/local/bin go install "github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}"
+    curl -fsSL "https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}/gosec_${GOSEC_VERSION}_linux_${TARGETARCH}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin gosec
     gosec --version
 
     GOBIN=/usr/local/bin go install "github.com/go-delve/delve/cmd/dlv@latest"
     dlv version
 
-    GOBIN=/usr/local/bin go install "github.com/sqlc-dev/sqlc/cmd/sqlc@v${SQLC_VERSION}"
+    curl -fsSL "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_${TARGETARCH}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin sqlc
     sqlc version
 
-    GOBIN=/usr/local/bin go install "github.com/swaggo/swag/cmd/swag@v${SWAG_VERSION}"
+    curl -fsSL "https://github.com/swaggo/swag/releases/download/v${SWAG_VERSION}/swag_${SWAG_VERSION}_Linux_${swag_arch}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin swag
     swag --version
 
-    GOBIN=/usr/local/bin go install "gotest.tools/gotestsum@v${GOTESTSUM_VERSION}"
+    curl -fsSL "https://github.com/gotestyourself/gotestsum/releases/download/v${GOTESTSUM_VERSION}/gotestsum_${GOTESTSUM_VERSION}_linux_${TARGETARCH}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin gotestsum
     gotestsum --version
 
-    arch="$(echo "${TARGETARCH}" | sed 's/arm64/aarch64/' | sed 's/amd64/x86_64/')"
     rtk_target='unknown-linux-gnu'
     if [ "${TARGETARCH}" = 'amd64' ]; then
         rtk_target='unknown-linux-musl'
