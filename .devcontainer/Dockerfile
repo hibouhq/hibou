@@ -15,7 +15,7 @@ ARG SQLC_VERSION='1.31.1'
 # renovate: datasource=github-releases depName=swaggo/swag extractVersion=^v(?<version>.+)$
 ARG SWAG_VERSION='1.16.6'
 # renovate: datasource=github-releases depName=gotestyourself/gotestsum extractVersion=^v(?<version>.+)$
-ARG GOTESTSUM_VERSION='1.12.1'
+ARG GOTESTSUM_VERSION='1.13.0'
 # renovate: datasource=github-releases packageName=helm/helm
 ARG HELM_VERSION='4.2.0'
 # renovate: datasource=github-releases packageName=oras-project/oras
