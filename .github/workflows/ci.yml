@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload to Hibou
         if: steps.hibou-ci.outputs.enabled == 'true'
-        # continue-on-error: true
+        continue-on-error: true
         uses: ./.github/actions/hibou-upload
         with:
           # On releases the image SBOM is uploaded afterwards into the same
