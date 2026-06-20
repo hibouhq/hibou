@@ -301,6 +301,73 @@ export interface DeltaResult {
   unchanged_vulnerabilities: number
 }
 
+export interface CoverageDiffTotals {
+  format: string
+  line_rate: number | null
+  branch_rate: number | null
+  lines_valid: number
+  lines_covered: number
+  branches_valid: number
+  branches_covered: number
+}
+
+export interface CoverageFileDelta {
+  file_path: string
+  change: 'added' | 'removed' | 'improved' | 'regressed'
+  base_line_rate: number | null
+  head_line_rate: number | null
+  line_rate_delta: number | null
+  base_lines_covered: number
+  head_lines_covered: number
+  base_lines_valid: number
+  head_lines_valid: number
+}
+
+export interface CoverageDiff {
+  base: CoverageDiffTotals | null
+  head: CoverageDiffTotals | null
+  line_rate_delta: number | null
+  branch_rate_delta: number | null
+  files: CoverageFileDelta[]
+  unchanged_files: number
+}
+
+export interface TestDiffTotals {
+  format: string
+  total: number
+  passed: number
+  failed: number
+  skipped: number
+  errors: number
+  duration_seconds: number
+}
+
+export interface TestCaseDelta {
+  suite: string
+  name: string
+  classname: string
+  file_path: string
+  change: 'added' | 'removed' | 'status_changed' | 'slower' | 'faster'
+  base_status: string
+  head_status: string
+  base_duration_seconds: number
+  head_duration_seconds: number
+  duration_delta_seconds: number
+  message: string
+}
+
+export interface TestDiff {
+  base: TestDiffTotals | null
+  head: TestDiffTotals | null
+  duration_delta_seconds: number
+  added: TestCaseDelta[]
+  removed: TestCaseDelta[]
+  status_changed: TestCaseDelta[]
+  slower: TestCaseDelta[]
+  faster: TestCaseDelta[]
+  unchanged: number
+}
+
 export interface CompareResult {
   base: {
     ref_name: string
@@ -320,6 +387,8 @@ export interface CompareResult {
     removed: ComponentEntry[]
     unchanged: number
   }
+  coverage_diff: CoverageDiff | null
+  test_diff: TestDiff | null
 }
 
 export interface TrendPoint {

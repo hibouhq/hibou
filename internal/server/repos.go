@@ -15,6 +15,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/comparison"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -84,10 +85,12 @@ type componentDiffResponse struct {
 }
 
 type compareResultResponse struct {
-	Base          refSnapshotResponse   `json:"base"`
-	Head          refSnapshotResponse   `json:"head"`
-	Delta         *delta.DeltaResult    `json:"delta"`
-	ComponentDiff componentDiffResponse `json:"component_diff"`
+	Base          refSnapshotResponse      `json:"base"`
+	Head          refSnapshotResponse      `json:"head"`
+	Delta         *delta.DeltaResult       `json:"delta"`
+	ComponentDiff componentDiffResponse    `json:"component_diff"`
+	CoverageDiff  *comparison.CoverageDiff `json:"coverage_diff"`
+	TestDiff      *comparison.TestDiff     `json:"test_diff"`
 }
 
 type trendPointResponse struct {
@@ -691,6 +694,18 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	componentDiff := buildComponentDiff(baseComponents, headComponents)
+
+	coverageDiff, err := s.buildSnapshotCoverageDiff(r.Context(), baseSnapshot.ID, headSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to compare coverage")
+		return
+	}
+	testDiff, err := s.buildSnapshotTestDiff(r.Context(), baseSnapshot.ID, headSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to compare test results")
+		return
+	}
+
 	response := compareResultResponse{
 		Base: refSnapshotResponse{
 			RefName:    baseRef.Name,
@@ -706,6 +721,8 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 		},
 		Delta:         deltaResult,
 		ComponentDiff: componentDiff,
+		CoverageDiff:  coverageDiff,
+		TestDiff:      testDiff,
 	}
 
 	api.JSON(w, http.StatusOK, response)
@@ -1122,4 +1139,121 @@ func componentDiffKey(entry componentEntryResponse) string {
 		return entry.Purl
 	}
 	return entry.Ecosystem + ":" + entry.Name + "@" + entry.Version
+}
+
+// buildSnapshotCoverageDiff loads the primary coverage report for each snapshot
+// (the report with the most valid lines, mirroring the Coverage tab) and diffs
+// them. It returns nil when neither snapshot has coverage data.
+func (s *Server) buildSnapshotCoverageDiff(ctx context.Context, baseSnapshotID, headSnapshotID uuid.UUID) (*comparison.CoverageDiff, error) {
+	baseInput, err := s.loadCoverageInput(ctx, baseSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	headInput, err := s.loadCoverageInput(ctx, headSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	return comparison.BuildCoverageDiff(baseInput, headInput), nil
+}
+
+func (s *Server) loadCoverageInput(ctx context.Context, snapshotID uuid.UUID) (comparison.CoverageInput, error) {
+	reports, err := s.queries.ListCoverageReportsBySnapshot(ctx, snapshotID)
+	if err != nil {
+		return comparison.CoverageInput{}, err
+	}
+	primary := primaryCoverageReport(reports)
+	if primary == nil {
+		return comparison.CoverageInput{}, nil
+	}
+
+	files, err := s.queries.ListCoverageFilesByReport(ctx, primary.ID)
+	if err != nil {
+		return comparison.CoverageInput{}, err
+	}
+	fileInputs := make([]comparison.CoverageFileInput, len(files))
+	for i, file := range files {
+		fileInputs[i] = comparison.CoverageFileInput{
+			FilePath:     file.FilePath,
+			LineRate:     file.LineRate,
+			LinesValid:   file.LinesValid,
+			LinesCovered: file.LinesCovered,
+		}
+	}
+
+	return comparison.CoverageInput{
+		HasData:         true,
+		Format:          primary.Format,
+		LineRate:        primary.LineRate,
+		BranchRate:      primary.BranchRate,
+		LinesValid:      primary.LinesValid,
+		LinesCovered:    primary.LinesCovered,
+		BranchesValid:   primary.BranchesValid,
+		BranchesCovered: primary.BranchesCovered,
+		Files:           fileInputs,
+	}, nil
+}
+
+func primaryCoverageReport(reports []store.CoverageReport) *store.CoverageReport {
+	var primary *store.CoverageReport
+	for i := range reports {
+		report := &reports[i]
+		if primary == nil || report.LinesValid > primary.LinesValid ||
+			(report.LinesValid == primary.LinesValid && report.Format < primary.Format) {
+			primary = report
+		}
+	}
+	return primary
+}
+
+// buildSnapshotTestDiff loads each snapshot's test report and cases and diffs
+// them. It returns nil when neither snapshot has test data.
+func (s *Server) buildSnapshotTestDiff(ctx context.Context, baseSnapshotID, headSnapshotID uuid.UUID) (*comparison.TestDiff, error) {
+	baseInput, err := s.loadTestInput(ctx, baseSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	headInput, err := s.loadTestInput(ctx, headSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	return comparison.BuildTestDiff(baseInput, headInput), nil
+}
+
+func (s *Server) loadTestInput(ctx context.Context, snapshotID uuid.UUID) (comparison.TestReportInput, error) {
+	report, err := s.queries.GetTestReportBySnapshot(ctx, snapshotID)
+	if err != nil {
+		return comparison.TestReportInput{}, err
+	}
+	if report == nil {
+		return comparison.TestReportInput{}, nil
+	}
+
+	cases, err := s.queries.ListTestCasesByReport(ctx, report.ID)
+	if err != nil {
+		return comparison.TestReportInput{}, err
+	}
+	caseInputs := make([]comparison.TestCaseInput, len(cases))
+	for i, c := range cases {
+		caseInputs[i] = comparison.TestCaseInput{
+			Suite:           c.Suite,
+			Name:            c.Name,
+			Classname:       c.Classname,
+			Status:          c.Status,
+			DurationSeconds: c.DurationSeconds,
+			Message:         c.Message,
+			FilePath:        c.FilePath,
+		}
+	}
+
+	return comparison.TestReportInput{
+		HasData:         true,
+		Format:          report.Format,
+		Total:           report.Total,
+		Passed:          report.Passed,
+		Failed:          report.Failed,
+		Skipped:         report.Skipped,
+		Errors:          report.Errors,
+		DurationSeconds: report.DurationSeconds,
+		Cases:           caseInputs,
+	}, nil
 }
