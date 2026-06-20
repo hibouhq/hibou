@@ -159,6 +159,11 @@ seaweedfs:
   accessKeyExistingSecret: ""
   # -- Default bucket name for Hibou artifacts in the bundled SeaweedFS S3 API.
   bucket: hibou-artifacts
+  # -- Maximum number of volumes the bundled volume server may host (weed -volume.max).
+  # Must exceed the number of collections in use (default + artifacts). Do not leave
+  # this to SeaweedFS auto-detection, which derives the cap from free disk and can
+  # collapse to 1 on a near-full data dir, starving the artifacts collection.
+  maxVolumes: 10
   storage:
     # -- Persistent volume size for bundled SeaweedFS data.
     size: 10Gi

@@ -33,6 +33,12 @@ spec:
           args:
             - server
             - -dir=/data
+            # -volume.max must be set explicitly. Left unset, `weed server`
+            # auto-derives maxVolumeCount from free disk (freeDisk / volumeSizeLimit),
+            # which collapses to 1 on a near-full data dir. The default collection then
+            # consumes that single slot, leaving none for the artifacts collection, so
+            # uploads hang on volume assignment and the snapshot never completes.
+            - -volume.max={{ .Values.seaweedfs.maxVolumes | default 10 }}
             - -s3
             - -s3.port=8333
             - -ip.bind=0.0.0.0
