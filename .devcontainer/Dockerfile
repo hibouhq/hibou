@@ -99,6 +99,7 @@ RUN <<EOF
 
     curl -fsSL "https://github.com/swaggo/swag/releases/download/v${SWAG_VERSION}/swag_${SWAG_VERSION}_Linux_${swag_arch}.tar.gz" \
         | tar -xzf - -C /usr/local/bin swag
+    chmod 755 /usr/local/bin/swag
     swag --version
 
     curl -fsSL "https://github.com/gotestyourself/gotestsum/releases/download/v${GOTESTSUM_VERSION}/gotestsum_${GOTESTSUM_VERSION}_linux_${TARGETARCH}.tar.gz" \

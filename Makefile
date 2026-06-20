@@ -10,6 +10,8 @@ LDFLAGS   := -X github.com/hibouhq/hibou/internal/version.Version=$(VERSION) \
 			 -X github.com/hibouhq/hibou/internal/version.Commit=$(COMMIT) \
 			 -X github.com/hibouhq/hibou/internal/version.Date=$(DATE)
 GO_BUILD_FLAGS := -buildvcs=false -trimpath
+SQLC      := $(if $(wildcard /usr/local/bin/sqlc),/usr/local/bin/sqlc,sqlc)
+SWAG      := $(if $(wildcard /usr/local/bin/swag),/usr/local/bin/swag,swag)
 
 # Reproducible release build (callers append: -o <out> .)
 GO_BUILD  := CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)'
@@ -224,8 +226,8 @@ db-migrate: ## Database migrations run automatically on hibou-server serve start
 
 .PHONY: generate
 generate: ## Run code generation (sqlc, swagger)
-	sqlc generate
-	swag init --parseDependency --parseInternal -g main.go -o internal/apidoc
+	$(SQLC) generate
+	$(SWAG) init --parseDependency --parseInternal -g main.go -o internal/apidoc
 
 .PHONY: check-generate
 check-generate: generate ## Fail if generated files are not up to date
