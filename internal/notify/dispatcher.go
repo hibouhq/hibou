@@ -639,7 +639,7 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 		payload.Body = fmt.Sprintf("Repo %s is approaching its retention storage budget", payload.RepoName)
 	case events.RetentionEviction:
 		payload.Title = "Retention reclaim started"
-		payload.Body = fmt.Sprintf("Retention reclaim started for repo %s", payload.RepoName)
+		payload.Body = "Retention reclaim started for repo " + payload.RepoName
 	case events.RetentionProtected:
 		payload.Title = "Protected snapshots exceed budget"
 		payload.Body = fmt.Sprintf("Protected snapshots keep repo %s above its retention budget", payload.RepoName)

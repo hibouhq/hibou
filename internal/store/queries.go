@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,7 +62,7 @@ func (q *Queries) ListComponentDependencyEdgesBySnapshot(ctx context.Context, sn
 func (q *Queries) GetSnapshotDependencyRoot(ctx context.Context, snapshotID uuid.UUID) (*string, error) {
 	rootRef, err := q.db.GetSnapshotDependencyRoot(ctx, snapshotID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err

@@ -25,16 +25,16 @@ const refPageSize = 200
 const notificationThrottleWindow = 6 * time.Hour
 
 type Worker struct {
-	store         WorkerStore
-	objStore      objstore.Store
-	auditLog      auditLogger
-	bus           eventPublisher
-	log           zerolog.Logger
-	policy        RetentionPolicy
-	pendingWindow time.Duration
-	now           func() time.Time
-	mu            sync.Mutex
-	throttle      map[string]time.Time
+	store                              WorkerStore
+	objStore                           objstore.Store
+	auditLog                           auditLogger
+	bus                                eventPublisher
+	log                                zerolog.Logger
+	policy                             RetentionPolicy
+	pendingWindow                      time.Duration
+	now                                func() time.Time
+	mu                                 sync.Mutex
+	throttle                           map[string]time.Time
 	loggedFindingsProtectionLimitation bool
 }
 
@@ -348,7 +348,6 @@ func (w *Worker) SweepStalePending(ctx context.Context) error {
 
 	return nil
 }
-
 
 func (w *Worker) listAllRefs(ctx context.Context, repoID uuid.UUID) ([]store.Ref, error) {
 	offset := 0

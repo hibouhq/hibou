@@ -62,11 +62,12 @@ start_dockerd(){
 	# Start dockerd (installed in Dockerfile via docker-in-docker install.sh)
 	if [ -f /usr/local/share/docker-init.sh ] && ! docker info >/dev/null 2>&1; then
 		log_info "Starting Docker daemon..."
-		sudo /usr/local/share/docker-init.sh &
-		# Wait briefly for dockerd to be ready
-		for i in $(seq 1 10); do
-			docker info >/dev/null 2>&1 && break
-			sleep 1
-		done
+		if ! sudo /usr/local/share/docker-init.sh; then
+			log_error "Docker init failed. Check /tmp/dockerd.log and /tmp/containerd.log."
+		fi
+
+		if ! docker info >/dev/null 2>&1; then
+			log_error "Docker daemon is still unavailable after docker-init completed. Check /tmp/dockerd.log and /tmp/containerd.log."
+		fi
 	fi
 }

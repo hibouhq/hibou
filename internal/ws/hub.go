@@ -33,13 +33,12 @@ type client struct {
 }
 
 type Hub struct {
-	mu        sync.RWMutex
-	clients   map[*client]bool
-	byUser    map[uuid.UUID]map[*client]bool
-	log       zerolog.Logger
-	idleCh    chan struct{}
-	draining  atomic.Bool
-	closeOnce sync.Once
+	mu       sync.RWMutex
+	clients  map[*client]bool
+	byUser   map[uuid.UUID]map[*client]bool
+	log      zerolog.Logger
+	idleCh   chan struct{}
+	draining atomic.Bool
 }
 
 func NewHub(log zerolog.Logger) *Hub {

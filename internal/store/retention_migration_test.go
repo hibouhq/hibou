@@ -148,7 +148,7 @@ func newIsolatedRetentionMigrationTestDB(t *testing.T) *sql.DB {
 	adminDB := openRetentionMigrationTestDB(t, retentionMigrationAdminDatabaseURL(t, databaseURL), "retention migration admin")
 	databaseName := retentionMigrationDatabaseName(t)
 
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", pq.QuoteIdentifier(databaseName))); err != nil {
+	if _, err := adminDB.Exec("CREATE DATABASE " + pq.QuoteIdentifier(databaseName)); err != nil {
 		_ = adminDB.Close()
 		t.Fatalf("create retention migration database %q: %v", databaseName, err)
 	}
@@ -163,7 +163,7 @@ func newIsolatedRetentionMigrationTestDB(t *testing.T) *sql.DB {
 		`, databaseName); err != nil {
 			t.Fatalf("terminate retention migration database connections %q: %v", databaseName, err)
 		}
-		if _, err := adminDB.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS %s", pq.QuoteIdentifier(databaseName))); err != nil {
+		if _, err := adminDB.Exec("DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(databaseName)); err != nil {
 			t.Fatalf("drop retention migration database %q: %v", databaseName, err)
 		}
 		if err := adminDB.Close(); err != nil {

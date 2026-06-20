@@ -87,8 +87,7 @@ jobs:
 
             # Start Docker daemon
             if ! docker info >/dev/null 2>&1; then
-              sudo /usr/local/share/docker-init.sh &
-              for i in $(seq 1 15); do docker info >/dev/null 2>&1 && break; sleep 1; done
+              sudo /usr/local/share/docker-init.sh
               docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon failed to start"; exit 1; }
             fi
 

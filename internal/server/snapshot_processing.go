@@ -111,7 +111,10 @@ func (s *Server) processNextArtifactSnapshot(ctx context.Context) (bool, error) 
 		markFinished := snapshot.ArtifactProcessingAttempts >= int(artifactProcessingMaxAttempts)
 		message := truncateArtifactProcessingError(err)
 		if _, failErr := s.queries.FailArtifactProcessingSnapshot(ctx, snapshot.ID, s.artifactWorkerID, markFinished, message); failErr != nil {
-			return true, fmt.Errorf("process snapshot %s: %w (finalize failure: %v)", snapshot.ID, err, failErr)
+			return true, errors.Join(
+				fmt.Errorf("process snapshot %s: %w", snapshot.ID, err),
+				fmt.Errorf("finalize failure: %w", failErr),
+			)
 		}
 		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Bool("mark_finished", markFinished).Msg("artifact processing failed")
 		return true, nil
@@ -439,7 +442,7 @@ func formatArtifactProcessingFailures(failures []artifactProcessingFailure) stri
 		parts = append(parts, fmt.Sprintf("%s %s: %v", failure.kind, failure.artifactID, failure.err))
 	}
 	if len(parts) == 1 {
-		return fmt.Sprintf("artifact ingest warning: %s", parts[0])
+		return "artifact ingest warning: " + parts[0]
 	}
-	return fmt.Sprintf("artifact ingest warnings: %s", strings.Join(parts, "; "))
+	return "artifact ingest warnings: " + strings.Join(parts, "; ")
 }

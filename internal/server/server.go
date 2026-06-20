@@ -455,7 +455,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
-					r.Get("/{repoSlug}/tests", s.handleGetTests)
+						r.Get("/{repoSlug}/tests", s.handleGetTests)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
 						r.Route("/{repoSlug}/vex", func(r chi.Router) {

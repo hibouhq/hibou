@@ -58,10 +58,10 @@ EOF
 RUN <<EOF
     curl -fsSL "https://dl.google.com/go/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz" \
         | tar -xz -C /usr/local
-    echo 'export PATH="/usr/local/go/bin:${HOME}/go/bin:${PATH}"' > /etc/profile.d/go.sh
+    echo 'export PATH="/usr/local/go/bin:${PATH}:${HOME}/go/bin"' > /etc/profile.d/go.sh
 EOF
 
-ENV PATH="/usr/local/go/bin:/home/vscode/go/bin:${PATH}"
+ENV PATH="/usr/local/go/bin:${PATH}:/home/vscode/go/bin"
 
 RUN <<EOF
     curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -

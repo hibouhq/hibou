@@ -530,10 +530,6 @@ func resolveRequestedRefName(r *http.Request, repo *store.Repository) string {
 	return refName
 }
 
-func (s *Server) resolveSnapshotForRequest(r *http.Request, w http.ResponseWriter, repo *store.Repository) (*store.Snapshot, bool) {
-	return s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestNonPurgedSnapshotByRef)
-}
-
 func (s *Server) resolveSnapshotForRequestWithFallback(r *http.Request, w http.ResponseWriter, repo *store.Repository, fallbacks ...snapshotFallbackLookup) (*store.Snapshot, bool) {
 	snapshotID := strings.TrimSpace(r.URL.Query().Get("snapshot"))
 	if snapshotID != "" {
@@ -746,7 +742,7 @@ func buildComponentGraphResponse(components []dbgen.Component, vulnerabilities [
 		adjacency[edge.Ref] = append(adjacency[edge.Ref], edge.DependsOn)
 		inDegree[edge.DependsOn]++
 		if _, ok := inDegree[edge.Ref]; !ok {
-			inDegree[edge.Ref] = inDegree[edge.Ref]
+			inDegree[edge.Ref] = 0
 		}
 	}
 	graphEdges := make([]componentGraphEdgeResponse, 0, len(dependsOnByRef))
@@ -756,7 +752,7 @@ func buildComponentGraphResponse(components []dbgen.Component, vulnerabilities [
 	sort.SliceStable(graphEdges, func(i, j int) bool {
 		return graphEdges[i].Ref < graphEdges[j].Ref
 	})
-	rootRef := ""
+	var rootRef string
 	// Prefer the SBOM-declared root when persisted; fall back to a deterministic graph heuristic only when absent.
 	if declaredRootRef != nil {
 		rootRef = *declaredRootRef
