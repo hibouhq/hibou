@@ -149,8 +149,10 @@ seaweedfs:
   # Use this bundled RWO-backed store by default, disable it and set artifact.s3.* for an external S3-compatible endpoint, or keep backend=filesystem with artifact.filesystem.persistence enabled for an operator-managed RWX filesystem.
   enabled: true
   image:
-    repository: ghcr.io/seaweedfs/seaweedfs
-    tag: "4.34.0"
+    # NOTE: the runnable SeaweedFS image is published on Docker Hub as
+    # chrislusf/seaweedfs. The ghcr.io/seaweedfs/seaweedfs path only hosts the Helm chart.
+    repository: chrislusf/seaweedfs
+    tag: "4.34"
     pullPolicy: IfNotPresent
   # -- Existing Secret containing keys accessKeyID, secretAccessKey, and s3-config.json.
   # When empty, the chart generates and retains credentials for the bundled store.
