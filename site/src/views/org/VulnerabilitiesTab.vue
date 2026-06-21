@@ -78,9 +78,10 @@
                   {{ vulnerability.primary_identifier?.value || vulnerability.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-3 py-2.5">
-                  <div class="text-gray-300">
-                    {{ vulnerability.title }}
-                  </div>
+                  <LinkedText
+                    :text="vulnerability.title"
+                    class="text-gray-300"
+                  />
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   {{ vulnerability.scanner_name || 'n/a' }}
@@ -125,6 +126,7 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type OrgVulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
+import LinkedText from '@/components/LinkedText.vue'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)

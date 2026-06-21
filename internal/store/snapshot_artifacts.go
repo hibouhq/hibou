@@ -74,6 +74,18 @@ func (q *Queries) ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID
 	return q.db.ListSnapshotArtifactObjectKeys(ctx, snapshotID)
 }
 
+// ListSnapshotArtifactObjectKeysByRepo returns every object-store key for all
+// snapshots under a repository, for cleanup before a repository hard delete.
+func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repoID uuid.UUID) ([]string, error) {
+	return q.db.ListSnapshotArtifactObjectKeysByRepo(ctx, repoID)
+}
+
+// ListSnapshotArtifactObjectKeysByOrg returns every object-store key for all
+// snapshots under an organization, for cleanup before an org hard delete.
+func (q *Queries) ListSnapshotArtifactObjectKeysByOrg(ctx context.Context, orgID uuid.UUID) ([]string, error) {
+	return q.db.ListSnapshotArtifactObjectKeysByOrg(ctx, orgID)
+}
+
 func snapshotArtifactFromRow(row dbgen.SnapshotArtifact) *SnapshotArtifact {
 	return &SnapshotArtifact{
 		ID:          row.ID,

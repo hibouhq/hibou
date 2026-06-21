@@ -99,6 +99,69 @@ func (q *Queries) ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID
 	return items, nil
 }
 
+const listSnapshotArtifactObjectKeysByOrg = `-- name: ListSnapshotArtifactObjectKeysByOrg :many
+SELECT sa.object_key
+FROM snapshot_artifacts sa
+JOIN snapshots s ON s.id = sa.snapshot_id
+JOIN refs rf ON rf.id = s.ref_id
+JOIN repositories r ON r.id = rf.repo_id
+WHERE r.org_id = $1 AND sa.object_key <> ''
+`
+
+func (q *Queries) ListSnapshotArtifactObjectKeysByOrg(ctx context.Context, orgID uuid.UUID) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSnapshotArtifactObjectKeysByOrg, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSnapshotArtifactObjectKeysByRepo = `-- name: ListSnapshotArtifactObjectKeysByRepo :many
+SELECT sa.object_key
+FROM snapshot_artifacts sa
+JOIN snapshots s ON s.id = sa.snapshot_id
+JOIN refs rf ON rf.id = s.ref_id
+WHERE rf.repo_id = $1 AND sa.object_key <> ''
+`
+
+func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repoID uuid.UUID) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSnapshotArtifactObjectKeysByRepo, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSnapshotArtifactsBySnapshot = `-- name: ListSnapshotArtifactsBySnapshot :many
 SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at FROM snapshot_artifacts
 WHERE snapshot_id = $1

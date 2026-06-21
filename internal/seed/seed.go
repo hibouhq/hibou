@@ -893,9 +893,9 @@ func seedTests(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, createdAt 
 	}
 
 	const insertReport = `
-		INSERT INTO test_reports (snapshot_id, format, total, passed, failed, skipped, errors, duration_seconds, created_at)
-		VALUES ($1, 'junit', $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (snapshot_id) DO NOTHING
+		INSERT INTO test_reports (snapshot_id, source, format, total, passed, failed, skipped, errors, duration_seconds, created_at)
+		VALUES ($1, 'seed', 'junit', $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (snapshot_id, source) DO NOTHING
 		RETURNING id
 	`
 	var reportID uuid.UUID

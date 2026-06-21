@@ -60,7 +60,7 @@ func (s *Server) handleGetTests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cases, err := s.queries.ListTestCasesByReport(r.Context(), report.ID)
+	cases, err := s.queries.ListTestCasesBySnapshot(r.Context(), report.SnapshotID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load test cases")
 		return
@@ -133,7 +133,7 @@ func (s *Server) resolveTestReport(r *http.Request, w http.ResponseWriter, repo 
 	return report, true
 }
 
-func (s *Server) processTestUpload(ctx context.Context, snapshotID uuid.UUID, content []byte, format string) {
+func (s *Server) processTestUpload(ctx context.Context, snapshotID uuid.UUID, content []byte, format, source string) {
 	report, err := testparser.Parse(content, format)
 	if err != nil {
 		s.failTestUpload(snapshotID, format, err)
@@ -147,22 +147,25 @@ func (s *Server) processTestUpload(ctx context.Context, snapshotID uuid.UUID, co
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Reports are keyed by (snapshot_id, source) so a Go and a frontend junit in
+	// the same snapshot coexist instead of overwriting each other. Re-uploading
+	// the same source replaces only its own report + cases (idempotent).
 	const insertReport = `
-		INSERT INTO test_reports (snapshot_id, format, total, passed, failed, skipped, errors, duration_seconds)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (snapshot_id) DO UPDATE SET
+		INSERT INTO test_reports (snapshot_id, source, format, total, passed, failed, skipped, errors, duration_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (snapshot_id, source) DO UPDATE SET
 		  format = EXCLUDED.format, total = EXCLUDED.total, passed = EXCLUDED.passed,
 		  failed = EXCLUDED.failed, skipped = EXCLUDED.skipped, errors = EXCLUDED.errors,
 		  duration_seconds = EXCLUDED.duration_seconds
 		RETURNING id
 	`
 	var reportID uuid.UUID
-	if err := tx.QueryRowContext(ctx, insertReport, snapshotID, report.Format, report.Total, report.Passed, report.Failed, report.Skipped, report.Errors, report.DurationSeconds).Scan(&reportID); err != nil {
+	if err := tx.QueryRowContext(ctx, insertReport, snapshotID, source, report.Format, report.Total, report.Passed, report.Failed, report.Skipped, report.Errors, report.DurationSeconds).Scan(&reportID); err != nil {
 		s.failTestUpload(snapshotID, report.Format, err)
 		return
 	}
 
-	// Replace any prior cases (idempotent re-upload).
+	// Replace any prior cases for this source (idempotent re-upload).
 	if _, err := tx.ExecContext(ctx, "DELETE FROM test_cases WHERE test_report_id = $1", reportID); err != nil {
 		s.failTestUpload(snapshotID, report.Format, err)
 		return

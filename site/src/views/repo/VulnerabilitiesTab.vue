@@ -10,6 +10,7 @@
       :sort-direction-options="sortDirectionOptions"
       :total-count="pagination.total"
       :filtered-count="hasActiveFilters ? pagination.total : undefined"
+      :counts="facetCounts"
       placeholder="Filter vulnerabilities..."
     />
 
@@ -77,9 +78,11 @@
                   {{ vulnerability.primary_identifier?.value || vulnerability.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-3 py-2.5">
-                  <div class="text-gray-300">
-                    {{ vulnerability.title }}
-                  </div>
+                  <LinkedText
+                    :text="vulnerability.title"
+                    class="text-gray-300"
+                  />
+
                   <div
                     v-if="formatLocation(vulnerability) !== 'n/a'"
                     class="mt-0.5 font-mono text-xs text-gray-500"
@@ -133,8 +136,9 @@
 import { computed, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { api, type Vulnerability } from '@/api/client'
+import { api, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
+import LinkedText from '@/components/LinkedText.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -152,12 +156,16 @@ const currentSortDirection = ref('desc')
 const pagination = ref({ page: 1, per_page: 50, total: 0 })
 const seenTools = ref<Set<string>>(new Set())
 const seenFiles = ref<Set<string>>(new Set())
+const facetCounts = ref<VulnerabilityFacets>({ type: {}, severity: {}, status: {}, tool: {}, file: {} })
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
 const statusOptions = ['detected', 'confirmed', 'dismissed', 'resolved']
-const toolOptions = computed(() => Array.from(seenTools.value).sort())
-const fileOptions = computed(() => Array.from(seenFiles.value).sort())
+// Build Sources/File option lists from the facet keys (full result set) merged
+// with what's been seen on loaded pages, so options aren't limited to the
+// current page. Order by descending count, then alphabetically.
+const toolOptions = computed(() => mergeFacetOptions(facetCounts.value.tool, seenTools.value))
+const fileOptions = computed(() => mergeFacetOptions(facetCounts.value.file, seenFiles.value))
 const filterDefs = computed(() => [
   { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected,confirmed' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
@@ -293,6 +301,42 @@ watch(
     }
   },
   { immediate: true },
+)
+
+function mergeFacetOptions(counts: Record<string, number>, seen: Set<string>): string[] {
+  const keys = new Set<string>([...Object.keys(counts), ...seen])
+  return Array.from(keys).sort((a, b) => {
+    const diff = (counts[b] ?? 0) - (counts[a] ?? 0)
+    return diff !== 0 ? diff : a.localeCompare(b)
+  })
+}
+
+// Faceted option counts. Refetched whenever the scope or filters change, but
+// not on pagination/sort — facets describe the whole filtered result set.
+watch(
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery],
+  async () => {
+    if (!provider.value || !slug.value || !repoSlug.value) {
+      facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {} }
+      return
+    }
+
+    try {
+      facetCounts.value = await api.listRefVulnerabilityFacets(provider.value, slug.value, repoSlug.value, {
+        ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
+        snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
+        type: activeFilters.value.type || undefined,
+        severity: activeFilters.value.severity || undefined,
+        status: activeFilters.value.status || undefined,
+        tool: activeFilters.value.tool || undefined,
+        file: activeFilters.value.file || undefined,
+        search: searchQuery.value || undefined,
+      })
+    } catch {
+      facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {} }
+    }
+  },
+  { deep: true, immediate: true },
 )
 
 function changePage(page: number) {

@@ -417,7 +417,11 @@ func (s *Server) handleTestsUpload(w http.ResponseWriter, r *http.Request, userI
 	if !ok {
 		return false
 	}
-	go s.processTestUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format)
+	testSource := ""
+	if input.Artifact != nil {
+		testSource = strings.TrimSpace(input.Artifact.Filename)
+	}
+	go s.processTestUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format, testSource)
 	snapshot, ok = s.completeUploadSnapshotIfNeeded(w, r, input, snapshot)
 	if !ok {
 		return false

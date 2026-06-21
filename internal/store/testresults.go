@@ -34,65 +34,77 @@ type TestCase struct {
 	FilePath        string    `json:"file_path"`
 }
 
-const testReportColumns = "id, snapshot_id, format, total, passed, failed, skipped, errors, duration_seconds, created_at"
-
-func scanTestReport(scanner interface{ Scan(...interface{}) error }) (*TestReport, error) {
-	var report TestReport
-	if err := scanner.Scan(
-		&report.ID, &report.SnapshotID, &report.Format, &report.Total, &report.Passed,
-		&report.Failed, &report.Skipped, &report.Errors, &report.DurationSeconds, &report.CreatedAt,
+// GetTestReportBySnapshot returns a single report for a snapshot by aggregating
+// every per-source report (e.g. Go + frontend junit) into summed totals, or nil
+// when the snapshot has no reports. The returned ID is zero — callers list cases
+// with ListTestCasesBySnapshot, not by report ID.
+func (q *Queries) GetTestReportBySnapshot(ctx context.Context, snapshotID uuid.UUID) (*TestReport, error) {
+	const query = `
+		SELECT COALESCE(string_agg(DISTINCT format, ',' ORDER BY format), ''),
+		       COALESCE(SUM(total), 0), COALESCE(SUM(passed), 0), COALESCE(SUM(failed), 0),
+		       COALESCE(SUM(skipped), 0), COALESCE(SUM(errors), 0), COALESCE(SUM(duration_seconds), 0),
+		       MAX(created_at), COUNT(*)
+		FROM test_reports
+		WHERE snapshot_id = $1
+	`
+	var (
+		report    TestReport
+		createdAt sql.NullTime
+		count     int
+	)
+	if err := q.sqlDB.QueryRowContext(ctx, query, snapshotID).Scan(
+		&report.Format, &report.Total, &report.Passed, &report.Failed, &report.Skipped,
+		&report.Errors, &report.DurationSeconds, &createdAt, &count,
 	); err != nil {
 		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	report.SnapshotID = snapshotID
+	if createdAt.Valid {
+		report.CreatedAt = createdAt.Time
 	}
 	return &report, nil
 }
 
-// GetTestReportBySnapshot returns the test report for a specific snapshot, or nil.
-func (q *Queries) GetTestReportBySnapshot(ctx context.Context, snapshotID uuid.UUID) (*TestReport, error) {
-	row := q.sqlDB.QueryRowContext(ctx, "SELECT "+testReportColumns+" FROM test_reports WHERE snapshot_id = $1", snapshotID)
-	report, err := scanTestReport(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return report, nil
-}
-
-// GetLatestTestReportByRef returns the most recent test report across all snapshots
-// of a ref (regardless of snapshot status), mirroring coverage resolution.
+// GetLatestTestReportByRef aggregates the reports of the most recent snapshot of
+// a ref that has any test report (regardless of status), mirroring coverage
+// resolution.
 func (q *Queries) GetLatestTestReportByRef(ctx context.Context, refID uuid.UUID) (*TestReport, error) {
 	const query = `
-		SELECT tr.id, tr.snapshot_id, tr.format, tr.total, tr.passed, tr.failed, tr.skipped, tr.errors, tr.duration_seconds, tr.created_at
+		SELECT tr.snapshot_id
 		FROM test_reports tr
 		JOIN snapshots s ON s.id = tr.snapshot_id
 		WHERE s.ref_id = $1
 		ORDER BY s.created_at DESC
 		LIMIT 1
 	`
-	row := q.sqlDB.QueryRowContext(ctx, query, refID)
-	report, err := scanTestReport(row)
+	var snapshotID uuid.UUID
+	err := q.sqlDB.QueryRowContext(ctx, query, refID).Scan(&snapshotID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return report, nil
+	return q.GetTestReportBySnapshot(ctx, snapshotID)
 }
 
-// ListTestCasesByReport returns a report's cases, failures and errors first.
-func (q *Queries) ListTestCasesByReport(ctx context.Context, reportID uuid.UUID) ([]TestCase, error) {
+// ListTestCasesBySnapshot returns every case across all of a snapshot's per-source
+// reports (e.g. Go + frontend), failures and errors first. This is what the Tests
+// tab renders so both languages' tests appear together.
+func (q *Queries) ListTestCasesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]TestCase, error) {
 	const query = `
-		SELECT id, test_report_id, suite, name, classname, status, duration_seconds, message, file_path
-		FROM test_cases
-		WHERE test_report_id = $1
+		SELECT tc.id, tc.test_report_id, tc.suite, tc.name, tc.classname, tc.status, tc.duration_seconds, tc.message, tc.file_path
+		FROM test_cases tc
+		JOIN test_reports tr ON tr.id = tc.test_report_id
+		WHERE tr.snapshot_id = $1
 		ORDER BY
-		  CASE status WHEN 'error' THEN 0 WHEN 'failed' THEN 1 WHEN 'skipped' THEN 2 ELSE 3 END,
-		  suite, name
+		  CASE tc.status WHEN 'error' THEN 0 WHEN 'failed' THEN 1 WHEN 'skipped' THEN 2 ELSE 3 END,
+		  tc.suite, tc.name
 	`
-	rows, err := q.sqlDB.QueryContext(ctx, query, reportID)
+	rows, err := q.sqlDB.QueryContext(ctx, query, snapshotID)
 	if err != nil {
 		return nil, err
 	}

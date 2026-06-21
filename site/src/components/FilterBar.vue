@@ -214,6 +214,11 @@
                         : 'border-surface-border text-transparent'"
                     >✓</span>
                     <span class="min-w-0 truncate">{{ option }}</span>
+                    <span
+                      v-if="optionCount(filter, option) !== undefined"
+                      class="ml-auto shrink-0 rounded-full border border-surface-border-subtle px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                      :class="optionCount(filter, option) === 0 ? 'text-gray-600' : 'text-gray-400'"
+                    >{{ optionCount(filter, option) }}</span>
                   </button>
                   <button
                     v-if="hasMoreSuggestions(filter)"
@@ -394,6 +399,9 @@ const props = withDefaults(defineProps<{
   sortDirectionOptions?: SortDef[]
   totalCount?: number
   filteredCount?: number
+  // Per-option result counts, keyed by filter key then option value. When
+  // provided, each option shows a badge with the number of results it matches.
+  counts?: Record<string, Record<string, number>>
   placeholder?: string
 }>(), {
   searchable: true,
@@ -401,6 +409,7 @@ const props = withDefaults(defineProps<{
   sortDirectionOptions: undefined,
   totalCount: undefined,
   filteredCount: undefined,
+  counts: undefined,
   placeholder: 'Filter findings...',
 })
 
@@ -794,6 +803,10 @@ function showMoreSuggestions(filterKey: string) {
 function showMoreCount(filter: FilterDef) {
   const limit = visibleSuggestionCounts.value[filter.key] ?? 20
   return Math.min(20, filteredOptionsFor(filter).length - limit)
+}
+
+function optionCount(filter: FilterDef, option: string): number | undefined {
+  return props.counts?.[filter.key]?.[option]
 }
 
 function getSelectedValues(filter: FilterDef) {

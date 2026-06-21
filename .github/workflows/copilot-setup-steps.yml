@@ -1,0 +1,137 @@
+name: Copilot setup steps
+
+# Provisions the GitHub Copilot coding agent's runner with this repo's full dev
+# toolchain so offloaded tasks have the same environment as the devcontainer.
+#
+# NOTE: Copilot coding agent CANNOT run inside a container. The copilot-setup-steps
+# job only honors steps / permissions / runs-on / services / snapshot /
+# timeout-minutes; a `container:` key is silently ignored, and the agent always
+# runs on the runner VM. So instead of running *in* the devcontainer, we copy the
+# devcontainer's exact binaries onto the runner. This works because the runner
+# (ubuntu-24.04 = noble) matches the devcontainer base image
+# (mcr.microsoft.com/devcontainers/base:noble), so the copied Go/Node/CLI binaries
+# are ABI-compatible. Versions stay in lockstep with .devcontainer/Dockerfile
+# because we pull the same prebuilt image CI publishes -- no version list to drift.
+#
+# Security: third-party actions are pinned to immutable commit SHAs (the practice
+# gh-aw and adoptium/containers follow). Permissions are least-privilege --
+# contents:read for the source, packages:read to pull the private devcontainer
+# image from GHCR.
+
+on:
+  workflow_dispatch:
+  # Validate the setup on changes to this file (Copilot only reads it from the
+  # default branch, but this lets PRs catch breakage before merge).
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # Must be named exactly "copilot-setup-steps" or Copilot will not pick it up.
+  copilot-setup-steps:
+    # `container:` is intentionally NOT used: it's ignored by copilot-setup-steps
+    # and broken for the agent itself (community discussion 170315 -- hardcoded
+    # /home/runner paths fail with exit 127 inside containers). We instead copy
+    # the devcontainer toolchain onto the hosted runner below.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      # Installs the `gh aw` CLI so the agent can compile/lint/run GitHub Agentic
+      # Workflows in this repo. gh-aw's own security model (SHA-pinned action
+      # locks, network egress allow-listing, sanitized safe-outputs) applies to
+      # the agentic .lock.yml workflows it generates -- not to this setup file.
+      - name: Install gh-aw CLI
+        uses: github/gh-aw-actions/setup-cli@5c2fe865bb4dc46e1450f6ee0d0541d759aea73a # v0.79.6
+        with:
+          version: v0.79.6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Import devcontainer toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Resolve the devcontainer image for the branch this agent runs on,
+          # using the same tag scheme as .github/actions/devcontainer-ci
+          # (sanitize_tag, kept in sync with that action). Only the default
+          # branch (published as :<tag> and :latest) and branches in the
+          # action's push-branches list (main|master|release*) publish a
+          # devcontainer image, so fall back to the default-branch image when
+          # the current branch has none.
+          sanitize_tag() {
+            printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's#[^a-z0-9._-]+#-#g; s#(^[-.]+|[-.]+$)##g'
+          }
+          repo="$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          image_name="ghcr.io/${repo}-devcontainer"
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-main}}"
+
+          image=""
+          for tag in "$(sanitize_tag "${branch}")" latest main; do
+            [ -n "${tag}" ] || continue
+            if docker pull "${image_name}:${tag}"; then
+              image="${image_name}:${tag}"
+              echo "Using devcontainer image ${image} (branch: ${branch})"
+              break
+            fi
+          done
+          [ -n "${image}" ] || { echo "no devcontainer image found for branch '${branch}' or default" >&2; exit 1; }
+
+          cid="$(docker create "${image}")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+
+          # Go (self-contained under /usr/local/go) plus every prebuilt CLI the
+          # Dockerfile drops into /usr/local/bin: golangci-lint, gosec, dlv, sqlc,
+          # swag, gotestsum, rtk, gh, kubectl, k9s, tofu, helm, oras, vcluster, apko.
+          sudo docker cp "$cid:/usr/local/go/." /usr/local/go/
+          sudo docker cp "$cid:/usr/local/bin/." /usr/local/bin/
+
+          # Node 26 is apt-installed in the image (binary + global modules).
+          sudo docker cp "$cid:/usr/bin/node" /usr/local/bin/node
+          sudo rm -rf /usr/lib/node_modules
+          sudo docker cp "$cid:/usr/lib/node_modules" /usr/lib/node_modules
+          sudo ln -sf /usr/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+          sudo ln -sf /usr/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+      - name: Configure PATH
+        shell: bash
+        run: |
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          go version
+          node --version
+          npm --version
+          helm version
+          kubectl version --client
+          golangci-lint --version
+          sqlc version
+          swag --version
+          gotestsum --version
+          gh aw --version || gh-aw --version || echo "gh-aw CLI not on PATH"
+
+      - name: Warm dependency caches
+        shell: bash
+        run: |
+          set -euxo pipefail
+          go mod download
+          (cd site && npm ci)

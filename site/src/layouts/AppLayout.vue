@@ -110,9 +110,15 @@
                 ref="repoMenuRef"
                 class="relative flex items-center gap-1"
               >
+                <Lock
+                  v-if="currentRepoIsPrivate"
+                  class="h-3.5 w-3.5 shrink-0 text-gray-400"
+                  :aria-label="`${currentRepoVisibilityLabel} repository`"
+                />
                 <RouterLink
                   :to="`/orgs/${currentOrgProvider}/${currentOrgSlug}/repos/${currentRepoSlug}`"
                   class="max-w-[14rem] truncate font-semibold text-white transition hover:text-accent"
+                  :title="currentRepoIsPrivate ? `${currentRepoVisibilityLabel} repository` : undefined"
                 >
                   {{ currentRepoSlug }}
                 </RouterLink>
@@ -357,6 +363,7 @@ import {
   ChevronDown,
   FlaskConical,
   LayoutDashboard,
+  Lock,
   Menu,
   Package,
   Search,
@@ -394,6 +401,30 @@ const isRepoMenuOpen = ref(false)
 const repoMenuRef = ref<HTMLElement | null>(null)
 const repoList = ref<Repository[]>([])
 const repoListLoading = ref(false)
+// Current repo's visibility, fetched for the breadcrumb lock icon. The route only
+// carries the slug string, so the repo object is loaded separately here.
+const currentRepoMeta = ref<Repository | null>(null)
+const currentRepoIsPrivate = computed(() => {
+  const meta = currentRepoMeta.value
+  return !!meta && (meta.private === true || (meta.visibility ?? 'public') !== 'public')
+})
+const currentRepoVisibilityLabel = computed(() => {
+  const v = currentRepoMeta.value?.visibility
+  return v === 'internal' ? 'Internal' : 'Private'
+})
+
+async function loadCurrentRepoMeta() {
+  if (!currentRepoSlug.value || !currentOrgProvider.value || !currentOrgSlug.value) {
+    currentRepoMeta.value = null
+    return
+  }
+  try {
+    const res = await api.getRepo(currentOrgProvider.value, currentOrgSlug.value, currentRepoSlug.value)
+    currentRepoMeta.value = res.data
+  } catch {
+    currentRepoMeta.value = null
+  }
+}
 const repoSearch = ref('')
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const searchDraft = ref('')
@@ -558,6 +589,7 @@ watch(
     repoList.value = []
     repoSearch.value = ''
     isRepoMenuOpen.value = false
+    void loadCurrentRepoMeta()
 
     if (typeof route.query.q === 'string') {
       searchDraft.value = route.query.q

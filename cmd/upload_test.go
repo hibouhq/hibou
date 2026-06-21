@@ -144,8 +144,66 @@ func TestSetOptionalUploadContextFieldsIncludesRunAttempt(t *testing.T) {
 func resetUploadFlags() {
 	uploadRef = ""
 	uploadCommitSHA = ""
+	uploadOrg = ""
+	uploadRepo = ""
 	_ = os.Unsetenv("HIBOU_REF")
 	_ = os.Unsetenv("HIBOU_SHA")
 	_ = os.Unsetenv("HIBOU_PR_SOURCE_BRANCH")
 	_ = os.Unsetenv("HIBOU_RUN_ATTEMPT")
+}
+
+func TestResolveUploadContextDetectsGitHubOrgRepo(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "abc123")
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	t.Setenv("GITHUB_REPOSITORY", "acme/api-gateway")
+	t.Setenv("GITHUB_REPOSITORY_OWNER", "acme")
+	t.Cleanup(resetUploadFlags)
+
+	ctx := resolveUploadContext()
+	if ctx.org != "github/acme" {
+		t.Fatalf("org = %q, want github/acme", ctx.org)
+	}
+	if ctx.repo != "api-gateway" {
+		t.Fatalf("repo = %q, want api-gateway", ctx.repo)
+	}
+}
+
+func TestResolveUploadContextForgejoTakesPrecedenceOverGitHub(t *testing.T) {
+	// Forgejo/Gitea act_runner sets GITEA_* alongside GITHUB_*; provider must be forgejo.
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "abc123")
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	t.Setenv("GITHUB_REPOSITORY", "acme/api-gateway")
+	t.Setenv("GITHUB_REPOSITORY_OWNER", "acme")
+	t.Setenv("GITEA_REPOSITORY", "devtools/api-gateway")
+	t.Setenv("GITEA_REPOSITORY_OWNER", "devtools")
+	t.Cleanup(resetUploadFlags)
+
+	ctx := resolveUploadContext()
+	if ctx.org != "forgejo/devtools" {
+		t.Fatalf("org = %q, want forgejo/devtools", ctx.org)
+	}
+	if ctx.repo != "api-gateway" {
+		t.Fatalf("repo = %q, want api-gateway", ctx.repo)
+	}
+}
+
+func TestResolveUploadBaseUsesDetectedOrgRepoWhenFlagsAbsent(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "abc123")
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	t.Setenv("GITHUB_REPOSITORY", "acme/api-gateway")
+	t.Setenv("GITHUB_REPOSITORY_OWNER", "acme")
+	t.Cleanup(resetUploadFlags)
+	uploadOrg = ""
+	uploadRepo = ""
+
+	base, err := resolveUploadBase()
+	if err != nil {
+		t.Fatalf("resolveUploadBase() error = %v", err)
+	}
+	if base.provider != "github" || base.org != "acme" || base.repo != "api-gateway" {
+		t.Fatalf("base = %+v, want {github acme api-gateway}", base)
+	}
 }

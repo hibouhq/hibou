@@ -47,6 +47,7 @@ export interface Repository {
   html_url?: string
   description?: string
   private?: boolean
+  visibility?: 'public' | 'private' | 'internal'
   enrolled?: boolean
   status?: RepoLifecycleStatus
   last_scanned?: string | null
@@ -215,6 +216,17 @@ export interface Vulnerability {
   metadata?: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+// Per-option result counts for each vulnerability filter dimension. Each record
+// maps an option value (e.g. severity "high", a scanner name, a file path) to
+// the number of findings it would match under the current filters.
+export interface VulnerabilityFacets {
+  type: Record<string, number>
+  severity: Record<string, number>
+  status: Record<string, number>
+  tool: Record<string, number>
+  file: Record<string, number>
 }
 
 export interface Advisory {
@@ -948,6 +960,38 @@ class ApiClient {
     const qs = query.toString()
     return this.request<PaginatedResponse<Vulnerability>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  // Per-option result counts for each filter dimension, respecting the other
+  // active filters. Pagination/sort params are intentionally omitted.
+  listRefVulnerabilityFacets(
+    provider: string,
+    slug: string,
+    repoSlug: string,
+    params?: {
+      ref?: string
+      snapshot?: string
+      type?: string
+      severity?: string
+      status?: string
+      tool?: string
+      language?: string
+      file?: string
+      search?: string
+    },
+  ) {
+    const query = new URLSearchParams()
+    for (const key of ['ref', 'snapshot', 'type', 'severity', 'status', 'tool', 'language', 'file', 'search'] as const) {
+      const value = params?.[key]
+      if (value) {
+        query.set(key, value)
+      }
+    }
+
+    const qs = query.toString()
+    return this.request<VulnerabilityFacets>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/facets${qs ? `?${qs}` : ''}`,
     )
   }
 

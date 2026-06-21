@@ -122,30 +122,15 @@ runs:
       run: |
         set -euo pipefail
 
-        # Auto-detect provider, org, and repo from CI environment
-        org="$INPUT_ORG"
-        repo="$INPUT_REPO"
-        ref="$INPUT_REF"
-        sha="$INPUT_SHA"
-
-        if [[ -z "$org" || -z "$repo" ]]; then
-          if [[ -n "${GITEA_REPOSITORY:-}" ]]; then
-            # Forgejo/Gitea
-            [[ -n "$org" ]]  || org="forgejo/${GITEA_REPOSITORY_OWNER}"
-            [[ -n "$repo" ]] || repo="${GITEA_REPOSITORY#*/}"
-          elif [[ -n "${GITHUB_REPOSITORY_OWNER:-}" ]]; then
-            # GitHub
-            [[ -n "$org" ]]  || org="github/${GITHUB_REPOSITORY_OWNER}"
-            [[ -n "$repo" ]] || repo="${GITHUB_REPOSITORY#*/}"
-          fi
-        fi
-
-        [[ -n "$org" ]]  || { echo 'org could not be detected; set it explicitly' >&2; exit 1; }
-        [[ -n "$repo" ]] || { echo 'repo could not be detected; set it explicitly' >&2; exit 1; }
-
-        [[ -n "$ref" ]] || ref="${GITHUB_REF:-${GITEA_REF:-}}"
-        [[ -n "$sha" ]] || sha="${GITHUB_SHA:-${GITEA_SHA:-}}"
-        [[ -n "$ref" && -n "$sha" ]] || { echo 'ref and sha are required' >&2; exit 1; }
+        # org / repo / ref / sha are auto-detected by the hibou CLI from the CI
+        # environment (GITHUB_*, GITEA_*, GitLab CI_*), so this wrapper only
+        # forwards explicit overrides. The CLI owns all CI-context detection --
+        # the bash side does not duplicate or pre-empt it.
+        ctx_flags=()
+        [[ -n "$INPUT_ORG"  ]] && ctx_flags+=(--org  "$INPUT_ORG")
+        [[ -n "$INPUT_REPO" ]] && ctx_flags+=(--repo "$INPUT_REPO")
+        [[ -n "$INPUT_REF"  ]] && ctx_flags+=(--ref  "$INPUT_REF")
+        [[ -n "$INPUT_SHA"  ]] && ctx_flags+=(--sha  "$INPUT_SHA")
 
         # Expand globs and newline-separated paths into file list
         files=()
@@ -159,35 +144,31 @@ runs:
 
         [[ ${#files[@]} -gt 0 ]] || { echo 'no files found matching the provided pattern(s)' >&2; exit 1; }
 
-        complete_flag=""
+        upload_flags=("${ctx_flags[@]}")
         if [[ "$INPUT_COMPLETE" == "false" ]]; then
-          complete_flag="--complete=false"
+          upload_flags+=(--complete=false)
         fi
-
-        expect_flag=""
         if [[ "$INPUT_EXPECT" != "0" && -n "$INPUT_EXPECT" ]]; then
-          expect_flag="--expect=$INPUT_EXPECT"
+          upload_flags+=(--expect="$INPUT_EXPECT")
         fi
 
-        hibou upload "${files[@]}" --org "$org" --repo "$repo" --ref "$ref" --sha "$sha" $complete_flag $expect_flag
+        hibou upload "${files[@]}" "${upload_flags[@]}"
 
         # Run CI-side reachability analysis if requested
         if [[ "$INPUT_REACHABILITY" != "false" && -n "$INPUT_REACHABILITY" ]]; then
-          reachability_args=(--org "$org" --repo "$repo" --ref "$ref" --sha "$sha")
+          reachability_args=("${ctx_flags[@]}")
 
           # Parse comma-separated languages
           IFS=',' read -ra langs <<< "$INPUT_REACHABILITY"
-          lang_flags=()
           for lang in "${langs[@]}"; do
             lang="$(echo "$lang" | xargs)"
-            lang_flags+=(--lang "$lang")
+            reachability_args+=(--lang "$lang")
           done
 
           # Add bytecode path override if provided (Java)
-          bytecode_flags=""
           if [[ -n "$INPUT_BYTECODE_PATH" ]]; then
-            bytecode_flags="--bytecode $INPUT_BYTECODE_PATH"
+            reachability_args+=(--bytecode "$INPUT_BYTECODE_PATH")
           fi
 
-          hibou analyze reachability "${lang_flags[@]}" "${reachability_args[@]}" $bytecode_flags
+          hibou analyze reachability "${reachability_args[@]}"
         fi

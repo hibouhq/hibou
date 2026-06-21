@@ -609,9 +609,28 @@ func TestExpiredArtifactProcessingClaimCanBeReclaimed(t *testing.T) {
 
 	queries := NewQueries(db)
 	ctx := context.Background()
-	snapshotID := createSnapshotForArtifactTest(t, ctx, queries)
+
+	// ClaimNextArtifactProcessingSnapshot claims the globally-oldest eligible
+	// snapshot. The hibou_test database is shared across packages, so other
+	// tests' committed snapshots would be claimed instead of this one. Isolate
+	// inside a rolled-back transaction, lock the tables, and quarantine every
+	// other snapshot -- same pattern as
+	// TestClaimNextArtifactProcessingSnapshotSkipsClaimedRowsAndStopsAfterFinishedFailure.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE snapshots, snapshot_artifacts IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock snapshot tables: %v", err)
+	}
+	txQueries := queries.WithTx(tx)
+
+	snapshotID := createSnapshotForArtifactTest(t, ctx, txQueries)
 	format := "cyclonedx-json"
-	if _, err := queries.CreateSnapshotArtifact(ctx, CreateSnapshotArtifactParams{
+	if _, err := txQueries.CreateSnapshotArtifact(ctx, CreateSnapshotArtifactParams{
 		SnapshotID: snapshotID,
 		Kind:       "sbom",
 		Format:     &format,
@@ -620,7 +639,14 @@ func TestExpiredArtifactProcessingClaimCanBeReclaimed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateSnapshotArtifact(sbom) error = %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE snapshots
+		SET artifact_processing_finished_at = NOW()
+		WHERE id <> $1
+	`, snapshotID); err != nil {
+		t.Fatalf("quarantine unrelated snapshots: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE snapshots
 		SET artifact_processing_claimed_by = 'worker-a',
 			artifact_processing_claim_expires_at = NOW() - INTERVAL '1 minute',
@@ -631,7 +657,7 @@ func TestExpiredArtifactProcessingClaimCanBeReclaimed(t *testing.T) {
 		t.Fatalf("seed expired claim: %v", err)
 	}
 
-	claimed, err := queries.ClaimNextArtifactProcessingSnapshot(ctx, "worker-b", time.Now().Add(5*time.Minute), 3)
+	claimed, err := txQueries.ClaimNextArtifactProcessingSnapshot(ctx, "worker-b", time.Now().Add(5*time.Minute), 3)
 	if err != nil {
 		t.Fatalf("ClaimNextArtifactProcessingSnapshot(reclaim) error = %v", err)
 	}

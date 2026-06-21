@@ -178,6 +178,49 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 
+// handleGetRefFindingFacets returns per-option result counts for each filter
+// dimension so the UI can badge every option with how many findings it would
+// match under the current filters.
+func (s *Server) handleGetRefFindingFacets(w http.ResponseWriter, r *http.Request) {
+	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+
+	emptyFacets := &store.VulnerabilityFacets{
+		Type:     map[string]int{},
+		Severity: map[string]int{},
+		Status:   map[string]int{},
+		Tool:     map[string]int{},
+		File:     map[string]int{},
+	}
+
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithVulnerabilitiesByRef)
+	if !ok {
+		return
+	}
+	if snapshot == nil {
+		api.JSON(w, http.StatusOK, emptyFacets)
+		return
+	}
+
+	facets, err := s.queries.FacetVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, store.VulnerabilityListOptions{
+		Types:      csvQueryFilterValues(r.URL.Query().Get("type")),
+		Severities: csvQueryFilterValues(r.URL.Query().Get("severity")),
+		Statuses:   csvQueryFilterValues(r.URL.Query().Get("status")),
+		Scanners:   mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
+		Languages:  csvQueryFilterValues(r.URL.Query().Get("language")),
+		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
+		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+	})
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to compute facets")
+		return
+	}
+
+	api.JSON(w, http.StatusOK, facets)
+}
+
 func parseCSVQueryFilter(raw string) map[string]struct{} {
 	values := make(map[string]struct{})
 

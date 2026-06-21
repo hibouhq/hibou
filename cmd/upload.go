@@ -31,9 +31,15 @@ var (
 type uploadBase struct {
 	provider string
 	org      string
+	repo     string
 }
 
 type uploadCIContext struct {
+	// org is the auto-detected "provider/slug" (e.g. "github/acme"); repo is the
+	// repository slug. Both are filled from the CI environment so callers (and
+	// the GitHub Action wrapper) need not pass --org/--repo.
+	org            string
+	repo           string
 	ref            string
 	commitSHA      string
 	runID          string
@@ -130,10 +136,15 @@ func resolveUploadClient() (*cliclient.Client, error) {
 }
 
 func resolveUploadBase() (uploadBase, error) {
+	ci := resolveUploadContext()
+
 	org := strings.TrimSpace(uploadOrg)
 	if org == "" {
 		cfg, _ := cliconfig.Load()
 		org = strings.TrimSpace(cfg.Org)
+	}
+	if org == "" {
+		org = ci.org // auto-detected "provider/slug" from the CI environment
 	}
 	if uploadProvider != "" && org == "" {
 		return uploadBase{}, errors.New("--provider is deprecated, use --org provider/slug")
@@ -141,10 +152,15 @@ func resolveUploadBase() (uploadBase, error) {
 	if org == "" {
 		return uploadBase{}, errors.New("--org is required (or set default with 'hibou config set-org')")
 	}
-	if uploadRepo == "" {
+
+	repo := strings.TrimSpace(uploadRepo)
+	if repo == "" {
+		repo = ci.repo // auto-detected repository slug from the CI environment
+	}
+	if repo == "" {
 		return uploadBase{}, errors.New("--repo is required")
 	}
-	ci := resolveUploadContext()
+
 	if ci.ref == "" {
 		return uploadBase{}, errors.New("--ref is required")
 	}
@@ -157,7 +173,27 @@ func resolveUploadBase() (uploadBase, error) {
 		return uploadBase{}, errors.New("org must be in 'provider/slug' format (e.g., 'forgejo/devtools')")
 	}
 
-	return uploadBase{provider: parts[0], org: parts[1]}, nil
+	return uploadBase{provider: parts[0], org: parts[1], repo: repo}, nil
+}
+
+// repoOwner returns the owner segment of a "owner/name" repository, preferring
+// the explicit owner env value when set.
+func repoOwner(fullName, explicitOwner string) string {
+	if owner := strings.TrimSpace(explicitOwner); owner != "" {
+		return owner
+	}
+	if idx := strings.Index(fullName, "/"); idx >= 0 {
+		return fullName[:idx]
+	}
+	return fullName
+}
+
+// repoSlug returns the repository name (last path segment) of a repository path.
+func repoSlug(fullName string) string {
+	if idx := strings.LastIndex(fullName, "/"); idx >= 0 {
+		return fullName[idx+1:]
+	}
+	return fullName
 }
 
 func detectCIContext() uploadCIContext {
@@ -193,6 +229,15 @@ func detectGitHubFamilyCIContext() (uploadCIContext, bool) {
 		runAttempt:     strings.TrimSpace(os.Getenv("GITHUB_RUN_ATTEMPT")),
 		runNumber:      strings.TrimSpace(os.Getenv("GITHUB_RUN_NUMBER")),
 	}
+	// Forgejo/Gitea act_runner sets GITEA_* alongside GITHUB_*; prefer it so the
+	// provider is "forgejo" rather than "github" on those runners.
+	if repository := strings.TrimSpace(os.Getenv("GITEA_REPOSITORY")); repository != "" {
+		ctx.org = "forgejo/" + repoOwner(repository, os.Getenv("GITEA_REPOSITORY_OWNER"))
+		ctx.repo = repoSlug(repository)
+	} else if repository := strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY")); repository != "" {
+		ctx.org = "github/" + repoOwner(repository, os.Getenv("GITHUB_REPOSITORY_OWNER"))
+		ctx.repo = repoSlug(repository)
+	}
 	serverURL := strings.TrimSpace(os.Getenv("GITHUB_SERVER_URL"))
 	repository := strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY"))
 	if ctx.runID != "" && serverURL != "" && repository != "" {
@@ -219,6 +264,8 @@ func detectGitLabCIContext() (uploadCIContext, bool) {
 		buildURL = strings.TrimSpace(os.Getenv("CI_JOB_URL"))
 	}
 	return uploadCIContext{
+		org:            "gitlab/" + repoOwner(strings.TrimSpace(os.Getenv("CI_PROJECT_PATH")), os.Getenv("CI_PROJECT_ROOT_NAMESPACE")),
+		repo:           strings.TrimSpace(os.Getenv("CI_PROJECT_NAME")),
 		commitSHA:      strings.TrimSpace(os.Getenv("CI_COMMIT_SHA")),
 		ref:            ref,
 		prTargetBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")),
@@ -310,7 +357,7 @@ func runUploadAuto(file string, complete bool, expect int) error {
 	payload := map[string]any{
 		"provider":   base.provider,
 		"org":        base.org,
-		"repo":       uploadRepo,
+		"repo":       base.repo,
 		"ref":        ci.ref,
 		"commit_sha": ci.commitSHA,
 		"complete":   complete,
@@ -342,7 +389,7 @@ func runUploadComplete() error {
 	payload := map[string]any{
 		"provider":   base.provider,
 		"org":        base.org,
-		"repo":       uploadRepo,
+		"repo":       base.repo,
 		"ref":        ci.ref,
 		"commit_sha": ci.commitSHA,
 		"complete":   true,

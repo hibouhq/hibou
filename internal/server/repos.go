@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"sort"
 	"strconv"
@@ -369,7 +370,30 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, repo)
+	// Repository visibility lives on the forge_repositories sync record, not the
+	// core repositories table, so join it onto the detail response. Without this
+	// the frontend never receives `private` and renders every repo as Public.
+	api.JSON(w, http.StatusOK, s.repoDetailResponse(r.Context(), repo))
+}
+
+// repoVisibilityResponse augments store.Repository with the forge visibility.
+// store.Repository (the core table) carries no visibility; it is sourced from
+// the forge_repositories sync record.
+type repoVisibilityResponse struct {
+	*store.Repository
+	Private    bool   `json:"private"`
+	Visibility string `json:"visibility"`
+}
+
+func (s *Server) repoDetailResponse(ctx context.Context, repo *store.Repository) repoVisibilityResponse {
+	resp := repoVisibilityResponse{Repository: repo, Visibility: "public"}
+	if forgeRepo, err := s.queries.GetForgeRepositoryByProviderKey(ctx, repo.Provider, repo.ProviderID); err == nil && forgeRepo != nil {
+		resp.Private = forgeRepo.Private
+		if forgeRepo.Private {
+			resp.Visibility = "private"
+		}
+	}
+	return resp
 }
 
 // @Summary      Update repository
@@ -460,11 +484,39 @@ func (s *Server) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
 // @Failure      500       {object}  api.Response
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/repos/{repoSlug} [delete]
+// purgeObjectStoreKeys best-effort deletes artifact bytes from the object store
+// before a hard delete cascades the snapshot_artifacts metadata rows away,
+// preventing orphaned objects. A missing object is fine; other failures are
+// logged but not fatal, so a transient store error never blocks the delete (the
+// worst case is a re-cleanable orphan, which beats an un-deletable repo/org).
+func (s *Server) purgeObjectStoreKeys(ctx context.Context, keys []string) {
+	if s.objStore == nil {
+		return
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if err := s.objStore.Delete(ctx, key); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.log.Warn().Err(err).Str("object_key", key).Msg("failed to delete artifact object during hard delete; object may be orphaned")
+		}
+	}
+}
+
 func (s *Server) handleRemoveRepo(w http.ResponseWriter, r *http.Request) {
 	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
 	if !ok {
 		return
 	}
+
+	// Hard-deleting the repository cascades the snapshot_artifacts rows away, so
+	// the object-store bytes must be purged first or they orphan forever.
+	objectKeys, err := s.queries.ListSnapshotArtifactObjectKeysByRepo(r.Context(), repo.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to enumerate repository artifacts")
+		return
+	}
+	s.purgeObjectStoreKeys(r.Context(), objectKeys)
 
 	if err := s.queries.DeleteRepository(r.Context(), repo.ID); err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete repository")
@@ -1228,7 +1280,7 @@ func (s *Server) loadTestInput(ctx context.Context, snapshotID uuid.UUID) (compa
 		return comparison.TestReportInput{}, nil
 	}
 
-	cases, err := s.queries.ListTestCasesByReport(ctx, report.ID)
+	cases, err := s.queries.ListTestCasesBySnapshot(ctx, snapshotID)
 	if err != nil {
 		return comparison.TestReportInput{}, err
 	}

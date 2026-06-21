@@ -695,3 +695,7 @@ The result should feel like a GitHub-native security tool — users familiar wit
 	- When auto-enrolling, hydrate repo metadata (name, slug, provider repo id, default branch) from the matching `forge_repositories` inventory row when one exists (provider + account/slug + repo); fall back to the upload-provided fields for non-forge/CI-only repos. Reuse the existing `CreateRepository(..., "enrolled")` path and write a `repo.enrolled` (or a new `repo.auto_enrolled`) audit log entry for traceability.
 	- Keep explicit enroll as the secure default for multi-tenant safety; auto-enroll stays opt-in per deployment.
 	- Acceptance criteria hint: with the flag enabled, a CI pipeline uploading to a not-yet-enrolled repo succeeds and the repo appears as `active` (enrolled + has scan data), hydrated from inventory metadata when available; with the flag disabled, the current explicit-enroll 404 behaviour is preserved.
+
+
+- [ ] cleanup any left over from previous experiments.
+  - [ ] delete alias, vulnerabilities vs findings in internal/server/server.go:453

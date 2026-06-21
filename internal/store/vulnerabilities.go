@@ -305,6 +305,115 @@ LIMIT $%d OFFSET $%d`, vulnerabilitySelectColumns, baseWhere, vulnerabilityOrder
 	return vulnerabilities, int(total), nil
 }
 
+// VulnerabilityFacets holds per-option result counts for each filterable
+// dimension. Each map is keyed by the option value (e.g. severity "high") and
+// holds the number of vulnerabilities that would match if that option were
+// selected, given the OTHER active filters. A dimension's own selections are
+// excluded from its own facet so every option's potential count stays visible
+// (standard faceted-search semantics).
+type VulnerabilityFacets struct {
+	Type     map[string]int `json:"type"`
+	Severity map[string]int `json:"severity"`
+	Status   map[string]int `json:"status"`
+	Tool     map[string]int `json:"tool"`
+	File     map[string]int `json:"file"`
+}
+
+// FacetVulnerabilitiesBySnapshot computes per-option counts for each filter
+// dimension. For every dimension it applies the base scope (snapshot, search)
+// plus all other dimensions' active filters, but NOT the dimension's own
+// filter, then groups by that dimension's column.
+func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID uuid.UUID, opts VulnerabilityListOptions) (*VulnerabilityFacets, error) {
+	types := normalizeStringFilters(opts.Types)
+	severities := normalizeStringFilters(opts.Severities)
+	statuses := normalizeStringFilters(opts.Statuses)
+	if len(statuses) == 0 {
+		statuses = []string{"detected", "confirmed", "dismissed", "resolved"}
+	}
+	scanners := normalizeStringFilters(opts.Scanners)
+	languages := normalizeStringFilters(opts.Languages)
+	fileQuery := escapeLikeFragment(opts.FileQuery)
+	search := escapeLikeFragment(opts.Search)
+
+	// buildConds assembles WHERE conditions, omitting the filter for `exclude`
+	// so that dimension's own selection does not constrain its own facet.
+	buildConds := func(exclude string) (string, []interface{}) {
+		conds := make([]string, 0, 7)
+		args := make([]interface{}, 0, 8)
+		add := func(v interface{}) int { args = append(args, v); return len(args) }
+
+		conds = append(conds, fmt.Sprintf("snapshot_id = $%d", add(snapshotID)))
+		if exclude != "status" {
+			conds = append(conds, fmt.Sprintf("status = ANY($%d)", add(pq.Array(statuses))))
+		}
+		if exclude != "type" && len(types) > 0 {
+			conds = append(conds, fmt.Sprintf("type = ANY($%d)", add(pq.Array(types))))
+		}
+		if exclude != "severity" && len(severities) > 0 {
+			conds = append(conds, fmt.Sprintf("severity = ANY($%d)", add(pq.Array(severities))))
+		}
+		if exclude != "tool" && len(scanners) > 0 {
+			conds = append(conds, fmt.Sprintf("lower(scanner_name) = ANY($%d)", add(pq.Array(scanners))))
+		}
+		if len(languages) > 0 {
+			conds = append(conds, fmt.Sprintf("language = ANY($%d)", add(pq.Array(languages))))
+		}
+		if exclude != "file" && fileQuery != "" {
+			conds = append(conds, fmt.Sprintf(`file_path ILIKE $%d ESCAPE '\'`, add("%"+fileQuery+"%")))
+		}
+		if search != "" {
+			idx := add("%" + search + "%")
+			conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\')`, idx, idx, idx))
+		}
+		return strings.Join(conds, " AND "), args
+	}
+
+	facetMap := func(exclude, column, extra string) (map[string]int, error) {
+		where, args := buildConds(exclude)
+		//nolint:gosec // G201: `column` is a constant identifier; all filter values use positional params.
+		query := fmt.Sprintf("SELECT %s::text AS k, COUNT(*)::bigint FROM vulnerabilities WHERE %s GROUP BY %s%s", column, where, column, extra)
+		rows, err := q.sqlDB.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		out := map[string]int{}
+		for rows.Next() {
+			var key sql.NullString
+			var count int64
+			if scanErr := rows.Scan(&key, &count); scanErr != nil {
+				return nil, scanErr
+			}
+			if !key.Valid || key.String == "" {
+				continue
+			}
+			out[key.String] = int(count)
+		}
+		return out, rows.Err()
+	}
+
+	facets := &VulnerabilityFacets{}
+	var err error
+	if facets.Type, err = facetMap("type", "type", ""); err != nil {
+		return nil, err
+	}
+	if facets.Severity, err = facetMap("severity", "severity", ""); err != nil {
+		return nil, err
+	}
+	if facets.Status, err = facetMap("status", "status", ""); err != nil {
+		return nil, err
+	}
+	if facets.Tool, err = facetMap("tool", "scanner_name", ""); err != nil {
+		return nil, err
+	}
+	// File paths are unbounded; cap to the busiest 100 so the payload stays small.
+	if facets.File, err = facetMap("file", "file_path", " ORDER BY COUNT(*) DESC LIMIT 100"); err != nil {
+		return nil, err
+	}
+	return facets, nil
+}
+
 func normalizeStringFilters(values []string) []string {
 	if len(values) == 0 {
 		return []string{}

@@ -436,6 +436,15 @@ func (s *Server) handleDeleteOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Purge object-store bytes for every snapshot under the org before the hard
+	// delete cascades the snapshot_artifacts rows away, or they orphan forever.
+	objectKeys, err := s.queries.ListSnapshotArtifactObjectKeysByOrg(r.Context(), org.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to enumerate organization artifacts")
+		return
+	}
+	s.purgeObjectStoreKeys(r.Context(), objectKeys)
+
 	if err := s.queries.DeleteOrganization(r.Context(), org.ID); err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete organization")
 		return

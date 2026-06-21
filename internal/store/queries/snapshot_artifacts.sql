@@ -26,3 +26,18 @@ ORDER BY created_at;
 SELECT object_key FROM snapshot_artifacts
 WHERE snapshot_id = $1
 ORDER BY created_at;
+
+-- name: ListSnapshotArtifactObjectKeysByRepo :many
+SELECT sa.object_key
+FROM snapshot_artifacts sa
+JOIN snapshots s ON s.id = sa.snapshot_id
+JOIN refs rf ON rf.id = s.ref_id
+WHERE rf.repo_id = $1 AND sa.object_key <> '';
+
+-- name: ListSnapshotArtifactObjectKeysByOrg :many
+SELECT sa.object_key
+FROM snapshot_artifacts sa
+JOIN snapshots s ON s.id = sa.snapshot_id
+JOIN refs rf ON rf.id = s.ref_id
+JOIN repositories r ON r.id = rf.repo_id
+WHERE r.org_id = $1 AND sa.object_key <> '';
