@@ -44,6 +44,7 @@ import (
 	"github.com/hibouhq/hibou/internal/retention"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/toolcatalog"
+	"github.com/hibouhq/hibou/internal/updatecheck"
 	"github.com/hibouhq/hibou/internal/version"
 	"github.com/hibouhq/hibou/internal/ws"
 )
@@ -73,6 +74,7 @@ type Server struct {
 	retentionWorker   *retention.Worker
 	dispatcher        *notify.Dispatcher
 	staleScanChecker  backgroundStarter
+	updateChecker     *updatecheck.Checker
 	annotator         *forge.Annotator
 	forgeIPAllowlists map[string]*forgeIPAllowlist
 	forgeLimiters     map[string]*ipRateLimiter
@@ -140,6 +142,7 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 		router:           r,
 		artifactWorkerID: newArtifactWorkerID(),
 		webhookHandlers:  make(map[string][]forgeEventHandler),
+		updateChecker:    updatecheck.New(version.Version, log),
 		http: &http.Server{
 			Handler:           r,
 			ReadHeaderTimeout: 10 * time.Second,
@@ -323,6 +326,7 @@ func (s *Server) routes(siteFS fs.FS) {
 		r.Get("/metrics", s.handleMetrics)
 		r.Get("/bin/version", s.handleBinVersion)
 		r.Get("/bin/{os}/{arch}", s.handleBinDownload)
+		r.Get("/version", s.handleVersion)
 		r.Get("/schemas/hibou-config.schema.json", s.handleGetConfigSchema)
 		r.Get("/ws", s.wsHub.HTTPHandler(s.authMgr, s.queries))
 		r.Get("/docs/*", httpSwagger.Handler(
@@ -534,6 +538,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		go s.staleScanChecker.Start(runtimeCtx)
+	}
+	if s.updateChecker != nil {
+		go s.updateChecker.Start(runtimeCtx)
 	}
 
 	s.log.Info().

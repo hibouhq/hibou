@@ -22,6 +22,20 @@ func (s *Server) handleBinVersion(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleVersion reports the running version alongside the latest released
+// version and whether an update is available. The comparison is served from
+// the background update checker's cache, so this never blocks on the network.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	if s.updateChecker == nil {
+		api.JSON(w, http.StatusOK, map[string]any{
+			"current":          version.Version,
+			"update_available": false,
+		})
+		return
+	}
+	api.JSON(w, http.StatusOK, s.updateChecker.Result())
+}
+
 func (s *Server) handleBinDownload(w http.ResponseWriter, r *http.Request) {
 	reqOS := chi.URLParam(r, "os")
 	reqArch := chi.URLParam(r, "arch")

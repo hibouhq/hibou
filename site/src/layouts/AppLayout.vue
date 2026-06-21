@@ -259,12 +259,55 @@
                   API Keys
                 </RouterLink>
                 <button
+                  class="flex w-full rounded-xl px-3 py-2 text-left text-sm text-gray-300 transition hover:bg-accent-muted hover:text-white"
+                  type="button"
+                  @click="openInstallCli"
+                >
+                  Install CLI
+                </button>
+                <button
                   class="flex w-full rounded-xl px-3 py-2 text-left text-sm text-gray-300 transition hover:bg-danger/15 hover:text-white"
                   type="button"
                   @click="handleLogout"
                 >
                   Logout
                 </button>
+              </div>
+              <!-- Version + update indicator -->
+              <div
+                v-if="serverVersion"
+                class="border-t border-surface-border-subtle px-4 py-2.5"
+              >
+                <div class="flex items-center justify-between gap-2 text-xs">
+                  <a
+                    v-if="serverVersion.current_url"
+                    :href="serverVersion.current_url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="font-mono text-gray-500 transition hover:text-gray-300 hover:underline"
+                    title="View release notes"
+                    @click="isUserMenuOpen = false"
+                  >{{ serverVersion.current }}</a>
+                  <span
+                    v-else
+                    class="font-mono text-gray-500"
+                  >{{ serverVersion.current }}</span>
+                  <a
+                    v-if="serverVersion.update_available"
+                    :href="serverVersion.release_url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-1 rounded-full bg-accent-muted px-2 py-0.5 font-medium text-accent transition hover:text-white"
+                    @click="isUserMenuOpen = false"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-accent" />
+                    Update to {{ serverVersion.latest }}
+                  </a>
+                  <span
+                    v-else
+                    class="text-gray-600"
+                  >Up to date</span>
+                </div>
               </div>
             </div>
           </div>
@@ -351,6 +394,11 @@
         <RouterView />
       </div>
     </main>
+
+    <InstallCliModal
+      v-if="isInstallCliOpen"
+      @close="isInstallCliOpen = false"
+    />
   </div>
 </template>
 
@@ -376,7 +424,8 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
-import { api, type Repository } from '@/api/client'
+import { api, type Repository, type ServerVersion } from '@/api/client'
+import InstallCliModal from '@/components/InstallCliModal.vue'
 import NotificationPanel from '@/components/NotificationPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationsStore } from '@/stores/notifications'
@@ -392,6 +441,8 @@ const isDrawerOpen = ref(false)
 const drawerRef = ref<HTMLElement | null>(null)
 const isUserMenuOpen = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
+const isInstallCliOpen = ref(false)
+const serverVersion = ref<ServerVersion | null>(null)
 const isNotifMenuOpen = ref(false)
 const notifMenuRef = ref<HTMLElement | null>(null)
 const isOrgMenuOpen = ref(false)
@@ -568,7 +619,19 @@ onMounted(async () => {
 
   document.addEventListener('click', handleDocumentClick)
   window.addEventListener('keydown', handleGlobalKeydown)
+
+  try {
+    const res = await api.getServerVersion()
+    serverVersion.value = res.data
+  } catch {
+    // Version display is non-essential; ignore failures.
+  }
 })
+
+function openInstallCli() {
+  isInstallCliOpen.value = true
+  isUserMenuOpen.value = false
+}
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleDocumentClick)

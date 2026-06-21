@@ -540,6 +540,18 @@ export interface ApiResponse<T> {
   error?: { code: number; message: string }
 }
 
+export type CliOS = 'linux' | 'darwin' | 'windows'
+export type CliArch = 'amd64' | 'arm64'
+
+export interface ServerVersion {
+  current: string
+  current_url?: string
+  latest?: string
+  update_available: boolean
+  release_url?: string
+  checked_at?: string
+}
+
 class ApiClient {
   private async request<T>(path: string, opts?: RequestInit): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -1135,6 +1147,16 @@ class ApiClient {
 
   markAllNotificationsRead() {
     return this.request<ApiResponse<{ updated: number }>>('/notifications/read-all', { method: 'POST' })
+  }
+
+  getServerVersion() {
+    return this.request<ApiResponse<ServerVersion>>('/version')
+  }
+
+  // Absolute path to download the CLI binary for a platform. The browser
+  // navigates here directly so the user initiates the download themselves.
+  cliDownloadUrl(os: CliOS, arch: CliArch) {
+    return `${API_BASE}/bin/${os}/${arch}`
   }
 }
 
