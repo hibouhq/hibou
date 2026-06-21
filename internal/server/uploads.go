@@ -83,10 +83,19 @@ type detectedUpload struct {
 }
 
 type rawArtifactPayload struct {
-	kind    string
-	format  string
-	tool    string
-	content []byte
+	kind     string
+	format   string
+	tool     string
+	filename string
+	content  []byte
+}
+
+// uploadArtifactFilename returns the original filename the client sent, if any.
+func uploadArtifactFilename(input *autoUploadRequest) string {
+	if input != nil && input.Artifact != nil {
+		return strings.TrimSpace(input.Artifact.Filename)
+	}
+	return ""
 }
 
 const (
@@ -364,10 +373,11 @@ func (s *Server) handleSBOMUpload(w http.ResponseWriter, r *http.Request, userID
 		return false
 	}
 	return s.writePendingUploadSnapshotResponse(w, r, userID, input, rawArtifactPayload{
-		kind:    "sbom",
-		format:  format,
-		tool:    input.Tool,
-		content: content,
+		kind:     "sbom",
+		format:   format,
+		tool:     input.Tool,
+		filename: uploadArtifactFilename(input),
+		content:  content,
 	}, status)
 }
 
@@ -377,18 +387,20 @@ func (s *Server) handleSARIFUpload(w http.ResponseWriter, r *http.Request, userI
 		return false
 	}
 	return s.writePendingUploadSnapshotResponse(w, r, userID, input, rawArtifactPayload{
-		kind:    "sarif",
-		tool:    tool,
-		content: content,
+		kind:     "sarif",
+		tool:     tool,
+		filename: uploadArtifactFilename(input),
+		content:  content,
 	}, status)
 }
 
 func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
 	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, true, &rawArtifactPayload{
-		kind:    "coverage",
-		format:  format,
-		tool:    input.Tool,
-		content: content,
+		kind:     "coverage",
+		format:   format,
+		tool:     input.Tool,
+		filename: uploadArtifactFilename(input),
+		content:  content,
 	})
 	if !ok {
 		return false
@@ -409,10 +421,11 @@ func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, us
 
 func (s *Server) handleTestsUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
 	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, true, &rawArtifactPayload{
-		kind:    "tests",
-		format:  format,
-		tool:    input.Tool,
-		content: content,
+		kind:     "tests",
+		format:   format,
+		tool:     input.Tool,
+		filename: uploadArtifactFilename(input),
+		content:  content,
 	})
 	if !ok {
 		return false
@@ -437,10 +450,11 @@ func (s *Server) handleTestsUpload(w http.ResponseWriter, r *http.Request, userI
 
 func (s *Server) handleVEXUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
 	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, true, &rawArtifactPayload{
-		kind:    "vex",
-		format:  format,
-		tool:    input.Tool,
-		content: content,
+		kind:     "vex",
+		format:   format,
+		tool:     input.Tool,
+		filename: uploadArtifactFilename(input),
+		content:  content,
 	})
 	if !ok {
 		return false
@@ -557,7 +571,7 @@ func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID
 			// Defensive only: server startup now fails if the configured artifact store cannot initialize.
 			return nil, errors.New("artifact store unavailable")
 		}
-		params := buildSnapshotArtifactParams(snapshotID, artifact.kind, artifact.format, artifact.tool, artifact.content)
+		params := buildSnapshotArtifactParams(snapshotID, artifact.kind, artifact.format, artifact.tool, artifact.filename, artifact.content)
 		contentType := ""
 		if params.ContentType != nil {
 			contentType = *params.ContentType
@@ -573,7 +587,7 @@ func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID
 	return s.loadSnapshotByID(ctx, snapshotID)
 }
 
-func buildSnapshotArtifactParams(snapshotID uuid.UUID, kind, format, tool string, content []byte) store.CreateSnapshotArtifactParams {
+func buildSnapshotArtifactParams(snapshotID uuid.UUID, kind, format, tool, filename string, content []byte) store.CreateSnapshotArtifactParams {
 	sum := sha256.Sum256(content)
 	sha256Hex := hex.EncodeToString(sum[:])
 	contentType := rawArtifactContentType(kind, format)
@@ -586,6 +600,7 @@ func buildSnapshotArtifactParams(snapshotID uuid.UUID, kind, format, tool string
 		SHA256:      &sha256Hex,
 		SizeBytes:   int64(len(content)),
 		ContentType: optionalTrimmedString(contentType),
+		Filename:    strings.TrimSpace(filename),
 	}
 }
 

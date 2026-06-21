@@ -21,6 +21,7 @@ type SnapshotArtifact struct {
 	SHA256      *string   `json:"sha256,omitempty"`
 	SizeBytes   int64     `json:"size_bytes"`
 	ContentType *string   `json:"content_type,omitempty"`
+	Filename    string    `json:"filename,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -33,6 +34,7 @@ type CreateSnapshotArtifactParams struct {
 	SHA256      *string
 	SizeBytes   int64
 	ContentType *string
+	Filename    string
 }
 
 func (q *Queries) CreateSnapshotArtifact(ctx context.Context, params CreateSnapshotArtifactParams) (*SnapshotArtifact, error) {
@@ -45,6 +47,7 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, params CreateSnaps
 		Sha256:      nullStringFromPtr(params.SHA256),
 		SizeBytes:   params.SizeBytes,
 		ContentType: nullStringFromPtr(params.ContentType),
+		Filename:    params.Filename,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -97,6 +100,7 @@ func snapshotArtifactFromRow(row dbgen.SnapshotArtifact) *SnapshotArtifact {
 		SHA256:      stringPtrFromNull(row.Sha256),
 		SizeBytes:   row.SizeBytes,
 		ContentType: stringPtrFromNull(row.ContentType),
+		Filename:    row.Filename,
 		CreatedAt:   row.CreatedAt,
 	}
 }

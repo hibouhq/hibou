@@ -1239,6 +1239,7 @@ type SnapshotArtifact struct {
 	SizeBytes   int64          `json:"size_bytes"`
 	ContentType sql.NullString `json:"content_type"`
 	CreatedAt   time.Time      `json:"created_at"`
+	Filename    string         `json:"filename"`
 }
 
 type SnapshotComponent struct {

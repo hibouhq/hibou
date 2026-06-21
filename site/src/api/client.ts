@@ -140,6 +140,8 @@ export interface EnhancedRef {
   latest_snapshot_id?: string
   latest_snapshot_status?: string
   latest_snapshot_date?: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface Snapshot {
@@ -153,6 +155,19 @@ export interface Snapshot {
   run_number?: string
   pr_number?: string
   pr_target_branch?: string
+  created_at: string
+}
+
+export interface SnapshotFile {
+  id: string
+  kind: string
+  format?: string
+  tool_name?: string
+  filename: string
+  size_bytes: number
+  sha256?: string
+  content_type?: string
+  download_url: string
   created_at: string
 }
 
@@ -862,6 +877,18 @@ class ApiClient {
     return this.request<PaginatedResponse<Snapshot>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/snapshots${qs ? `?${qs}` : ''}`,
     )
+  }
+
+  listSnapshotFiles(provider: string, slug: string, repoSlug: string, snapshotId: string) {
+    return this.request<ApiResponse<SnapshotFile[]>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/snapshots/${snapshotId}/files`,
+    )
+  }
+
+  // Absolute path to download all of a snapshot's files as a zip. The browser
+  // navigates here directly to start the download.
+  snapshotArchiveUrl(provider: string, slug: string, repoSlug: string, snapshotId: string) {
+    return `${API_BASE}/orgs/${provider}/${slug}/repos/${repoSlug}/snapshots/${snapshotId}/files.zip`
   }
 
   getPRSummary(provider: string, slug: string, repoSlug: string, number: string | number) {

@@ -1603,12 +1603,13 @@ func newAdvanceUploadSnapshotFailureCase(t *testing.T, preExisted bool) (*Server
 	repo := createUploadTestRepository(t, srv, org)
 	snapshot := createPendingSnapshotForAdvanceUploadTest(t, srv, admin.ID, org.Slug, repo.Slug)
 	artifact := &rawArtifactPayload{
-		kind:    "sbom",
-		format:  "cyclonedx-json",
-		tool:    "syft",
-		content: minimalSBOMForTest(),
+		kind:     "sbom",
+		format:   "cyclonedx-json",
+		tool:     "syft",
+		filename: "sbom.cdx.json",
+		content:  minimalSBOMForTest(),
 	}
-	params := buildSnapshotArtifactParams(snapshot.ID, artifact.kind, artifact.format, artifact.tool, artifact.content)
+	params := buildSnapshotArtifactParams(snapshot.ID, artifact.kind, artifact.format, artifact.tool, artifact.filename, artifact.content)
 	setAdvanceUploadSnapshotFailingDB(t, srv)
 	return srv, snapshot, artifact, params.ObjectKey
 }

@@ -192,17 +192,83 @@
             Open on forge
           </a>
         </section>
+
+        <!-- Snapshot files -->
+        <section
+          v-if="shownSnapshotId"
+          class="rounded-xl border border-surface-border bg-surface-raised/40 p-4"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-sm font-semibold text-white">
+              Files
+            </h2>
+            <a
+              v-if="files.length > 0"
+              :href="archiveUrl"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-surface-border px-2 py-1 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+              title="Download all files as a zip"
+            >
+              <FileArchive class="h-3.5 w-3.5" />
+              Download all
+            </a>
+          </div>
+
+          <p
+            v-if="filesLoading"
+            class="mt-3 text-xs text-gray-500"
+          >
+            Loading files…
+          </p>
+          <p
+            v-else-if="files.length === 0"
+            class="mt-3 text-xs text-gray-500"
+          >
+            No files in this snapshot.
+          </p>
+          <ul
+            v-else
+            class="mt-3 max-h-72 space-y-1.5 overflow-y-auto pr-1"
+          >
+            <li
+              v-for="file in files"
+              :key="file.id"
+              class="flex items-center gap-2 rounded-lg border border-surface-border-subtle bg-surface-overlay/40 px-2.5 py-2"
+            >
+              <FileText class="h-4 w-4 shrink-0 text-gray-500" />
+              <div class="min-w-0 flex-1">
+                <div
+                  class="truncate font-mono text-xs text-gray-200"
+                  :title="file.filename"
+                >
+                  {{ file.filename }}
+                </div>
+                <div class="text-[11px] text-gray-500">
+                  {{ file.kind }}<span v-if="file.tool_name"> · {{ file.tool_name }}</span> · {{ humanSize(file.size_bytes) }}
+                </div>
+              </div>
+              <a
+                :href="file.download_url"
+                :download="file.filename"
+                class="shrink-0 rounded-md p-1.5 text-gray-400 transition hover:bg-accent-muted hover:text-white"
+                :title="`Download ${file.filename}`"
+                :aria-label="`Download ${file.filename}`"
+              >
+                <Download class="h-4 w-4" />
+              </a>
+            </li>
+          </ul>
+        </section>
       </aside>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Activity, ArrowRight, Clock, ExternalLink, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
+import { Activity, ArrowRight, Clock, Download, ExternalLink, FileArchive, FileText, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type RefSummary, type Repository, type SeverityCounts, type Snapshot } from '@/api/client'
+import { api, type RefSummary, type Repository, type SeverityCounts, type Snapshot, type SnapshotFile } from '@/api/client'
 
 type SeverityKey = keyof SeverityCounts
 
@@ -225,6 +291,22 @@ const loading = ref(true)
 const error = ref('')
 const summary = ref<RefSummary | null>(null)
 const coverageRate = ref<number | null>(null)
+const files = ref<SnapshotFile[]>([])
+const filesLoading = ref(false)
+
+// The snapshot whose files we show: an explicitly selected one, else the latest.
+const shownSnapshotId = computed(() => {
+  const q = route.query.snapshot
+  if (typeof q === 'string' && q) {
+    return q
+  }
+  return latestSnapshot?.value?.id ?? ''
+})
+const archiveUrl = computed(() =>
+  shownSnapshotId.value
+    ? api.snapshotArchiveUrl(provider.value, slug.value, repoSlug.value, shownSnapshotId.value)
+    : '',
+)
 
 const severityMeta: Array<{ key: SeverityKey; label: string; valueClass: string; barClass: string }> = [
   { key: 'critical', label: 'crit', valueClass: 'text-sev-critical', barClass: 'bg-sev-critical' },
@@ -295,6 +377,46 @@ async function loadCoverage() {
   } catch {
     coverageRate.value = null
   }
+}
+
+watch(
+  shownSnapshotId,
+  () => {
+    void loadFiles()
+  },
+  { immediate: true },
+)
+
+async function loadFiles() {
+  const snapshotId = shownSnapshotId.value
+  if (!provider.value || !slug.value || !repoSlug.value || !snapshotId) {
+    files.value = []
+    return
+  }
+
+  filesLoading.value = true
+  try {
+    const response = await api.listSnapshotFiles(provider.value, slug.value, repoSlug.value, snapshotId)
+    files.value = response.data
+  } catch {
+    files.value = []
+  } finally {
+    filesLoading.value = false
+  }
+}
+
+function humanSize(bytes: number) {
+  if (!bytes || bytes < 0) {
+    return '0 B'
+  }
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = bytes
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit += 1
+  }
+  return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`
 }
 
 function totalCounts(counts?: SeverityCounts) {

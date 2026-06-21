@@ -7,9 +7,10 @@ INSERT INTO snapshot_artifacts (
 	object_key,
 	sha256,
 	size_bytes,
-	content_type
+	content_type,
+	filename
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, $8
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
 WHERE NOT EXISTS (
 	SELECT 1
 	FROM snapshot_artifacts

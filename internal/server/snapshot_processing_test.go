@@ -511,7 +511,7 @@ func newArtifactProcessingTestServer(t *testing.T) (*Server, uuid.UUID) {
 
 func writeArtifactForProcessingTest(t *testing.T, srv *Server, snapshotID uuid.UUID, kind string, format, tool *string, content string) {
 	t.Helper()
-	params := buildSnapshotArtifactParams(snapshotID, kind, optionalStringValue(format), optionalStringValue(tool), []byte(content))
+	params := buildSnapshotArtifactParams(snapshotID, kind, optionalStringValue(format), optionalStringValue(tool), "", []byte(content))
 	if err := srv.objStore.Put(context.Background(), params.ObjectKey, strings.NewReader(content), optionalStringValue(params.ContentType)); err != nil {
 		t.Fatalf("Put artifact object: %v", err)
 	}

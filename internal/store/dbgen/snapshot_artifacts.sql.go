@@ -21,15 +21,16 @@ INSERT INTO snapshot_artifacts (
 	object_key,
 	sha256,
 	size_bytes,
-	content_type
+	content_type,
+	filename
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, $8
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
 WHERE NOT EXISTS (
 	SELECT 1
 	FROM snapshot_artifacts
 	WHERE snapshot_id = $1 AND object_key = $5
 )
-RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at
+RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename
 `
 
 type CreateSnapshotArtifactParams struct {
@@ -41,6 +42,7 @@ type CreateSnapshotArtifactParams struct {
 	Sha256      sql.NullString `json:"sha256"`
 	SizeBytes   int64          `json:"size_bytes"`
 	ContentType sql.NullString `json:"content_type"`
+	Filename    string         `json:"filename"`
 }
 
 func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshotArtifactParams) (SnapshotArtifact, error) {
@@ -53,6 +55,7 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshot
 		arg.Sha256,
 		arg.SizeBytes,
 		arg.ContentType,
+		arg.Filename,
 	)
 	var i SnapshotArtifact
 	err := row.Scan(
@@ -66,6 +69,7 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshot
 		&i.SizeBytes,
 		&i.ContentType,
 		&i.CreatedAt,
+		&i.Filename,
 	)
 	return i, err
 }
@@ -163,7 +167,7 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repo
 }
 
 const listSnapshotArtifactsBySnapshot = `-- name: ListSnapshotArtifactsBySnapshot :many
-SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at FROM snapshot_artifacts
+SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename FROM snapshot_artifacts
 WHERE snapshot_id = $1
 ORDER BY created_at
 `
@@ -188,6 +192,7 @@ func (q *Queries) ListSnapshotArtifactsBySnapshot(ctx context.Context, snapshotI
 			&i.SizeBytes,
 			&i.ContentType,
 			&i.CreatedAt,
+			&i.Filename,
 		); err != nil {
 			return nil, err
 		}

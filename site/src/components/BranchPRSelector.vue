@@ -17,18 +17,34 @@
     </button>
 
     <div class="flex items-center gap-3 text-xs text-gray-400">
-      <span class="flex items-center gap-1">
+      <button
+        type="button"
+        class="flex items-center gap-1 rounded transition hover:text-white"
+        title="Switch branches"
+        @click.stop="open('branch')"
+      >
         <GitBranch class="h-3.5 w-3.5" />
         {{ branchCount }} Branches
-      </span>
-      <span
+      </button>
+      <button
         v-if="tagCount > 0"
-        class="flex items-center gap-1"
+        type="button"
+        class="flex items-center gap-1 rounded transition hover:text-white"
+        title="Switch tags"
+        @click.stop="open('tag')"
       >
         <Tag class="h-3.5 w-3.5" />
         {{ tagCount }} Tags
-      </span>
-      <span v-if="prCount > 0">{{ prCount }} Pull Requests</span>
+      </button>
+      <button
+        v-if="prCount > 0"
+        type="button"
+        class="rounded transition hover:text-white"
+        title="Switch pull requests"
+        @click.stop="open('pull_request')"
+      >
+        {{ prCount }} Pull Requests
+      </button>
     </div>
 
     <div
@@ -55,7 +71,7 @@
           <input
             v-model="search"
             type="search"
-            placeholder="Search branches, tags, or pull requests"
+            placeholder="Search branches, tags, PRs, or commit SHA"
             class="w-full bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none"
           >
         </label>
@@ -250,25 +266,54 @@ const filteredRefs = computed(() => {
       item.pr_source_branch,
       item.merge_target_ref_name,
       effectivePRNumber(item),
+      item.latest_commit_sha,
     ].some((value) => (value || '').toLowerCase().includes(query))
   })
 
   return [...items].sort((left, right) => {
-    if (left.name === props.defaultBranch && right.name !== props.defaultBranch) {
-      return -1
+    // Default branch always pinned first.
+    const leftDefault = left.name === props.defaultBranch
+    const rightDefault = right.name === props.defaultBranch
+    if (leftDefault !== rightDefault) {
+      return leftDefault ? -1 : 1
     }
-    if (right.name === props.defaultBranch && left.name !== props.defaultBranch) {
-      return 1
+    // Group order: branches, then tags, then pull requests.
+    const groupDelta = refGroup(left) - refGroup(right)
+    if (groupDelta !== 0) {
+      return groupDelta
     }
-    if (left.ref_type === 'branch' && right.ref_type !== 'branch') {
-      return -1
+    // PRs sort by number descending (newest PR first).
+    if (refGroup(left) === 2) {
+      const leftNum = Number.parseInt(effectivePRNumber(left) || '0', 10)
+      const rightNum = Number.parseInt(effectivePRNumber(right) || '0', 10)
+      if (leftNum !== rightNum) {
+        return rightNum - leftNum
+      }
     }
-    if (right.ref_type === 'branch' && left.ref_type !== 'branch') {
-      return 1
+    // Otherwise newest first by latest activity, then name for stability.
+    const timeDelta = refTimestamp(right) - refTimestamp(left)
+    if (timeDelta !== 0) {
+      return timeDelta
     }
     return refPrimaryLabel(left).localeCompare(refPrimaryLabel(right))
   })
 })
+
+function refGroup(item: EnhancedRef) {
+  if (item.ref_type === 'branch') {
+    return 0
+  }
+  if (item.ref_type === 'tag') {
+    return 1
+  }
+  return 2
+}
+
+function refTimestamp(item: EnhancedRef) {
+  const value = item.latest_snapshot_date || item.updated_at || item.created_at
+  const time = value ? new Date(value).getTime() : 0
+  return Number.isNaN(time) ? 0 : time
+}
 
 onMounted(() => {
   document.addEventListener('click', handleDocumentClick)
@@ -289,6 +334,15 @@ function selectRef(name: string) {
   isOpen.value = false
   emit('select', name)
 }
+
+// Open the switcher, optionally jumping to a specific tab. Exposed so ref/PR
+// info shown elsewhere can deep-open the picker.
+function open(tab: typeof activeTab.value = 'all') {
+  activeTab.value = tab
+  isOpen.value = true
+}
+
+defineExpose({ open })
 
 function isSelected(refItem: EnhancedRef) {
   return refItem.name === props.selectedRefName
