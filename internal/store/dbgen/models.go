@@ -1292,6 +1292,7 @@ type TestReport struct {
 	Errors          int32     `json:"errors"`
 	DurationSeconds float64   `json:"duration_seconds"`
 	CreatedAt       time.Time `json:"created_at"`
+	Source          string    `json:"source"`
 }
 
 type User struct {
