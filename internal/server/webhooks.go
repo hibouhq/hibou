@@ -260,11 +260,14 @@ func webhookEventType(forgeType string, r *http.Request) string {
 	}
 }
 
+// pullRequestRefName returns the canonical PR ref (refs/pull/N, or
+// refs/merge-requests/N on GitLab). A PR is one ref; the /head and /merge
+// variants from CI uploads normalize to this same name.
 func pullRequestRefName(forgeType string, number int) string {
 	if forgeType == "gitlab" {
-		return "refs/merge-requests/" + strconv.Itoa(number) + "/head"
+		return "refs/merge-requests/" + strconv.Itoa(number)
 	}
-	return "refs/pull/" + strconv.Itoa(number) + "/head"
+	return "refs/pull/" + strconv.Itoa(number)
 }
 
 func stringPtr(value string) *string {

@@ -19,7 +19,6 @@ type UpsertRefOptions struct {
 	ProviderID       *string
 	MergeTargetRefID *uuid.UUID
 	LatestCommitSHA  *string
-	PRRefKind        string
 	PRNumber         *string
 	PRTitle          string
 	PRSourceBranch   string
@@ -39,7 +38,6 @@ type Ref struct {
 	ProviderID       *string    `json:"provider_id,omitempty"`
 	MergeTargetRefID *uuid.UUID `json:"merge_target_ref_id,omitempty"`
 	LatestCommitSHA  *string    `json:"latest_commit_sha,omitempty"`
-	PrRefKind        string     `json:"pr_ref_kind,omitempty"`
 	PrNumber         *string    `json:"pr_number,omitempty"`
 	PrState          *string    `json:"pr_state,omitempty"`
 	PrTitle          string     `json:"pr_title,omitempty"`
@@ -59,7 +57,6 @@ type EnhancedRef struct {
 	MergeTargetRefID     *uuid.UUID `json:"merge_target_ref_id,omitempty"`
 	MergeTargetRefName   *string    `json:"merge_target_ref_name,omitempty"`
 	LatestCommitSHA      *string    `json:"latest_commit_sha,omitempty"`
-	PrRefKind            string     `json:"pr_ref_kind,omitempty"`
 	PrNumber             *string    `json:"pr_number,omitempty"`
 	PrState              *string    `json:"pr_state,omitempty"`
 	PrTitle              string     `json:"pr_title,omitempty"`
@@ -163,7 +160,6 @@ func (q *Queries) UpsertRef(ctx context.Context, repoID uuid.UUID, name string, 
 		ProviderID:       nullStringFromPtr(opts.ProviderID),
 		MergeTargetRefID: nullUUIDFromPtr(opts.MergeTargetRefID),
 		LatestCommitSha:  nullStringFromPtr(opts.LatestCommitSHA),
-		PrRefKind:        opts.PRRefKind,
 		PrNumber:         nullStringFromPtr(opts.PRNumber),
 		PrTitle:          opts.PRTitle,
 		PrSourceBranch:   opts.PRSourceBranch,
@@ -248,7 +244,6 @@ func refFromRow(row dbgen.Ref) *Ref {
 		ProviderID:       stringPtrFromNull(row.ProviderID),
 		MergeTargetRefID: uuidPtrFromNull(row.MergeTargetRefID),
 		LatestCommitSHA:  stringPtrFromNull(row.LatestCommitSha),
-		PrRefKind:        row.PrRefKind,
 		PrNumber:         stringPtrFromNull(row.PrNumber),
 		PrState:          stringPtrFromNull(row.PrState),
 		PrTitle:          row.PrTitle,
@@ -270,7 +265,6 @@ func enhancedRefFromListRefsEnhancedRow(row dbgen.ListRefsEnhancedRow) EnhancedR
 		mergeTargetRefID:     row.MergeTargetRefID,
 		mergeTargetRefName:   row.MergeTargetRefName,
 		latestCommitSHA:      row.LatestCommitSha,
-		prRefKind:            row.PrRefKind,
 		prNumber:             row.PrNumber,
 		prState:              row.PrState,
 		prTitle:              row.PrTitle,
@@ -295,7 +289,6 @@ func enhancedRefFromListPullRequestRefsRow(row dbgen.ListPullRequestRefsRow) Enh
 		mergeTargetRefID:     row.MergeTargetRefID,
 		mergeTargetRefName:   row.MergeTargetRefName,
 		latestCommitSHA:      row.LatestCommitSha,
-		prRefKind:            row.PrRefKind,
 		prNumber:             row.PrNumber,
 		prState:              row.PrState,
 		prTitle:              row.PrTitle,
@@ -319,7 +312,6 @@ type enhancedRefFields struct {
 	mergeTargetRefID     uuid.NullUUID
 	mergeTargetRefName   string
 	latestCommitSHA      sql.NullString
-	prRefKind            string
 	prNumber             sql.NullString
 	prState              sql.NullString
 	prTitle              string
@@ -343,7 +335,6 @@ func enhancedRefFromFields(fields enhancedRefFields) EnhancedRef {
 		MergeTargetRefID:     uuidPtrFromNull(fields.mergeTargetRefID),
 		MergeTargetRefName:   stringPtrIfNotEmpty(fields.mergeTargetRefName),
 		LatestCommitSHA:      stringPtrFromNull(fields.latestCommitSHA),
-		PrRefKind:            fields.prRefKind,
 		PrNumber:             stringPtrFromNull(fields.prNumber),
 		PrState:              stringPtrFromNull(fields.prState),
 		PrTitle:              fields.prTitle,

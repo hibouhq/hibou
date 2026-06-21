@@ -22,31 +22,23 @@ func TestUpsertRefStoresPRKindAndNumber(t *testing.T) {
 	commitSHA := uniqueStoreTestName(t, "commit")
 	number := "7"
 
-	ref, err := queries.UpsertRef(ctx, repo.ID, "refs/pull/7/merge", RefTypePullRequest, UpsertRefOptions{
+	ref, err := queries.UpsertRef(ctx, repo.ID, "refs/pull/7", RefTypePullRequest, UpsertRefOptions{
 		LatestCommitSHA: &commitSHA,
-		PRRefKind:       "merge",
 		PRNumber:        &number,
 		PRTitle:         "Docs update",
 	})
 	if err != nil {
 		t.Fatalf("UpsertRef() insert error = %v", err)
 	}
-	if ref.PrRefKind != "merge" {
-		t.Fatalf("inserted ref kind = %q, want merge", ref.PrRefKind)
-	}
 	if ref.PrNumber == nil || *ref.PrNumber != "7" {
 		t.Fatalf("inserted ref number = %v, want 7", ref.PrNumber)
 	}
 
-	ref, err = queries.UpsertRef(ctx, repo.ID, "refs/pull/7/merge", RefTypePullRequest, UpsertRefOptions{
-		PRRefKind: "merge",
-		PRTitle:   "Docs update",
+	ref, err = queries.UpsertRef(ctx, repo.ID, "refs/pull/7", RefTypePullRequest, UpsertRefOptions{
+		PRTitle: "Docs update",
 	})
 	if err != nil {
 		t.Fatalf("UpsertRef() update error = %v", err)
-	}
-	if ref.PrRefKind != "merge" {
-		t.Fatalf("updated ref kind = %q, want merge", ref.PrRefKind)
 	}
 	if ref.PrNumber == nil || *ref.PrNumber != "7" {
 		t.Fatalf("updated ref number = %v, want preserved 7", ref.PrNumber)

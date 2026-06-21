@@ -310,26 +310,27 @@ func TestPRRefDerivationHelpers(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		refName   string
-		wantKind  string
-		wantPRNum string
+		name          string
+		refName       string
+		wantPRNum     string
+		wantCanonical string
 	}{
-		{name: "github merge", refName: "refs/pull/1/merge", wantKind: "merge", wantPRNum: "1"},
-		{name: "github head", refName: "refs/pull/1/head", wantKind: "head", wantPRNum: "1"},
-		{name: "gitlab merge", refName: "refs/merge-requests/2/merge", wantKind: "merge", wantPRNum: "2"},
-		{name: "branch ref", refName: "refs/heads/main", wantKind: "", wantPRNum: ""},
+		{name: "github merge", refName: "refs/pull/1/merge", wantPRNum: "1", wantCanonical: "refs/pull/1"},
+		{name: "github head", refName: "refs/pull/1/head", wantPRNum: "1", wantCanonical: "refs/pull/1"},
+		{name: "gitlab merge", refName: "refs/merge-requests/2/merge", wantPRNum: "2", wantCanonical: "refs/merge-requests/2"},
+		{name: "already canonical", refName: "refs/pull/3", wantPRNum: "3", wantCanonical: "refs/pull/3"},
+		{name: "branch ref", refName: "refs/heads/main", wantPRNum: "", wantCanonical: "main"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := prRefKindFromName(tt.refName); got != tt.wantKind {
-				t.Fatalf("prRefKindFromName(%q) = %q, want %q", tt.refName, got, tt.wantKind)
-			}
 			if got := prNumberFromName(tt.refName); got != tt.wantPRNum {
 				t.Fatalf("prNumberFromName(%q) = %q, want %q", tt.refName, got, tt.wantPRNum)
+			}
+			if got := normalizeStoredRefName(tt.refName); got != tt.wantCanonical {
+				t.Fatalf("normalizeStoredRefName(%q) = %q, want %q", tt.refName, got, tt.wantCanonical)
 			}
 		})
 	}

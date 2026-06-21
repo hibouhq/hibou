@@ -5945,9 +5945,6 @@ const docTemplate = `{
                 "pr_number": {
                     "type": "string"
                 },
-                "pr_ref_kind": {
-                    "type": "string"
-                },
                 "pr_source_branch": {
                     "type": "string"
                 },

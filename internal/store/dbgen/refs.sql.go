@@ -27,7 +27,7 @@ func (q *Queries) CountRefsByRepo(ctx context.Context, repoID uuid.UUID) (int64,
 const createRef = `-- name: CreateRef :one
 INSERT INTO refs (repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number
+RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number
 `
 
 type CreateRefParams struct {
@@ -64,7 +64,6 @@ func (q *Queries) CreateRef(ctx context.Context, arg CreateRefParams) (Ref, erro
 		&i.PrClosedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PrRefKind,
 		&i.PrNumber,
 	)
 	return i, err
@@ -80,7 +79,7 @@ func (q *Queries) DeleteRef(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRefByID = `-- name: GetRefByID :one
-SELECT id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number FROM refs WHERE id = $1
+SELECT id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number FROM refs WHERE id = $1
 `
 
 func (q *Queries) GetRefByID(ctx context.Context, id uuid.UUID) (Ref, error) {
@@ -101,14 +100,13 @@ func (q *Queries) GetRefByID(ctx context.Context, id uuid.UUID) (Ref, error) {
 		&i.PrClosedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PrRefKind,
 		&i.PrNumber,
 	)
 	return i, err
 }
 
 const getRefByRepoAndName = `-- name: GetRefByRepoAndName :one
-SELECT id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number FROM refs WHERE repo_id = $1 AND name = $2 AND ref_type = $3
+SELECT id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number FROM refs WHERE repo_id = $1 AND name = $2 AND ref_type = $3
 `
 
 type GetRefByRepoAndNameParams struct {
@@ -135,7 +133,6 @@ func (q *Queries) GetRefByRepoAndName(ctx context.Context, arg GetRefByRepoAndNa
 		&i.PrClosedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PrRefKind,
 		&i.PrNumber,
 	)
 	return i, err
@@ -143,7 +140,7 @@ func (q *Queries) GetRefByRepoAndName(ctx context.Context, arg GetRefByRepoAndNa
 
 const listPullRequestRefs = `-- name: ListPullRequestRefs :many
 SELECT
-	r.id, r.repo_id, r.name, r.ref_type, r.provider_id, r.merge_target_ref_id, r.latest_commit_sha, r.pr_state, r.pr_title, r.pr_source_branch, r.pr_merged_at, r.pr_closed_at, r.created_at, r.updated_at, r.pr_ref_kind, r.pr_number,
+	r.id, r.repo_id, r.name, r.ref_type, r.provider_id, r.merge_target_ref_id, r.latest_commit_sha, r.pr_state, r.pr_title, r.pr_source_branch, r.pr_merged_at, r.pr_closed_at, r.created_at, r.updated_at, r.pr_number,
 	CASE WHEN s.id IS NULL THEN NULL ELSE s.id END AS latest_snapshot_id,
 	COALESCE(s.status::text, '') AS latest_snapshot_status,
 	CASE WHEN s.id IS NULL THEN NULL ELSE s.created_at END AS latest_snapshot_date,
@@ -186,7 +183,6 @@ type ListPullRequestRefsRow struct {
 	PrClosedAt           sql.NullTime   `json:"pr_closed_at"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
-	PrRefKind            string         `json:"pr_ref_kind"`
 	PrNumber             sql.NullString `json:"pr_number"`
 	LatestSnapshotID     interface{}    `json:"latest_snapshot_id"`
 	LatestSnapshotStatus interface{}    `json:"latest_snapshot_status"`
@@ -218,7 +214,6 @@ func (q *Queries) ListPullRequestRefs(ctx context.Context, arg ListPullRequestRe
 			&i.PrClosedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.PrRefKind,
 			&i.PrNumber,
 			&i.LatestSnapshotID,
 			&i.LatestSnapshotStatus,
@@ -239,7 +234,7 @@ func (q *Queries) ListPullRequestRefs(ctx context.Context, arg ListPullRequestRe
 }
 
 const listRefsByRepo = `-- name: ListRefsByRepo :many
-SELECT id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number FROM refs WHERE repo_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3
+SELECT id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number FROM refs WHERE repo_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3
 `
 
 type ListRefsByRepoParams struct {
@@ -272,7 +267,6 @@ func (q *Queries) ListRefsByRepo(ctx context.Context, arg ListRefsByRepoParams) 
 			&i.PrClosedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.PrRefKind,
 			&i.PrNumber,
 		); err != nil {
 			return nil, err
@@ -290,7 +284,7 @@ func (q *Queries) ListRefsByRepo(ctx context.Context, arg ListRefsByRepoParams) 
 
 const listRefsEnhanced = `-- name: ListRefsEnhanced :many
 SELECT
-	r.id, r.repo_id, r.name, r.ref_type, r.provider_id, r.merge_target_ref_id, r.latest_commit_sha, r.pr_state, r.pr_title, r.pr_source_branch, r.pr_merged_at, r.pr_closed_at, r.created_at, r.updated_at, r.pr_ref_kind, r.pr_number,
+	r.id, r.repo_id, r.name, r.ref_type, r.provider_id, r.merge_target_ref_id, r.latest_commit_sha, r.pr_state, r.pr_title, r.pr_source_branch, r.pr_merged_at, r.pr_closed_at, r.created_at, r.updated_at, r.pr_number,
 	CASE WHEN s.id IS NULL THEN NULL ELSE s.id END AS latest_snapshot_id,
 	COALESCE(s.status::text, '') AS latest_snapshot_status,
 	CASE WHEN s.id IS NULL THEN NULL ELSE s.created_at END AS latest_snapshot_date,
@@ -332,7 +326,6 @@ type ListRefsEnhancedRow struct {
 	PrClosedAt           sql.NullTime   `json:"pr_closed_at"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
-	PrRefKind            string         `json:"pr_ref_kind"`
 	PrNumber             sql.NullString `json:"pr_number"`
 	LatestSnapshotID     interface{}    `json:"latest_snapshot_id"`
 	LatestSnapshotStatus interface{}    `json:"latest_snapshot_status"`
@@ -364,7 +357,6 @@ func (q *Queries) ListRefsEnhanced(ctx context.Context, arg ListRefsEnhancedPara
 			&i.PrClosedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.PrRefKind,
 			&i.PrNumber,
 			&i.LatestSnapshotID,
 			&i.LatestSnapshotStatus,
@@ -385,7 +377,7 @@ func (q *Queries) ListRefsEnhanced(ctx context.Context, arg ListRefsEnhancedPara
 }
 
 const updateRefLatestCommit = `-- name: UpdateRefLatestCommit :one
-UPDATE refs SET latest_commit_sha = $2, updated_at = NOW() WHERE id = $1 RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number
+UPDATE refs SET latest_commit_sha = $2, updated_at = NOW() WHERE id = $1 RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number
 `
 
 type UpdateRefLatestCommitParams struct {
@@ -411,7 +403,6 @@ func (q *Queries) UpdateRefLatestCommit(ctx context.Context, arg UpdateRefLatest
 		&i.PrClosedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PrRefKind,
 		&i.PrNumber,
 	)
 	return i, err
@@ -426,7 +417,7 @@ SET pr_state = $2,
 	pr_closed_at = $6,
 	updated_at = NOW()
 WHERE id = $1
-RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number
+RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number
 `
 
 type UpdateRefPRStateParams struct {
@@ -463,7 +454,6 @@ func (q *Queries) UpdateRefPRState(ctx context.Context, arg UpdateRefPRStatePara
 		&i.PrClosedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PrRefKind,
 		&i.PrNumber,
 	)
 	return i, err
@@ -477,7 +467,6 @@ INSERT INTO refs (
 	provider_id,
 	merge_target_ref_id,
 	latest_commit_sha,
-	pr_ref_kind,
 	pr_number,
 	pr_state,
 	pr_title,
@@ -485,12 +474,11 @@ INSERT INTO refs (
 	pr_merged_at,
 	pr_closed_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (repo_id, name, ref_type) DO UPDATE SET
 	provider_id = COALESCE(EXCLUDED.provider_id, refs.provider_id),
 	merge_target_ref_id = COALESCE(EXCLUDED.merge_target_ref_id, refs.merge_target_ref_id),
 	latest_commit_sha = COALESCE(EXCLUDED.latest_commit_sha, refs.latest_commit_sha),
-	pr_ref_kind = EXCLUDED.pr_ref_kind,
 	pr_number = COALESCE(EXCLUDED.pr_number, refs.pr_number),
 	pr_state = COALESCE(EXCLUDED.pr_state, refs.pr_state),
 	pr_title = CASE WHEN EXCLUDED.pr_title != '' THEN EXCLUDED.pr_title ELSE refs.pr_title END,
@@ -498,7 +486,7 @@ ON CONFLICT (repo_id, name, ref_type) DO UPDATE SET
 	pr_merged_at = COALESCE(EXCLUDED.pr_merged_at, refs.pr_merged_at),
 	pr_closed_at = COALESCE(EXCLUDED.pr_closed_at, refs.pr_closed_at),
 	updated_at = NOW()
-RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_ref_kind, pr_number
+RETURNING id, repo_id, name, ref_type, provider_id, merge_target_ref_id, latest_commit_sha, pr_state, pr_title, pr_source_branch, pr_merged_at, pr_closed_at, created_at, updated_at, pr_number
 `
 
 type UpsertRefParams struct {
@@ -508,7 +496,6 @@ type UpsertRefParams struct {
 	ProviderID       sql.NullString `json:"provider_id"`
 	MergeTargetRefID uuid.NullUUID  `json:"merge_target_ref_id"`
 	LatestCommitSha  sql.NullString `json:"latest_commit_sha"`
-	PrRefKind        string         `json:"pr_ref_kind"`
 	PrNumber         sql.NullString `json:"pr_number"`
 	PrState          sql.NullString `json:"pr_state"`
 	PrTitle          string         `json:"pr_title"`
@@ -525,7 +512,6 @@ func (q *Queries) UpsertRef(ctx context.Context, arg UpsertRefParams) (Ref, erro
 		arg.ProviderID,
 		arg.MergeTargetRefID,
 		arg.LatestCommitSha,
-		arg.PrRefKind,
 		arg.PrNumber,
 		arg.PrState,
 		arg.PrTitle,
@@ -549,7 +535,6 @@ func (q *Queries) UpsertRef(ctx context.Context, arg UpsertRefParams) (Ref, erro
 		&i.PrClosedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PrRefKind,
 		&i.PrNumber,
 	)
 	return i, err

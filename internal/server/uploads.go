@@ -107,9 +107,10 @@ const (
 )
 
 var (
-	prMergeRefPattern = regexp.MustCompile(`^refs/(pull|merge-requests)/\d+/merge$`)
-	prHeadRefPattern  = regexp.MustCompile(`^refs/(pull|merge-requests)/\d+/head$`)
-	prNumberPattern   = regexp.MustCompile(`^refs/(pull|merge-requests)/(\d+)(?:/.*)?$`)
+	prNumberPattern = regexp.MustCompile(`^refs/(pull|merge-requests)/(\d+)(?:/.*)?$`)
+	// prCanonicalPattern matches a head/merge PR ref and captures the canonical
+	// form (refs/pull/N or refs/merge-requests/N) without the trailing segment.
+	prCanonicalPattern = regexp.MustCompile(`^(refs/(?:pull|merge-requests)/\d+)/(?:head|merge)$`)
 )
 
 // detectArtifactType inspects the decoded content to determine the upload type and format.
@@ -1176,7 +1177,6 @@ func buildUploadRefOptions(input uploadRequest) store.UpsertRefOptions {
 	if refType != store.RefTypePullRequest {
 		return options
 	}
-	options.PRRefKind = prRefKindFromName(input.Ref)
 	options.PRNumber = optionalTrimmedString(input.PRNumber)
 	if options.PRNumber == nil {
 		options.PRNumber = optionalTrimmedString(prNumberFromName(input.Ref))
@@ -1214,17 +1214,6 @@ func refTypeFromName(name string) store.RefType {
 	return store.RefTypeBranch
 }
 
-func prRefKindFromName(name string) string {
-	name = strings.TrimSpace(name)
-	if prMergeRefPattern.MatchString(name) {
-		return "merge"
-	}
-	if prHeadRefPattern.MatchString(name) {
-		return "head"
-	}
-	return ""
-}
-
 func prNumberFromName(name string) string {
 	name = strings.TrimSpace(name)
 	matches := prNumberPattern.FindStringSubmatch(name)
@@ -1241,6 +1230,11 @@ func normalizeStoredRefName(name string) string {
 	}
 	if strings.HasPrefix(name, refsTagsPrefix) {
 		return strings.TrimPrefix(name, refsTagsPrefix)
+	}
+	// A pull request collapses to a single canonical ref (refs/pull/N), so the
+	// /head and /merge variants both resolve to and store the same row.
+	if m := prCanonicalPattern.FindStringSubmatch(name); m != nil {
+		return m[1]
 	}
 	return name
 }

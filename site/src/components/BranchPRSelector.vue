@@ -210,49 +210,11 @@ const selectedIcon = computed(() => selectedRef.value ? refIcon(selectedRef.valu
 const branchCount = computed(() => props.refs.filter((item) => item.ref_type === 'branch').length)
 const tagCount = computed(() => props.refs.filter((item) => item.ref_type === 'tag').length)
 
-const visiblePullRequestRefs = computed(() => {
-  const pullRequestRefs = props.refs.filter((item) => item.ref_type === 'pull_request')
-
-  return pullRequestRefs.filter((item) => {
-    const kind = effectivePRRefKind(item)
-    const number = effectivePRNumber(item)
-    if (!number || (kind !== 'merge' && kind !== 'head')) {
-      return true
-    }
-
-    return !pullRequestRefs.some((other) => (
-      other.id !== item.id
-      && effectivePRNumber(other) === number
-      && effectivePRRefKind(other) !== 'merge'
-    ))
-  })
-})
-
-const displayRefs = computed(() => {
-  const visiblePullRequestIDs = new Set(visiblePullRequestRefs.value.map((item) => item.id))
-  return props.refs.filter((item) => item.ref_type !== 'pull_request' || visiblePullRequestIDs.has(item.id))
-})
-
-const prCount = computed(() => {
-  const seen = new Set<string>()
-  let count = 0
-
-  for (const item of visiblePullRequestRefs.value) {
-    const number = effectivePRNumber(item)
-    const key = number ? `pr:${number}` : `ref:${item.id}`
-    if (seen.has(key)) {
-      continue
-    }
-    seen.add(key)
-    count += 1
-  }
-
-  return count
-})
+const prCount = computed(() => props.refs.filter((item) => item.ref_type === 'pull_request').length)
 
 const filteredRefs = computed(() => {
   const query = search.value.trim().toLowerCase()
-  const items = displayRefs.value.filter((item) => {
+  const items = props.refs.filter((item) => {
     if (activeTab.value !== 'all' && item.ref_type !== activeTab.value) {
       return false
     }
@@ -357,27 +319,10 @@ function effectivePRNumber(refItem: EnhancedRef) {
   return refItem.pr_number?.trim() || pullRequestNumber(refItem.name)
 }
 
-function syntheticRefKind(name: string) {
-  if (/\/pull\/\d+\/merge$/i.test(name) || /\/merge$/i.test(name)) {
-    return 'merge'
-  }
-  if (/\/pull\/\d+\/head$/i.test(name) || /\/head$/i.test(name)) {
-    return 'head'
-  }
-  return ''
-}
-
-function effectivePRRefKind(refItem: EnhancedRef) {
-  return refItem.pr_ref_kind?.trim() || syntheticRefKind(refItem.name)
-}
-
 function refPrimaryLabel(refItem: EnhancedRef) {
   if (refItem.ref_type === 'pull_request') {
     const number = effectivePRNumber(refItem)
-    const kind = effectivePRRefKind(refItem)
-    // Fall back to a clean label when the PR has no title (e.g. synthetic
-    // refs/pull/N/merge|head refs) instead of dumping the raw ref name.
-    const title = refItem.pr_title?.trim() || (kind ? `${kind} ref` : '')
+    const title = refItem.pr_title?.trim() || ''
     if (number) {
       return title ? `#${number} ${title}` : `#${number}`
     }
@@ -401,7 +346,7 @@ function refSecondaryLabel(refItem: EnhancedRef) {
   if (target) {
     return `→ ${target}`
   }
-  return effectivePRRefKind(refItem) ? 'auto-generated ref' : ''
+  return ''
 }
 
 function refIcon(refItem: EnhancedRef) {

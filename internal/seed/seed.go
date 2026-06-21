@@ -843,7 +843,7 @@ func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p hi
 
 	// In-flight pull request targeting main: its snapshot is still pending.
 	prCommit := fakeHistorySHA(p.orgIndex, p.repoIndex, 42)
-	prRef, err := queries.CreateRef(ctx, p.repoID, "refs/pull/42/head", store.RefTypePullRequest, nil, &p.branchRefID, &prCommit)
+	prRef, err := queries.CreateRef(ctx, p.repoID, "refs/pull/42", store.RefTypePullRequest, nil, &p.branchRefID, &prCommit)
 	if err != nil {
 		return err
 	}

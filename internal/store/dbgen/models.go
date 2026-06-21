@@ -1138,7 +1138,6 @@ type Ref struct {
 	PrClosedAt       sql.NullTime   `json:"pr_closed_at"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
-	PrRefKind        string         `json:"pr_ref_kind"`
 	PrNumber         sql.NullString `json:"pr_number"`
 }
 

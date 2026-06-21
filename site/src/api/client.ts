@@ -129,7 +129,6 @@ export interface EnhancedRef {
   provider_id?: string
   merge_target_ref_id?: string
   merge_target_ref_name?: string
-  pr_ref_kind?: string
   pr_number?: string
   pr_state?: string
   pr_title?: string
