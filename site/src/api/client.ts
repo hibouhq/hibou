@@ -1028,7 +1028,7 @@ class ApiClient {
     }
 
     const qs = query.toString()
-    return this.request<VulnerabilityFacets>(
+    return this.request<ApiResponse<VulnerabilityFacets>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/facets${qs ? `?${qs}` : ''}`,
     )
   }

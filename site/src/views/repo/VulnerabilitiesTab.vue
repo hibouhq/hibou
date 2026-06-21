@@ -303,10 +303,11 @@ watch(
   { immediate: true },
 )
 
-function mergeFacetOptions(counts: Record<string, number>, seen: Set<string>): string[] {
-  const keys = new Set<string>([...Object.keys(counts), ...seen])
+function mergeFacetOptions(counts: Record<string, number> | undefined, seen: Set<string>): string[] {
+  const safeCounts = counts ?? {}
+  const keys = new Set<string>([...Object.keys(safeCounts), ...seen])
   return Array.from(keys).sort((a, b) => {
-    const diff = (counts[b] ?? 0) - (counts[a] ?? 0)
+    const diff = (safeCounts[b] ?? 0) - (safeCounts[a] ?? 0)
     return diff !== 0 ? diff : a.localeCompare(b)
   })
 }
@@ -322,7 +323,7 @@ watch(
     }
 
     try {
-      facetCounts.value = await api.listRefVulnerabilityFacets(provider.value, slug.value, repoSlug.value, {
+      const facetsRes = await api.listRefVulnerabilityFacets(provider.value, slug.value, repoSlug.value, {
         ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
         snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
         type: activeFilters.value.type || undefined,
@@ -332,6 +333,7 @@ watch(
         file: activeFilters.value.file || undefined,
         search: searchQuery.value || undefined,
       })
+      facetCounts.value = facetsRes.data
     } catch {
       facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {} }
     }
