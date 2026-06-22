@@ -38,7 +38,80 @@
               {{ repoDescription }}
             </p>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <div
+              v-if="compareRefOptions.length > 0"
+              ref="compareMenuRef"
+              class="relative"
+            >
+              <button
+                class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
+                type="button"
+                @click.stop="toggleCompareMenu"
+              >
+                <GitCompareArrows class="h-3.5 w-3.5" />
+                Compare with
+              </button>
+
+              <div
+                v-if="compareMenuOpen"
+                class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface-overlay p-3 shadow-2xl"
+              >
+                <div class="space-y-3">
+                  <div>
+                    <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                      Base
+                    </p>
+                    <BranchPRSelector
+                      :refs="refs"
+                      :selected-ref-name="compareBaseRefName"
+                      :default-branch="repo.default_branch"
+                      compact
+                      block
+                      @select="selectCompareBase"
+                    />
+                    <p
+                      v-if="selectedSnapshotId && sameComparableRef(compareBaseRefName, selectedRefName)"
+                      class="mt-1 text-[11px] text-gray-500"
+                    >
+                      Uses the snapshot currently selected on this page.
+                    </p>
+                  </div>
+
+                  <div>
+                    <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                      Target
+                    </p>
+                    <BranchPRSelector
+                      :refs="compareTargetOptions"
+                      :selected-ref-name="compareTargetRefName"
+                      :default-branch="repo.default_branch"
+                      compact
+                      block
+                      @select="selectCompareTarget"
+                    />
+                  </div>
+
+                  <div class="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      class="rounded-md border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-400 transition hover:text-white"
+                      type="button"
+                      @click="compareMenuOpen = false"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                      type="button"
+                      :disabled="!canRunCompare"
+                      @click="runCompare"
+                    >
+                      Open compare
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <RouterLink
               v-if="selectedPRNumber"
               class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
@@ -163,6 +236,7 @@ import {
   BookMarked,
   ExternalLink,
   FlaskConical,
+  GitCompareArrows,
   GitPullRequest,
   LayoutDashboard,
   Package,
@@ -216,6 +290,121 @@ const selectedPRNumber = computed(() => {
 
   return extractPullRequestNumber(selectedRef.value.name)
 })
+const compareMenuRef = ref<HTMLElement | null>(null)
+const compareMenuOpen = ref(false)
+const compareBaseRefName = ref('')
+const compareTargetRefName = ref('')
+
+function canonicalComparableRefName(name: string) {
+  const trimmed = name.trim()
+  if (trimmed.startsWith('refs/heads/')) {
+    return trimmed.slice('refs/heads/'.length)
+  }
+  if (trimmed.startsWith('refs/tags/')) {
+    return trimmed.slice('refs/tags/'.length)
+  }
+  return trimmed
+}
+
+function sameComparableRef(left: string, right: string) {
+  const leftName = left.trim()
+  const rightName = right.trim()
+  if (!leftName || !rightName) {
+    return false
+  }
+  return leftName === rightName || canonicalComparableRefName(leftName) === canonicalComparableRefName(rightName)
+}
+
+const compareRefOptions = computed(() => {
+  const current = selectedRefName.value
+  if (!current || current === 'No refs available') {
+    return []
+  }
+
+  return refs.value.filter((item) => !sameComparableRef(item.name, current))
+})
+
+const compareTargetOptions = computed(() => refs.value.filter((item) => !sameComparableRef(item.name, compareBaseRefName.value)))
+
+const canRunCompare = computed(() => {
+  return compareBaseRefName.value.length > 0
+    && compareTargetRefName.value.length > 0
+    && !sameComparableRef(compareBaseRefName.value, compareTargetRefName.value)
+})
+
+function preferredCompareTarget(source: string) {
+  const candidates = refs.value.filter((item) => !sameComparableRef(item.name, source))
+  if (candidates.length === 0) {
+    return ''
+  }
+
+  const defaultBranch = repo.value?.default_branch || ''
+  const defaultBranchRef = candidates.find((item) => sameComparableRef(item.name, defaultBranch))
+  if (defaultBranchRef) {
+    return defaultBranchRef.name
+  }
+
+  return candidates.find((item) => item.ref_type === 'branch')?.name
+    || candidates.find((item) => item.ref_type === 'pull_request')?.name
+    || candidates.find((item) => item.ref_type === 'tag')?.name
+    || ''
+}
+
+function syncCompareSelection() {
+  const current = selectedRefName.value
+  compareBaseRefName.value = current === 'No refs available' ? '' : current
+  if (!compareTargetOptions.value.some((item) => item.name === compareTargetRefName.value)) {
+    compareTargetRefName.value = preferredCompareTarget(compareBaseRefName.value)
+  }
+}
+
+function selectCompareBase(name: string) {
+  compareBaseRefName.value = name
+  if (sameComparableRef(compareBaseRefName.value, compareTargetRefName.value) || !compareTargetOptions.value.some((item) => item.name === compareTargetRefName.value)) {
+    compareTargetRefName.value = preferredCompareTarget(compareBaseRefName.value)
+  }
+}
+
+function selectCompareTarget(name: string) {
+  compareTargetRefName.value = name
+}
+
+function toggleCompareMenu() {
+  if (!compareMenuOpen.value) {
+    syncCompareSelection()
+  }
+  compareMenuOpen.value = !compareMenuOpen.value
+}
+
+function runCompare() {
+  if (!canRunCompare.value) {
+    return
+  }
+
+  const query: Record<string, string> = {
+    base: compareBaseRefName.value,
+    head: compareTargetRefName.value,
+  }
+
+  if (selectedSnapshotId.value) {
+    if (sameComparableRef(compareBaseRefName.value, selectedRefName.value)) {
+      query.base_snapshot = selectedSnapshotId.value
+    }
+    if (sameComparableRef(compareTargetRefName.value, selectedRefName.value)) {
+      query.head_snapshot = selectedSnapshotId.value
+    }
+  }
+
+  compareMenuOpen.value = false
+  void router.push({ name: 'repo-compare', params: route.params, query })
+}
+
+function handleCompareMenuDocumentClick(event: MouseEvent) {
+  const target = event.target as Node | null
+  if (target && compareMenuRef.value && !compareMenuRef.value.contains(target)) {
+    compareMenuOpen.value = false
+  }
+}
 
 const tabs = computed(() => {
   const query = selectedRefName.value !== 'No refs available'
@@ -240,6 +429,7 @@ const prevParams = ref({ provider: '', slug: '', repoSlug: '' })
 const latestSnapshotTitle = computed(() => snapshotTitle(latestSnapshot.value, 'Latest snapshot'))
 
 onMounted(() => {
+  document.addEventListener('click', handleCompareMenuDocumentClick)
   prevParams.value = { provider: provider.value, slug: orgSlug.value, repoSlug: repoSlug.value }
   if (orgStore.orgs.length === 0) {
     void orgStore.fetchOrgs()
@@ -248,6 +438,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('click', handleCompareMenuDocumentClick)
   stopSnapshotPolling()
 })
 
@@ -269,6 +460,7 @@ watch(
 watch(
   () => selectedRefName.value,
   () => {
+    syncCompareSelection()
     stopSnapshotPolling()
     void loadSnapshots()
     void loadSummary()

@@ -191,6 +191,7 @@ seed_hibou_data() {
   fi
 
   env \
+    HIBOU_DEVELOPMENT=true \
     HIBOU_ARTIFACT_PATH=tmp/artifacts \
     HIBOU_FORGE_0_TYPE= \
     HIBOU_FORGE_0_ID= \

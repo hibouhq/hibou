@@ -1,120 +1,223 @@
 <template>
-  <section class="compare-root relative space-y-6 overflow-hidden rounded-3xl border border-surface-border bg-surface-raised p-6 sm:p-7">
-    <div
-      class="compare-aurora pointer-events-none absolute inset-0"
-      aria-hidden="true"
-    />
-    <div
-      class="compare-grain pointer-events-none absolute inset-0"
-      aria-hidden="true"
-    />
+  <div class="px-4 pt-5">
+    <div class="compare-rise flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <p class="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-gray-500">
+        <span class="compare-beacon" />
+        <span class="compare-display">Compare</span>
+      </p>
+      <h1 class="compare-display text-xl font-semibold tracking-tight text-white sm:text-2xl">
+        <span class="compare-ref">{{ baseLabel }}</span>
+        <span class="compare-arrow">→</span>
+        <span class="compare-ref compare-ref-head">{{ headLabel }}</span>
+      </h1>
+    </div>
 
-    <div class="compare-rise relative flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-      <div>
-        <p class="flex items-center gap-2 text-xs uppercase tracking-[0.28em] text-gray-500">
-          <span class="compare-beacon" />
-          <span class="compare-display">Snapshot comparison</span>
-        </p>
-        <h1 class="compare-display mt-3 text-3xl font-semibold tracking-tight text-white sm:text-[2.1rem]">
-          <span class="text-gray-500">compare</span>
-          <span class="compare-ref">{{ baseLabel }}</span>
-          <span class="compare-arrow">→</span>
-          <span class="compare-ref compare-ref-head">{{ headLabel }}</span>
-        </h1>
-        <p class="mt-3 max-w-xl text-sm text-gray-400">
-          Security, coverage, tests, and SBOM components — diffed across any two scanned refs.
-        </p>
+    <div class="compare-rise relative z-20 mt-4 border-b border-surface-border pb-3">
+      <div class="compare-comparator grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-start lg:gap-2">
+        <div class="min-w-0 flex-1 space-y-2">
+          <span class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
+            <span class="compare-dot compare-dot-base" />
+            Base <span class="text-gray-600">(from)</span>
+          </span>
+          <BranchPRSelector
+            :refs="refs"
+            :selected-ref-name="baseRef"
+            :default-branch="repo?.default_branch"
+            :loading="loadingRefs"
+            compact
+            block
+            @select="selectBase"
+          />
+          <div
+            v-if="baseSnapshots.length > 0"
+            class="relative"
+          >
+            <button
+              type="button"
+              class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
+              aria-label="Base snapshot"
+              @click.stop="baseSnapshotOpen = !baseSnapshotOpen"
+            >
+              <span
+                v-if="selectedBaseSnapshot"
+                class="inline-block h-2 w-2 shrink-0 rounded-full"
+                :class="snapshotDotClass(selectedBaseSnapshot)"
+              />
+              <span class="flex-1 truncate">{{ baseSnapshotId ? snapshotOptionLabel(resolveSelectedSnapshot(baseSnapshots, baseSnapshotId) ?? baseSnapshots[0]) : 'Latest snapshot' }}</span>
+              <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
+            </button>
+            <div
+              v-if="baseSnapshotOpen"
+              class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+            >
+              <button
+                type="button"
+                class="w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                :class="!baseSnapshotId ? 'text-accent font-medium' : 'text-gray-300'"
+                @click="baseSnapshotId = ''; baseSnapshotOpen = false"
+              >
+                Latest snapshot
+              </button>
+              <button
+                v-for="snapshot in baseSnapshots"
+                :key="snapshot.id"
+                type="button"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                :class="baseSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
+                @click="baseSnapshotId = snapshot.id; baseSnapshotOpen = false"
+              >
+                <span
+                  class="inline-block h-2 w-2 shrink-0 rounded-full"
+                  :class="snapshotDotClass(snapshot)"
+                />
+                <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
+                <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
+                <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
+                <span
+                  v-if="snapshot.run_number"
+                  class="text-gray-500"
+                >#{{ snapshot.run_number }}</span>
+                <span
+                  v-if="snapshot.tag"
+                  class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
+                >{{ snapshot.tag }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-if="selectedBaseSnapshot"
+            class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
+          >
+            <span
+              class="rounded-full px-2 py-0.5 font-medium"
+              :class="snapshotBadgeClass(selectedBaseSnapshot)"
+            >
+              {{ snapshotStatusLabel(selectedBaseSnapshot) }}
+            </span>
+            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedBaseSnapshot) }}</span>
+            <span>{{ snapshotSecondaryLine(selectedBaseSnapshot) }}</span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="compare-swap mx-auto my-1 inline-flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/60 hover:text-white"
+          :disabled="!baseRef || !headRef"
+          title="Swap base and head"
+          aria-label="Swap base and head"
+          @click="swapRefs"
+        >
+          <ArrowLeftRight class="h-4 w-4" />
+        </button>
+
+        <div class="min-w-0 flex-1 space-y-2">
+          <span class="flex items-center justify-end gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
+            Head <span class="text-gray-600">(to)</span>
+            <span class="compare-dot compare-dot-head" />
+          </span>
+          <BranchPRSelector
+            :refs="refs"
+            :selected-ref-name="headRef"
+            :default-branch="repo?.default_branch"
+            :loading="loadingRefs"
+            compact
+            block
+            align="right"
+            @select="selectHead"
+          />
+          <div
+            v-if="headSnapshots.length > 0"
+            class="relative"
+          >
+            <button
+              type="button"
+              class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
+              aria-label="Head snapshot"
+              @click.stop="headSnapshotOpen = !headSnapshotOpen"
+            >
+              <span
+                v-if="selectedHeadSnapshot"
+                class="inline-block h-2 w-2 shrink-0 rounded-full"
+                :class="snapshotDotClass(selectedHeadSnapshot)"
+              />
+              <span class="flex-1 truncate">{{ headSnapshotId ? snapshotOptionLabel(resolveSelectedSnapshot(headSnapshots, headSnapshotId) ?? headSnapshots[0]) : 'Latest snapshot' }}</span>
+              <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
+            </button>
+            <div
+              v-if="headSnapshotOpen"
+              class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+            >
+              <button
+                type="button"
+                class="w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                :class="!headSnapshotId ? 'text-accent font-medium' : 'text-gray-300'"
+                @click="headSnapshotId = ''; headSnapshotOpen = false"
+              >
+                Latest snapshot
+              </button>
+              <button
+                v-for="snapshot in headSnapshots"
+                :key="snapshot.id"
+                type="button"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                :class="headSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
+                @click="headSnapshotId = snapshot.id; headSnapshotOpen = false"
+              >
+                <span
+                  class="inline-block h-2 w-2 shrink-0 rounded-full"
+                  :class="snapshotDotClass(snapshot)"
+                />
+                <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
+                <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
+                <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
+                <span
+                  v-if="snapshot.run_number"
+                  class="text-gray-500"
+                >#{{ snapshot.run_number }}</span>
+                <span
+                  v-if="snapshot.tag"
+                  class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
+                >{{ snapshot.tag }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-if="selectedHeadSnapshot"
+            class="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
+          >
+            <span>{{ snapshotSecondaryLine(selectedHeadSnapshot) }}</span>
+            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedHeadSnapshot) }}</span>
+            <span
+              class="rounded-full px-2 py-0.5 font-medium"
+              :class="snapshotBadgeClass(selectedHeadSnapshot)"
+            >
+              {{ snapshotStatusLabel(selectedHeadSnapshot) }}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="compare-rise relative grid gap-4 lg:grid-cols-2">
-      <label class="space-y-2 text-sm text-gray-300">
-        <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Base ref</span>
-        <select
-          v-model="baseRef"
-          class="compare-select w-full rounded-2xl border border-surface-border bg-surface-overlay/80 px-4 py-3 text-sm text-gray-100"
-        >
-          <option
-            v-for="refItem in refs"
-            :key="`base-${refItem.id}`"
-            :value="refItem.name"
-          >
-            {{ formatRefOption(refItem) }}
-          </option>
-        </select>
-      </label>
-
-      <label class="space-y-2 text-sm text-gray-300">
-        <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Head ref</span>
-        <select
-          v-model="headRef"
-          class="compare-select w-full rounded-2xl border border-surface-border bg-surface-overlay/80 px-4 py-3 text-sm text-gray-100"
-        >
-          <option
-            v-for="refItem in refs"
-            :key="`head-${refItem.id}`"
-            :value="refItem.name"
-          >
-            {{ formatRefOption(refItem) }}
-          </option>
-        </select>
-      </label>
-    </div>
-
     <div
-      v-if="comparison"
-      class="compare-rise relative grid gap-4 lg:grid-cols-2"
+      v-if="hasFailedSnapshot"
+      class="compare-rise mt-3 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-200"
     >
-      <div class="compare-snapcard rounded-2xl border border-surface-border-subtle bg-surface-overlay/60 p-4">
-        <p class="text-xs uppercase tracking-[0.18em] text-gray-500">
-          Base snapshot
+      <ShieldAlert class="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+      <div>
+        <p class="font-medium">
+          Comparing against a failed build
         </p>
-        <p class="mt-2 text-lg font-medium text-white">
-          {{ comparison.base.ref_name }}
-        </p>
-        <p class="mt-1 text-sm text-gray-400">
-          <a
-            v-if="commitUrl(comparison.base.commit_sha)"
-            :href="commitUrl(comparison.base.commit_sha) || undefined"
-            target="_blank"
-            rel="noopener"
-            class="font-mono hover:text-accent hover:underline"
-          >{{ comparison.base.commit_sha.slice(0, 12) }}</a>
-          <span
-            v-else
-            class="font-mono"
-          >{{ comparison.base.commit_sha.slice(0, 12) }}</span>
-          · {{ formatDateTime(comparison.base.date) }}
-        </p>
-      </div>
-
-      <div class="compare-snapcard rounded-2xl border border-surface-border-subtle bg-surface-overlay/60 p-4">
-        <p class="text-xs uppercase tracking-[0.18em] text-gray-500">
-          Head snapshot
-        </p>
-        <p class="mt-2 text-lg font-medium text-white">
-          {{ comparison.head.ref_name }}
-        </p>
-        <p class="mt-1 text-sm text-gray-400">
-          <a
-            v-if="commitUrl(comparison.head.commit_sha)"
-            :href="commitUrl(comparison.head.commit_sha) || undefined"
-            target="_blank"
-            rel="noopener"
-            class="font-mono hover:text-accent hover:underline"
-          >{{ comparison.head.commit_sha.slice(0, 12) }}</a>
-          <span
-            v-else
-            class="font-mono"
-          >{{ comparison.head.commit_sha.slice(0, 12) }}</span>
-          · {{ formatDateTime(comparison.head.date) }}
+        <p class="mt-0.5 text-xs text-amber-300/70">
+          {{ failedSnapshotWarning }} Results may be incomplete or misleading.
         </p>
       </div>
     </div>
 
     <div
       v-if="loading"
-      class="compare-rise relative overflow-hidden rounded-2xl border border-dashed border-surface-border-subtle px-4 py-10 text-sm text-gray-500"
+      class="compare-rise relative mt-4 overflow-hidden rounded-xl border border-dashed border-surface-border-subtle px-4 py-6 text-sm text-gray-500"
     >
       <span class="compare-scan" />
       Running comparison…
@@ -129,12 +232,12 @@
 
     <template v-else-if="comparison">
       <!-- Tab bar -->
-      <nav class="compare-rise relative flex flex-wrap gap-1 border-b border-surface-border-subtle">
+      <nav class="compare-rise mt-3 flex flex-wrap gap-0.5 border-b border-surface-border">
         <button
           v-for="tab in tabs"
           :key="tab.id"
           type="button"
-          class="compare-tab inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition"
+          class="compare-tab inline-flex items-center gap-2 border-b-2 border-transparent px-3 pb-2.5 pt-1.5 text-sm transition"
           :class="activeTab === tab.id ? 'compare-tab-active text-white' : 'text-gray-400 hover:text-gray-200'"
           @click="activeTab = tab.id"
         >
@@ -726,16 +829,16 @@
         </div>
       </div>
     </template>
-  </section>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { ArrowRight, ArrowDownRight, ArrowUpRight, FlaskConical, GaugeCircle, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, FlaskConical, GaugeCircle, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, forgeCommitUrl, type CompareResult, type ComponentEntry, type CoverageFileDelta, type EnhancedRef, type Repository, type TestCaseDelta, type Vulnerability } from '@/api/client'
-import { useOrgStore } from '@/stores/org'
+import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type EnhancedRef, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
+import BranchPRSelector from '@/components/BranchPRSelector.vue'
 
 type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
 type ComponentRow = ComponentEntry & { change: 'added' | 'removed' }
@@ -743,8 +846,8 @@ type TabId = 'overview' | 'security' | 'coverage' | 'tests' | 'components'
 
 const route = useRoute()
 const router = useRouter()
-const orgStore = useOrgStore()
 
+// ─── Core state ───────────────────────────────────────────────────────────────
 const repo = ref<Repository | null>(null)
 const refs = ref<EnhancedRef[]>([])
 const comparison = ref<CompareResult | null>(null)
@@ -753,9 +856,20 @@ const loadingRefs = ref(true)
 const error = ref('')
 const baseRef = ref('')
 const headRef = ref('')
+const baseSnapshots = ref<Snapshot[]>([])
+const headSnapshots = ref<Snapshot[]>([])
+const baseSnapshotId = ref('')
+const headSnapshotId = ref('')
+const baseSnapshotOpen = ref(false)
+const headSnapshotOpen = ref(false)
 const activeTab = ref<TabId>('overview')
-const forgeUrl = computed(() => orgStore.currentOrg?.forge_url ?? '')
-const repoProviderID = computed(() => repo.value?.provider_id ?? '')
+
+function closeSnapshotDropdowns() {
+  baseSnapshotOpen.value = false
+  headSnapshotOpen.value = false
+}
+onMounted(() => document.addEventListener('click', closeSnapshotDropdowns))
+onUnmounted(() => document.removeEventListener('click', closeSnapshotDropdowns))
 
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
@@ -763,15 +877,27 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 
 const baseLabel = computed(() => baseRef.value || 'Base')
 const headLabel = computed(() => headRef.value || 'Head')
+const selectedBaseSnapshot = computed(() => resolveSelectedSnapshot(baseSnapshots.value, baseSnapshotId.value))
+const selectedHeadSnapshot = computed(() => resolveSelectedSnapshot(headSnapshots.value, headSnapshotId.value))
 
 const coverageDiff = computed(() => comparison.value?.coverage_diff ?? null)
 const testDiff = computed(() => comparison.value?.test_diff ?? null)
 
-const vulnRows = computed<VulnRow[]>(() => {
-  if (!comparison.value) {
-    return []
-  }
+const hasFailedSnapshot = computed(() => {
+  return selectedBaseSnapshot.value?.status === 'failed' || selectedHeadSnapshot.value?.status === 'failed'
+})
 
+const failedSnapshotWarning = computed(() => {
+  const baseFailed = selectedBaseSnapshot.value?.status === 'failed'
+  const headFailed = selectedHeadSnapshot.value?.status === 'failed'
+  if (baseFailed && headFailed) return 'Both base and head snapshots have failed builds.'
+  if (baseFailed) return 'The base snapshot has a failed build.'
+  return 'The head snapshot has a failed build.'
+})
+
+// ─── Derived data ─────────────────────────────────────────────────────────────
+const vulnRows = computed<VulnRow[]>(() => {
+  if (!comparison.value) return []
   return [
     ...comparison.value.delta.new_vulnerabilities.map((vuln) => ({ ...vuln, change: 'new' as const })),
     ...comparison.value.delta.resolved_vulnerabilities.map((vuln) => ({ ...vuln, change: 'resolved' as const })),
@@ -779,21 +905,16 @@ const vulnRows = computed<VulnRow[]>(() => {
 })
 
 const componentRows = computed<ComponentRow[]>(() => {
-  if (!comparison.value) {
-    return []
-  }
-
+  if (!comparison.value) return []
   return [
-    ...comparison.value.component_diff.added.map((component) => ({ ...component, change: 'added' as const })),
-    ...comparison.value.component_diff.removed.map((component) => ({ ...component, change: 'removed' as const })),
+    ...comparison.value.component_diff.added.map((c) => ({ ...c, change: 'added' as const })),
+    ...comparison.value.component_diff.removed.map((c) => ({ ...c, change: 'removed' as const })),
   ]
 })
 
 const testChangeCount = computed(() => {
   const diff = testDiff.value
-  if (!diff) {
-    return 0
-  }
+  if (!diff) return 0
   return diff.added.length + diff.removed.length + diff.status_changed.length + diff.slower.length + diff.faster.length
 })
 
@@ -801,9 +922,7 @@ type TestGroup = { key: TestCaseDelta['change']; label: string; hint: string; ba
 
 const testGroups = computed<TestGroup[]>(() => {
   const diff = testDiff.value
-  if (!diff) {
-    return []
-  }
+  if (!diff) return []
   return [
     { key: 'status_changed', label: 'Status changed', hint: 'e.g. skipped or newly failing', badgeClass: pillClass('amber'), items: diff.status_changed },
     { key: 'slower', label: 'Slower', hint: 'significant execution-time increase', badgeClass: pillClass('red'), items: diff.slower },
@@ -813,19 +932,12 @@ const testGroups = computed<TestGroup[]>(() => {
   ]
 })
 
-const visibleTestGroups = computed(() => testGroups.value.filter((group) => group.items.length > 0))
+const visibleTestGroups = computed(() => testGroups.value.filter((g) => g.items.length > 0))
 
 const verdict = computed(() => {
   const c = comparison.value
   if (!c) {
-    return {
-      eyebrow: 'No data',
-      headline: 'Nothing to compare',
-      detail: 'Select two refs to run a comparison.',
-      shellClass: 'border-surface-border-subtle bg-surface-overlay/40',
-      orbClass: 'compare-orb-neutral',
-      eyebrowClass: 'text-gray-500',
-    }
+    return { eyebrow: 'No data', headline: 'Nothing to compare', detail: 'Select two refs to run a comparison.', shellClass: 'border-surface-border-subtle bg-surface-overlay/40', orbClass: 'compare-orb-neutral', eyebrowClass: 'text-gray-500' }
   }
 
   const newVuln = c.delta.new_vulnerabilities.length
@@ -833,69 +945,22 @@ const verdict = computed(() => {
   const cov = coverageDiff.value?.line_rate_delta ?? 0
   const slower = testDiff.value?.slower.length ?? 0
   const removedTests = testDiff.value?.removed.length ?? 0
-  const eps = 0.0001
 
   const wins: string[] = []
   const risks: string[] = []
-
-  if (newVuln > 0) {
-    risks.push(`${newVuln} new ${newVuln === 1 ? 'vulnerability' : 'vulnerabilities'}`)
-  }
-  if (resolved > 0) {
-    wins.push(`${resolved} resolved`)
-  }
-  if (cov > eps) {
-    wins.push(`coverage ${formatRateDelta(cov)}`)
-  } else if (cov < -eps) {
-    risks.push(`coverage ${formatRateDelta(cov)}`)
-  }
-  if (slower > 0) {
-    risks.push(`${slower} slower ${slower === 1 ? 'test' : 'tests'}`)
-  }
-  if (removedTests > 0) {
-    risks.push(`${removedTests} ${removedTests === 1 ? 'test' : 'tests'} removed`)
-  }
+  if (newVuln > 0) risks.push(`${newVuln} new ${newVuln === 1 ? 'vulnerability' : 'vulnerabilities'}`)
+  if (resolved > 0) wins.push(`${resolved} resolved`)
+  if (cov > 0.0001) wins.push(`coverage ${formatRateDelta(cov)}`)
+  else if (cov < -0.0001) risks.push(`coverage ${formatRateDelta(cov)}`)
+  if (slower > 0) risks.push(`${slower} slower ${slower === 1 ? 'test' : 'tests'}`)
+  if (removedTests > 0) risks.push(`${removedTests} ${removedTests === 1 ? 'test' : 'tests'} removed`)
 
   const detail = [...wins, ...risks].join(' · ') || 'No meaningful changes detected between these refs.'
 
-  if (risks.length > 0 && wins.length > 0) {
-    return {
-      eyebrow: 'Mixed signals',
-      headline: 'Improvements with regressions',
-      detail,
-      shellClass: 'border-amber-500/30 bg-amber-500/[0.06]',
-      orbClass: 'compare-orb-amber',
-      eyebrowClass: 'text-amber-300',
-    }
-  }
-  if (risks.length > 0) {
-    return {
-      eyebrow: 'Regression detected',
-      headline: 'Quality dropped on head',
-      detail,
-      shellClass: 'border-danger/30 bg-danger/[0.06]',
-      orbClass: 'compare-orb-red',
-      eyebrowClass: 'text-danger',
-    }
-  }
-  if (wins.length > 0) {
-    return {
-      eyebrow: 'Net improvement',
-      headline: 'Head looks healthier',
-      detail,
-      shellClass: 'border-emerald-500/30 bg-emerald-500/[0.06]',
-      orbClass: 'compare-orb-emerald',
-      eyebrowClass: 'text-emerald-300',
-    }
-  }
-  return {
-    eyebrow: 'Steady',
-    headline: 'No meaningful change',
-    detail,
-    shellClass: 'border-surface-border-subtle bg-surface-overlay/40',
-    orbClass: 'compare-orb-neutral',
-    eyebrowClass: 'text-gray-500',
-  }
+  if (risks.length > 0 && wins.length > 0) return { eyebrow: 'Mixed signals', headline: 'Improvements with regressions', detail, shellClass: 'border-amber-500/30 bg-amber-500/[0.06]', orbClass: 'compare-orb-amber', eyebrowClass: 'text-amber-300' }
+  if (risks.length > 0) return { eyebrow: 'Regression detected', headline: 'Quality dropped on head', detail, shellClass: 'border-danger/30 bg-danger/[0.06]', orbClass: 'compare-orb-red', eyebrowClass: 'text-danger' }
+  if (wins.length > 0) return { eyebrow: 'Net improvement', headline: 'Head looks healthier', detail, shellClass: 'border-emerald-500/30 bg-emerald-500/[0.06]', orbClass: 'compare-orb-emerald', eyebrowClass: 'text-emerald-300' }
+  return { eyebrow: 'Steady', headline: 'No meaningful change', detail, shellClass: 'border-surface-border-subtle bg-surface-overlay/40', orbClass: 'compare-orb-neutral', eyebrowClass: 'text-gray-500' }
 })
 
 const tabs = computed(() => [
@@ -906,253 +971,348 @@ const tabs = computed(() => [
   { id: 'components' as const, label: 'Components', icon: Package, count: componentRows.value.length },
 ])
 
-watch(
-  () => [route.params.provider, route.params.slug, route.params.repoSlug],
-  () => {
-    void loadRefs()
-  },
-  { immediate: true },
-)
-
-watch(
-  () => [route.query.base, route.query.head],
-  () => {
-    baseRef.value = typeof route.query.base === 'string' ? route.query.base : ''
-    headRef.value = typeof route.query.head === 'string' ? route.query.head : ''
-    void loadComparison()
-  },
-  { immediate: true },
-)
-
-watch([baseRef, headRef], ([base, head]) => {
-  const nextBase = typeof route.query.base === 'string' ? route.query.base : ''
-  const nextHead = typeof route.query.head === 'string' ? route.query.head : ''
-  if (!base || !head || (base === nextBase && head === nextHead)) {
-    return
+// ─── URL ↔ State sync ────────────────────────────────────────────────────────
+function routeQuery(): Record<string, string> {
+  const q: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === 'string') q[k] = v
   }
+  return q
+}
 
-  void router.replace({ query: { ...route.query, base, head } })
+// URL → local state
+watch(
+  () => [route.query.base, route.query.head, route.query.base_snapshot, route.query.head_snapshot],
+  ([base, head, baseSn, headSn]) => {
+    const nextBase = typeof base === 'string' ? base : ''
+    const nextHead = typeof head === 'string' ? head : ''
+    if (nextBase !== baseRef.value) baseSnapshots.value = []
+    if (nextHead !== headRef.value) headSnapshots.value = []
+    baseRef.value = nextBase
+    headRef.value = nextHead
+    baseSnapshotId.value = typeof baseSn === 'string' ? baseSn : ''
+    headSnapshotId.value = typeof headSn === 'string' ? headSn : ''
+  },
+  { immediate: true },
+)
+
+// Local state → URL
+watch([baseRef, headRef, baseSnapshotId, headSnapshotId], ([base, head, baseSn, headSn]) => {
+  const q = routeQuery()
+  if (base === (q.base || '') && head === (q.head || '') && baseSn === (q.base_snapshot || '') && headSn === (q.head_snapshot || '')) return
+
+  const next: Record<string, string> = { ...q }
+  if (base) next.base = base; else delete next.base
+  if (head) next.head = head; else delete next.head
+  if (baseSn) next.base_snapshot = baseSn; else delete next.base_snapshot
+  if (headSn) next.head_snapshot = headSn; else delete next.head_snapshot
+  void router.replace({ query: next })
 })
 
-async function loadRefs() {
-  loadingRefs.value = true
+// ─── User actions ─────────────────────────────────────────────────────────────
+function selectBase(name: string) {
+  baseRef.value = name
+  baseSnapshotId.value = ''
+  baseSnapshots.value = []
+}
 
-  try {
-    const [repoRes, refsRes] = await Promise.all([
-      api.getRepo(provider.value, slug.value, repoSlug.value),
-      api.listRefsEnhanced(provider.value, slug.value, repoSlug.value),
-    ])
+function selectHead(name: string) {
+  headRef.value = name
+  headSnapshotId.value = ''
+  headSnapshots.value = []
+}
 
-    repo.value = repoRes.data
-    refs.value = refsRes.data
-    ensureSelections()
-  } catch {
-    repo.value = null
-    refs.value = []
-    error.value = 'Failed to load refs for comparison.'
-  } finally {
-    loadingRefs.value = false
+function swapRefs() {
+  if (!baseRef.value || !headRef.value) return
+  const prev = baseRef.value
+  baseRef.value = headRef.value
+  headRef.value = prev
+  baseSnapshotId.value = ''
+  headSnapshotId.value = ''
+  baseSnapshots.value = []
+  headSnapshots.value = []
+}
 
-    if (typeof route.query.base === 'string' && typeof route.query.head === 'string') {
-      void loadComparison()
+// ─── Data loading (reactive with onCleanup) ──────────────────────────────────
+// Load refs when route params change
+watch(
+  () => [provider.value, slug.value, repoSlug.value] as const,
+  async ([p, s, r], _, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => { cancelled = true })
+
+    loadingRefs.value = true
+    try {
+      const [repoRes, refsRes] = await Promise.all([
+        api.getRepo(p, s, r),
+        api.listRefsEnhanced(p, s, r),
+      ])
+      if (cancelled) return
+      repo.value = repoRes.data
+      refs.value = refsRes.data
+
+      // Set defaults if URL has no base/head
+      if (!baseRef.value || !headRef.value) {
+        const defaultBase = refsRes.data.find((ref) => ref.name === repoRes.data.default_branch)?.name || refsRes.data[0]?.name || ''
+        const defaultHead = refsRes.data.find((ref) => ref.name !== defaultBase)?.name || defaultBase
+        if (!baseRef.value) baseRef.value = defaultBase
+        if (!headRef.value) headRef.value = defaultHead
+      }
+    } catch {
+      if (cancelled) return
+      repo.value = null
+      refs.value = []
+      error.value = 'Failed to load refs for comparison.'
+    } finally {
+      if (!cancelled) loadingRefs.value = false
     }
-  }
+  },
+  { immediate: true },
+)
+
+// Load base snapshots
+watch(
+  () => [baseRef.value, loadingRefs.value, provider.value, slug.value, repoSlug.value] as const,
+  async ([refName, refsLoading, p, s, r], _, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => { cancelled = true })
+
+    if (refsLoading || !refName || !p || !s || !r) {
+      baseSnapshots.value = []
+      return
+    }
+    try {
+      const res = await api.listSnapshots(p, s, r, { ref: refName, per_page: 50 })
+      if (!cancelled) baseSnapshots.value = res.data
+    } catch {
+      if (!cancelled) baseSnapshots.value = []
+    }
+  },
+  { immediate: true },
+)
+
+// Load head snapshots
+watch(
+  () => [headRef.value, loadingRefs.value, provider.value, slug.value, repoSlug.value] as const,
+  async ([refName, refsLoading, p, s, r], _, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => { cancelled = true })
+
+    if (refsLoading || !refName || !p || !s || !r) {
+      headSnapshots.value = []
+      return
+    }
+    try {
+      const res = await api.listSnapshots(p, s, r, { ref: refName, per_page: 50 })
+      if (!cancelled) headSnapshots.value = res.data
+    } catch {
+      if (!cancelled) headSnapshots.value = []
+    }
+  },
+  { immediate: true },
+)
+
+// Load comparison
+watch(
+  () => [baseRef.value, headRef.value, selectedBaseSnapshot.value?.id, selectedHeadSnapshot.value?.id, loadingRefs.value, provider.value, slug.value, repoSlug.value] as const,
+  async ([base, head, baseSn, headSn, refsLoading, p, s, r], _, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => { cancelled = true })
+
+    if (refsLoading || !base || !head || !p || !s || !r) {
+      comparison.value = null
+      loading.value = false
+      return
+    }
+
+    loading.value = true
+    error.value = ''
+    try {
+      const res = await api.compareRefs(p, s, r, base, head, {
+        baseSnapshot: baseSn || undefined,
+        headSnapshot: headSn || undefined,
+      })
+      if (cancelled) return
+      comparison.value = res.data
+    } catch (err) {
+      if (cancelled) return
+      comparison.value = null
+      error.value = err instanceof Error ? err.message : 'Failed to compare refs.'
+    } finally {
+      if (!cancelled) loading.value = false
+    }
+  },
+  { immediate: true },
+)
+
+// ─── Snapshot helpers ─────────────────────────────────────────────────────────
+function snapshotOptionLabel(snapshot: Snapshot) {
+  const parts: string[] = []
+
+  // Status prefix for non-complete snapshots
+  if (snapshot.status === 'failed') parts.push('✗')
+  else if (snapshot.status === 'pending') parts.push('⏳')
+
+  // Commit SHA (always)
+  parts.push(snapshot.commit_sha.slice(0, 7))
+
+  // Tag if present
+  if (snapshot.tag) parts.push(`[${snapshot.tag}]`)
+
+  // Status label
+  parts.push(snapshotStatusLabel(snapshot))
+
+  // Date
+  parts.push(formatDateTime(snapshot.created_at))
+
+  // PR info
+  if (snapshot.pr_number) parts.push(`PR #${snapshot.pr_number}`)
+
+  // Run number
+  if (snapshot.run_number) parts.push(`#${snapshot.run_number}`)
+
+  return parts.join(' · ')
 }
 
-function ensureSelections() {
-  if (refs.value.length === 0 || !repo.value) {
-    return
-  }
-
-  const routeBase = typeof route.query.base === 'string' ? route.query.base : ''
-  const routeHead = typeof route.query.head === 'string' ? route.query.head : ''
-  const defaultBase = refs.value.find((refItem) => refItem.name === repo.value?.default_branch)?.name || refs.value[0]?.name || ''
-  const defaultHead = refs.value.find((refItem) => refItem.name !== defaultBase)?.name || defaultBase
-
-  baseRef.value = routeBase || defaultBase
-  headRef.value = routeHead || defaultHead
-
-  if (!routeBase || !routeHead) {
-    void router.replace({
-      query: {
-        ...route.query,
-        base: baseRef.value,
-        head: headRef.value,
-      },
-    })
-  }
+function snapshotPrimaryLabel(snapshot: Snapshot) {
+  return snapshot.tag || snapshot.commit_sha.slice(0, 7)
 }
 
-async function loadComparison() {
-  if (loadingRefs.value || !baseRef.value || !headRef.value) {
-    return
-  }
-
-  loading.value = true
-  error.value = ''
-
-  try {
-    const response = await api.compareRefs(
-      provider.value,
-      slug.value,
-      repoSlug.value,
-      baseRef.value,
-      headRef.value,
-    )
-    comparison.value = response.data
-  } catch (err) {
-    comparison.value = null
-    error.value = err instanceof Error ? err.message : 'Failed to compare refs.'
-  } finally {
-    loading.value = false
-  }
+function snapshotStatusLabel(snapshot: Snapshot) {
+  if (snapshot.status === 'failed') return 'Build failed'
+  if (snapshot.status === 'pending') return 'Build running'
+  if (snapshot.status === 'active') return 'Build active'
+  return 'Build passed'
 }
 
-function formatRefOption(refItem: EnhancedRef) {
-  if (refItem.ref_type === 'pull_request') {
-    return `${refItem.pr_title || refItem.name} (${refItem.pr_source_branch || 'source'} → ${refItem.merge_target_ref_name || 'target'})`
+function snapshotBadgeClass(snapshot: Snapshot) {
+  if (snapshot.status === 'failed') return 'bg-danger/15 text-danger'
+  if (snapshot.status === 'pending') return 'bg-amber-500/15 text-amber-300'
+  if (snapshot.tag) return 'bg-sky-500/15 text-sky-300'
+  return 'bg-emerald-500/15 text-emerald-300'
+}
+
+function snapshotDotClass(snapshot: Snapshot) {
+  if (snapshot.status === 'failed') return 'bg-danger'
+  if (snapshot.status === 'pending') return 'bg-amber-400 animate-pulse'
+  return 'bg-emerald-400'
+}
+
+function snapshotStatusTextClass(snapshot: Snapshot) {
+  if (snapshot.status === 'failed') return 'text-danger'
+  if (snapshot.status === 'pending') return 'text-amber-300'
+  return 'text-emerald-300'
+}
+
+function snapshotSecondaryLine(snapshot: Snapshot) {
+  const details = [`Commit ${snapshot.commit_sha.slice(0, 12)}`, formatDateTime(snapshot.created_at)]
+  if (snapshot.tag) details.push(`Tag ${snapshot.tag}`)
+  if (snapshot.run_number) details.push(`Run #${snapshot.run_number}`)
+  else if (snapshot.run_id) details.push(`Run ${snapshot.run_id}`)
+  if (snapshot.pr_number) {
+    const suffix = snapshot.pr_target_branch ? ` -> ${snapshot.pr_target_branch}` : ''
+    details.push(`PR #${snapshot.pr_number}${suffix}`)
   }
-  return refItem.name
+  return details.join(' · ')
 }
 
-function commitUrl(sha: string): string | null {
-  return forgeCommitUrl(forgeUrl.value, repoProviderID.value, sha)
+function snapshotTitle(snapshot: Snapshot, prefix: string) {
+  return `${prefix}\n${snapshotStatusLabel(snapshot)}\nCommit ${snapshot.commit_sha.slice(0, 12)}\n${formatDateTime(snapshot.created_at)}`
 }
 
+function resolveSelectedSnapshot(snapshots: Snapshot[], id: string) {
+  if (id) {
+    const found = snapshots.find((s) => s.id === id)
+    if (found) return found
+  }
+  return snapshots.find((s) => s.status === 'complete' || s.status === 'active') ?? snapshots[0] ?? null
+}
+
+// ─── Display helpers ──────────────────────────────────────────────────────────
 function severityBadgeClass(severity: string) {
   return `sev-${severity.toLowerCase()} rounded-full px-2.5 py-1 text-xs font-medium`
 }
 
 function changeBadgeClass(change: string) {
-  if (change === 'new' || change === 'added') {
-    return 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-300'
-  }
-
-  return 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-danger'
+  return change === 'new' || change === 'added'
+    ? 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-300'
+    : 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-danger'
 }
 
 function pillClass(color: 'emerald' | 'red' | 'amber') {
-  const palette = {
-    emerald: 'bg-emerald-500/15 text-emerald-300',
-    red: 'bg-danger/15 text-danger',
-    amber: 'bg-amber-500/15 text-amber-300',
-  }
+  const palette = { emerald: 'bg-emerald-500/15 text-emerald-300', red: 'bg-danger/15 text-danger', amber: 'bg-amber-500/15 text-amber-300' }
   return `rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] ${palette[color]}`
 }
 
 function coverageChangeBadgeClass(change: CoverageFileDelta['change']) {
-  switch (change) {
-    case 'improved':
-    case 'added':
-      return pillClass('emerald')
-    case 'regressed':
-    case 'removed':
-      return pillClass('red')
-    default:
-      return pillClass('amber')
-  }
+  if (change === 'improved' || change === 'added') return pillClass('emerald')
+  if (change === 'regressed' || change === 'removed') return pillClass('red')
+  return pillClass('amber')
 }
 
 function statusBadgeClass(status: string) {
   switch (status) {
-    case 'passed':
-      return 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300'
-    case 'failed':
-    case 'error':
-      return 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium text-danger'
-    case 'skipped':
-      return 'rounded-full bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-300'
-    default:
-      return 'rounded-full bg-surface-overlay px-2.5 py-1 text-xs font-medium text-gray-300'
+    case 'passed': return 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300'
+    case 'failed': case 'error': return 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium text-danger'
+    case 'skipped': return 'rounded-full bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-300'
+    default: return 'rounded-full bg-surface-overlay px-2.5 py-1 text-xs font-medium text-gray-300'
   }
-}
-
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat('en', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value))
 }
 
 function vulnerabilityLocation(vuln: Vulnerability) {
-  if (vuln.file_path) {
-    return vuln.start_line ? `${vuln.file_path}:${vuln.start_line}` : vuln.file_path
-  }
-
-  if (vuln.component_name) {
-    return vuln.component_version ? `${vuln.component_name}@${vuln.component_version}` : vuln.component_name
-  }
-
+  if (vuln.file_path) return vuln.start_line ? `${vuln.file_path}:${vuln.start_line}` : vuln.file_path
+  if (vuln.component_name) return vuln.component_version ? `${vuln.component_name}@${vuln.component_version}` : vuln.component_name
   return 'n/a'
 }
 
+// ─── Formatting ───────────────────────────────────────────────────────────────
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+}
+
 function formatRate(rate: number | null) {
-  if (rate === null || rate === undefined) {
-    return 'n/a'
-  }
+  if (rate === null || rate === undefined) return 'n/a'
   return `${(rate * 100).toFixed(1)}%`
 }
 
 function formatRateDelta(delta: number | null) {
-  if (delta === null || delta === undefined) {
-    return 'n/a'
-  }
+  if (delta === null || delta === undefined) return 'n/a'
   const points = delta * 100
-  if (Math.abs(points) < 0.05) {
-    return '0.0 pp'
-  }
-  return `${points > 0 ? '+' : ''}${points.toFixed(1)} pp`
+  if (Math.abs(points) < 0.05) return '0.0%'
+  return `${points > 0 ? '+' : ''}${points.toFixed(1)}%`
 }
 
 function formatDuration(seconds: number) {
-  if (seconds >= 1) {
-    return `${seconds.toFixed(2)}s`
-  }
-  return `${(seconds * 1000).toFixed(0)}ms`
+  return seconds >= 1 ? `${seconds.toFixed(2)}s` : `${(seconds * 1000).toFixed(0)}ms`
 }
 
 function formatDurationDelta(seconds: number) {
-  if (Math.abs(seconds) < 0.0005) {
-    return '±0ms'
-  }
+  if (Math.abs(seconds) < 0.0005) return '±0ms'
   const sign = seconds > 0 ? '+' : '-'
   const abs = Math.abs(seconds)
   return `${sign}${abs >= 1 ? `${abs.toFixed(2)}s` : `${(abs * 1000).toFixed(0)}ms`}`
 }
 
 function rateColor(rate: number | null) {
-  if (rate === null || rate === undefined) {
-    return 'var(--color-text-muted, #6b7280)'
-  }
-  const percent = rate * 100
-  if (percent >= 80) {
-    return 'var(--color-ok, #3fb950)'
-  }
-  if (percent >= 60) {
-    return 'var(--color-warn, #d29922)'
-  }
+  if (rate === null || rate === undefined) return 'var(--color-text-muted, #6b7280)'
+  const pct = rate * 100
+  if (pct >= 80) return 'var(--color-ok, #3fb950)'
+  if (pct >= 60) return 'var(--color-warn, #d29922)'
   return 'var(--color-danger, #f85149)'
 }
 
 function deltaColor(delta: number | null) {
-  if (delta === null || delta === undefined || Math.abs(delta) < 1e-9) {
-    return 'var(--color-text-muted, #6b7280)'
-  }
+  if (delta === null || delta === undefined || Math.abs(delta) < 1e-9) return 'var(--color-text-muted, #6b7280)'
   return delta > 0 ? 'var(--color-ok, #3fb950)' : 'var(--color-danger, #f85149)'
 }
 
 function trendIcon(delta: number | null) {
-  if (delta === null || delta === undefined || Math.abs(delta) < 1e-9) {
-    return Minus
-  }
+  if (delta === null || delta === undefined || Math.abs(delta) < 1e-9) return Minus
   return delta > 0 ? ArrowUpRight : ArrowDownRight
 }
 
 function coverageBarStyle(rate: number | null) {
-  return {
-    width: `${Math.max(0, Math.min(100, (rate ?? 0) * 100))}%`,
-    backgroundColor: rateColor(rate),
-  }
+  return { width: `${Math.max(0, Math.min(100, (rate ?? 0) * 100))}%`, backgroundColor: rateColor(rate) }
 }
 </script>
 
@@ -1161,40 +1321,11 @@ function coverageBarStyle(rate: number | null) {
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 }
 
-/* Lift every real child above the decorative aurora/grain layers. */
-.compare-root > :not(.compare-aurora):not(.compare-grain) {
-  position: relative;
-}
-
-/* Atmospheric mesh — a quiet night sky for an owl. */
-.compare-aurora {
-  background:
-    radial-gradient(120% 80% at 8% -10%, rgb(88 166 255 / 0.16), transparent 55%),
-    radial-gradient(90% 70% at 100% 0%, rgb(63 185 80 / 0.10), transparent 50%),
-    radial-gradient(80% 90% at 60% 120%, rgb(188 140 255 / 0.08), transparent 60%);
-  opacity: 0.9;
-}
-
-.compare-grain {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
-  opacity: 0.025;
-  mix-blend-mode: overlay;
-}
-
-/* Pulsing signal beacon in the eyebrow. */
 .compare-beacon {
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 9999px;
   background: #58a6ff;
-  box-shadow: 0 0 0 0 rgb(88 166 255 / 0.55);
-  animation: compare-pulse 2.4s ease-out infinite;
-}
-
-@keyframes compare-pulse {
-  0% { box-shadow: 0 0 0 0 rgb(88 166 255 / 0.5); }
-  70% { box-shadow: 0 0 0 8px rgb(88 166 255 / 0); }
-  100% { box-shadow: 0 0 0 0 rgb(88 166 255 / 0); }
 }
 
 .compare-ref {
@@ -1211,6 +1342,26 @@ function coverageBarStyle(rate: number | null) {
   text-shadow: 0 0 12px rgb(88 166 255 / 0.5);
 }
 
+.compare-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 9999px;
+}
+.compare-dot-base { background: #8b949e; box-shadow: 0 0 8px rgb(139 148 158 / 0.6); }
+.compare-dot-head { background: #58a6ff; box-shadow: 0 0 8px rgb(88 166 255 / 0.7); }
+
+.compare-swap:not(:disabled):hover {
+  box-shadow: 0 0 0 1px rgb(88 166 255 / 0.3);
+  transform: rotate(180deg);
+}
+.compare-swap {
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+.compare-swap:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .compare-select {
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -1220,34 +1371,10 @@ function coverageBarStyle(rate: number | null) {
   box-shadow: 0 0 0 1px rgb(88 166 255 / 0.25);
 }
 
-.compare-snapcard {
-  transition: border-color 0.2s ease, transform 0.2s ease;
+.compare-tab-active {
+  border-bottom-color: rgb(88 166 255 / 1);
+  font-weight: 600;
 }
-.compare-snapcard:hover {
-  border-color: rgb(88 166 255 / 0.35);
-  transform: translateY(-1px);
-}
-
-/* Underline-glide tabs. */
-.compare-tab {
-  position: relative;
-}
-.compare-tab::after {
-  content: '';
-  position: absolute;
-  left: 0.6rem;
-  right: 0.6rem;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, #58a6ff, #79c0ff);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.22s ease;
-}
-.compare-tab:hover::after { transform: scaleX(0.4); }
-.compare-tab-active::after { transform: scaleX(1); }
-.compare-tab-active { text-shadow: 0 0 16px rgb(88 166 255 / 0.25); }
 
 /* Instrument stat cards. */
 .compare-stat {
@@ -1321,7 +1448,6 @@ function coverageBarStyle(rate: number | null) {
     opacity: 1;
     animation: none;
   }
-  .compare-beacon,
   .compare-scan {
     animation: none;
   }

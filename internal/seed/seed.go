@@ -760,9 +760,10 @@ var historySteps = []struct {
 }
 
 // seedRepoHistory enriches a repo's main branch with coverage on the latest
-// snapshot, a backdated snapshot history (incl. a failed build), and — for the
-// first repo of each org — a release tag and an in-flight pull request. This is
-// what exercises the snapshot selector, coverage tab, trends, and PR views.
+// snapshot, a backdated snapshot history (incl. a failed build), a compareable
+// feature branch on every repo, and — for the first repo of each org — a release
+// tag plus an in-flight pull request. This is what exercises the snapshot
+// selector, coverage tab, trends, and compare / PR views.
 func seedRepoHistory(ctx context.Context, tx *sql.Tx, queries *store.Queries, p historyParams) error {
 	if len(p.repoSeed.components) == 0 {
 		return nil // unscanned repo (e.g. discovered-only) — leave empty
@@ -780,12 +781,44 @@ func seedRepoHistory(ctx context.Context, tx *sql.Tx, queries *store.Queries, p 
 	if err := seedMainBranchHistory(ctx, tx, queries, p); err != nil {
 		return err
 	}
+	if _, err := seedCompareBranch(ctx, tx, queries, p); err != nil {
+		return err
+	}
 
 	// Only the first repo of each org grows a release tag + an open PR.
 	if p.repoIndex != 0 {
 		return nil
 	}
 	return seedExtraRefs(ctx, tx, queries, p)
+}
+
+func seedCompareBranch(ctx context.Context, tx *sql.Tx, queries *store.Queries, p historyParams) (string, error) {
+	branchName := compareBranchName(p)
+	branchCommit := fakeHistorySHA(p.orgIndex, p.repoIndex, 41)
+	branchRef, err := queries.CreateRef(ctx, p.repoID, branchName, store.RefTypeBranch, nil, nil, &branchCommit)
+	if err != nil {
+		return "", err
+	}
+
+	branchCreatedAt := p.latestCreatedAt.Add(-90 * time.Minute)
+	branchSnapshotID, err := insertSnapshotRaw(ctx, tx, branchRef.ID, branchCommit, store.SnapshotStatusComplete, snapshotMeta{createdAt: branchCreatedAt})
+	if err != nil {
+		return "", err
+	}
+	if _, err := seedComponentsForSnapshot(ctx, tx, branchSnapshotID, p.repoSeed.components); err != nil {
+		return "", err
+	}
+	if err := seedFindings(ctx, queries, branchSnapshotID, compareBranchFindings(p.repoSeed, branchName)); err != nil {
+		return "", err
+	}
+	if err := seedCoverage(ctx, tx, branchSnapshotID, branchCreatedAt, coverageSpecForRepo(p.repoSeed, 0.81)); err != nil {
+		return "", err
+	}
+	if err := seedTests(ctx, tx, branchSnapshotID, branchCreatedAt, p.repoSeed, 2); err != nil {
+		return "", err
+	}
+
+	return branchName, nil
 }
 
 // seedMainBranchHistory creates the backdated snapshots on the main branch.
@@ -820,6 +853,7 @@ func seedMainBranchHistory(ctx context.Context, tx *sql.Tx, queries *store.Queri
 
 // seedExtraRefs adds a release tag and an in-flight pull request to a repo.
 func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p historyParams) error {
+	branchName := compareBranchName(p)
 	tagName := p.repoSeed.label
 	if tagName == "" || tagName == "initial" {
 		tagName = defaultSeedTag
@@ -841,21 +875,69 @@ func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p hi
 		return err
 	}
 
-	// In-flight pull request targeting main: its snapshot is still pending.
+	// Pull request targeting main, scanned (complete) so it produces a rich diff
+	// against the base branch: most findings carry over (unchanged), the last two
+	// base findings are gone (resolved), and the PR introduces two new findings.
+	// Coverage and tests also move, so the compare/PR-review POC shows changes on
+	// every dimension via `make start-quick`.
 	prCommit := fakeHistorySHA(p.orgIndex, p.repoIndex, 42)
 	prRef, err := queries.CreateRef(ctx, p.repoID, "refs/pull/42", store.RefTypePullRequest, nil, &p.branchRefID, &prCommit)
 	if err != nil {
 		return err
 	}
-	if err := setSeedPRMetadata(ctx, tx, prRef.ID, "open", "Add request rate limiting middleware", "feature/rate-limit"); err != nil {
+	if err := setSeedPRMetadata(ctx, tx, prRef.ID, "open", "Add request rate limiting middleware", branchName); err != nil {
 		return err
 	}
-	prSnapshotID, err := insertSnapshotRaw(ctx, tx, prRef.ID, prCommit, store.SnapshotStatusPending, snapshotMeta{createdAt: p.latestCreatedAt.Add(-2 * time.Hour)})
+	prCreatedAt := p.latestCreatedAt.Add(-2 * time.Hour)
+	prSnapshotID, err := insertSnapshotRaw(ctx, tx, prRef.ID, prCommit, store.SnapshotStatusComplete, snapshotMeta{createdAt: prCreatedAt})
 	if err != nil {
 		return err
 	}
-	_, err = seedComponentsForSnapshot(ctx, tx, prSnapshotID, p.repoSeed.components)
-	return err
+	if _, err := seedComponentsForSnapshot(ctx, tx, prSnapshotID, p.repoSeed.components); err != nil {
+		return err
+	}
+
+	prFindings := append([]seededFinding{}, subsetFindings(p.repoSeed.findings, len(p.repoSeed.findings)-2)...)
+	prFindings = append(prFindings,
+		finding("gosec", "G115", store.SeverityLevelHigh, "open", "internal/middleware/ratelimit.go", 64, 64, "Integer overflow converting the rate window to int32 in the new limiter.", map[string]any{"introduced_by": "pr-42"}),
+		finding("semgrep", "missing-burst-ceiling", store.SeverityLevelMedium, "open", "internal/middleware/ratelimit.go", 88, 95, "New rate limiter lacks an upper burst ceiling, allowing short request spikes.", map[string]any{"surface": "middleware"}),
+	)
+	if err := seedFindings(ctx, queries, prSnapshotID, prFindings); err != nil {
+		return err
+	}
+	// Base latest coverage is 0.78; the PR raises it to 0.83 (both sides present).
+	if err := seedCoverage(ctx, tx, prSnapshotID, prCreatedAt, coverageSpecForRepo(p.repoSeed, 0.83)); err != nil {
+		return err
+	}
+	// Base latest has 1 failing test; the PR fixes it (status change in the diff).
+	return seedTests(ctx, tx, prSnapshotID, prCreatedAt, p.repoSeed, 0)
+}
+
+func compareBranchName(p historyParams) string {
+	if p.repoIndex == 0 {
+		return "feature/rate-limit"
+	}
+	return "feature/compare-demo"
+}
+
+func compareBranchFindings(repoSeed seededRepo, branchName string) []seededFinding {
+	keep := len(repoSeed.findings) - 1
+	if keep <= 0 {
+		keep = len(repoSeed.findings)
+	}
+	findings := append([]seededFinding{}, subsetFindings(repoSeed.findings, keep)...)
+	findings = append(findings, finding(
+		"semgrep",
+		"compare-demo-regression",
+		store.SeverityLevelMedium,
+		"open",
+		fmt.Sprintf("internal/compare/%s.go", repoSeed.slug),
+		17,
+		25,
+		fmt.Sprintf("Compare demo branch %s introduces a regression for %s.", branchName, repoSeed.slug),
+		map[string]any{"surface": "compare-demo", "branch": branchName},
+	))
+	return findings
 }
 
 type seededTestCase struct {

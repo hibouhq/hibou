@@ -482,6 +482,13 @@ export interface PRSummary {
     reasons: string[]
   } | null
   summary: RefSummary
+  component_diff?: {
+    added: ComponentEntry[]
+    removed: ComponentEntry[]
+    unchanged: number
+  } | null
+  coverage_diff?: CoverageDiff | null
+  test_diff?: TestDiff | null
 }
 
 export interface RepoDashboardEntry {
@@ -902,8 +909,15 @@ class ApiClient {
     repoSlug: string,
     base: string,
     head: string,
+    opts?: { baseSnapshot?: string; headSnapshot?: string },
   ) {
     const query = new URLSearchParams({ base, head })
+    if (opts?.baseSnapshot) {
+      query.set('base_snapshot', opts.baseSnapshot)
+    }
+    if (opts?.headSnapshot) {
+      query.set('head_snapshot', opts.headSnapshot)
+    }
 
     return this.request<ApiResponse<CompareResult>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/compare?${query.toString()}`,

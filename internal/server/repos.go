@@ -56,12 +56,15 @@ func (r *updateRepoRequest) UnmarshalJSON(data []byte) error {
 }
 
 type prSummaryResponse struct {
-	Ref              store.EnhancedRef  `json:"ref"`
-	PRSnapshotID     *uuid.UUID         `json:"pr_snapshot_id,omitempty"`
-	TargetSnapshotID *uuid.UUID         `json:"target_snapshot_id,omitempty"`
-	Delta            *delta.DeltaResult `json:"delta,omitempty"`
-	Gate             *delta.GateResult  `json:"gate"`
-	Summary          refSummaryResponse `json:"summary"`
+	Ref              store.EnhancedRef        `json:"ref"`
+	PRSnapshotID     *uuid.UUID               `json:"pr_snapshot_id,omitempty"`
+	TargetSnapshotID *uuid.UUID               `json:"target_snapshot_id,omitempty"`
+	Delta            *delta.DeltaResult       `json:"delta,omitempty"`
+	Gate             *delta.GateResult        `json:"gate"`
+	Summary          refSummaryResponse       `json:"summary"`
+	ComponentDiff    *componentDiffResponse   `json:"component_diff,omitempty"`
+	CoverageDiff     *comparison.CoverageDiff `json:"coverage_diff,omitempty"`
+	TestDiff         *comparison.TestDiff     `json:"test_diff,omitempty"`
 }
 
 type refSnapshotResponse struct {
@@ -679,8 +682,44 @@ func (s *Server) handleGetPRSummary(w http.ResponseWriter, r *http.Request) {
 	if !s.populatePRSummaryDelta(w, r, response, org, repo, prSnapshot, targetSnapshot) {
 		return
 	}
+	if !s.populatePRSummaryDiffs(w, r, response, prSnapshot, targetSnapshot) {
+		return
+	}
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+// resolveCompareSide resolves one side of a comparison. A snapshot ID (when
+// given) selects an exact snapshot; otherwise the ref's latest snapshot is used.
+func (s *Server) resolveCompareSide(r *http.Request, w http.ResponseWriter, repo *store.Repository, refName, snapshotID, side string) (*store.Ref, *store.Snapshot, bool) {
+	if snapshotID != "" {
+		snapshot, status, message := s.loadSnapshotForRepoByID(r, repo, snapshotID)
+		if status != 0 {
+			api.JSONError(w, status, message)
+			return nil, nil, false
+		}
+		ref, err := s.queries.GetRefByID(r.Context(), snapshot.RefID)
+		if err != nil || ref == nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to load "+side+" ref")
+			return nil, nil, false
+		}
+		return ref, snapshot, true
+	}
+
+	ref, snapshot, err := s.resolveSnapshotForRepo(r, repo, refName)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load "+side+" ref")
+		return nil, nil, false
+	}
+	if ref == nil {
+		api.JSONError(w, http.StatusNotFound, side+" ref not found")
+		return nil, nil, false
+	}
+	if snapshot == nil {
+		api.JSONError(w, http.StatusNotFound, side+" ref has no snapshots")
+		return nil, nil, false
+	}
+	return ref, snapshot, true
 }
 
 func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
@@ -695,36 +734,19 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 
 	baseName := r.URL.Query().Get("base")
 	headName := r.URL.Query().Get("head")
-	if baseName == "" || headName == "" {
-		api.JSONError(w, http.StatusBadRequest, "base and head refs are required")
+	baseSnapshotID := r.URL.Query().Get("base_snapshot")
+	headSnapshotID := r.URL.Query().Get("head_snapshot")
+	if (baseName == "" && baseSnapshotID == "") || (headName == "" && headSnapshotID == "") {
+		api.JSONError(w, http.StatusBadRequest, "base and head (ref or snapshot) are required")
 		return
 	}
 
-	baseRef, baseSnapshot, err := s.resolveSnapshotForRepo(r, repo, baseName)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load base ref")
+	baseRef, baseSnapshot, ok := s.resolveCompareSide(r, w, repo, baseName, baseSnapshotID, "base")
+	if !ok {
 		return
 	}
-	if baseRef == nil {
-		api.JSONError(w, http.StatusNotFound, "base ref not found")
-		return
-	}
-	if baseSnapshot == nil {
-		api.JSONError(w, http.StatusNotFound, "base ref has no snapshots")
-		return
-	}
-
-	headRef, headSnapshot, err := s.resolveSnapshotForRepo(r, repo, headName)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load head ref")
-		return
-	}
-	if headRef == nil {
-		api.JSONError(w, http.StatusNotFound, "head ref not found")
-		return
-	}
-	if headSnapshot == nil {
-		api.JSONError(w, http.StatusNotFound, "head ref has no snapshots")
+	headRef, headSnapshot, ok := s.resolveCompareSide(r, w, repo, headName, headSnapshotID, "head")
+	if !ok {
 		return
 	}
 
@@ -969,6 +991,44 @@ func (s *Server) populatePRSummaryDelta(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
+// populatePRSummaryDiffs enriches the PR summary with component, coverage, and
+// test diffs between the merge target snapshot (base) and the PR snapshot (head),
+// mirroring the ref-compare view so the PR review surfaces the full quality delta.
+func (s *Server) populatePRSummaryDiffs(w http.ResponseWriter, r *http.Request, response *prSummaryResponse, prSnapshot, targetSnapshot *store.Snapshot) bool {
+	if prSnapshot == nil || targetSnapshot == nil {
+		return true
+	}
+
+	baseComponents, err := s.queries.ListComponentsBySnapshotWithVulns(r.Context(), targetSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load target components")
+		return false
+	}
+	headComponents, err := s.queries.ListComponentsBySnapshotWithVulns(r.Context(), prSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request components")
+		return false
+	}
+	componentDiff := buildComponentDiff(baseComponents, headComponents)
+	response.ComponentDiff = &componentDiff
+
+	coverageDiff, err := s.buildSnapshotCoverageDiff(r.Context(), targetSnapshot.ID, prSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to compare pull request coverage")
+		return false
+	}
+	response.CoverageDiff = coverageDiff
+
+	testDiff, err := s.buildSnapshotTestDiff(r.Context(), targetSnapshot.ID, prSnapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to compare pull request test results")
+		return false
+	}
+	response.TestDiff = testDiff
+
+	return true
+}
+
 func parseTrendQuery(r *http.Request, repo *store.Repository) (*trendQuery, error) {
 	query := &trendQuery{refName: r.URL.Query().Get("ref")}
 	if query.refName == "" {
@@ -1160,7 +1220,12 @@ func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithV
 		headByKey[componentDiffKey(entry)] = entry
 	}
 
-	result := componentDiffResponse{}
+	// Initialize as empty (not nil) so the JSON arrays are [] rather than null,
+	// which the frontend maps over directly.
+	result := componentDiffResponse{
+		Added:   []componentEntryResponse{},
+		Removed: []componentEntryResponse{},
+	}
 	for key, entry := range headByKey {
 		if _, ok := baseByKey[key]; ok {
 			result.Unchanged++

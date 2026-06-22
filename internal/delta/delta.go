@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -88,6 +89,10 @@ func (s *Service) ComputeDelta(ctx context.Context, prSnapshotID, targetSnapshot
 			continue
 		}
 		resolved = append(resolved, vuln)
+	}
+	// Always emit empty (not nil) slices so the JSON arrays are [] not null.
+	if filteredNewVulns == nil {
+		filteredNewVulns = []store.Vulnerability{}
 	}
 	result.New = filteredNewVulns
 	result.Resolved = resolved
@@ -245,12 +250,51 @@ func uniqueVulnerabilities(vulns []store.Vulnerability) map[string]store.Vulnera
 	return set
 }
 
+// vulnerabilityKey derives a key that is stable for the same finding across
+// snapshots. A scanner-provided fingerprint wins; otherwise we build one from
+// attributes that don't change snapshot-to-snapshot. The per-snapshot ID must
+// never be used as the key — it differs every snapshot, which would make every
+// finding read as both "new" and "resolved" in a diff.
 func vulnerabilityKey(vuln store.Vulnerability) string {
 	if trimmed := strings.TrimSpace(vuln.Fingerprint); trimmed != "" {
 		return trimmed
+	}
+
+	parts := []string{
+		strings.TrimSpace(vuln.Type),
+		strings.TrimSpace(vuln.ScannerName),
+		strings.TrimSpace(vuln.ScannerExternalID),
+		strings.TrimSpace(string(vuln.PrimaryIdentifier)),
+		strings.TrimSpace(ptrString(vuln.ComponentPurl)),
+		strings.TrimSpace(ptrString(vuln.FilePath)),
+	}
+	if vuln.StartLine != nil {
+		parts = append(parts, strconv.FormatInt(int64(*vuln.StartLine), 10))
+	}
+
+	key := strings.Join(nonEmptyStrings(parts), "|")
+	if key != "" {
+		return key
 	}
 	if vuln.ID != uuid.Nil {
 		return vuln.ID.String()
 	}
 	return ""
+}
+
+func ptrString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := values[:0:0]
+	for _, v := range values {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

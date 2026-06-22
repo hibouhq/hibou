@@ -60,11 +60,13 @@ setup-full: up-all ## Full setup with Forgejo OAuth (for OAuth testing)
 	@./scripts/setup-dev.sh
 
 .PHONY: start
+start: export HIBOU_DEVELOPMENT = true
 start: setup-full build-frontend ## One command: full setup with real data + start the app
 	@./scripts/seed-real.sh
 	@$(MAKE) dev
 
 .PHONY: start-quick
+start-quick: export HIBOU_DEVELOPMENT = true
 start-quick: setup build-frontend ## Quick start with fake seed data
 	@$(MAKE) dev
 

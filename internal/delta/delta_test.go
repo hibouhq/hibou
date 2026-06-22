@@ -101,6 +101,49 @@ func TestComputeDeltaEmptySnapshots(t *testing.T) {
 	}
 }
 
+// SAST findings (gosec) carry no scanner fingerprint, so before the stable
+// composite key they were matched by the per-snapshot ID and every finding read
+// as both new and resolved. Identical findings across snapshots must now match.
+func TestComputeDeltaMatchesFingerprintlessFindingsAcrossSnapshots(t *testing.T) {
+	mock := newMockStore()
+	prSnapshotID := uuid.New()
+	targetSnapshotID := uuid.New()
+
+	sast := func(line int32) storepkg.Vulnerability {
+		file := "internal/store/org_members.go"
+		return storepkg.Vulnerability{
+			ID:                uuid.New(), // differs every snapshot — must NOT be the key
+			Type:              "sast",
+			ScannerName:       "gosec",
+			ScannerExternalID: "G115",
+			FilePath:          &file,
+			StartLine:         &line,
+			Severity:          storepkg.SeverityLevelHigh,
+			// Fingerprint intentionally empty.
+		}
+	}
+
+	// Same finding at the same location in both snapshots, plus one extra line
+	// per side to verify genuine new/resolved still work.
+	mock.vulnsBySnapshot[targetSnapshotID] = []storepkg.Vulnerability{sast(84), sast(100)}
+	mock.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{sast(84), sast(200)}
+
+	service := NewService(mock, zerolog.Nop())
+	result, err := service.ComputeDelta(context.Background(), prSnapshotID, targetSnapshotID)
+	if err != nil {
+		t.Fatalf("ComputeDelta returned error: %v", err)
+	}
+	if result.Unchanged != 1 {
+		t.Fatalf("unchanged = %d, want 1 (the line-84 finding should match)", result.Unchanged)
+	}
+	if len(result.New) != 1 || result.New[0].StartLine == nil || *result.New[0].StartLine != 200 {
+		t.Fatalf("new = %#v, want only the line-200 finding", result.New)
+	}
+	if len(result.Resolved) != 1 || result.Resolved[0].StartLine == nil || *result.Resolved[0].StartLine != 100 {
+		t.Fatalf("resolved = %#v, want only the line-100 finding", result.Resolved)
+	}
+}
+
 func TestComputeDeltaDetectsNewAndResolvedVulns(t *testing.T) {
 	mock := newMockStore()
 	prSnapshotID := uuid.New()

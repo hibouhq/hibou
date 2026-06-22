@@ -2,9 +2,11 @@
   <div
     ref="rootRef"
     class="relative flex flex-wrap items-center gap-3"
+    :class="block ? 'w-full' : ''"
   >
     <button
       class="inline-flex items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-200 transition hover:border-accent/50 hover:text-white"
+      :class="block ? 'w-full justify-between' : ''"
       type="button"
       @click.stop="isOpen = !isOpen"
     >
@@ -12,11 +14,17 @@
         :is="selectedIcon"
         class="h-4 w-4 shrink-0 text-gray-400"
       />
-      <span class="max-w-[12rem] truncate">{{ selectedLabel }}</span>
-      <ChevronDown class="h-3.5 w-3.5 text-gray-400" />
+      <span
+        class="truncate"
+        :class="block ? 'flex-1 text-left' : 'max-w-[12rem]'"
+      >{{ selectedLabel }}</span>
+      <ChevronDown class="h-3.5 w-3.5 shrink-0 text-gray-400" />
     </button>
 
-    <div class="flex items-center gap-3 text-xs text-gray-400">
+    <div
+      v-if="!compact"
+      class="flex items-center gap-3 text-xs text-gray-400"
+    >
       <button
         type="button"
         class="flex items-center gap-1 rounded transition hover:text-white"
@@ -49,7 +57,8 @@
 
     <div
       v-if="isOpen"
-      class="absolute left-0 top-[calc(100%+0.5rem)] z-30 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-surface-border bg-surface-overlay shadow-2xl"
+      class="absolute top-[calc(100%+0.5rem)] z-50 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-surface-border bg-surface-overlay shadow-2xl"
+      :class="align === 'right' ? 'right-0' : 'left-0'"
     >
       <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-3">
         <h3 class="text-sm font-medium text-gray-100">
@@ -186,6 +195,9 @@ const props = defineProps<{
   selectedRefName: string
   defaultBranch?: string
   loading?: boolean
+  compact?: boolean
+  align?: 'left' | 'right'
+  block?: boolean
 }>()
 
 const emit = defineEmits<{

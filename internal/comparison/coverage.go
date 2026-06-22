@@ -74,7 +74,7 @@ func BuildCoverageDiff(base, head CoverageInput) *CoverageDiff {
 		return nil
 	}
 
-	diff := &CoverageDiff{}
+	diff := &CoverageDiff{Files: []CoverageFileDelta{}}
 	if base.HasData {
 		diff.Base = coverageTotalsFromInput(base)
 	}
