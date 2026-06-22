@@ -1216,10 +1216,6 @@ function snapshotSecondaryLine(snapshot: Snapshot) {
   return details.join(' · ')
 }
 
-function snapshotTitle(snapshot: Snapshot, prefix: string) {
-  return `${prefix}\n${snapshotStatusLabel(snapshot)}\nCommit ${snapshot.commit_sha.slice(0, 12)}\n${formatDateTime(snapshot.created_at)}`
-}
-
 function resolveSelectedSnapshot(snapshots: Snapshot[], id: string) {
   if (id) {
     const found = snapshots.find((s) => s.id === id)
