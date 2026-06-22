@@ -55,16 +55,12 @@ func (r *updateRepoRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type prSummaryResponse struct {
-	Ref              store.EnhancedRef        `json:"ref"`
-	PRSnapshotID     *uuid.UUID               `json:"pr_snapshot_id,omitempty"`
-	TargetSnapshotID *uuid.UUID               `json:"target_snapshot_id,omitempty"`
-	Delta            *delta.DeltaResult       `json:"delta,omitempty"`
-	Gate             *delta.GateResult        `json:"gate"`
-	Summary          refSummaryResponse       `json:"summary"`
-	ComponentDiff    *componentDiffResponse   `json:"component_diff,omitempty"`
-	CoverageDiff     *comparison.CoverageDiff `json:"coverage_diff,omitempty"`
-	TestDiff         *comparison.TestDiff     `json:"test_diff,omitempty"`
+type comparePRInfo struct {
+	Number       int    `json:"number"`
+	Title        string `json:"title"`
+	SourceBranch string `json:"source_branch"`
+	TargetBranch string `json:"target_branch"`
+	State        string `json:"state"`
 }
 
 type refSnapshotResponse struct {
@@ -95,6 +91,8 @@ type compareResultResponse struct {
 	ComponentDiff componentDiffResponse    `json:"component_diff"`
 	CoverageDiff  *comparison.CoverageDiff `json:"coverage_diff"`
 	TestDiff      *comparison.TestDiff     `json:"test_diff"`
+	Gate          *delta.GateResult        `json:"gate,omitempty"`
+	PR            *comparePRInfo           `json:"pr,omitempty"`
 }
 
 type trendPointResponse struct {
@@ -659,36 +657,6 @@ func (s *Server) handleListSnapshots(w http.ResponseWriter, r *http.Request) {
 	api.JSONList(w, snapshots, pagination.Page, pagination.PerPage, total)
 }
 
-func (s *Server) handleGetPRSummary(w http.ResponseWriter, r *http.Request) {
-	org, repo, ok := s.loadAuthorizedRepo(r, w)
-	if !ok {
-		return
-	}
-
-	number, ok := parsePullRequestNumber(chi.URLParam(r, "number"))
-	if !ok {
-		api.JSONError(w, http.StatusBadRequest, "invalid pull request number")
-		return
-	}
-
-	ref, prSnapshot, targetRef, targetSnapshot, ok := s.loadPRSummarySnapshots(w, r, repo, number)
-	if !ok {
-		return
-	}
-	response := s.newPRSummaryResponse(ref, targetRef, prSnapshot)
-	if !s.populatePRSummary(w, r, response, prSnapshot, targetSnapshot) {
-		return
-	}
-	if !s.populatePRSummaryDelta(w, r, response, org, repo, prSnapshot, targetSnapshot) {
-		return
-	}
-	if !s.populatePRSummaryDiffs(w, r, response, prSnapshot, targetSnapshot) {
-		return
-	}
-
-	api.JSON(w, http.StatusOK, response)
-}
-
 // resolveCompareSide resolves one side of a comparison. A snapshot ID (when
 // given) selects an exact snapshot; otherwise the ref's latest snapshot is used.
 func (s *Server) resolveCompareSide(r *http.Request, w http.ResponseWriter, repo *store.Repository, refName, snapshotID, side string) (*store.Ref, *store.Snapshot, bool) {
@@ -723,7 +691,7 @@ func (s *Server) resolveCompareSide(r *http.Request, w http.ResponseWriter, repo
 }
 
 func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
-	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
 		return
 	}
@@ -799,6 +767,28 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 		TestDiff:      testDiff,
 	}
 
+	// Auto-detect PR: if head ref is a pull request, enrich with gate + PR metadata
+	if headRef.RefType == store.RefTypePullRequest {
+		weaknessGate := s.resolveRepoWeaknessGate(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, baseSnapshot.ID)
+		gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, deltaResult, weaknessGate)
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
+			return
+		}
+		response.Gate = gate
+		prNum := extractPRNumberFromRefName(headRef.Name)
+		if headRef.PrNumber != nil {
+			prNum, _ = strconv.Atoi(*headRef.PrNumber)
+		}
+		response.PR = &comparePRInfo{
+			Number:       prNum,
+			Title:        headRef.PrTitle,
+			SourceBranch: headRef.PrSourceBranch,
+			TargetBranch: baseRef.Name,
+			State:        optionalStringValue(headRef.PrState),
+		}
+	}
+
 	api.JSON(w, http.StatusOK, response)
 }
 
@@ -863,170 +853,20 @@ func parsePullRequestNumber(raw string) (int, bool) {
 	return number, err == nil && number > 0
 }
 
-func (s *Server) loadPRSummarySnapshots(w http.ResponseWriter, r *http.Request, repo *store.Repository, number int) (*store.Ref, *store.Snapshot, *store.Ref, *store.Snapshot, bool) {
-	ref, ok := s.loadPullRequestRef(w, r, repo, number)
-	if !ok {
-		return nil, nil, nil, nil, false
-	}
-	prSnapshot, err := s.queries.GetLatestSnapshotByRef(r.Context(), ref.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request snapshot")
-		return nil, nil, nil, nil, false
-	}
-	targetRef, targetSnapshot, ok := s.loadPRTargetSnapshot(w, r, ref)
-	if !ok {
-		return nil, nil, nil, nil, false
-	}
-	return ref, prSnapshot, targetRef, targetSnapshot, true
-}
-
-func (s *Server) loadPullRequestRef(w http.ResponseWriter, r *http.Request, repo *store.Repository, number int) (*store.Ref, bool) {
-	forgeType := repo.Provider
-	if provider, ok := s.forges[repo.Provider]; ok && provider != nil {
-		forgeType = provider.ID()
-	}
-	refName := pullRequestRefName(forgeType, number)
-	ref, err := s.queries.GetRefByRepoAndName(r.Context(), repo.ID, refName, store.RefTypePullRequest)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request reference")
-		return nil, false
-	}
-	if ref == nil {
-		api.JSONError(w, http.StatusNotFound, "pull request not found")
-		return nil, false
-	}
-	return ref, true
-}
-
-func (s *Server) loadPRTargetSnapshot(w http.ResponseWriter, r *http.Request, ref *store.Ref) (*store.Ref, *store.Snapshot, bool) {
-	if ref.MergeTargetRefID == nil {
-		return nil, nil, true
-	}
-	targetRef, err := s.queries.GetRefByID(r.Context(), *ref.MergeTargetRefID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load target reference")
-		return nil, nil, false
-	}
-	if targetRef == nil {
-		return nil, nil, true
-	}
-	targetSnapshot, err := s.queries.GetLatestSnapshotByRef(r.Context(), targetRef.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load target snapshot")
-		return nil, nil, false
-	}
-	return targetRef, targetSnapshot, true
-}
-
-func (s *Server) newPRSummaryResponse(ref *store.Ref, targetRef *store.Ref, prSnapshot *store.Snapshot) *prSummaryResponse {
-	var targetRefName *string
-	if targetRef != nil {
-		targetRefName = &targetRef.Name
-	}
-	responseRef := store.EnhancedRef{
-		ID:                 ref.ID,
-		RepoID:             ref.RepoID,
-		Name:               ref.Name,
-		RefType:            ref.RefType,
-		ProviderID:         ref.ProviderID,
-		MergeTargetRefID:   ref.MergeTargetRefID,
-		MergeTargetRefName: targetRefName,
-		LatestCommitSHA:    ref.LatestCommitSHA,
-		PrNumber:           ref.PrNumber,
-		PrState:            ref.PrState,
-		PrTitle:            ref.PrTitle,
-		PrSourceBranch:     ref.PrSourceBranch,
-		PrMergedAt:         ref.PrMergedAt,
-		PrClosedAt:         ref.PrClosedAt,
-		CreatedAt:          ref.CreatedAt,
-		UpdatedAt:          ref.UpdatedAt,
-	}
-	if prSnapshot != nil {
-		responseRef.LatestSnapshotID = &prSnapshot.ID
-		status := string(prSnapshot.Status)
-		responseRef.LatestSnapshotStatus = &status
-		responseRef.LatestSnapshotDate = &prSnapshot.CreatedAt
-	}
-	response := &prSummaryResponse{Ref: responseRef}
-	if prSnapshot == nil {
-		status := "no_data"
-		response.Summary.SnapshotStatus = &status
-	}
-	return response
-}
-
-func (s *Server) populatePRSummary(w http.ResponseWriter, r *http.Request, response *prSummaryResponse, prSnapshot, targetSnapshot *store.Snapshot) bool {
-	if prSnapshot != nil {
-		response.PRSnapshotID = &prSnapshot.ID
-		summary, err := s.buildRefSummary(r, prSnapshot)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to build pull request summary")
-			return false
+// extractPRNumberFromRefName parses the number from refs/pull/N or refs/merge-requests/N.
+func extractPRNumberFromRefName(name string) int {
+	for _, prefix := range []string{"refs/pull/", "refs/merge-requests/"} {
+		if strings.HasPrefix(name, prefix) {
+			rest := strings.TrimPrefix(name, prefix)
+			if idx := strings.IndexByte(rest, '/'); idx > 0 {
+				rest = rest[:idx]
+			}
+			if n, err := strconv.Atoi(rest); err == nil {
+				return n
+			}
 		}
-		response.Summary = summary
 	}
-	if targetSnapshot != nil {
-		response.TargetSnapshotID = &targetSnapshot.ID
-	}
-	return true
-}
-
-func (s *Server) populatePRSummaryDelta(w http.ResponseWriter, r *http.Request, response *prSummaryResponse, org *store.Organization, repo *store.Repository, prSnapshot, targetSnapshot *store.Snapshot) bool {
-	if s.deltaSvc == nil || prSnapshot == nil || targetSnapshot == nil {
-		return true
-	}
-	deltaResult, err := s.deltaSvc.ComputeDelta(r.Context(), prSnapshot.ID, targetSnapshot.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to compute pull request delta")
-		return false
-	}
-	response.Delta = deltaResult
-	weaknessGate := s.resolveRepoWeaknessGate(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshot.ID)
-	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, deltaResult, weaknessGate)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
-		return false
-	}
-	response.Gate = gate
-	return true
-}
-
-// populatePRSummaryDiffs enriches the PR summary with component, coverage, and
-// test diffs between the merge target snapshot (base) and the PR snapshot (head),
-// mirroring the ref-compare view so the PR review surfaces the full quality delta.
-func (s *Server) populatePRSummaryDiffs(w http.ResponseWriter, r *http.Request, response *prSummaryResponse, prSnapshot, targetSnapshot *store.Snapshot) bool {
-	if prSnapshot == nil || targetSnapshot == nil {
-		return true
-	}
-
-	baseComponents, err := s.queries.ListComponentsBySnapshotWithVulns(r.Context(), targetSnapshot.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load target components")
-		return false
-	}
-	headComponents, err := s.queries.ListComponentsBySnapshotWithVulns(r.Context(), prSnapshot.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request components")
-		return false
-	}
-	componentDiff := buildComponentDiff(baseComponents, headComponents)
-	response.ComponentDiff = &componentDiff
-
-	coverageDiff, err := s.buildSnapshotCoverageDiff(r.Context(), targetSnapshot.ID, prSnapshot.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to compare pull request coverage")
-		return false
-	}
-	response.CoverageDiff = coverageDiff
-
-	testDiff, err := s.buildSnapshotTestDiff(r.Context(), targetSnapshot.ID, prSnapshot.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to compare pull request test results")
-		return false
-	}
-	response.TestDiff = testDiff
-
-	return true
+	return 0
 }
 
 func parseTrendQuery(r *http.Request, repo *store.Repository) (*trendQuery, error) {

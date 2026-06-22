@@ -74,6 +74,30 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshot
 	return i, err
 }
 
+const getSnapshotArtifactByID = `-- name: GetSnapshotArtifactByID :one
+SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename FROM snapshot_artifacts
+WHERE id = $1
+`
+
+func (q *Queries) GetSnapshotArtifactByID(ctx context.Context, id uuid.UUID) (SnapshotArtifact, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotArtifactByID, id)
+	var i SnapshotArtifact
+	err := row.Scan(
+		&i.ID,
+		&i.SnapshotID,
+		&i.Kind,
+		&i.Format,
+		&i.ToolName,
+		&i.ObjectKey,
+		&i.Sha256,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.CreatedAt,
+		&i.Filename,
+	)
+	return i, err
+}
+
 const listSnapshotArtifactObjectKeys = `-- name: ListSnapshotArtifactObjectKeys :many
 SELECT object_key FROM snapshot_artifacts
 WHERE snapshot_id = $1
@@ -88,11 +112,11 @@ func (q *Queries) ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var object_key string
-		if err := rows.Scan(&object_key); err != nil {
+		var objectKey string
+		if err := rows.Scan(&objectKey); err != nil {
 			return nil, err
 		}
-		items = append(items, object_key)
+		items = append(items, objectKey)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -120,11 +144,11 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByOrg(ctx context.Context, orgID
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var object_key string
-		if err := rows.Scan(&object_key); err != nil {
+		var objectKey string
+		if err := rows.Scan(&objectKey); err != nil {
 			return nil, err
 		}
-		items = append(items, object_key)
+		items = append(items, objectKey)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -151,11 +175,11 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repo
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var object_key string
-		if err := rows.Scan(&object_key); err != nil {
+		var objectKey string
+		if err := rows.Scan(&objectKey); err != nil {
 			return nil, err
 		}
-		items = append(items, object_key)
+		items = append(items, objectKey)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

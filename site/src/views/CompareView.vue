@@ -1,120 +1,39 @@
 <template>
   <div class="px-4 pt-5">
-    <div class="compare-rise flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <p class="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-gray-500">
+    <div class="compare-rise relative">
+      <p class="mb-1 flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-gray-500">
         <span class="compare-beacon" />
         <span class="compare-display">Compare</span>
       </p>
-      <h1 class="compare-display text-xl font-semibold tracking-tight text-white sm:text-2xl">
-        <span class="compare-ref">{{ baseLabel }}</span>
-        <span class="compare-arrow">→</span>
-        <span class="compare-ref compare-ref-head">{{ headLabel }}</span>
-      </h1>
+      <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 lg:gap-2">
+        <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
+          <component :is="headRefIcon" class="h-5 w-5 shrink-0 text-gray-400" />
+          <span class="compare-ref min-w-0 truncate">{{ headLabel }}</span>
+        </span>
+        <span class="compare-arrow flex h-10 w-10 items-center justify-center text-2xl">→</span>
+        <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
+          <component :is="baseRefIcon" class="h-5 w-5 shrink-0 text-gray-400" />
+          <span class="compare-ref compare-ref-head min-w-0 truncate">{{ baseLabel }}</span>
+        </span>
+      </div>
+      <span
+        v-if="gateState"
+        class="absolute right-0 top-1/2 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium"
+        :class="gateState.badgeClass"
+      >
+        <span class="h-1.5 w-1.5 rounded-full" :class="gateState.dotClass" />
+        {{ gateState.label }}
+      </span>
     </div>
 
-    <div class="compare-rise relative z-20 mt-4 border-b border-surface-border pb-3">
+    <div
+      class="compare-rise relative z-20 mt-4 border-b border-surface-border pb-3"
+    >
       <div class="compare-comparator grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-start lg:gap-2">
         <div class="min-w-0 flex-1 space-y-2">
           <span class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
-            <span class="compare-dot compare-dot-base" />
-            Base <span class="text-gray-600">(from)</span>
-          </span>
-          <BranchPRSelector
-            :refs="refs"
-            :selected-ref-name="baseRef"
-            :default-branch="repo?.default_branch"
-            :loading="loadingRefs"
-            compact
-            block
-            @select="selectBase"
-          />
-          <div
-            v-if="baseSnapshots.length > 0"
-            class="relative"
-          >
-            <button
-              type="button"
-              class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
-              aria-label="Base snapshot"
-              @click.stop="baseSnapshotOpen = !baseSnapshotOpen"
-            >
-              <span
-                v-if="selectedBaseSnapshot"
-                class="inline-block h-2 w-2 shrink-0 rounded-full"
-                :class="snapshotDotClass(selectedBaseSnapshot)"
-              />
-              <span class="flex-1 truncate">{{ baseSnapshotId ? snapshotOptionLabel(resolveSelectedSnapshot(baseSnapshots, baseSnapshotId) ?? baseSnapshots[0]) : 'Latest snapshot' }}</span>
-              <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
-            </button>
-            <div
-              v-if="baseSnapshotOpen"
-              class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
-            >
-              <button
-                type="button"
-                class="w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                :class="!baseSnapshotId ? 'text-accent font-medium' : 'text-gray-300'"
-                @click="baseSnapshotId = ''; baseSnapshotOpen = false"
-              >
-                Latest snapshot
-              </button>
-              <button
-                v-for="snapshot in baseSnapshots"
-                :key="snapshot.id"
-                type="button"
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                :class="baseSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
-                @click="baseSnapshotId = snapshot.id; baseSnapshotOpen = false"
-              >
-                <span
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="snapshotDotClass(snapshot)"
-                />
-                <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
-                <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
-                <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
-                <span
-                  v-if="snapshot.run_number"
-                  class="text-gray-500"
-                >#{{ snapshot.run_number }}</span>
-                <span
-                  v-if="snapshot.tag"
-                  class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
-                >{{ snapshot.tag }}</span>
-              </button>
-            </div>
-          </div>
-
-          <div
-            v-if="selectedBaseSnapshot"
-            class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
-          >
-            <span
-              class="rounded-full px-2 py-0.5 font-medium"
-              :class="snapshotBadgeClass(selectedBaseSnapshot)"
-            >
-              {{ snapshotStatusLabel(selectedBaseSnapshot) }}
-            </span>
-            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedBaseSnapshot) }}</span>
-            <span>{{ snapshotSecondaryLine(selectedBaseSnapshot) }}</span>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          class="compare-swap mx-auto my-1 inline-flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/60 hover:text-white"
-          :disabled="!baseRef || !headRef"
-          title="Swap base and head"
-          aria-label="Swap base and head"
-          @click="swapRefs"
-        >
-          <ArrowLeftRight class="h-4 w-4" />
-        </button>
-
-        <div class="min-w-0 flex-1 space-y-2">
-          <span class="flex items-center justify-end gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
-            Head <span class="text-gray-600">(to)</span>
             <span class="compare-dot compare-dot-head" />
+            Head <span class="text-gray-600">(from)</span>
           </span>
           <BranchPRSelector
             :refs="refs"
@@ -123,7 +42,6 @@
             :loading="loadingRefs"
             compact
             block
-            align="right"
             @select="selectHead"
           />
           <div
@@ -146,7 +64,7 @@
             </button>
             <div
               v-if="headSnapshotOpen"
-              class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+              class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
             >
               <button
                 type="button"
@@ -185,15 +103,113 @@
 
           <div
             v-if="selectedHeadSnapshot"
-            class="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
+            class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
           >
-            <span>{{ snapshotSecondaryLine(selectedHeadSnapshot) }}</span>
-            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedHeadSnapshot) }}</span>
             <span
               class="rounded-full px-2 py-0.5 font-medium"
               :class="snapshotBadgeClass(selectedHeadSnapshot)"
             >
               {{ snapshotStatusLabel(selectedHeadSnapshot) }}
+            </span>
+            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedHeadSnapshot) }}</span>
+            <span>{{ snapshotSecondaryLine(selectedHeadSnapshot) }}</span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="compare-swap mx-auto my-1 inline-flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/60 hover:text-white"
+          :disabled="!baseRef || !headRef"
+          title="Swap base and head"
+          aria-label="Swap base and head"
+          @click="swapRefs"
+        >
+          <ArrowLeftRight class="h-4 w-4" />
+        </button>
+
+        <div class="min-w-0 flex-1 space-y-2">
+          <span class="flex items-center justify-end gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
+            Base <span class="text-gray-600">(to)</span>
+            <span class="compare-dot compare-dot-base" />
+          </span>
+          <BranchPRSelector
+            :refs="refs"
+            :selected-ref-name="baseRef"
+            :default-branch="repo?.default_branch"
+            :loading="loadingRefs"
+            compact
+            block
+            align="right"
+            @select="selectBase"
+          />
+          <div
+            v-if="baseSnapshots.length > 0"
+            class="relative"
+          >
+            <button
+              type="button"
+              class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
+              aria-label="Base snapshot"
+              @click.stop="baseSnapshotOpen = !baseSnapshotOpen"
+            >
+              <span
+                v-if="selectedBaseSnapshot"
+                class="inline-block h-2 w-2 shrink-0 rounded-full"
+                :class="snapshotDotClass(selectedBaseSnapshot)"
+              />
+              <span class="flex-1 truncate">{{ baseSnapshotId ? snapshotOptionLabel(resolveSelectedSnapshot(baseSnapshots, baseSnapshotId) ?? baseSnapshots[0]) : 'Latest snapshot' }}</span>
+              <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
+            </button>
+            <div
+              v-if="baseSnapshotOpen"
+              class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+            >
+              <button
+                type="button"
+                class="w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                :class="!baseSnapshotId ? 'text-accent font-medium' : 'text-gray-300'"
+                @click="baseSnapshotId = ''; baseSnapshotOpen = false"
+              >
+                Latest snapshot
+              </button>
+              <button
+                v-for="snapshot in baseSnapshots"
+                :key="snapshot.id"
+                type="button"
+                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                :class="baseSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
+                @click="baseSnapshotId = snapshot.id; baseSnapshotOpen = false"
+              >
+                <span
+                  class="inline-block h-2 w-2 shrink-0 rounded-full"
+                  :class="snapshotDotClass(snapshot)"
+                />
+                <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
+                <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
+                <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
+                <span
+                  v-if="snapshot.run_number"
+                  class="text-gray-500"
+                >#{{ snapshot.run_number }}</span>
+                <span
+                  v-if="snapshot.tag"
+                  class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
+                >{{ snapshot.tag }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            v-if="selectedBaseSnapshot"
+            class="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
+          >
+            <span>{{ snapshotSecondaryLine(selectedBaseSnapshot) }}</span>
+            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedBaseSnapshot) }}</span>
+            <span
+              class="rounded-full px-2 py-0.5 font-medium"
+              :class="snapshotBadgeClass(selectedBaseSnapshot)"
+            >
+              {{ snapshotStatusLabel(selectedBaseSnapshot) }}
             </span>
           </div>
         </div>
@@ -280,6 +296,23 @@
               {{ verdict.detail }}
             </p>
           </div>
+        </div>
+
+        <div
+          v-if="gateReasons.length > 0"
+          class="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger"
+        >
+          <p class="font-medium text-white">
+            Gate reasons
+          </p>
+          <ul class="mt-2 space-y-1">
+            <li
+              v-for="reason in gateReasons"
+              :key="reason"
+            >
+              {{ reason }}
+            </li>
+          </ul>
         </div>
 
         <div class="compare-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -834,7 +867,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, FlaskConical, GaugeCircle, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
+import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, FlaskConical, GaugeCircle, GitBranch, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert, Tag } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type EnhancedRef, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
@@ -875,13 +908,56 @@ const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 
-const baseLabel = computed(() => baseRef.value || 'Base')
-const headLabel = computed(() => headRef.value || 'Head')
+
+function refLabel(refObj: EnhancedRef | undefined, refName: string | undefined): string {
+  if (refObj?.ref_type === 'pull_request') {
+    const num = refObj.pr_number || ''
+    const title = refObj.pr_title?.trim() || ''
+    return num ? (title ? `#${num} ${title}` : `#${num}`) : title || refObj.name
+  }
+  return refObj?.name || refName || ''
+}
+
+function refIconFor(refObj: EnhancedRef | undefined) {
+  if (refObj?.ref_type === 'pull_request') return GitPullRequest
+  if (refObj?.ref_type === 'tag') return Tag
+  return GitBranch
+}
+
+const headRefObj = computed(() => refs.value.find(r => r.name === headRef.value))
+const baseRefObj = computed(() => refs.value.find(r => r.name === baseRef.value))
+const headLabel = computed(() => refLabel(headRefObj.value, headRef.value) || 'Head')
+const baseLabel = computed(() => refLabel(baseRefObj.value, baseRef.value) || 'Base')
+const headRefIcon = computed(() => refIconFor(headRefObj.value))
+const baseRefIcon = computed(() => refIconFor(baseRefObj.value))
 const selectedBaseSnapshot = computed(() => resolveSelectedSnapshot(baseSnapshots.value, baseSnapshotId.value))
 const selectedHeadSnapshot = computed(() => resolveSelectedSnapshot(headSnapshots.value, headSnapshotId.value))
 
 const coverageDiff = computed(() => comparison.value?.coverage_diff ?? null)
 const testDiff = computed(() => comparison.value?.test_diff ?? null)
+const gateReasons = computed(() => comparison.value?.gate?.reasons ?? [])
+const isPRAgainstTarget = computed(() => {
+  const head = headRefObj.value
+  if (!head || head.ref_type !== 'pull_request') return false
+  return baseRef.value === head.merge_target_ref_name
+})
+
+const gateState = computed(() => {
+  if (!isPRAgainstTarget.value) return null
+  if (!comparison.value?.gate) return null
+  if (!comparison.value.gate.passed) {
+    return {
+      label: 'QG Failed',
+      badgeClass: 'border-danger/40 bg-danger/10 text-danger',
+      dotClass: 'bg-danger',
+    }
+  }
+  return {
+    label: 'QG Passed',
+    badgeClass: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+    dotClass: 'bg-emerald-400',
+  }
+})
 
 const hasFailedSnapshot = computed(() => {
   return selectedBaseSnapshot.value?.status === 'failed' || selectedHeadSnapshot.value?.status === 'failed'
@@ -1024,13 +1100,19 @@ function selectHead(name: string) {
 
 function swapRefs() {
   if (!baseRef.value || !headRef.value) return
-  const prev = baseRef.value
+  // Swap refs, selected snapshot ids, AND the loaded snapshot lists together.
+  // Clearing the lists would break same-branch compares: the snapshot-loading
+  // watchers are keyed on ref name, so they don't refire when base === head,
+  // leaving the dropdowns permanently empty (hidden by v-if on list length).
+  const prevRef = baseRef.value
   baseRef.value = headRef.value
-  headRef.value = prev
-  baseSnapshotId.value = ''
-  headSnapshotId.value = ''
-  baseSnapshots.value = []
-  headSnapshots.value = []
+  headRef.value = prevRef
+  const prevSnapshotId = baseSnapshotId.value
+  baseSnapshotId.value = headSnapshotId.value
+  headSnapshotId.value = prevSnapshotId
+  const prevSnapshots = baseSnapshots.value
+  baseSnapshots.value = headSnapshots.value
+  headSnapshots.value = prevSnapshots
 }
 
 // ─── Data loading (reactive with onCleanup) ──────────────────────────────────
@@ -1119,7 +1201,7 @@ watch(
     let cancelled = false
     onCleanup(() => { cancelled = true })
 
-    if (refsLoading || !base || !head || !p || !s || !r) {
+    if (refsLoading || !p || !s || !r || !base || !head) {
       comparison.value = null
       loading.value = false
       return

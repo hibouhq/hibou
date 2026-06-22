@@ -23,6 +23,10 @@ SELECT * FROM snapshot_artifacts
 WHERE snapshot_id = $1
 ORDER BY created_at;
 
+-- name: GetSnapshotArtifactByID :one
+SELECT * FROM snapshot_artifacts
+WHERE id = $1;
+
 -- name: ListSnapshotArtifactObjectKeys :many
 SELECT object_key FROM snapshot_artifacts
 WHERE snapshot_id = $1

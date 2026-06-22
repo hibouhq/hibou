@@ -246,6 +246,15 @@
                   {{ file.kind }}<span v-if="file.tool_name"> · {{ file.tool_name }}</span> · {{ humanSize(file.size_bytes) }}
                 </div>
               </div>
+              <RouterLink
+                v-if="file.kind === 'sbom'"
+                :to="{ name: 'sbom-compare', query: { base_artifact: file.id, base_snapshot: effectiveSnapshotId } }"
+                class="shrink-0 rounded-md p-1.5 text-gray-400 transition hover:bg-accent-muted hover:text-white"
+                title="Compare this SBOM"
+                aria-label="Compare this SBOM"
+              >
+                <ArrowLeftRight class="h-4 w-4" />
+              </RouterLink>
               <a
                 :href="file.download_url"
                 :download="file.filename"
@@ -264,7 +273,7 @@
 </template>
 
 <script setup lang="ts">
-import { Activity, ArrowRight, Clock, Download, ExternalLink, FileArchive, FileText, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
+import { Activity, ArrowLeftRight, ArrowRight, Clock, Download, ExternalLink, FileArchive, FileText, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -302,6 +311,7 @@ const shownSnapshotId = computed(() => {
   }
   return latestSnapshot?.value?.id ?? ''
 })
+const effectiveSnapshotId = computed(() => shownSnapshotId.value)
 const archiveUrl = computed(() =>
   shownSnapshotId.value
     ? api.snapshotArchiveUrl(provider.value, slug.value, repoSlug.value, shownSnapshotId.value)

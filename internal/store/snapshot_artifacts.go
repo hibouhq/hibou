@@ -73,6 +73,17 @@ func (q *Queries) ListSnapshotArtifactsBySnapshot(ctx context.Context, snapshotI
 	return artifacts, nil
 }
 
+func (q *Queries) GetSnapshotArtifactByID(ctx context.Context, id uuid.UUID) (*SnapshotArtifact, error) {
+	row, err := q.db.GetSnapshotArtifactByID(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return snapshotArtifactFromRow(row), nil
+}
+
 func (q *Queries) ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID uuid.UUID) ([]string, error) {
 	return q.db.ListSnapshotArtifactObjectKeys(ctx, snapshotID)
 }

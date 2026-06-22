@@ -115,7 +115,7 @@
             <RouterLink
               v-if="selectedPRNumber"
               class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
-              :to="{ name: 'pr-review', params: { ...route.params, number: selectedPRNumber }, query: { ref: selectedRefName } }"
+              :to="{ name: 'repo-compare', params: route.params, query: { base: selectedRef?.merge_target_ref_name || repo?.default_branch || 'main', head: selectedRefName } }"
             >
               <GitPullRequest class="h-3.5 w-3.5" />
               PR Review

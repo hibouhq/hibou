@@ -34,14 +34,14 @@ const router = createRouter({
           component: () => import('@/views/ClientDetailView.vue'),
         },
         {
-          path: 'orgs/:provider/:slug/repos/:repoSlug/pr/:number',
-          name: 'pr-review',
-          component: () => import('@/views/PRReviewView.vue'),
-        },
-        {
           path: 'orgs/:provider/:slug/repos/:repoSlug/compare',
           name: 'repo-compare',
           component: () => import('@/views/CompareView.vue'),
+        },
+        {
+          path: 'orgs/:provider/:slug/repos/:repoSlug/sbom-compare',
+          name: 'sbom-compare',
+          component: () => import('@/views/SBOMCompareView.vue'),
         },
         {
           path: 'orgs/:provider/:slug/repos/:repoSlug',

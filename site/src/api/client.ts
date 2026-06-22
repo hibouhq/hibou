@@ -170,6 +170,41 @@ export interface SnapshotFile {
   created_at: string
 }
 
+export interface ComponentDelta {
+  purl?: string
+  name: string
+  version?: string
+  base_version?: string
+  head_version?: string
+  ecosystem?: string
+}
+
+export interface SBOMDiff {
+  added: ComponentDelta[]
+  removed: ComponentDelta[]
+  version_changed: ComponentDelta[]
+  unchanged: ComponentDelta[]
+  summary: {
+    total_base: number
+    total_head: number
+    added: number
+    removed: number
+    version_changed: number
+    unchanged: number
+  }
+}
+
+export type SBOMCompareFormat = 'spdx-json' | 'cyclonedx-json'
+
+export interface CompareSBOMsRequest {
+  base_artifact_id?: string
+  base_content?: string
+  base_format?: SBOMCompareFormat
+  head_artifact_id?: string
+  head_content?: string
+  head_format?: SBOMCompareFormat
+}
+
 export interface SeverityCounts {
   critical: number
   high: number
@@ -415,6 +450,17 @@ export interface CompareResult {
   }
   coverage_diff: CoverageDiff | null
   test_diff: TestDiff | null
+  gate?: {
+    passed: boolean
+    reasons: string[]
+  } | null
+  pr?: {
+    number: number
+    title: string
+    source_branch: string
+    target_branch: string
+    state: string
+  } | null
 }
 
 export interface TrendPoint {
@@ -470,25 +516,6 @@ export interface TestReport {
   errors: number
   duration_seconds: number
   cases: TestCase[]
-}
-
-export interface PRSummary {
-  ref: EnhancedRef
-  pr_snapshot_id?: string
-  target_snapshot_id?: string
-  delta?: DeltaResult
-  gate?: {
-    passed: boolean
-    reasons: string[]
-  } | null
-  summary: RefSummary
-  component_diff?: {
-    added: ComponentEntry[]
-    removed: ComponentEntry[]
-    unchanged: number
-  } | null
-  coverage_diff?: CoverageDiff | null
-  test_diff?: TestDiff | null
 }
 
 export interface RepoDashboardEntry {
@@ -897,12 +924,6 @@ class ApiClient {
     return `${API_BASE}/orgs/${provider}/${slug}/repos/${repoSlug}/snapshots/${snapshotId}/files.zip`
   }
 
-  getPRSummary(provider: string, slug: string, repoSlug: string, number: string | number) {
-    return this.request<ApiResponse<PRSummary>>(
-      `/orgs/${provider}/${slug}/repos/${repoSlug}/pr/${number}`,
-    )
-  }
-
   compareRefs(
     provider: string,
     slug: string,
@@ -921,6 +942,13 @@ class ApiClient {
 
     return this.request<ApiResponse<CompareResult>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/compare?${query.toString()}`,
+    )
+  }
+
+  compareSBOMs(provider: string, slug: string, repoSlug: string, body: CompareSBOMsRequest) {
+    return this.request<ApiResponse<SBOMDiff>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/sbom/compare`,
+      { method: 'POST', body: JSON.stringify(body) },
     )
   }
 
