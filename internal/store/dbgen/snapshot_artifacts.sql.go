@@ -112,11 +112,11 @@ func (q *Queries) ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var objectKey string
-		if err := rows.Scan(&objectKey); err != nil {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
 			return nil, err
 		}
-		items = append(items, objectKey)
+		items = append(items, object_key)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -144,11 +144,11 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByOrg(ctx context.Context, orgID
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var objectKey string
-		if err := rows.Scan(&objectKey); err != nil {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
 			return nil, err
 		}
-		items = append(items, objectKey)
+		items = append(items, object_key)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -175,11 +175,11 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repo
 	defer rows.Close()
 	items := []string{}
 	for rows.Next() {
-		var objectKey string
-		if err := rows.Scan(&objectKey); err != nil {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
 			return nil, err
 		}
-		items = append(items, objectKey)
+		items = append(items, object_key)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

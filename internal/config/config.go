@@ -41,6 +41,7 @@ type Config struct {
 	AutoProvisionOrgs bool
 	RetentionPolicy   retention.RetentionPolicy
 	Background        BackgroundConfig
+	AdvisoryScan      AdvisoryScanConfig
 	Worker            WorkerConfig
 	SecretScan        SecretScanConfig
 
@@ -52,6 +53,11 @@ type BackgroundConfig struct {
 	RetentionEnabled          bool
 	StaleScanEnabled          bool
 	StalePendingEnabled       bool
+}
+
+type AdvisoryScanConfig struct {
+	Providers []string
+	Interval  time.Duration
 }
 
 type WorkerConfig struct {
@@ -179,6 +185,8 @@ func Load() (Config, error) {
 	v.SetDefault("background.retention.enabled", true)
 	v.SetDefault("background.stale_scan.enabled", true)
 	v.SetDefault("background.stale_pending.enabled", true)
+	v.SetDefault("advisory_scan.providers", []string{"osv", "trivy"})
+	v.SetDefault("advisory_scan.interval", "6h")
 	v.SetDefault("worker.lease.duration", "5m")
 	v.SetDefault("worker.heartbeat.interval", "100s")
 	v.SetDefault("retention.preset", "envelope")
@@ -233,6 +241,13 @@ func Load() (Config, error) {
 	if workerHeartbeatInterval >= workerLeaseDuration {
 		return Config{}, errors.New("parsing worker heartbeat: worker.heartbeat.interval must be shorter than worker.lease.duration")
 	}
+	advisoryScanInterval, err := time.ParseDuration(v.GetString("advisory_scan.interval"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing advisory_scan.interval: %w", err)
+	}
+	if advisoryScanInterval <= 0 {
+		return Config{}, errors.New("parsing advisory_scan.interval: duration must be greater than zero")
+	}
 	retentionPolicy, err := loadRetentionPolicy(v)
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing retention policy: %w", err)
@@ -274,6 +289,10 @@ func Load() (Config, error) {
 			StaleScanEnabled:          v.GetBool("background.stale_scan.enabled"),
 			StalePendingEnabled:       v.GetBool("background.stale_pending.enabled"),
 		},
+		AdvisoryScan: AdvisoryScanConfig{
+			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),
+			Interval:  advisoryScanInterval,
+		},
 		Worker: WorkerConfig{
 			LeaseDuration:     workerLeaseDuration,
 			HeartbeatInterval: workerHeartbeatInterval,
@@ -288,6 +307,25 @@ func Load() (Config, error) {
 
 	cfg.Forges = loadForgeConfigs()
 	return cfg, nil
+}
+
+func normalizeProviderList(values []string) []string {
+	providers := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			provider := strings.ToLower(strings.TrimSpace(part))
+			if provider == "" {
+				continue
+			}
+			if _, ok := seen[provider]; ok {
+				continue
+			}
+			seen[provider] = struct{}{}
+			providers = append(providers, provider)
+		}
+	}
+	return providers
 }
 
 func (c Config) IsDevelopment() bool {

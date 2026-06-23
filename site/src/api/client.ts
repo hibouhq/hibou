@@ -1090,6 +1090,21 @@ class ApiClient {
     )
   }
 
+  triggerComponentScan(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) {
+      query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<{ scan_id: string; providers: string[] }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/components/scan${qs ? `?${qs}` : ''}`,
+      { method: 'POST' },
+    )
+  }
+
   getRefSummary(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
     const query = new URLSearchParams()
     if (params?.ref) {

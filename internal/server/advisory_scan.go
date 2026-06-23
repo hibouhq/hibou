@@ -1,0 +1,125 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/hibouhq/hibou/internal/api"
+)
+
+const advisoryScanTimeout = 30 * time.Minute
+
+func (s *Server) runAdvisoryScanLoop(ctx context.Context) {
+	if s.advisoryScanner == nil || len(s.advisoryProviders) == 0 || s.cfg.AdvisoryScan.Interval <= 0 {
+		return
+	}
+
+	s.runAdvisoryScanPass(ctx)
+
+	ticker := time.NewTicker(s.cfg.AdvisoryScan.Interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.runAdvisoryScanPass(ctx)
+		}
+	}
+}
+
+func (s *Server) runAdvisoryScanPass(ctx context.Context) {
+	if s.advisoryScanner == nil || len(s.advisoryProviders) == 0 {
+		return
+	}
+	if !s.advisoryScanActive.CompareAndSwap(false, true) {
+		s.log.Warn().Msg("advisory scan pass already running; skipping overlap")
+		return
+	}
+	defer s.advisoryScanActive.Store(false)
+
+	snapshotIDs, err := s.listLatestSnapshotsForAdvisoryScan(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			s.log.Error().Err(err).Msg("list snapshots for advisory scan failed")
+		}
+		return
+	}
+
+	succeeded := 0
+	failed := 0
+	s.log.Info().Int("snapshots", len(snapshotIDs)).Strs("providers", s.advisoryProviders).Msg("starting advisory scan pass")
+	for _, snapshotID := range snapshotIDs {
+		if _, err := s.advisoryScanner.RunScan(ctx, snapshotID, s.advisoryProviders, "system"); err != nil {
+			failed++
+			s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
+			continue
+		}
+		succeeded++
+	}
+	s.log.Info().Int("snapshots", len(snapshotIDs)).Int("succeeded", succeeded).Int("failed", failed).Msg("finished advisory scan pass")
+}
+
+func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid.UUID, error) {
+	repos, err := s.queries.ListRepositoriesForRetention(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshotIDs := make([]uuid.UUID, 0)
+	for _, repo := range repos {
+		offset := 0
+		for {
+			refs, total, err := s.queries.ListRefsByRepo(ctx, repo.ID, api.MaxPerPage, offset)
+			if err != nil {
+				return nil, err
+			}
+			for _, ref := range refs {
+				snapshot, err := s.queries.GetLatestSnapshotWithComponentsByRef(ctx, ref.ID)
+				if err != nil {
+					return nil, err
+				}
+				if snapshot != nil {
+					snapshotIDs = append(snapshotIDs, snapshot.ID)
+				}
+			}
+			offset += len(refs)
+			if offset >= total || len(refs) == 0 {
+				break
+			}
+		}
+	}
+
+	sort.Slice(snapshotIDs, func(i, j int) bool {
+		return snapshotIDs[i].String() < snapshotIDs[j].String()
+	})
+	return snapshotIDs, nil
+}
+
+func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
+	if s.advisoryScanner == nil || len(s.advisoryProviders) == 0 {
+		return
+	}
+	baseCtx := s.lifecycleCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	providers := append([]string(nil), s.advisoryProviders...)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.log.Error().Any("panic", recovered).Str("snapshot_id", snapshotID.String()).Msg("advisory scan goroutine panicked")
+			}
+		}()
+		scanCtx, cancel := context.WithTimeout(baseCtx, advisoryScanTimeout)
+		defer cancel()
+		if _, err := s.advisoryScanner.RunScan(scanCtx, snapshotID, providers, triggeredBy); err != nil && !errors.Is(err, context.Canceled) {
+			s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
+		}
+	}()
+}

@@ -39,7 +39,8 @@ type loadedSnapshotArtifact struct {
 }
 
 type artifactProcessingResult struct {
-	warning string
+	warning            string
+	componentsIngested int
 }
 
 type artifactProcessingFailure struct {
@@ -123,7 +124,7 @@ func (s *Server) processNextArtifactSnapshot(ctx context.Context) (bool, error) 
 	if result == nil {
 		result = &artifactProcessingResult{}
 	}
-	if err := s.completeArtifactProcessingSnapshot(ctx, run, snapshot.ID, result.warning); err != nil {
+	if err := s.completeArtifactProcessingSnapshot(ctx, run, snapshot.ID, result.warning, result.componentsIngested); err != nil {
 		if run.ctx.Err() != nil || errors.Is(context.Cause(run.ctx), store.ErrArtifactProcessingClaimLost) {
 			return true, nil
 		}
@@ -163,7 +164,8 @@ func (s *Server) processClaimedArtifactSnapshotBase(ctx context.Context, snapsho
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := s.processClaimableSnapshotArtifact(ctx, snapshot, artifact); err != nil {
+		componentsIngested, err := s.processClaimableSnapshotArtifact(ctx, snapshot, artifact)
+		if err != nil {
 			if shouldAbortArtifactProcessing(err) {
 				return nil, err
 			}
@@ -174,6 +176,7 @@ func (s *Server) processClaimedArtifactSnapshotBase(ctx context.Context, snapsho
 			})
 			continue
 		}
+		result.componentsIngested += componentsIngested
 	}
 
 	if len(failures) == 0 {
@@ -189,47 +192,56 @@ func (s *Server) processClaimedArtifactSnapshotBase(ctx context.Context, snapsho
 	return result, nil
 }
 
-func (s *Server) processClaimableSnapshotArtifact(ctx context.Context, snapshot *store.Snapshot, artifact store.SnapshotArtifact) error {
+func (s *Server) processClaimableSnapshotArtifact(ctx context.Context, snapshot *store.Snapshot, artifact store.SnapshotArtifact) (int, error) {
 	loadedArtifact, err := s.loadSnapshotArtifact(ctx, artifact)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	queries := s.queries.WithTx(tx)
+	componentsIngested := 0
 	switch loadedArtifact.artifact.Kind {
 	case "sarif":
 		if err := s.ingestSARIFArtifact(ctx, queries, snapshot, loadedArtifact); err != nil {
 			_ = tx.Rollback()
-			return err
+			return 0, err
 		}
 	case "sbom":
-		if err := s.ingestSBOMArtifact(ctx, queries, snapshot, loadedArtifact); err != nil {
+		componentsIngested, err = s.ingestSBOMArtifact(ctx, queries, snapshot, loadedArtifact)
+		if err != nil {
 			_ = tx.Rollback()
-			return err
+			return 0, err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		_ = tx.Rollback()
-		return err
+		return 0, err
 	}
-	return nil
+	return componentsIngested, nil
 }
 
-func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *artifactProcessingRun, snapshotID uuid.UUID, warning string) error {
+func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *artifactProcessingRun, snapshotID uuid.UUID, warning string, componentsIngested int) error {
+	var err error
 	if warning == "" {
-		_, err := s.queries.CompleteArtifactProcessingSnapshot(ctx, snapshotID, s.artifactWorkerID)
+		_, err = s.queries.CompleteArtifactProcessingSnapshot(ctx, snapshotID, s.artifactWorkerID)
+	} else {
+		_, err = s.queries.CompleteArtifactProcessingSnapshotWithWarning(ctx, snapshotID, s.artifactWorkerID, warning)
+		if err != nil && run != nil && s.shouldAbandonArtifactProcessing(run, err, snapshotID) {
+			return nil
+		}
+	}
+	if err != nil {
 		return err
 	}
-	_, err := s.queries.CompleteArtifactProcessingSnapshotWithWarning(ctx, snapshotID, s.artifactWorkerID, warning)
-	if err != nil && run != nil && s.shouldAbandonArtifactProcessing(run, err, snapshotID) {
-		return nil
+	if componentsIngested > 0 {
+		s.enqueueAdvisoryScan(snapshotID, "system")
 	}
-	return err
+	return nil
 }
 
 func (s *Server) artifactProcessingLeaseDuration() time.Duration {
@@ -352,11 +364,35 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 	return nil
 }
 
-func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) error {
+func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) (int, error) {
 	format := optionalStringValue(artifact.artifact.Format)
-	if format != "cyclonedx-json" {
-		return nil
+	componentsBefore, err := queries.CountComponentsBySnapshot(ctx, snapshot.ID)
+	if err != nil {
+		return 0, fmt.Errorf("count snapshot components before ingest %s: %w", snapshot.ID, err)
 	}
+	switch format {
+	case "cyclonedx-json":
+		if err := s.ingestCycloneDXSBOMArtifact(ctx, queries, snapshot, artifact); err != nil {
+			return 0, err
+		}
+	case "spdx-json":
+		if err := s.ingestSPDXSBOMArtifact(ctx, queries, snapshot, artifact); err != nil {
+			return 0, err
+		}
+	default:
+		return 0, nil
+	}
+	componentsAfter, err := queries.CountComponentsBySnapshot(ctx, snapshot.ID)
+	if err != nil {
+		return 0, fmt.Errorf("count snapshot components after ingest %s: %w", snapshot.ID, err)
+	}
+	if componentsAfter <= componentsBefore {
+		return 0, nil
+	}
+	return int(componentsAfter - componentsBefore), nil
+}
+
+func (s *Server) ingestCycloneDXSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) error {
 	components, dependencies, rootBomRef, bomRefIndex, err := sbom.ParseCycloneDXJSONGraph(artifact.content)
 	if err != nil {
 		return fmt.Errorf("parse sbom artifact %s: %w", artifact.artifact.ID, err)
@@ -374,13 +410,47 @@ func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries,
 			componentIDsByBomRef[bomRef] = storedComponent.ID
 		}
 	}
-	if rootBomRef != "" {
-		if componentID, ok := componentIDsByBomRef[rootBomRef]; ok {
-			if err := queries.UpsertSnapshotDependencyRoot(ctx, snapshot.ID, componentID); err != nil {
-				return fmt.Errorf("upsert snapshot dependency root %s: %w", rootBomRef, err)
-			}
+	if err := upsertCycloneDXDependencyRoot(ctx, queries, snapshot.ID, rootBomRef, componentIDsByBomRef); err != nil {
+		return err
+	}
+	if err := upsertCycloneDXDependencies(ctx, queries, snapshot.ID, dependencies, componentIDsByBomRef); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) ingestSPDXSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) error {
+	components, err := sbom.ParseSPDXJSON(artifact.content)
+	if err != nil {
+		return fmt.Errorf("parse sbom artifact %s: %w", artifact.artifact.ID, err)
+	}
+	for _, component := range components {
+		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem)
+		if err != nil {
+			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
+		}
+		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID); err != nil {
+			return fmt.Errorf("attach component %s to snapshot: %w", component.PURL, err)
 		}
 	}
+	return nil
+}
+
+func upsertCycloneDXDependencyRoot(ctx context.Context, queries *store.Queries, snapshotID uuid.UUID, rootBomRef string, componentIDsByBomRef map[string]uuid.UUID) error {
+	if rootBomRef == "" {
+		return nil
+	}
+	componentID, ok := componentIDsByBomRef[rootBomRef]
+	if !ok {
+		return nil
+	}
+	if err := queries.UpsertSnapshotDependencyRoot(ctx, snapshotID, componentID); err != nil {
+		return fmt.Errorf("upsert snapshot dependency root %s: %w", rootBomRef, err)
+	}
+	return nil
+}
+
+func upsertCycloneDXDependencies(ctx context.Context, queries *store.Queries, snapshotID uuid.UUID, dependencies []sbom.ParsedDependency, componentIDsByBomRef map[string]uuid.UUID) error {
 	for _, dependency := range dependencies {
 		componentID, ok := componentIDsByBomRef[dependency.Ref]
 		if !ok {
@@ -391,7 +461,7 @@ func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries,
 			if !ok || dependsOnID == componentID {
 				continue
 			}
-			if err := queries.UpsertComponentDependency(ctx, snapshot.ID, componentID, dependsOnID); err != nil {
+			if err := queries.UpsertComponentDependency(ctx, snapshotID, componentID, dependsOnID); err != nil {
 				return fmt.Errorf("upsert component dependency %s -> %s: %w", dependency.Ref, dependsOnRef, err)
 			}
 		}
@@ -404,7 +474,8 @@ func isClaimableSnapshotArtifact(artifact store.SnapshotArtifact) bool {
 	case "sarif":
 		return true
 	case "sbom":
-		return optionalStringValue(artifact.Format) == "cyclonedx-json"
+		format := optionalStringValue(artifact.Format)
+		return format == "cyclonedx-json" || format == "spdx-json"
 	default:
 		return false
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,9 @@ import (
 
 func TestProcessNextArtifactSnapshotIngestsCycloneDXComponents(t *testing.T) {
 	srv, snapshotID := newArtifactProcessingTestServer(t)
+	scannerStub := &advisoryScannerStub{calls: make(chan advisoryScanCall, 1)}
+	srv.advisoryScanner = scannerStub
+	srv.advisoryProviders = []string{"osv"}
 	writeArtifactForProcessingTest(t, srv, snapshotID, "sbom", stringPtrForProcessingTest("cyclonedx-json"), nil, `{
 		"bomFormat":"CycloneDX",
 		"specVersion":"1.5",
@@ -62,6 +66,111 @@ func TestProcessNextArtifactSnapshotIngestsCycloneDXComponents(t *testing.T) {
 	if rootRef == nil || *rootRef != "pkg:gomod/github.com/hibouhq/hibou@1.0.0" {
 		t.Fatalf("persisted root_ref = %v, want declared root purl", rootRef)
 	}
+	select {
+	case call := <-scannerStub.calls:
+		if call.SnapshotID != snapshotID {
+			t.Fatalf("scan snapshot id = %s, want %s", call.SnapshotID, snapshotID)
+		}
+		if !reflect.DeepEqual(call.Providers, []string{"osv"}) {
+			t.Fatalf("scan providers = %v, want [osv]", call.Providers)
+		}
+		if call.Triggered != "system" {
+			t.Fatalf("scan triggeredBy = %q, want system", call.Triggered)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected advisory scan trigger after component ingest")
+	}
+	assertSnapshotProcessingCompleted(t, srv, snapshotID)
+	if components[0].Ecosystem == "" && components[1].Ecosystem == "" {
+		t.Fatal("expected ingested components to include ecosystems")
+	}
+}
+
+func TestProcessNextArtifactSnapshotIngestsSPDXComponentsWithoutDependencies(t *testing.T) {
+	srv, snapshotID := newArtifactProcessingTestServer(t)
+	scannerStub := &advisoryScannerStub{calls: make(chan advisoryScanCall, 1)}
+	srv.advisoryScanner = scannerStub
+	srv.advisoryProviders = []string{"osv"}
+	writeArtifactForProcessingTest(t, srv, snapshotID, "sbom", stringPtrForProcessingTest("spdx-json"), nil, `{
+		"spdxVersion":"SPDX-2.3",
+		"documentNamespace":"https://example.com/spdx/doc",
+		"packages":[
+			{
+				"SPDXID":"SPDXRef-DOCUMENT",
+				"name":"https://example.com/spdx/doc#document-root",
+				"versionInfo":"0.0.0"
+			},
+			{
+				"SPDXID":"SPDXRef-Package-golang.org-x-net",
+				"name":"golang.org/x/net",
+				"versionInfo":"v0.25.0",
+				"externalRefs":[
+					{
+						"referenceCategory":"PACKAGE-MANAGER",
+						"referenceLocator":"pkg:golang/golang.org/x/net@v0.25.0",
+						"referenceType":"purl"
+					}
+				]
+			},
+			{
+				"SPDXID":"SPDXRef-Package-left-pad",
+				"name":"left-pad",
+				"versionInfo":"1.3.0",
+				"externalRefs":[
+					{
+						"referenceCategory":"PACKAGE-MANAGER",
+						"referenceLocator":"pkg:npm/left-pad@1.3.0",
+						"referenceType":"purl"
+					}
+				]
+			}
+		]
+	}`)
+	quarantineUnrelatedClaimableSnapshots(t, srv, snapshotID)
+
+	processed, err := srv.processNextArtifactSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("processNextArtifactSnapshot: %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+
+	components, err := srv.queries.ListComponentsBySnapshot(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("ListComponentsBySnapshot: %v", err)
+	}
+	if len(components) != 2 {
+		t.Fatalf("component count = %d, want 2", len(components))
+	}
+	var dependencyEdges int
+	if err := srv.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM component_dependencies WHERE snapshot_id = $1`, snapshotID).Scan(&dependencyEdges); err != nil {
+		t.Fatalf("count component_dependencies: %v", err)
+	}
+	if dependencyEdges != 0 {
+		t.Fatalf("dependency edge count = %d, want 0", dependencyEdges)
+	}
+	rootRef, err := srv.queries.GetSnapshotDependencyRoot(context.Background(), snapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshotDependencyRoot: %v", err)
+	}
+	if rootRef != nil {
+		t.Fatalf("persisted root_ref = %v, want nil", rootRef)
+	}
+	select {
+	case call := <-scannerStub.calls:
+		if call.SnapshotID != snapshotID {
+			t.Fatalf("scan snapshot id = %s, want %s", call.SnapshotID, snapshotID)
+		}
+		if !reflect.DeepEqual(call.Providers, []string{"osv"}) {
+			t.Fatalf("scan providers = %v, want [osv]", call.Providers)
+		}
+		if call.Triggered != "system" {
+			t.Fatalf("scan triggeredBy = %q, want system", call.Triggered)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected advisory scan trigger after component ingest")
+	}
 	assertSnapshotProcessingCompleted(t, srv, snapshotID)
 	if components[0].Ecosystem == "" && components[1].Ecosystem == "" {
 		t.Fatal("expected ingested components to include ecosystems")
@@ -70,6 +179,9 @@ func TestProcessNextArtifactSnapshotIngestsCycloneDXComponents(t *testing.T) {
 
 func TestProcessNextArtifactSnapshotIngestsSARIFFindings(t *testing.T) {
 	srv, snapshotID := newArtifactProcessingTestServer(t)
+	scannerStub := &advisoryScannerStub{calls: make(chan advisoryScanCall, 1)}
+	srv.advisoryScanner = scannerStub
+	srv.advisoryProviders = []string{"osv"}
 	writeArtifactForProcessingTest(t, srv, snapshotID, "sarif", nil, stringPtrForProcessingTest("semgrep"), `{
 		"version":"2.1.0",
 		"runs":[{
@@ -102,6 +214,11 @@ func TestProcessNextArtifactSnapshotIngestsSARIFFindings(t *testing.T) {
 	}
 	if vulnerabilities[0].Type != "sast" {
 		t.Fatalf("vulnerability type = %q, want sast", vulnerabilities[0].Type)
+	}
+	select {
+	case call := <-scannerStub.calls:
+		t.Fatalf("unexpected advisory scan trigger for SARIF-only processing: %+v", call)
+	case <-time.After(200 * time.Millisecond):
 	}
 	assertSnapshotProcessingCompleted(t, srv, snapshotID)
 	if vulnerabilities[0].ScannerName != "semgrep" {
@@ -415,7 +532,7 @@ func TestProcessNextArtifactSnapshotCompletesWhenClaimedArtifactsDisappear(t *te
 	if result == nil {
 		result = &artifactProcessingResult{}
 	}
-	if err := srv.completeArtifactProcessingSnapshot(context.Background(), run, snapshotID, result.warning); err != nil {
+	if err := srv.completeArtifactProcessingSnapshot(context.Background(), run, snapshotID, result.warning, result.componentsIngested); err != nil {
 		t.Fatalf("completeArtifactProcessingSnapshot: %v", err)
 	}
 

@@ -46,34 +46,35 @@
           />
           <div
             v-if="headSnapshots.length > 0"
-            class="relative"
+            class="flex items-center gap-2"
           >
             <button
+              v-if="headSnapshotId"
               type="button"
-              class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
-              aria-label="Head snapshot"
-              @click.stop="headSnapshotOpen = !headSnapshotOpen"
+              class="inline-flex shrink-0 items-center rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-gray-300 transition hover:border-accent/50 hover:text-white"
+              @click="headSnapshotId = ''"
             >
-              <span
-                v-if="selectedHeadSnapshot"
-                class="inline-block h-2 w-2 shrink-0 rounded-full"
-                :class="snapshotDotClass(selectedHeadSnapshot)"
-              />
-              <span class="flex-1 truncate">{{ headSnapshotId ? snapshotOptionLabel(resolveSelectedSnapshot(headSnapshots, headSnapshotId) ?? headSnapshots[0]) : 'Latest snapshot' }}</span>
-              <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
+              Snapshot
             </button>
-            <div
-              v-if="headSnapshotOpen"
-              class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
-            >
+            <div class="relative min-w-0 flex-1">
               <button
                 type="button"
-                class="w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                :class="!headSnapshotId ? 'text-accent font-medium' : 'text-gray-300'"
-                @click="headSnapshotId = ''; headSnapshotOpen = false"
+                class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
+                aria-label="Head snapshot"
+                @click.stop="headSnapshotOpen = !headSnapshotOpen"
               >
-                Latest snapshot
+                <span
+                  v-if="selectedHeadSnapshot"
+                  class="inline-block h-2 w-2 shrink-0 rounded-full"
+                  :class="snapshotDotClass(selectedHeadSnapshot)"
+                />
+                <span class="flex-1 truncate">{{ selectedHeadSnapshot ? snapshotOptionLabel(selectedHeadSnapshot) : 'Snapshot' }}</span>
+                <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
               </button>
+              <div
+                v-if="headSnapshotOpen"
+                class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+              >
               <button
                 v-for="snapshot in headSnapshots"
                 :key="snapshot.id"
@@ -98,6 +99,7 @@
                   class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
                 >{{ snapshot.tag }}</span>
               </button>
+              </div>
             </div>
           </div>
 
@@ -144,34 +146,27 @@
           />
           <div
             v-if="baseSnapshots.length > 0"
-            class="relative"
+            class="flex items-center gap-2"
           >
-            <button
-              type="button"
-              class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
-              aria-label="Base snapshot"
-              @click.stop="baseSnapshotOpen = !baseSnapshotOpen"
-            >
-              <span
-                v-if="selectedBaseSnapshot"
-                class="inline-block h-2 w-2 shrink-0 rounded-full"
-                :class="snapshotDotClass(selectedBaseSnapshot)"
-              />
-              <span class="flex-1 truncate">{{ baseSnapshotId ? snapshotOptionLabel(resolveSelectedSnapshot(baseSnapshots, baseSnapshotId) ?? baseSnapshots[0]) : 'Latest snapshot' }}</span>
-              <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
-            </button>
-            <div
-              v-if="baseSnapshotOpen"
-              class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
-            >
+            <div class="relative min-w-0 flex-1">
               <button
                 type="button"
-                class="w-full px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                :class="!baseSnapshotId ? 'text-accent font-medium' : 'text-gray-300'"
-                @click="baseSnapshotId = ''; baseSnapshotOpen = false"
+                class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
+                aria-label="Base snapshot"
+                @click.stop="baseSnapshotOpen = !baseSnapshotOpen"
               >
-                Latest snapshot
+                <span
+                  v-if="selectedBaseSnapshot"
+                  class="inline-block h-2 w-2 shrink-0 rounded-full"
+                  :class="snapshotDotClass(selectedBaseSnapshot)"
+                />
+                <span class="flex-1 truncate">{{ selectedBaseSnapshot ? snapshotOptionLabel(selectedBaseSnapshot) : 'Snapshot' }}</span>
+                <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
               </button>
+              <div
+                v-if="baseSnapshotOpen"
+                class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+              >
               <button
                 v-for="snapshot in baseSnapshots"
                 :key="snapshot.id"
@@ -196,7 +191,16 @@
                   class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
                 >{{ snapshot.tag }}</span>
               </button>
+              </div>
             </div>
+            <button
+              v-if="baseSnapshotId"
+              type="button"
+              class="inline-flex shrink-0 items-center rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-gray-300 transition hover:border-accent/50 hover:text-white"
+              @click="baseSnapshotId = ''"
+            >
+              Snapshot
+            </button>
           </div>
 
           <div

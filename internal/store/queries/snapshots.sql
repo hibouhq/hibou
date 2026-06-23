@@ -109,7 +109,7 @@ WITH candidate AS (
 			WHERE sa.snapshot_id = s.id
 				AND (
 					sa.kind = 'sarif'
-					OR (sa.kind = 'sbom' AND sa.format = 'cyclonedx-json')
+					OR (sa.kind = 'sbom' AND sa.format IN ('cyclonedx-json', 'spdx-json'))
 				)
 		)
 	ORDER BY s.created_at ASC, s.id ASC

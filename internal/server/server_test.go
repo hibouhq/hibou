@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/audit"
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/store"
@@ -26,6 +29,39 @@ import (
 )
 
 type staleScanCheckerFunc func(context.Context)
+
+type advisoryScanCall struct {
+	SnapshotID uuid.UUID
+	Providers  []string
+	Triggered  string
+}
+
+type advisoryScannerStub struct {
+	calls chan advisoryScanCall
+	err   error
+}
+
+func (s *advisoryScannerStub) RunScan(_ context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error) {
+	if s.calls != nil {
+		s.calls <- advisoryScanCall{
+			SnapshotID: snapshotID,
+			Providers:  append([]string(nil), providerNames...),
+			Triggered:  triggeredBy,
+		}
+	}
+	return uuid.New(), s.err
+}
+
+func (s *advisoryScannerStub) TriggerRescan(_ context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error) {
+	if s.calls != nil {
+		s.calls <- advisoryScanCall{
+			SnapshotID: snapshotID,
+			Providers:  append([]string(nil), providerNames...),
+			Triggered:  actor.ActorDisplay,
+		}
+	}
+	return uuid.New(), s.err
+}
 
 func (fn staleScanCheckerFunc) Start(ctx context.Context) {
 	fn(ctx)
@@ -68,6 +104,11 @@ func TestNewFailsWhenFilesystemArtifactStoreInitFails(t *testing.T) {
 func TestNewInitializesS3ArtifactStore(t *testing.T) {
 	srv, err := New(config.Config{
 		ArtifactBackend: "s3",
+		AdvisoryScan: config.AdvisoryScanConfig{
+			Providers: []string{"osv"},
+			Interval:  6 * time.Hour,
+		},
+		OSVURL: "http://osv.internal",
 		ArtifactS3: config.ArtifactS3Config{
 			Endpoint:     "127.0.0.1:9000",
 			Region:       "us-east-1",
@@ -86,6 +127,109 @@ func TestNewInitializesS3ArtifactStore(t *testing.T) {
 	}
 	if srv.retentionWorker == nil {
 		t.Fatal("retentionWorker = nil, want non-nil")
+	}
+	if srv.advisoryScanner == nil {
+		t.Fatal("advisoryScanner = nil, want initialized scanner")
+	}
+	if !reflect.DeepEqual(srv.advisoryProviders, []string{"osv"}) {
+		t.Fatalf("advisoryProviders = %v, want [osv]", srv.advisoryProviders)
+	}
+}
+
+func TestNewDisablesAdvisoryScanningForUnsupportedProviders(t *testing.T) {
+	var logs bytes.Buffer
+	artifactPath := t.TempDir()
+	srv, err := New(config.Config{
+		AdvisoryScan: config.AdvisoryScanConfig{
+			Providers: []string{"nvd", "nope"},
+			Interval:  6 * time.Hour,
+		},
+		ArtifactPath:  artifactPath,
+		UploadWindow: 10 * time.Minute,
+	}, zerolog.New(&logs), nil, nil, nil, nil, os.DirFS(t.TempDir()))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if len(srv.advisoryProviders) != 0 {
+		t.Fatalf("advisoryProviders = %v, want empty when no providers were built", srv.advisoryProviders)
+	}
+	if !strings.Contains(logs.String(), "advisory scanning disabled: no supported providers are configured") {
+		t.Fatalf("startup logs = %q, want advisory scanning disabled message", logs.String())
+	}
+	stub := &advisoryScannerStub{calls: make(chan advisoryScanCall, 1)}
+	srv.advisoryScanner = stub
+	srv.enqueueAdvisoryScan(uuid.New(), "system")
+	select {
+	case call := <-stub.calls:
+		t.Fatalf("unexpected scan trigger with unsupported providers: %+v", call)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestRunAdvisoryScanPassScansLatestComponentSnapshotPerRef(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	repo := createRepository(t, srv, org, repoSeed{
+		name:          uniqueName(t, "advisory-scan-pass"),
+		slug:          uniqueName(t, "advisory-scan-pass"),
+		provider:      "github",
+		providerID:    uniqueName(t, "advisory-scan-provider"),
+		defaultBranch: "main",
+	})
+	mainRef, err := srv.queries.CreateRef(context.Background(), repo.ID, "main", store.RefTypeBranch, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CreateRef(main): %v", err)
+	}
+	releaseRef, err := srv.queries.CreateRef(context.Background(), repo.ID, "release", store.RefTypeBranch, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CreateRef(release): %v", err)
+	}
+	mainSnapshot, err := srv.queries.CreateSnapshot(context.Background(), mainRef.ID, uniqueName(t, "main-old"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot(main old): %v", err)
+	}
+	seedSnapshotComponent(t, srv, mainSnapshot.ID, "pkg:npm/left-pad@1.3.0", "left-pad", "1.3.0", "npm")
+	newerMainNoComponents, err := srv.queries.CreateSnapshot(context.Background(), mainRef.ID, uniqueName(t, "main-new"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot(main new): %v", err)
+	}
+	releaseSnapshot, err := srv.queries.CreateSnapshot(context.Background(), releaseRef.ID, uniqueName(t, "release"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot(release): %v", err)
+	}
+	seedSnapshotComponent(t, srv, releaseSnapshot.ID, "pkg:npm/chalk@5.0.0", "chalk", "5.0.0", "npm")
+	_ = newerMainNoComponents
+
+	stub := &advisoryScannerStub{calls: make(chan advisoryScanCall, 4096)}
+	srv.advisoryScanner = stub
+	srv.advisoryProviders = []string{"osv"}
+
+	srv.runAdvisoryScanPass(context.Background())
+	close(stub.calls)
+
+	var got []uuid.UUID
+	for call := range stub.calls {
+		got = append(got, call.SnapshotID)
+		if !reflect.DeepEqual(call.Providers, []string{"osv"}) {
+			t.Fatalf("providers = %v, want [osv]", call.Providers)
+		}
+		if call.Triggered != "system" {
+			t.Fatalf("triggeredBy = %q, want system", call.Triggered)
+		}
+	}
+	scanned := make(map[uuid.UUID]struct{}, len(got))
+	for _, snapshotID := range got {
+		scanned[snapshotID] = struct{}{}
+	}
+	if _, ok := scanned[mainSnapshot.ID]; !ok {
+		t.Fatalf("scanned snapshots missing latest main snapshot with components: %v", got)
+	}
+	if _, ok := scanned[releaseSnapshot.ID]; !ok {
+		t.Fatalf("scanned snapshots missing release snapshot with components: %v", got)
+	}
+	if _, ok := scanned[newerMainNoComponents.ID]; ok {
+		t.Fatalf("scanned snapshots unexpectedly included newer main snapshot without components: %v", got)
 	}
 }
 

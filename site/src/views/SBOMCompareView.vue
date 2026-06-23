@@ -468,6 +468,7 @@ const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 
 const snapshotsLoading = ref(false)
+let pendingSnapshotLoads = 0
 const baseRef = ref('')
 const headRef = ref('')
 const baseSnapshotId = ref('')
@@ -497,6 +498,7 @@ const error = ref('')
 
 const snapshotFilesCache = new Map<string, SnapshotFile[]>()
 const snapshotFilesRequests = new Map<string, Promise<SnapshotFile[]>>()
+const loadedSnapshotRefs = new Set<string>()
 
 const selectedBaseRef = computed(() => refs.value.find((item) => item.name === baseRef.value) ?? null)
 const selectedHeadRef = computed(() => refs.value.find((item) => item.name === headRef.value) ?? null)
@@ -634,6 +636,37 @@ const sections = computed<SectionConfig[]>(() => {
   ]
 })
 
+async function loadSnapshotsForRef(refName: string) {
+  if (!refName || loadedSnapshotRefs.has(refName)) return
+  const reqProvider = provider.value
+  const reqSlug = slug.value
+  const reqRepoSlug = repoSlug.value
+  loadedSnapshotRefs.add(refName)
+  pendingSnapshotLoads += 1
+  snapshotsLoading.value = true
+  try {
+    const response = await api.listSnapshots(reqProvider, reqSlug, reqRepoSlug, { ref: refName, per_page: 100 })
+    if (reqProvider !== provider.value || reqSlug !== slug.value || reqRepoSlug !== repoSlug.value) return
+    const seen = new Set(allSnapshots.value.map((snapshot) => snapshot.id))
+    const merged = allSnapshots.value.slice()
+    for (const snapshot of response.data) {
+      if (!seen.has(snapshot.id)) {
+        merged.push(snapshot)
+        seen.add(snapshot.id)
+      }
+    }
+    allSnapshots.value = merged
+  } catch {
+    loadedSnapshotRefs.delete(refName)
+  } finally {
+    pendingSnapshotLoads -= 1
+    if (pendingSnapshotLoads <= 0) {
+      pendingSnapshotLoads = 0
+      snapshotsLoading.value = false
+    }
+  }
+}
+
 watch(
   () => [provider.value, slug.value, repoSlug.value] as const,
   async ([nextProvider, nextSlug, nextRepoSlug], _, onCleanup) => {
@@ -665,17 +698,16 @@ watch(
     headFiles.value = []
     snapshotFilesCache.clear()
     snapshotFilesRequests.clear()
+    loadedSnapshotRefs.clear()
 
     try {
-      const [repoResponse, refsResponse, snapshotsResponse] = await Promise.all([
+      const [repoResponse, refsResponse] = await Promise.all([
         api.getRepo(nextProvider, nextSlug, nextRepoSlug),
         api.listRefsEnhanced(nextProvider, nextSlug, nextRepoSlug),
-        api.listSnapshots(nextProvider, nextSlug, nextRepoSlug, { per_page: 100 }),
       ])
       if (cancelled) return
       repo.value = repoResponse.data
       refs.value = refsResponse.data
-      allSnapshots.value = snapshotsResponse.data
 
       const defaultBase = refsResponse.data.find((item) => item.name === repoResponse.data.default_branch)?.name || refsResponse.data[0]?.name || ''
       const defaultHead = refsResponse.data.find((item) => item.name !== defaultBase)?.name || defaultBase
@@ -690,6 +722,15 @@ watch(
         snapshotsLoading.value = false
       }
     }
+  },
+  { immediate: true },
+)
+
+watch(
+  [baseRef, headRef],
+  ([nextBaseRef, nextHeadRef]) => {
+    if (nextBaseRef) void loadSnapshotsForRef(nextBaseRef)
+    if (nextHeadRef) void loadSnapshotsForRef(nextHeadRef)
   },
   { immediate: true },
 )
@@ -761,9 +802,16 @@ watch([baseRef, headRef, baseSnapshotId, headSnapshotId, baseArtifactId, headArt
 })
 
 watch(
-  () => [baseRef.value, baseSnapshots.value] as const,
+  () => [baseRef.value, baseSnapshots.value, snapshotsLoading.value] as const,
   ([nextBaseRef, nextBaseSnapshots]) => {
-    if (!nextBaseRef || nextBaseSnapshots.length === 0) {
+    if (!nextBaseRef) {
+      baseSnapshotId.value = ''
+      baseArtifactId.value = ''
+      return
+    }
+    if (nextBaseSnapshots.length === 0) {
+      // Keep any URL-restored / pending selection while this ref's snapshots are still loading.
+      if (snapshotsLoading.value) return
       baseSnapshotId.value = ''
       baseArtifactId.value = ''
       return
@@ -777,9 +825,16 @@ watch(
 )
 
 watch(
-  () => [headRef.value, headSnapshots.value] as const,
+  () => [headRef.value, headSnapshots.value, snapshotsLoading.value] as const,
   ([nextHeadRef, nextHeadSnapshots]) => {
-    if (!nextHeadRef || nextHeadSnapshots.length === 0) {
+    if (!nextHeadRef) {
+      headSnapshotId.value = ''
+      headArtifactId.value = ''
+      return
+    }
+    if (nextHeadSnapshots.length === 0) {
+      // Keep any URL-restored / pending selection while this ref's snapshots are still loading.
+      if (snapshotsLoading.value) return
       headSnapshotId.value = ''
       headArtifactId.value = ''
       return

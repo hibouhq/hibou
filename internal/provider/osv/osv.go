@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -21,6 +23,7 @@ import (
 const (
 	defaultBaseURL = "https://api.osv.dev"
 	batchSize      = 1000
+	hydrateWorkers = 8
 )
 
 var internalToOSVEcosystem = map[string]string{
@@ -179,11 +182,18 @@ func (p *Provider) queryBatch(ctx context.Context, queries []provider.PackageQue
 	if err != nil {
 		return nil, err
 	}
+	if len(expandedQueries) == 0 {
+		return nil, nil
+	}
 	batchResp, err := p.executeQueryBatch(ctx, reqBody, len(expandedQueries))
 	if err != nil {
 		return nil, err
 	}
-	return collectBatchResults(batchResp, expandedQueries)
+	hydrated, err := p.hydrateVulns(ctx, batchResp)
+	if err != nil {
+		return nil, err
+	}
+	return collectBatchResults(batchResp, expandedQueries, hydrated)
 }
 
 func buildOSVBatchRequest(queries []provider.PackageQuery) (queryBatchRequest, []provider.PackageQuery, error) {
@@ -192,7 +202,9 @@ func buildOSVBatchRequest(queries []provider.PackageQuery) (queryBatchRequest, [
 	for _, query := range queries {
 		osvEcosystems, ok := toOSVEcosystems(query.Ecosystem)
 		if !ok {
-			return queryBatchRequest{}, nil, fmt.Errorf("osv: unsupported ecosystem %q", query.Ecosystem)
+			// Unknown/unsupported ecosystem: skip this package entirely instead of
+			// failing the whole batch. It simply yields no advisories.
+			continue
 		}
 		for _, osvEcosystem := range osvEcosystems {
 			reqBody.Queries = append(reqBody.Queries, osvQuery{Package: queryPackage{Name: query.Name, Ecosystem: osvEcosystem}})
@@ -236,11 +248,91 @@ func (p *Provider) executeQueryBatch(ctx context.Context, reqBody queryBatchRequ
 	return &batchResp, nil
 }
 
-func collectBatchResults(batchResp *queryBatchResponse, expandedQueries []provider.PackageQuery) ([]provider.AdvisoryResult, error) {
+func (p *Provider) fetchVuln(ctx context.Context, id string) (vulnerability, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v1/vulns/"+url.PathEscape(id), nil)
+	if err != nil {
+		return vulnerability{}, fmt.Errorf("osv: create vuln request: %w", err)
+	}
+	req.Header.Set("User-Agent", "hibou/"+version.Version)
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return vulnerability{}, fmt.Errorf("osv: fetch vuln %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return vulnerability{}, fmt.Errorf("osv: fetch vuln %s returned status %d", id, resp.StatusCode)
+	}
+	var vuln vulnerability
+	limitedBody := io.LimitReader(resp.Body, 10<<20)
+	if err := json.NewDecoder(limitedBody).Decode(&vuln); err != nil {
+		return vulnerability{}, fmt.Errorf("osv: decode vuln %s: %w", id, err)
+	}
+	return vuln, nil
+}
+
+func uniqueVulnIDs(batchResp *queryBatchResponse) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0)
+	for _, result := range batchResp.Results {
+		for _, vuln := range result.Vulns {
+			if vuln.ID == "" {
+				continue
+			}
+			if _, ok := seen[vuln.ID]; ok {
+				continue
+			}
+			seen[vuln.ID] = struct{}{}
+			ids = append(ids, vuln.ID)
+		}
+	}
+	return ids
+}
+
+func (p *Provider) hydrateVulns(ctx context.Context, batchResp *queryBatchResponse) (map[string]vulnerability, error) {
+	ids := uniqueVulnIDs(batchResp)
+	hydrated := make(map[string]vulnerability, len(ids))
+	if len(ids) == 0 {
+		return hydrated, nil
+	}
+
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	sem := make(chan struct{}, hydrateWorkers)
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			vuln, err := p.fetchVuln(ctx, id)
+			if err != nil {
+				p.log.Warn().Err(err).Str("vuln_id", id).Msg("osv: skip vuln that failed to hydrate")
+				return
+			}
+
+			mu.Lock()
+			hydrated[id] = vuln
+			mu.Unlock()
+		}(id)
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return hydrated, nil
+}
+
+func collectBatchResults(batchResp *queryBatchResponse, expandedQueries []provider.PackageQuery, hydrated map[string]vulnerability) ([]provider.AdvisoryResult, error) {
 	results := make([]provider.AdvisoryResult, 0)
 	rpmResults := make([]provider.AdvisoryResult, 0)
 	for idx, result := range batchResp.Results {
-		mapped, rpmMapped, err := collectQueryResultMatches(result, expandedQueries[idx])
+		mapped, rpmMapped, err := collectQueryResultMatches(result, expandedQueries[idx], hydrated)
 		if err != nil {
 			return nil, err
 		}
@@ -251,11 +343,15 @@ func collectBatchResults(batchResp *queryBatchResponse, expandedQueries []provid
 	return results, nil
 }
 
-func collectQueryResultMatches(result queryResult, query provider.PackageQuery) ([]provider.AdvisoryResult, []provider.AdvisoryResult, error) {
+func collectQueryResultMatches(result queryResult, query provider.PackageQuery, hydrated map[string]vulnerability) ([]provider.AdvisoryResult, []provider.AdvisoryResult, error) {
 	results := make([]provider.AdvisoryResult, 0, len(result.Vulns))
 	rpmResults := make([]provider.AdvisoryResult, 0)
 	for _, vuln := range result.Vulns {
-		mapped, err := mapVulnerability(vuln)
+		full, ok := hydrated[vuln.ID]
+		if !ok {
+			continue
+		}
+		mapped, err := mapVulnerability(full)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -14,75 +16,130 @@ import (
 	"github.com/hibouhq/hibou/internal/provider"
 )
 
-func TestQueryPackagesBasicMapping(t *testing.T) {
-	var gotUserAgent string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUserAgent = r.Header.Get("User-Agent")
-		if r.URL.Path != "/v1/querybatch" {
-			t.Fatalf("expected /v1/querybatch, got %s", r.URL.Path)
+func osvTestServer(
+	t *testing.T,
+	resultsByQuery [][]string,
+	vulnsByID map[string]vulnerability,
+	assertQuery func(*testing.T, queryBatchRequest, *http.Request),
+	onHydrate func(string),
+) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/querybatch" {
+			handleOSVQueryBatch(t, w, r, resultsByQuery, assertQuery)
+			return
 		}
-
-		var req queryBatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+		if strings.HasPrefix(r.URL.Path, "/v1/vulns/") {
+			handleOSVVulnFetch(w, r, vulnsByID, onHydrate)
+			return
 		}
-		if len(req.Queries) != 1 {
-			t.Fatalf("expected 1 query, got %d", len(req.Queries))
-		}
-		if req.Queries[0].Package.Ecosystem != "npm" {
-			t.Fatalf("expected npm ecosystem, got %s", req.Queries[0].Package.Ecosystem)
-		}
-		if req.Queries[0].Version != "" {
-			t.Fatalf("expected version to be omitted from query, got %q", req.Queries[0].Version)
-		}
-
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{
-			Results: []queryResult{{
-				Vulns: []vulnerability{{
-					ID:      "GHSA-xxxx-yyyy-zzzz",
-					Aliases: []string{"CVE-2021-12345"},
-					Summary: "lodash issue",
-					Details: "details",
-					Severity: []severityEntry{
-						{Type: "CVSS_V2", Score: "4.3"},
-						{Type: "CVSS_V3", Score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"},
-					},
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
-						Ranges: []affectedRange{{
-							Type:   "ECOSYSTEM",
-							Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}},
-						}},
-					}},
-					Published: "2021-05-06T00:00:00Z",
-					Withdrawn: "2024-01-01T00:00:00Z",
-					DatabaseSpecific: vulnerabilityDBSpecific{
-						Severity: "high",
-						CWEIDs:   []string{"CWE-79", "CWE-89"},
-					},
-				}},
-			}},
-		})
+		t.Fatalf("unexpected path %s", r.URL.Path)
 	}))
-	defer server.Close()
+}
 
-	prov := New(server.URL, zerolog.Nop())
-	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{
-		Ecosystem: "npm",
-		Name:      "lodash",
-		Version:   "4.17.20",
-	}})
-	if err != nil {
-		t.Fatalf("QueryPackages() error = %v", err)
+func handleOSVQueryBatch(
+	t *testing.T,
+	w http.ResponseWriter,
+	r *http.Request,
+	resultsByQuery [][]string,
+	assertQuery func(*testing.T, queryBatchRequest, *http.Request),
+) {
+	t.Helper()
+	var req queryBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		t.Fatalf("decode request: %v", err)
 	}
+	if assertQuery != nil {
+		assertQuery(t, req, r)
+	}
+	if len(req.Queries) != len(resultsByQuery) {
+		t.Fatalf("expected %d query results, got %d requests", len(resultsByQuery), len(req.Queries))
+	}
+	_ = json.NewEncoder(w).Encode(queryBatchResponse{Results: batchResultsForIDs(resultsByQuery)})
+}
+
+func handleOSVVulnFetch(w http.ResponseWriter, r *http.Request, vulnsByID map[string]vulnerability, onHydrate func(string)) {
+	id := strings.TrimPrefix(r.URL.Path, "/v1/vulns/")
+	if onHydrate != nil {
+		onHydrate(id)
+	}
+	vuln, ok := vulnsByID[id]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(vuln)
+}
+
+func batchResultsForIDs(resultsByQuery [][]string) []queryResult {
+	results := make([]queryResult, len(resultsByQuery))
+	for i, ids := range resultsByQuery {
+		results[i] = queryResult{Vulns: vulnerabilitiesForIDs(ids)}
+	}
+	return results
+}
+
+func vulnerabilitiesForIDs(ids []string) []vulnerability {
+	vulns := make([]vulnerability, 0, len(ids))
+	for _, id := range ids {
+		vulns = append(vulns, vulnerability{ID: id})
+	}
+	return vulns
+}
+
+func basicMappingVulnerability() vulnerability {
+	return vulnerability{
+		ID:      "GHSA-xxxx-yyyy-zzzz",
+		Aliases: []string{"CVE-2021-12345"},
+		Summary: "lodash issue",
+		Details: "details",
+		Severity: []severityEntry{
+			{Type: "CVSS_V2", Score: "4.3"},
+			{Type: "CVSS_V3", Score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"},
+		},
+		Affected: []affectedPackage{{
+			Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
+			Ranges: []affectedRange{{
+				Type:   "ECOSYSTEM",
+				Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}},
+			}},
+		}},
+		Published: "2021-05-06T00:00:00Z",
+		Withdrawn: "2024-01-01T00:00:00Z",
+		DatabaseSpecific: vulnerabilityDBSpecific{
+			Severity: "high",
+			CWEIDs:   []string{"CWE-79", "CWE-89"},
+		},
+	}
+}
+
+func assertBasicMappingQuery(t *testing.T, req queryBatchRequest, r *http.Request, gotUserAgent *string) {
+	t.Helper()
+	*gotUserAgent = r.Header.Get("User-Agent")
+	if len(req.Queries) != 1 {
+		t.Fatalf("expected 1 query, got %d", len(req.Queries))
+	}
+	if req.Queries[0].Package.Ecosystem != "npm" {
+		t.Fatalf("expected npm ecosystem, got %s", req.Queries[0].Package.Ecosystem)
+	}
+	if req.Queries[0].Version != "" {
+		t.Fatalf("expected version to be omitted from query, got %q", req.Queries[0].Version)
+	}
+}
+
+func assertBasicMappingResult(t *testing.T, results []provider.AdvisoryResult, gotUserAgent string) {
+	t.Helper()
 	if gotUserAgent != "hibou/dev" {
 		t.Fatalf("expected user agent hibou/dev, got %s", gotUserAgent)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
+	assertBasicMappingAdvisory(t, results[0])
+}
 
-	result := results[0]
+func assertBasicMappingAdvisory(t *testing.T, result provider.AdvisoryResult) {
+	t.Helper()
 	if result.ProviderName != "osv" {
 		t.Fatalf("expected provider osv, got %s", result.ProviderName)
 	}
@@ -118,59 +175,75 @@ func TestQueryPackagesBasicMapping(t *testing.T) {
 	}
 }
 
+func TestQueryPackagesBasicMapping(t *testing.T) {
+	var gotUserAgent string
+	server := osvTestServer(
+		t,
+		[][]string{{"GHSA-xxxx-yyyy-zzzz"}},
+		map[string]vulnerability{
+			"GHSA-xxxx-yyyy-zzzz": basicMappingVulnerability(),
+		},
+		func(t *testing.T, req queryBatchRequest, r *http.Request) {
+			assertBasicMappingQuery(t, req, r, &gotUserAgent)
+		},
+		nil,
+	)
+	defer server.Close()
+
+	prov := New(server.URL, zerolog.Nop())
+	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{
+		Ecosystem: "npm",
+		Name:      "lodash",
+		Version:   "4.17.20",
+	}})
+	if err != nil {
+		t.Fatalf("QueryPackages() error = %v", err)
+	}
+	assertBasicMappingResult(t, results, gotUserAgent)
+}
+
 func TestQueryPackagesOmitsVersionAndExpandsRPM(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var reqBody map[string][]map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-
-		queries := reqBody["queries"]
-		if len(queries) != 4 {
-			t.Fatalf("expected 4 expanded rpm queries, got %d", len(queries))
-		}
-
-		gotEcosystems := make([]string, 0, len(queries))
-		for _, query := range queries {
-			if _, ok := query["version"]; ok {
-				t.Fatal("expected version field to be omitted from OSV query")
-			}
-			pkg, ok := query["package"].(map[string]any)
-			if !ok {
-				t.Fatalf("expected package object, got %#v", query["package"])
-			}
-			ecosystem, _ := pkg["ecosystem"].(string)
-			gotEcosystems = append(gotEcosystems, ecosystem)
-		}
-
-		expected := []string{"Red Hat", "Rocky Linux", "AlmaLinux", "SUSE"}
-		if !reflect.DeepEqual(gotEcosystems, expected) {
-			t.Fatalf("unexpected rpm ecosystem expansion: %#v", gotEcosystems)
-		}
-
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{
-			Results: []queryResult{
-				{Vulns: []vulnerability{{
-					ID:      "RHSA-1",
-					Summary: "rhel advisory",
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "openssl", Ecosystem: "Red Hat"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
-					}},
-				}}},
-				{Vulns: []vulnerability{{
-					ID:      "ROCKY-1",
-					Summary: "rocky advisory",
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "openssl", Ecosystem: "Rocky Linux"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.3"}}}},
-					}},
-				}}},
-				{},
-				{},
+	server := osvTestServer(
+		t,
+		[][]string{{"RHSA-1"}, {"ROCKY-1"}, {}, {}},
+		map[string]vulnerability{
+			"RHSA-1": {
+				ID:      "RHSA-1",
+				Summary: "rhel advisory",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "openssl", Ecosystem: "Red Hat"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
+				}},
 			},
-		})
-	}))
+			"ROCKY-1": {
+				ID:      "ROCKY-1",
+				Summary: "rocky advisory",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "openssl", Ecosystem: "Rocky Linux"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.3"}}}},
+				}},
+			},
+		},
+		func(t *testing.T, req queryBatchRequest, _ *http.Request) {
+			if len(req.Queries) != 4 {
+				t.Fatalf("expected 4 expanded rpm queries, got %d", len(req.Queries))
+			}
+
+			gotEcosystems := make([]string, 0, len(req.Queries))
+			for _, query := range req.Queries {
+				if query.Version != "" {
+					t.Fatal("expected version field to be omitted from OSV query")
+				}
+				gotEcosystems = append(gotEcosystems, query.Package.Ecosystem)
+			}
+
+			expected := []string{"Red Hat", "Rocky Linux", "AlmaLinux", "SUSE"}
+			if !reflect.DeepEqual(gotEcosystems, expected) {
+				t.Fatalf("unexpected rpm ecosystem expansion: %#v", gotEcosystems)
+			}
+		},
+		nil,
+	)
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
@@ -190,33 +263,83 @@ func TestQueryPackagesOmitsVersionAndExpandsRPM(t *testing.T) {
 	}
 }
 
+func TestQueryPackagesSkipsUnknownEcosystem(t *testing.T) {
+	server := osvTestServer(
+		t,
+		[][]string{{"GHSA-skip-unknown"}},
+		map[string]vulnerability{
+			"GHSA-skip-unknown": {
+				ID:      "GHSA-skip-unknown",
+				Summary: "lodash issue",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}}}},
+				}},
+			},
+		},
+		func(t *testing.T, req queryBatchRequest, _ *http.Request) {
+			if len(req.Queries) != 1 {
+				t.Fatalf("expected 1 supported query, got %d", len(req.Queries))
+			}
+			if req.Queries[0].Package.Name != "lodash" {
+				t.Fatalf("expected lodash query, got %s", req.Queries[0].Package.Name)
+			}
+			if req.Queries[0].Package.Ecosystem != "npm" {
+				t.Fatalf("expected npm ecosystem, got %s", req.Queries[0].Package.Ecosystem)
+			}
+		},
+		nil,
+	)
+	defer server.Close()
+
+	prov := New(server.URL, zerolog.Nop())
+	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{
+		Ecosystem: "npm",
+		Name:      "lodash",
+		Version:   "4.17.20",
+	}, {
+		Ecosystem: "",
+		Name:      "mystery",
+		Version:   "1.0.0",
+	}})
+	if err != nil {
+		t.Fatalf("QueryPackages() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].ProviderID != "GHSA-skip-unknown" {
+		t.Fatalf("unexpected provider id: %s", results[0].ProviderID)
+	}
+	if len(results[0].AffectedRanges) != 1 || results[0].AffectedRanges[0].Ecosystem != "npm" {
+		t.Fatalf("expected npm advisory mapping, got %#v", results[0].AffectedRanges)
+	}
+}
+
 func TestQueryPackagesDedupesRPMAdvisoriesByProviderID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{
-			Results: []queryResult{
-				{Vulns: []vulnerability{{
-					ID:      "CVE-2024-1234",
-					Aliases: []string{"GHSA-dup-1"},
-					Summary: "red hat advisory",
-					Affected: []affectedPackage{{
+	server := osvTestServer(
+		t,
+		[][]string{{"CVE-2024-1234"}, {"CVE-2024-1234"}, {}, {}},
+		map[string]vulnerability{
+			"CVE-2024-1234": {
+				ID:      "CVE-2024-1234",
+				Aliases: []string{"GHSA-dup-1"},
+				Summary: "red hat advisory",
+				Affected: []affectedPackage{
+					{
 						Package: queryPackage{Name: "openssl", Ecosystem: "Red Hat"},
 						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
-					}},
-				}}},
-				{Vulns: []vulnerability{{
-					ID:      "CVE-2024-1234",
-					Aliases: []string{"GHSA-dup-1"},
-					Summary: "rocky advisory",
-					Affected: []affectedPackage{{
+					},
+					{
 						Package: queryPackage{Name: "openssl", Ecosystem: "Rocky Linux"},
 						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
-					}},
-				}}},
-				{},
-				{},
+					},
+				},
 			},
-		})
-	}))
+		},
+		nil,
+		nil,
+	)
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
@@ -240,28 +363,30 @@ func TestQueryPackagesDedupesRPMAdvisoriesByProviderID(t *testing.T) {
 }
 
 func TestQueryPackagesMultiplePackages(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{
-			Results: []queryResult{
-				{Vulns: []vulnerability{{
-					ID:      "GHSA-one",
-					Summary: "one",
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}}}},
-					}},
-				}}},
-				{Vulns: []vulnerability{{
-					ID:      "GHSA-two",
-					Summary: "two",
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "django", Ecosystem: "PyPI"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "3.2.2"}}}},
-					}},
-				}}},
+	server := osvTestServer(
+		t,
+		[][]string{{"GHSA-one"}, {"GHSA-two"}},
+		map[string]vulnerability{
+			"GHSA-one": {
+				ID:      "GHSA-one",
+				Summary: "one",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}}}},
+				}},
 			},
-		})
-	}))
+			"GHSA-two": {
+				ID:      "GHSA-two",
+				Summary: "two",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "django", Ecosystem: "PyPI"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "3.2.2"}}}},
+				}},
+			},
+		},
+		nil,
+		nil,
+	)
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
@@ -290,9 +415,7 @@ func TestQueryPackagesMultiplePackages(t *testing.T) {
 }
 
 func TestQueryPackagesEmptyResults(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{Results: []queryResult{{}}})
-	}))
+	server := osvTestServer(t, [][]string{{}}, map[string]vulnerability{}, nil, nil)
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
@@ -306,20 +429,22 @@ func TestQueryPackagesEmptyResults(t *testing.T) {
 }
 
 func TestQueryPackagesMalwareDetection(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{
-			Results: []queryResult{{
-				Vulns: []vulnerability{{
-					ID:      "MAL-2024-0001",
-					Summary: "bad package",
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "pkg", Ecosystem: "npm"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}}}},
-					}},
+	server := osvTestServer(
+		t,
+		[][]string{{"MAL-2024-0001"}},
+		map[string]vulnerability{
+			"MAL-2024-0001": {
+				ID:      "MAL-2024-0001",
+				Summary: "bad package",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "pkg", Ecosystem: "npm"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}}}},
 				}},
-			}},
-		})
-	}))
+			},
+		},
+		nil,
+		nil,
+	)
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
@@ -333,27 +458,29 @@ func TestQueryPackagesMalwareDetection(t *testing.T) {
 }
 
 func TestQueryPackagesCVSSFallbackAndRanges(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(queryBatchResponse{
-			Results: []queryResult{{
-				Vulns: []vulnerability{{
-					ID:      "GHSA-ranges",
-					Summary: "ranges",
-					Severity: []severityEntry{{
-						Type:  "CVSS_V2",
-						Score: "5.0",
-					}},
-					Affected: []affectedPackage{{
-						Package: queryPackage{Name: "pkg", Ecosystem: "Debian"},
-						Ranges: []affectedRange{{
-							Type:   "ECOSYSTEM",
-							Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.2.0"}, {Introduced: "1.3.0"}, {LastAffected: "1.3.5"}},
-						}},
+	server := osvTestServer(
+		t,
+		[][]string{{"GHSA-ranges"}},
+		map[string]vulnerability{
+			"GHSA-ranges": {
+				ID:      "GHSA-ranges",
+				Summary: "ranges",
+				Severity: []severityEntry{{
+					Type:  "CVSS_V2",
+					Score: "5.0",
+				}},
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "pkg", Ecosystem: "Debian"},
+					Ranges: []affectedRange{{
+						Type:   "ECOSYSTEM",
+						Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.2.0"}, {Introduced: "1.3.0"}, {LastAffected: "1.3.5"}},
 					}},
 				}},
-			}},
-		})
-	}))
+			},
+		},
+		nil,
+		nil,
+	)
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
@@ -376,6 +503,92 @@ func TestQueryPackagesCVSSFallbackAndRanges(t *testing.T) {
 	}
 	if result.AffectedRanges[0].Ecosystem != "deb" || result.AffectedRanges[1].LastAffected != "1.3.5" {
 		t.Fatalf("unexpected ranges: %#v", result.AffectedRanges)
+	}
+}
+
+func TestQueryPackagesHydratesVulnDetails(t *testing.T) {
+	var hydrateCalls atomic.Int32
+	server := osvTestServer(
+		t,
+		[][]string{{"GHSA-hydrated"}},
+		map[string]vulnerability{
+			"GHSA-hydrated": {
+				ID:       "GHSA-hydrated",
+				Summary:  "hydrated",
+				Severity: []severityEntry{{Type: "CVSS_V3", Score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}},
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "pkg", Ecosystem: "npm"},
+					Ranges: []affectedRange{{
+						Type:   "ECOSYSTEM",
+						Events: []rangeEvent{{Introduced: "0"}, {Fixed: "2.0.0"}},
+					}},
+				}},
+				DatabaseSpecific: vulnerabilityDBSpecific{Severity: "critical"},
+			},
+		},
+		nil,
+		func(id string) {
+			if id == "GHSA-hydrated" {
+				hydrateCalls.Add(1)
+			}
+		},
+	)
+	defer server.Close()
+
+	results, err := New(server.URL, zerolog.Nop()).QueryPackages(context.Background(), []provider.PackageQuery{{
+		Ecosystem: "npm",
+		Name:      "pkg",
+		Version:   "1.0.0",
+	}})
+	if err != nil {
+		t.Fatalf("QueryPackages() error = %v", err)
+	}
+	if hydrateCalls.Load() != 1 {
+		t.Fatalf("expected 1 hydration request, got %d", hydrateCalls.Load())
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if len(results[0].AffectedRanges) != 1 || results[0].AffectedRanges[0].Fixed != "2.0.0" {
+		t.Fatalf("expected hydrated affected range, got %#v", results[0].AffectedRanges)
+	}
+	if results[0].Severity == nil || *results[0].Severity != advisory.SeverityCritical {
+		t.Fatalf("expected hydrated severity, got %#v", results[0].Severity)
+	}
+}
+
+func TestFetchVulnNotFoundSkipped(t *testing.T) {
+	server := osvTestServer(
+		t,
+		[][]string{{"GHSA-missing", "GHSA-present"}},
+		map[string]vulnerability{
+			"GHSA-present": {
+				ID:      "GHSA-present",
+				Summary: "present",
+				Affected: []affectedPackage{{
+					Package: queryPackage{Name: "pkg", Ecosystem: "npm"},
+					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.1"}}}},
+				}},
+			},
+		},
+		nil,
+		nil,
+	)
+	defer server.Close()
+
+	results, err := New(server.URL, zerolog.Nop()).QueryPackages(context.Background(), []provider.PackageQuery{{
+		Ecosystem: "npm",
+		Name:      "pkg",
+		Version:   "1.0.0",
+	}})
+	if err != nil {
+		t.Fatalf("QueryPackages() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 hydrated result, got %d", len(results))
+	}
+	if results[0].ProviderID != "GHSA-present" {
+		t.Fatalf("unexpected provider id: %s", results[0].ProviderID)
 	}
 }
 

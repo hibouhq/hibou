@@ -14,9 +14,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/versioncmp"
 )
 
 type severityCounts struct {
@@ -54,6 +56,7 @@ type componentWithVulnsResponse struct {
 	Advisories      []advisoryResponse `json:"advisories,omitempty"`
 	Sources         []string           `json:"sources,omitempty"`
 	FixedVersions   []string           `json:"fixed_versions,omitempty"`
+	UsagePaths      [][]string         `json:"usage_paths,omitempty"`
 }
 
 type componentGraphNodeResponse struct {
@@ -305,14 +308,73 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerability matches")
 		return
 	}
+	edges, err := s.queries.ListComponentDependencyEdgesBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list component dependencies")
+		return
+	}
+	declaredRootRef, err := s.queries.GetSnapshotDependencyRoot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load component dependency root")
+		return
+	}
 
-	responses, err := s.buildComponentResponses(r, components, vulnerabilities)
+	responses, err := s.buildComponentResponses(r, components, vulnerabilities, edges, declaredRootRef)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load advisories")
 		return
 	}
 
 	api.JSON(w, http.StatusOK, responses)
+}
+
+// handleTriggerComponentScan runs an advisory rescan for the snapshot resolved from the current ref or snapshot query.
+// It is a state-changing operation (cache invalidation, scan execution, audit log), so it requires repo admin access.
+func (s *Server) handleTriggerComponentScan(w http.ResponseWriter, r *http.Request) {
+	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
+	if !ok {
+		return
+	}
+
+	if len(s.advisoryProviders) == 0 {
+		api.JSONError(w, http.StatusConflict, "advisory scanning is not enabled: no advisory providers are configured")
+		return
+	}
+
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithComponentsByRef)
+	if !ok {
+		return
+	}
+	if snapshot == nil {
+		api.JSONError(w, http.StatusNotFound, "no snapshot available to scan for this ref")
+		return
+	}
+
+	ipAddress, userAgent := audit.RequestContext(r)
+	actorID := user.ID
+	orgID := org.ID
+	actor := audit.Entry{
+		ActorID:      &actorID,
+		ActorType:    audit.ActorUser,
+		ActorDisplay: actorDisplay(user),
+		OrgID:        &orgID,
+		IPAddress:    ipAddress,
+		UserAgent:    userAgent,
+	}
+
+	scanID, err := s.advisoryScanner.TriggerRescan(r.Context(), snapshot.ID, s.advisoryProviders, actor)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to trigger component scan")
+		return
+	}
+
+	api.JSON(w, http.StatusOK, struct {
+		ScanID    uuid.UUID `json:"scan_id"`
+		Providers []string  `json:"providers"`
+	}{
+		ScanID:    scanID,
+		Providers: append([]string(nil), s.advisoryProviders...),
+	})
 }
 
 func (s *Server) handleGetRefComponentGraph(w http.ResponseWriter, r *http.Request) {
@@ -706,11 +768,13 @@ func (s *Server) resolveRefForRepo(r *http.Request, repo *store.Repository, refN
 	}
 }
 
-func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Component, vulnerabilities []store.Vulnerability) ([]componentWithVulnsResponse, error) {
+func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Component, vulnerabilities []store.Vulnerability, dependencyEdges []store.ListComponentDependencyEdgesBySnapshotRow, declaredRootRef *string) ([]componentWithVulnsResponse, error) {
 	countedVulns, err := s.loadCountedVulns(r, vulnerabilities)
 	if err != nil {
 		return nil, err
 	}
+
+	nodeLabels, adjacency, rootRef := buildComponentUsageGraph(components, dependencyEdges, declaredRootRef)
 
 	vulnsByComponent := make(map[uuid.UUID][]countedVuln)
 	for _, item := range countedVulns {
@@ -727,25 +791,8 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 			Ecosystem: component.Ecosystem,
 			Purl:      component.Purl,
 		}
-		if len(countedAdvisories) > 0 {
-			response.Advisories = make([]advisoryResponse, 0, len(countedAdvisories))
-			response.VulnCount = len(countedAdvisories)
-			advisories := make([]dbgen.Advisory, 0, len(countedAdvisories))
-			componentSources := make([]string, 0, len(countedAdvisories))
-			componentFixedVersions := make([]string, 0, len(countedAdvisories))
-			for _, countedAdvisory := range countedAdvisories {
-				advisories = append(advisories, countedAdvisory.Advisory)
-				response.Advisories = append(response.Advisories, advisoryToResponse(countedAdvisory.Advisory, countedAdvisory.Enrichment))
-				componentSources = append(componentSources, countedAdvisory.Enrichment.Sources...)
-				componentFixedVersions = append(componentFixedVersions, countedAdvisory.Enrichment.FixedVersions...)
-			}
-			response.Sources = sortedUniqueNonEmptyStrings(componentSources)
-			response.FixedVersions = sortedUniqueNonEmptyStrings(componentFixedVersions)
-			highest := highestAdvisorySeverity(advisories)
-			if highest != "" {
-				response.HighestSeverity = &highest
-			}
-		}
+		populateComponentVulnerabilityDetails(&response, component, countedAdvisories)
+		response.UsagePaths = computeComponentUsagePaths(rootRef, adjacency, nodeLabels, component.Purl)
 		responses = append(responses, response)
 	}
 
@@ -759,6 +806,72 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 	})
 
 	return responses, nil
+}
+
+func buildComponentUsageGraph(components []dbgen.Component, dependencyEdges []store.ListComponentDependencyEdgesBySnapshotRow, declaredRootRef *string) (map[string]string, map[string][]string, string) {
+	nodeLabels := make(map[string]string, len(components))
+	for _, component := range components {
+		nodeLabels[component.Purl] = componentUsageNodeLabel(component)
+	}
+
+	adjacency := make(map[string][]string)
+	inDegree := make(map[string]int)
+	for _, edge := range dependencyEdges {
+		if !usageGraphIncludesEdge(nodeLabels, edge) {
+			continue
+		}
+		adjacency[edge.Ref] = append(adjacency[edge.Ref], edge.DependsOn)
+		inDegree[edge.DependsOn]++
+		if _, ok := inDegree[edge.Ref]; !ok {
+			inDegree[edge.Ref] = 0
+		}
+	}
+
+	if declaredRootRef != nil {
+		return nodeLabels, adjacency, *declaredRootRef
+	}
+	return nodeLabels, adjacency, deriveComponentGraphRootRef(adjacency, inDegree)
+}
+
+func componentUsageNodeLabel(component dbgen.Component) string {
+	if component.Name != "" {
+		return component.Name
+	}
+	return shortPurlLabel(component.Purl)
+}
+
+func usageGraphIncludesEdge(nodeLabels map[string]string, edge store.ListComponentDependencyEdgesBySnapshotRow) bool {
+	if _, ok := nodeLabels[edge.Ref]; !ok {
+		return false
+	}
+	if _, ok := nodeLabels[edge.DependsOn]; !ok {
+		return false
+	}
+	return true
+}
+
+func populateComponentVulnerabilityDetails(response *componentWithVulnsResponse, component dbgen.Component, countedAdvisories []countedVuln) {
+	if len(countedAdvisories) == 0 {
+		return
+	}
+
+	response.Advisories = make([]advisoryResponse, 0, len(countedAdvisories))
+	response.VulnCount = len(countedAdvisories)
+	advisories := make([]dbgen.Advisory, 0, len(countedAdvisories))
+	componentSources := make([]string, 0, len(countedAdvisories))
+	componentFixedVersionSets := make([][]string, 0, len(countedAdvisories))
+	for _, countedAdvisory := range countedAdvisories {
+		advisories = append(advisories, countedAdvisory.Advisory)
+		response.Advisories = append(response.Advisories, advisoryToResponse(countedAdvisory.Advisory, countedAdvisory.Enrichment))
+		componentSources = append(componentSources, countedAdvisory.Enrichment.Sources...)
+		componentFixedVersionSets = append(componentFixedVersionSets, countedAdvisory.Enrichment.FixedVersions)
+	}
+	response.Sources = sortedUniqueNonEmptyStrings(componentSources)
+	response.FixedVersions = computeComponentFixedVersions(component.Ecosystem, componentFixedVersionSets)
+	highest := highestAdvisorySeverity(advisories)
+	if highest != "" {
+		response.HighestSeverity = &highest
+	}
 }
 
 func buildComponentGraphResponse(components []dbgen.Component, vulnerabilities []store.Vulnerability, dependencyEdges []store.ListComponentDependencyEdgesBySnapshotRow, declaredRootRef *string) componentGraphResponse {
@@ -808,6 +921,261 @@ func buildComponentGraphResponse(components []dbgen.Component, vulnerabilities [
 		Nodes:   nodes,
 		Edges:   graphEdges,
 	}
+}
+
+// computeComponentUsagePaths returns dependency chains (root -> ... -> target) as ordered display
+// labels. It mirrors the frontend computeUsagePaths (site/src/views/repo/DependenciesTab.vue):
+// per-target DFS from rootRef over adjacency with bounded paths/depth/steps and a visited-set
+// cycle guard, stopping descent once the target is reached. Returns nil when there is no path.
+func computeComponentUsagePaths(rootRef string, adjacency map[string][]string, nodeLabels map[string]string, targetRef string) [][]string {
+	if !componentUsagePathInputsValid(rootRef, targetRef, nodeLabels) {
+		return nil
+	}
+
+	walker := newComponentUsagePathWalker(adjacency, nodeLabels, targetRef)
+	walker.walk(rootRef, 0)
+	return walker.result()
+}
+
+const (
+	componentUsageMaxPaths = 12
+	componentUsageMaxDepth = 14
+	componentUsageMaxSteps = 5000
+)
+
+type componentUsagePathWalker struct {
+	adjacency   map[string][]string
+	nodeLabels  map[string]string
+	targetRef   string
+	paths       [][]string
+	currentPath []string
+	visited     map[string]struct{}
+	steps       int
+}
+
+func componentUsagePathInputsValid(rootRef, targetRef string, nodeLabels map[string]string) bool {
+	if rootRef == "" || targetRef == "" {
+		return false
+	}
+	if _, ok := nodeLabels[rootRef]; !ok {
+		return false
+	}
+	if _, ok := nodeLabels[targetRef]; !ok {
+		return false
+	}
+	return true
+}
+
+func newComponentUsagePathWalker(adjacency map[string][]string, nodeLabels map[string]string, targetRef string) *componentUsagePathWalker {
+	return &componentUsagePathWalker{
+		adjacency:   adjacency,
+		nodeLabels:  nodeLabels,
+		targetRef:   targetRef,
+		paths:       make([][]string, 0),
+		currentPath: make([]string, 0, componentUsageMaxDepth+1),
+		visited:     make(map[string]struct{}),
+	}
+}
+
+func (w *componentUsagePathWalker) result() [][]string {
+	if len(w.paths) == 0 {
+		return nil
+	}
+	return w.paths
+}
+
+func (w *componentUsagePathWalker) label(ref string) string {
+	if value, ok := w.nodeLabels[ref]; ok && value != "" {
+		return value
+	}
+	return shortPurlLabel(ref)
+}
+
+func (w *componentUsagePathWalker) canVisit(currentRef string, depth int) bool {
+	if len(w.paths) >= componentUsageMaxPaths || depth > componentUsageMaxDepth {
+		return false
+	}
+	if _, seen := w.visited[currentRef]; seen {
+		return false
+	}
+	w.steps++
+	return w.steps <= componentUsageMaxSteps
+}
+
+func (w *componentUsagePathWalker) canDescend() bool {
+	if len(w.paths) >= componentUsageMaxPaths {
+		return false
+	}
+	w.steps++
+	return w.steps <= componentUsageMaxSteps
+}
+
+func (w *componentUsagePathWalker) appendCurrentPath() {
+	chain := make([]string, len(w.currentPath))
+	for i, ref := range w.currentPath {
+		chain[i] = w.label(ref)
+	}
+	w.paths = append(w.paths, chain)
+}
+
+func (w *componentUsagePathWalker) walk(currentRef string, depth int) {
+	if !w.canVisit(currentRef, depth) {
+		return
+	}
+
+	w.visited[currentRef] = struct{}{}
+	w.currentPath = append(w.currentPath, currentRef)
+	defer func() {
+		w.currentPath = w.currentPath[:len(w.currentPath)-1]
+		delete(w.visited, currentRef)
+	}()
+
+	if currentRef == w.targetRef {
+		w.appendCurrentPath()
+		return
+	}
+
+	for _, childRef := range w.adjacency[currentRef] {
+		if !w.canDescend() {
+			break
+		}
+		w.walk(childRef, depth+1)
+	}
+}
+
+// shortPurlLabel derives a compact display label from a purl when a component name is unavailable.
+// It mirrors the frontend shortPurl + parsePurl (site/src/lib/purl.ts): a parsed purl yields
+// "namespace/name" (or just "name"), with percent-decoded, subpath/qualifier-stripped segments;
+// an unparsable value falls back to the (truncated) raw string.
+func shortPurlLabel(purl string) string {
+	parsed, ok := parsePurl(purl)
+	if !ok {
+		if len(purl) > 36 {
+			return purl[:33] + "..."
+		}
+		return purl
+	}
+	if parsed.namespace != "" {
+		return parsed.namespace + "/" + parsed.name
+	}
+	if parsed.name != "" {
+		return parsed.name
+	}
+	return purl
+}
+
+type parsedPurl struct {
+	typ       string
+	namespace string
+	name      string
+	version   string
+}
+
+// parsePurl is a minimal purl parser mirroring the frontend parsePurl (site/src/lib/purl.ts).
+// Spec: pkg:type/namespace/name@version?qualifiers#subpath.
+func parsePurl(purl string) (parsedPurl, bool) {
+	if !strings.HasPrefix(purl, "pkg:") {
+		return parsedPurl{}, false
+	}
+	rest := purl[len("pkg:"):]
+	if idx := strings.Index(rest, "#"); idx != -1 {
+		rest = rest[:idx]
+	}
+	if idx := strings.Index(rest, "?"); idx != -1 {
+		rest = rest[:idx]
+	}
+	var version string
+	if idx := strings.LastIndex(rest, "@"); idx != -1 {
+		version = decodePurlSegment(rest[idx+1:])
+		rest = rest[:idx]
+	}
+	segments := make([]string, 0)
+	for _, segment := range strings.Split(rest, "/") {
+		if segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+	if len(segments) == 0 {
+		return parsedPurl{}, false
+	}
+	parsed := parsedPurl{typ: strings.ToLower(segments[0]), version: version}
+	if len(segments) > 1 {
+		parsed.name = decodePurlSegment(segments[len(segments)-1])
+	}
+	if len(segments) > 2 {
+		decoded := make([]string, 0, len(segments)-2)
+		for _, segment := range segments[1 : len(segments)-1] {
+			decoded = append(decoded, decodePurlSegment(segment))
+		}
+		parsed.namespace = strings.Join(decoded, "/")
+	}
+	return parsed, true
+}
+
+// decodePurlSegment percent-decodes a single purl segment, mirroring the frontend's
+// decodeURIComponent. On malformed input it returns the segment unchanged.
+func decodePurlSegment(value string) string {
+	if decoded, err := url.PathUnescape(value); err == nil {
+		return decoded
+	}
+	return value
+}
+
+func computeComponentFixedVersions(ecosystem string, advisoryFixedVersionSets [][]string) []string {
+	version, ok := computeComponentFixedVersion(ecosystem, advisoryFixedVersionSets)
+	if !ok {
+		return nil
+	}
+	return []string{version}
+}
+
+func computeComponentFixedVersion(ecosystem string, advisoryFixedVersionSets [][]string) (string, bool) {
+	if len(advisoryFixedVersionSets) == 0 {
+		return "", false
+	}
+
+	comparator, ok := versioncmp.Get(ecosystem)
+	if !ok {
+		return "", false
+	}
+
+	var candidate string
+	for _, fixedVersions := range advisoryFixedVersionSets {
+		advisoryMin, ok := minimumComparableFixedVersion(comparator, fixedVersions)
+		if !ok {
+			return "", false
+		}
+		if candidate == "" || comparator.Compare(advisoryMin, candidate) > 0 {
+			candidate = advisoryMin
+		}
+	}
+
+	if candidate == "" {
+		return "", false
+	}
+	return candidate, true
+}
+
+func minimumComparableFixedVersion(comparator versioncmp.Comparator, fixedVersions []string) (string, bool) {
+	unique := sortedUniqueNonEmptyStrings(fixedVersions)
+	if len(unique) == 0 {
+		return "", false
+	}
+
+	minVersion := ""
+	for _, fixedVersion := range unique {
+		if !comparator.Valid(fixedVersion) {
+			return "", false
+		}
+		if minVersion == "" || comparator.Compare(fixedVersion, minVersion) < 0 {
+			minVersion = fixedVersion
+		}
+	}
+
+	if minVersion == "" {
+		return "", false
+	}
+	return minVersion, true
 }
 
 type countedVuln struct {

@@ -1,0 +1,359 @@
+package trivy
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/rs/zerolog"
+
+	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/provider"
+)
+
+func newTestProvider(t *testing.T, handler http.HandlerFunc) *Provider {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return New(srv.URL, zerolog.Nop())
+}
+
+func TestQueryPackagesMapsVulnerabilities(t *testing.T) {
+	var putArtifactCalled, putBlobCalled, scanCalled bool
+	var capturedBlob putBlobRequest
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "PutArtifact"):
+			putArtifactCalled = true
+			writeJSON(t, w, map[string]any{})
+		case strings.HasSuffix(r.URL.Path, "PutBlob"):
+			putBlobCalled = true
+			if err := json.Unmarshal(body, &capturedBlob); err != nil {
+				t.Errorf("decode blob request: %v", err)
+			}
+			writeJSON(t, w, map[string]any{})
+		case strings.HasSuffix(r.URL.Path, "Scan"):
+			scanCalled = true
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Target: "package-lock.json",
+				Type:   "npm",
+				Class:  "lang-pkgs",
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2020-28500",
+					PkgName:          "lodash",
+					InstalledVersion: "4.17.15",
+					FixedVersion:     "4.17.21",
+					Title:            "lodash ReDoS",
+					Description:      "Regular expression denial of service",
+					Severity:         "MEDIUM",
+					CweIDs:           []string{"CWE-400"},
+					CVSS: map[string]trivyCVSS{
+						"nvd": {V3Vector: "CVSS:3.1/AV:N", V3Score: 5.3},
+					},
+					PublishedDate: "2021-02-15T11:15:00Z",
+				}},
+			}}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "npm", Name: "lodash", Version: "4.17.15"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if !putArtifactCalled || !putBlobCalled || !scanCalled {
+		t.Fatalf("expected all twirp endpoints called: artifact=%v blob=%v scan=%v", putArtifactCalled, putBlobCalled, scanCalled)
+	}
+	if capturedBlob.BlobInfo.SchemaVersion != blobSchemaVersion {
+		t.Errorf("expected blob schema version %d, got %d", blobSchemaVersion, capturedBlob.BlobInfo.SchemaVersion)
+	}
+	if len(capturedBlob.BlobInfo.Applications) != 1 || capturedBlob.BlobInfo.Applications[0].Type != "npm" {
+		t.Fatalf("expected single npm application, got %+v", capturedBlob.BlobInfo.Applications)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 advisory result, got %d", len(results))
+	}
+	got := results[0]
+	if got.ProviderName != "trivy" || got.ProviderID != "CVE-2020-28500" {
+		t.Errorf("unexpected provider identity: %+v", got)
+	}
+	if len(got.AffectedRanges) != 1 {
+		t.Fatalf("expected 1 affected range, got %d", len(got.AffectedRanges))
+	}
+	rng := got.AffectedRanges[0]
+	if rng.Ecosystem != "npm" || rng.PackageName != "lodash" || rng.Fixed != "4.17.21" || rng.Introduced != "0" || rng.Source != "trivy" {
+		t.Errorf("unexpected affected range: %+v", rng)
+	}
+	if got.CVSSScore == nil || *got.CVSSScore != 5.3 {
+		t.Errorf("expected cvss score 5.3, got %v", got.CVSSScore)
+	}
+	if got.CVSSVersion == nil || *got.CVSSVersion != advisory.CVSSVersionV31 {
+		t.Errorf("expected cvss v3.1, got %v", got.CVSSVersion)
+	}
+	if got.Severity == nil || *got.Severity != advisory.SeverityMedium {
+		t.Errorf("expected medium severity, got %v", got.Severity)
+	}
+}
+
+func TestQueryPackagesSkipsUnknownEcosystems(t *testing.T) {
+	called := false
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "haskell", Name: "aeson", Version: "1.0"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if called {
+		t.Fatal("expected no twirp calls when all ecosystems unsupported")
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results, got %d", len(results))
+	}
+}
+
+func TestQueryPackagesNoFixedVersionUsesLastAffected(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Type: "pip",
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2019-0000",
+					PkgName:          "requests",
+					InstalledVersion: "2.20.0",
+					Severity:         "HIGH",
+				}},
+			}}})
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "pypi", Name: "requests", Version: "2.20.0"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	rng := results[0].AffectedRanges[0]
+	if rng.Ecosystem != "pypi" || rng.Fixed != "" || rng.LastAffected != "2.20.0" {
+		t.Errorf("unexpected range without fix: %+v", rng)
+	}
+}
+
+func TestQueryPackagesPropagatesScanError(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"code":"internal","msg":"boom"}`))
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	_, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "npm", Name: "lodash", Version: "4.17.15"},
+	})
+	if err == nil {
+		t.Fatal("expected error from failing scan")
+	}
+}
+
+func TestQueryPackagesMultiFixedVersionPicksBranchAboveInstalled(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Type: "npm",
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2024-0001",
+					PkgName:          "example",
+					InstalledVersion: "2.0.0",
+					FixedVersion:     "1.2.5, 2.0.1, 3.0.0",
+					Severity:         "HIGH",
+				}},
+			}}})
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "npm", Name: "example", Version: "2.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	rng := results[0].AffectedRanges[0]
+	// 2.0.1 is the smallest fix strictly greater than the installed 2.0.0, so
+	// [0, 2.0.1) keeps the installed version inside the affected range.
+	if rng.Fixed != "2.0.1" {
+		t.Errorf("expected fixed 2.0.1 for installed 2.0.0, got %q", rng.Fixed)
+	}
+}
+
+func TestQueryPackagesUsesOriginalQueryNameNotTrivyCasing(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Type: "python-pkg", // alias of the uploaded "pip" type
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2024-0002",
+					PkgName:          "Flask", // Trivy may echo different casing
+					InstalledVersion: "1.0.0",
+					FixedVersion:     "1.1.0",
+					Severity:         "LOW",
+				}},
+			}}})
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "pypi", Name: "flask", Version: "1.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	rng := results[0].AffectedRanges[0]
+	if rng.PackageName != "flask" {
+		t.Errorf("expected original query name 'flask', got %q", rng.PackageName)
+	}
+	if rng.Ecosystem != "pypi" {
+		t.Errorf("expected ecosystem pypi, got %q", rng.Ecosystem)
+	}
+}
+
+func TestQueryPackagesFallsBackToResultTypeEcosystem(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Type: "npm",
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2024-0003",
+					PkgName:          "transitive-dep", // not in our query set
+					InstalledVersion: "1.0.0",
+					FixedVersion:     "1.0.1",
+					Severity:         "MEDIUM",
+				}},
+			}}})
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "npm", Name: "lodash", Version: "4.17.15"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	rng := results[0].AffectedRanges[0]
+	if rng.Ecosystem != "npm" || rng.PackageName != "transitive-dep" {
+		t.Errorf("expected fallback ecosystem npm + Trivy name, got %+v", rng)
+	}
+}
+
+func TestQueryPackagesNoFixAboveInstalledUsesLastAffected(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Type: "npm",
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2024-0004",
+					PkgName:          "example",
+					InstalledVersion: "3.0.0",
+					FixedVersion:     "1.2.5, 2.0.1", // all fixes below installed
+					Severity:         "HIGH",
+				}},
+			}}})
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "npm", Name: "example", Version: "3.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	rng := results[0].AffectedRanges[0]
+	// No fix is strictly greater than 3.0.0, so bound by the installed version.
+	if rng.Fixed != "" || rng.LastAffected != "3.0.0" {
+		t.Errorf("expected LastAffected=3.0.0 with empty Fixed, got %+v", rng)
+	}
+}
+
+func TestQueryPackagesUnregisteredComparatorUsesFirstFix(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "Scan") {
+			writeJSON(t, w, scanResponse{Results: []scanResult{{
+				Type: "composer",
+				Vulnerabilities: []trivyVulnerability{{
+					VulnerabilityID:  "CVE-2024-0005",
+					PkgName:          "vendor/pkg",
+					InstalledVersion: "1.0.0",
+					FixedVersion:     "1.0.1, 1.2.0",
+					Severity:         "MEDIUM",
+				}},
+			}}})
+			return
+		}
+		writeJSON(t, w, map[string]any{})
+	}
+	p := newTestProvider(t, handler)
+	results, err := p.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "packagist", Name: "vendor/pkg", Version: "1.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("QueryPackages: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	rng := results[0].AffectedRanges[0]
+	// packagist has no versioncmp comparator, so the first listed fix is used.
+	if rng.Ecosystem != "packagist" || rng.PackageName != "vendor/pkg" || rng.Fixed != "1.0.1" {
+		t.Errorf("unexpected range for unregistered comparator: %+v", rng)
+	}
+}
+
+func writeJSON(t *testing.T, w http.ResponseWriter, payload any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Errorf("encode response: %v", err)
+	}
+}

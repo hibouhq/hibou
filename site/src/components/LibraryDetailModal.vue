@@ -61,9 +61,9 @@
           class="mt-5"
         >
           <h3 class="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-gray-300">
-            <span class="text-sev-critical">⚠</span>
+            <span class="text-sev-high">⚠</span>
             Known Vulnerabilities
-            <span class="rounded-full bg-sev-high/20 px-2 py-0.5 text-[11px] font-medium text-sev-high">{{ advisories.length }}</span>
+            <span class="vuln-count inline-flex min-w-[1.5rem] items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-medium">{{ advisories.length }}</span>
           </h3>
           <div class="max-h-[40vh] overflow-auto rounded-xl border border-surface-border-subtle">
             <table class="min-w-full divide-y divide-surface-border-subtle text-sm">

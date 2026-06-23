@@ -36,6 +36,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CacheTTL != 6*time.Hour {
 		t.Errorf("expected default cache ttl 6h, got %s", cfg.CacheTTL)
 	}
+	if cfg.AdvisoryScan.Interval != 6*time.Hour {
+		t.Errorf("expected default advisory scan interval 6h, got %s", cfg.AdvisoryScan.Interval)
+	}
+	if len(cfg.AdvisoryScan.Providers) != 2 || cfg.AdvisoryScan.Providers[0] != "osv" || cfg.AdvisoryScan.Providers[1] != "trivy" {
+		t.Fatalf("expected default advisory scan providers [osv trivy], got %v", cfg.AdvisoryScan.Providers)
+	}
 	if cfg.ArtifactBackend != "filesystem" {
 		t.Errorf("expected default artifact backend filesystem, got %s", cfg.ArtifactBackend)
 	}
@@ -78,6 +84,8 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("HIBOU_LOG_LEVEL", "debug")
 	t.Setenv("HIBOU_OSV_URL", "http://osv.internal")
 	t.Setenv("HIBOU_CACHE_TTL", "30m")
+	t.Setenv("HIBOU_ADVISORY_SCAN_INTERVAL", "45m") // TODO must be per provider (to do later.)
+	t.Setenv("HIBOU_ADVISORY_SCAN_PROVIDERS", "osv,nvd,osv")
 	t.Setenv("HIBOU_ARTIFACT_BACKEND", "s3")
 	t.Setenv("HIBOU_ARTIFACT_PATH", "/tmp/hibou-artifacts")
 	t.Setenv("HIBOU_ARTIFACT_S3_ENDPOINT", "s3.internal:9000")
@@ -134,6 +142,12 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.CacheTTL != 30*time.Minute {
 		t.Errorf("expected cache ttl override, got %s", cfg.CacheTTL)
+	}
+	if cfg.AdvisoryScan.Interval != 45*time.Minute {
+		t.Fatalf("expected advisory scan interval override, got %s", cfg.AdvisoryScan.Interval)
+	}
+	if got := cfg.AdvisoryScan.Providers; len(got) != 2 || got[0] != "osv" || got[1] != "nvd" {
+		t.Fatalf("expected advisory scan providers [osv nvd], got %v", got)
 	}
 	if cfg.ArtifactBackend != "s3" {
 		t.Errorf("expected artifact backend override, got %s", cfg.ArtifactBackend)

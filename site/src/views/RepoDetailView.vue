@@ -179,34 +179,20 @@
       >
         <span class="shrink-0 text-[11px] uppercase tracking-[0.14em] text-gray-500">Snapshot</span>
         <button
-          class="snapshot-chip shrink-0"
-          :class="[
-            latestSnapshot ? snapshotChipToneClass(latestSnapshot) : 'snapshot-chip--default',
-            !selectedSnapshotId ? 'snapshot-chip--selected' : 'snapshot-chip--idle',
-          ]"
-          :title="latestSnapshotTitle"
-          type="button"
-          @click="selectSnapshot()"
-        >
-          <span class="snapshot-chip__primary">Latest</span>
-          <span class="snapshot-chip__secondary">
-            {{ latestSnapshot ? relativeTime(latestSnapshot.created_at) : 'Most recent build' }}
-          </span>
-        </button>
-        <button
-          v-for="snapshot in snapshots.slice(0, 6)"
+          v-for="snapshot in snapshotChips"
           :key="snapshot.id"
           class="snapshot-chip shrink-0"
           :class="[
             snapshotChipToneClass(snapshot),
-            snapshot.id === selectedSnapshotId ? 'snapshot-chip--selected' : 'snapshot-chip--idle',
+            isLatestSnapshot(snapshot) ? 'snapshot-chip--latest' : '',
+            isSelectedSnapshot(snapshot) ? 'snapshot-chip--selected' : 'snapshot-chip--idle',
           ]"
-          :title="snapshotTitle(snapshot)"
+          :title="snapshotTitle(snapshot, isLatestSnapshot(snapshot) ? 'Latest successful snapshot' : 'Snapshot')"
           type="button"
-          @click="selectSnapshot(snapshot.id)"
+          @click="selectSnapshot(isLatestSnapshot(snapshot) ? undefined : snapshot.id)"
         >
-          <span class="snapshot-chip__primary">{{ snapshotLabel(snapshot) }}</span>
-          <span class="snapshot-chip__secondary">{{ relativeTime(snapshot.created_at) }}</span>
+          <span class="snapshot-chip__primary">{{ snapshotChipPrimary(snapshot) }}</span>
+          <span class="snapshot-chip__secondary">{{ snapshotChipSecondary(snapshot) }}</span>
         </button>
         <span
           v-if="snapshotsLoading"
@@ -281,8 +267,49 @@ const selectedRefName = computed(() => {
   return repo.value?.default_branch || refs.value[0]?.name || 'No refs available'
 })
 const selectedRef = computed(() => refs.value.find((item) => item.name === selectedRefName.value) ?? null)
-const latestSnapshot = computed(() => snapshots.value.find(isFinishedSnapshot) ?? snapshots.value[0] ?? null)
+const latestSnapshot = computed(() => snapshots.value.find(isSuccessfulSnapshot) ?? snapshots.value[0] ?? null)
 provide('latestSnapshot', latestSnapshot)
+const snapshotChips = computed(() => {
+  const visibleIndexes: number[] = []
+  const mandatoryIndexes = new Set<number>()
+
+  const latestIndex = latestSnapshot.value
+    ? snapshots.value.findIndex((snapshot) => snapshot.id === latestSnapshot.value?.id)
+    : -1
+  const selectedIndex = selectedSnapshotId.value
+    ? snapshots.value.findIndex((snapshot) => snapshot.id === selectedSnapshotId.value)
+    : -1
+
+  if (latestIndex >= 0) {
+    mandatoryIndexes.add(latestIndex)
+  }
+
+  if (selectedIndex >= 0) {
+    mandatoryIndexes.add(selectedIndex)
+  }
+
+  for (let index = 0; index < snapshots.value.length && visibleIndexes.length < 6; index += 1) {
+    visibleIndexes.push(index)
+  }
+
+  for (const index of mandatoryIndexes) {
+    if (!visibleIndexes.includes(index)) {
+      visibleIndexes.push(index)
+    }
+  }
+
+  visibleIndexes.sort((left, right) => left - right)
+
+  while (visibleIndexes.length > 6) {
+    const removableIndex = [...visibleIndexes].reverse().find((index) => !mandatoryIndexes.has(index))
+    if (removableIndex === undefined) {
+      break
+    }
+    visibleIndexes.splice(visibleIndexes.indexOf(removableIndex), 1)
+  }
+
+  return visibleIndexes.map((index) => snapshots.value[index])
+})
 const selectedPRNumber = computed(() => {
   if (selectedRef.value?.ref_type !== 'pull_request') {
     return ''
@@ -426,8 +453,6 @@ const tabs = computed(() => {
 const repoDescription = computed(() => repo.value?.description || '')
 
 const prevParams = ref({ provider: '', slug: '', repoSlug: '' })
-const latestSnapshotTitle = computed(() => snapshotTitle(latestSnapshot.value, 'Latest snapshot'))
-
 onMounted(() => {
   document.addEventListener('click', handleCompareMenuDocumentClick)
   prevParams.value = { provider: provider.value, slug: orgSlug.value, repoSlug: repoSlug.value }
@@ -607,8 +632,27 @@ function snapshotLabel(snapshot: Snapshot) {
   return snapshot.tag || snapshot.commit_sha.slice(0, 7)
 }
 
-function isFinishedSnapshot(snapshot: Snapshot) {
-  return snapshot.status === 'complete' || snapshot.status === 'active'
+function snapshotChipPrimary(snapshot: Snapshot) {
+  return snapshotLabel(snapshot)
+}
+
+function snapshotChipSecondary(snapshot: Snapshot) {
+  return relativeTime(snapshot.created_at)
+}
+
+function isLatestSnapshot(snapshot: Snapshot) {
+  return snapshot.id === latestSnapshot.value?.id
+}
+
+function isSelectedSnapshot(snapshot: Snapshot) {
+  if (selectedSnapshotId.value) {
+    return snapshot.id === selectedSnapshotId.value
+  }
+  return snapshot.id === latestSnapshot.value?.id
+}
+
+function isSuccessfulSnapshot(snapshot: Snapshot) {
+  return snapshot.status === 'complete'
 }
 
 function snapshotTitle(snapshot: Snapshot | null, prefix = 'Snapshot') {
@@ -645,6 +689,9 @@ function snapshotChipToneClass(snapshot: Snapshot) {
   }
   if (snapshot.tag) {
     return 'snapshot-chip--release'
+  }
+  if (isLatestSnapshot(snapshot)) {
+    return 'snapshot-chip--latest'
   }
   return 'snapshot-chip--default'
 }
@@ -771,7 +818,11 @@ function relativeTime(input: string) {
 }
 
 .snapshot-chip--selected {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 10px 24px -18px rgba(15, 23, 42, 0.85);
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 3px rgba(96, 165, 250, 0.18),
+    0 14px 30px -18px rgba(15, 23, 42, 0.9);
 }
 
 .snapshot-chip--default {
@@ -784,6 +835,22 @@ function relativeTime(input: string) {
   border-color: rgb(96 165 250 / 0.64);
   background: linear-gradient(180deg, rgb(29 78 216 / 0.22), rgb(18 28 43 / 0.94));
   color: rgb(191 219 254);
+}
+
+.snapshot-chip--latest {
+  border-color: rgb(168 85 247 / 0.45);
+  background: linear-gradient(180deg, rgb(88 28 135 / 0.3), rgb(30 27 75 / 0.92));
+  color: rgb(221 214 254);
+}
+
+.snapshot-chip--latest.snapshot-chip--selected {
+  border-color: rgb(192 132 252 / 0.72);
+  background: linear-gradient(180deg, rgb(126 34 206 / 0.34), rgb(49 46 129 / 0.96));
+  color: rgb(245 243 255);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 3px rgba(168, 85, 247, 0.22),
+    0 14px 30px -18px rgba(88, 28, 135, 0.75);
 }
 
 .snapshot-chip--release {
@@ -843,6 +910,7 @@ function relativeTime(input: string) {
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1;
+  letter-spacing: 0.03em;
 }
 
 .snapshot-chip__secondary {

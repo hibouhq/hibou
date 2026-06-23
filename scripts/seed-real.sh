@@ -15,6 +15,7 @@ HIBOU_PID=""
 COOKIE_JAR="$TMPDIR_BASE/cookies.txt"
 SKIP_UPLOADS=""
 K9S_RELEASES=("v0.50.14" "v0.50.15" "v0.50.16" "v0.50.17" "v0.50.18")
+UPLOADED_REFS=()
 
 cleanup() {
   local exit_code=$?
@@ -67,6 +68,56 @@ wait_for_hibou() {
 
   echo "ERROR: Hibou did not become ready in time" >&2
   exit 1
+}
+
+wait_for_snapshots_processed() {
+  echo "==> Waiting for k9s snapshots to finish processing..."
+
+  local attempt
+  for attempt in $(seq 1 30); do
+    if (( ${#UPLOADED_REFS[@]} == 0 )); then
+      return 0
+    fi
+
+    local unfinished_total=0
+    local has_unknown="false"
+    local ref_name=""
+    for ref_name in "${UPLOADED_REFS[@]+"${UPLOADED_REFS[@]}"}"; do
+      local encoded_ref=""
+      encoded_ref=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$ref_name" 2>/dev/null || echo "")
+
+      if [[ -z "$encoded_ref" ]]; then
+        has_unknown="true"
+        continue
+      fi
+
+      local ref_pending_count=""
+      ref_pending_count=$(curl -sf -b "$COOKIE_JAR" "$HIBOU_URL/api/v1/orgs/forgejo/devtools/repos/k9s/snapshots?per_page=100&ref=$encoded_ref" 2>/dev/null | \
+        python3 -c 'import json,sys; data=json.load(sys.stdin).get("data", []); print(sum(1 for snapshot in data if not snapshot.get("artifact_processing_finished_at")))' 2>/dev/null || echo "unknown")
+
+      if [[ "$ref_pending_count" == "unknown" ]]; then
+        has_unknown="true"
+        continue
+      fi
+
+      unfinished_total=$((unfinished_total + ref_pending_count))
+    done
+
+    if [[ "$has_unknown" != "true" ]] && (( unfinished_total == 0 )); then
+      return 0
+    fi
+
+    if [[ "$has_unknown" == "true" ]]; then
+      echo "    waiting for snapshots to finish processing..."
+    else
+      echo "    waiting for $unfinished_total snapshot(s) to finish processing..."
+    fi
+
+    sleep 2
+  done
+
+  echo "WARNING: Timed out waiting for k9s snapshots to finish processing" >&2
+  return 0
 }
 
 generate_admin_token() {
@@ -161,6 +212,7 @@ payload = {
     "repo": os.environ["REPO"],
     "ref": os.environ["REF_NAME"],
     "commit_sha": os.environ["COMMIT_SHA"],
+  "complete": True,
     "artifact": {
         "filename": "k9s_Linux_amd64.tar.gz.sbom.json",
         "content_base64": content_b64,
@@ -175,6 +227,8 @@ PY
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     --data @"$payload_file" >/dev/null
+
+  UPLOADED_REFS+=("$ref_name")
 }
 
 seed_hibou_data() {
@@ -278,65 +332,6 @@ seed_hibou_data() {
   API_KEY_ID=$(printf '%s' "$key_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["api_key"]["id"])')
 }
 
-modify_sbom_bump_versions() {
-  local input_file=$1
-  local output_file=$2
-
-  python3 - "$input_file" "$output_file" <<'PYEOF'
-import json
-import re
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    sbom = json.load(f)
-
-count = 0
-for pkg in sbom.get("packages", []):
-    ver = pkg.get("versionInfo", "")
-    match = re.match(r'^(\d+)\.(\d+)\.(\d+)$', ver)
-    if match and count < 5:
-        major, minor, patch = map(int, match.groups())
-        pkg["versionInfo"] = f"{major}.{minor}.{patch + 1}"
-        count += 1
-
-with open(sys.argv[2], 'w', encoding="utf-8") as f:
-    json.dump(sbom, f)
-PYEOF
-}
-
-modify_sbom_remove_packages() {
-  local input_file=$1
-  local output_file=$2
-
-  python3 - "$input_file" "$output_file" <<'PYEOF'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as f:
-    sbom = json.load(f)
-
-packages = sbom.get("packages", [])
-removed = []
-kept = []
-for pkg in packages:
-    if len(removed) < 3 and pkg.get("SPDXID", "") != "SPDXRef-DOCUMENT" and not pkg.get("name", "").startswith("k9s") and len(kept) > 0:
-        removed.append(pkg)
-    else:
-        kept.append(pkg)
-
-sbom["packages"] = kept
-
-removed_ids = {p["SPDXID"] for p in removed}
-sbom["relationships"] = [
-    rel for rel in sbom.get("relationships", [])
-    if rel.get("spdxElementId") not in removed_ids and rel.get("relatedSpdxElement") not in removed_ids
-]
-
-with open(sys.argv[2], 'w', encoding="utf-8") as f:
-    json.dump(sbom, f)
-PYEOF
-}
-
 create_prs() {
   echo "==> Creating pull requests in Forgejo..."
 
@@ -391,10 +386,7 @@ PYEOF
 }
 
 upload_pr_sboms() {
-  echo "==> Uploading modified SBOMs for pull requests..."
-
-  local latest_tag="${K9S_RELEASES[${#K9S_RELEASES[@]}-1]}"
-  local base_sbom="$TMPDIR_BASE/k9s-${latest_tag}.sbom.json"
+  echo "==> Uploading real release SBOMs for pull requests..."
 
   local prs
   prs=$(curl -sf \
@@ -415,18 +407,20 @@ upload_pr_sboms() {
     pr_head_branch=$(printf '%s' "$prs" | python3 -c "import json,sys; head=json.load(sys.stdin)[$idx]['head']; print(head.get('label') or head.get('ref') or '')")
     pr_head_sha=$(printf '%s' "$prs" | python3 -c "import json,sys; print(json.load(sys.stdin)[$idx]['head']['sha'])")
 
-    local modified_sbom="$TMPDIR_BASE/k9s-pr-${pr_number}.sbom.json"
-
+    local release_tag
     if [[ "$pr_head_branch" == *"deps"* ]] || [[ "$pr_head_branch" == *"deps/"* ]]; then
-      modify_sbom_bump_versions "$base_sbom" "$modified_sbom"
-      echo "    PR #$pr_number ($pr_head_branch): bumped versions"
+      release_tag="${K9S_RELEASES[0]}"
     else
-      modify_sbom_remove_packages "$base_sbom" "$modified_sbom"
-      echo "    PR #$pr_number ($pr_head_branch): removed packages"
+      release_tag="${K9S_RELEASES[2]}"
     fi
 
-    upload_sbom "k9s" "refs/pull/$pr_number/head" "$pr_head_sha" "$modified_sbom"
-    echo "    PR #$pr_number SBOM uploaded"
+    local real_sbom="$TMPDIR_BASE/k9s-${release_tag}.sbom.json"
+    if [[ ! -f "$real_sbom" ]]; then
+      download_release_sbom "$release_tag" "$real_sbom"
+    fi
+
+    upload_sbom "k9s" "refs/pull/$pr_number/head" "$pr_head_sha" "$real_sbom"
+    echo "    PR #$pr_number ($pr_head_branch): real SBOM $release_tag uploaded"
   done
 }
 
@@ -459,17 +453,9 @@ main() {
     echo "    master branch SBOM uploaded"
   fi
 
-  # PRs are idempotent (branch existence check) and need the SBOM files
-  # downloaded above OR already present from a previous run.
-  # Download latest SBOM if not present (for re-runs where SKIP_UPLOADS=true).
-  local latest_tag="${K9S_RELEASES[${#K9S_RELEASES[@]}-1]}"
-  local base_sbom="$TMPDIR_BASE/k9s-${latest_tag}.sbom.json"
-  if [[ ! -f "$base_sbom" ]]; then
-    download_release_sbom "$latest_tag" "$base_sbom"
-  fi
-
   create_prs
   upload_pr_sboms
+  wait_for_snapshots_processed
 
   echo "==> Real seed data complete."
 }

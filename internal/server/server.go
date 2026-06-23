@@ -26,9 +26,12 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"golang.org/x/oauth2"
 
+	"github.com/hibouhq/hibou/internal/advisory"
 	"github.com/hibouhq/hibou/internal/api"
 	_ "github.com/hibouhq/hibou/internal/apidoc"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/cache"
 	"github.com/hibouhq/hibou/internal/compliance"
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/delta"
@@ -38,10 +41,14 @@ import (
 	"github.com/hibouhq/hibou/internal/objstore"
 	"github.com/hibouhq/hibou/internal/orgprovision"
 	"github.com/hibouhq/hibou/internal/permissionsync"
+	"github.com/hibouhq/hibou/internal/provider"
+	"github.com/hibouhq/hibou/internal/provider/osv"
+	"github.com/hibouhq/hibou/internal/provider/trivy"
 	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/repoinventory"
 	"github.com/hibouhq/hibou/internal/retention"
+	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/toolcatalog"
 	"github.com/hibouhq/hibou/internal/updatecheck"
@@ -50,46 +57,49 @@ import (
 )
 
 type Server struct {
-	cfg               config.Config
-	db                *sql.DB
-	enforcer          *rbac.Enforcer
-	authMgr           *auth.Manager
-	forges            map[string]forge.Provider
-	log               zerolog.Logger
-	queries           *store.Queries
-	bus               *events.Bus
-	objStore          objstore.Store
-	wsHub             *ws.Hub
-	wsFanout          ws.LiveDelivery
-	wsListener        closeableListener
-	notifySvc         *notify.Service
-	deltaSvc          *delta.Service
-	repoConfigLoader  *repoconfig.Loader
-	onboardingSvc     *repoconfig.OnboardingService
-	inventorySvc      *repoinventory.Service
-	orgProvisionSvc   *orgprovision.Service
-	permissionSyncSvc *permissionsync.Service
-	complianceSvc     *compliance.Service
-	toolCatalogSvc    *toolcatalog.Service
-	retentionWorker   *retention.Worker
-	dispatcher        *notify.Dispatcher
-	staleScanChecker  backgroundStarter
-	updateChecker     *updatecheck.Checker
-	annotator         *forge.Annotator
-	forgeIPAllowlists map[string]*forgeIPAllowlist
-	forgeLimiters     map[string]*ipRateLimiter
-	webhookHandlers   map[string][]forgeEventHandler
-	artifactWorkerID  string
-	lifecycleCtx      context.Context
-	shutdownCancel    context.CancelFunc
-	startedAt         time.Time
-	router            chi.Router
-	http              *http.Server
-	draining          atomic.Bool
-	artifactStateMu   sync.Mutex
-	artifactIdleCh    chan struct{}
-	artifactInFlight  map[uuid.UUID]struct{}
-	activeArtifacts   int
+	cfg                config.Config
+	db                 *sql.DB
+	enforcer           *rbac.Enforcer
+	authMgr            *auth.Manager
+	forges             map[string]forge.Provider
+	log                zerolog.Logger
+	queries            *store.Queries
+	bus                *events.Bus
+	objStore           objstore.Store
+	wsHub              *ws.Hub
+	wsFanout           ws.LiveDelivery
+	wsListener         closeableListener
+	notifySvc          *notify.Service
+	deltaSvc           *delta.Service
+	repoConfigLoader   *repoconfig.Loader
+	onboardingSvc      *repoconfig.OnboardingService
+	inventorySvc       *repoinventory.Service
+	orgProvisionSvc    *orgprovision.Service
+	permissionSyncSvc  *permissionsync.Service
+	complianceSvc      *compliance.Service
+	toolCatalogSvc     *toolcatalog.Service
+	advisoryScanner    advisoryScanner
+	advisoryProviders  []string
+	retentionWorker    *retention.Worker
+	dispatcher         *notify.Dispatcher
+	staleScanChecker   backgroundStarter
+	updateChecker      *updatecheck.Checker
+	annotator          *forge.Annotator
+	forgeIPAllowlists  map[string]*forgeIPAllowlist
+	forgeLimiters      map[string]*ipRateLimiter
+	webhookHandlers    map[string][]forgeEventHandler
+	artifactWorkerID   string
+	lifecycleCtx       context.Context
+	shutdownCancel     context.CancelFunc
+	startedAt          time.Time
+	router             chi.Router
+	http               *http.Server
+	draining           atomic.Bool
+	artifactStateMu    sync.Mutex
+	artifactIdleCh     chan struct{}
+	artifactInFlight   map[uuid.UUID]struct{}
+	activeArtifacts    int
+	advisoryScanActive atomic.Bool
 }
 
 type healthResponse struct {
@@ -109,6 +119,11 @@ type metricsResponse struct {
 
 type backgroundStarter interface {
 	Start(context.Context)
+}
+
+type advisoryScanner interface {
+	RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error)
+	TriggerRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error)
 }
 
 type closeableListener interface {
@@ -196,6 +211,14 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.permissionSyncSvc = permissionsync.NewService(permissionsync.NewStoreAdapter(s.queries), s.enforcer, s.forges, log)
 	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
 	s.toolCatalogSvc = toolcatalog.NewService(toolcatalog.NewStoreAdapter(s.queries))
+	providers := buildAdvisoryProviders(cfg, log)
+	advisoryCache := cache.New(s.queries, cache.Config{DefaultTTL: cfg.CacheTTL}, log)
+	advisoryIngester := advisory.NewIngester(s.queries, log)
+	s.advisoryScanner = scanner.New(s.queries, advisoryCache, advisoryIngester, s.bus, providers, log)
+	s.advisoryProviders = configuredAdvisoryProviderNames(cfg.AdvisoryScan.Providers, providers)
+	if len(s.advisoryProviders) == 0 {
+		log.Info().Strs("configured_providers", append([]string(nil), cfg.AdvisoryScan.Providers...)).Msg("advisory scanning disabled: no supported providers are configured")
+	}
 	if s.authMgr != nil && s.permissionSyncSvc != nil {
 		s.authMgr.AddLoginHook(func(ctx context.Context, user *store.User, providerID string, token *oauth2.Token) {
 			if err := s.permissionSyncSvc.SyncUser(ctx, user, providerID, token); err != nil {
@@ -219,6 +242,39 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.registerDefaultWebhookHandlers()
 	success = true
 	return nil
+}
+
+func buildAdvisoryProviders(cfg config.Config, log zerolog.Logger) map[string]provider.AdvisoryProvider {
+	providers := map[string]provider.AdvisoryProvider{}
+	for _, name := range cfg.AdvisoryScan.Providers {
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "osv":
+			providers["osv"] = osv.New(cfg.OSVURL, log)
+		case "trivy":
+			providers["trivy"] = trivy.New(cfg.TriviURL, log)
+		}
+	}
+	return providers
+}
+
+func configuredAdvisoryProviderNames(configured []string, built map[string]provider.AdvisoryProvider) []string {
+	providerNames := make([]string, 0, len(built))
+	seen := make(map[string]struct{}, len(built))
+	for _, name := range configured {
+		normalized := strings.ToLower(strings.TrimSpace(name))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := built[normalized]; !ok {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		providerNames = append(providerNames, normalized)
+		seen[normalized] = struct{}{}
+	}
+	return providerNames
 }
 
 func initializeWebsocketFanout(s *Server, cfg config.Config, log zerolog.Logger) {
@@ -461,6 +517,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/vulnerabilities/facets", s.handleGetRefFindingFacets)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
+						r.Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
@@ -538,6 +595,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	if s.objStore != nil && s.cfg.Background.ArtifactProcessingEnabled {
 		go s.runArtifactProcessingLoop(runtimeCtx)
+	}
+	if s.advisoryScanner != nil && len(s.advisoryProviders) > 0 && s.cfg.AdvisoryScan.Interval > 0 {
+		go s.runAdvisoryScanLoop(runtimeCtx)
 	}
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		go s.staleScanChecker.Start(runtimeCtx)

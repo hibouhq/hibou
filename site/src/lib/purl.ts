@@ -11,7 +11,7 @@ export interface ParsedPurl {
 }
 
 export function parsePurl(purl: string | undefined | null): ParsedPurl | null {
-  if (!purl || !purl.startsWith('pkg:')) {
+  if (!purl?.startsWith('pkg:')) {
     return null
   }
 
@@ -40,7 +40,7 @@ export function parsePurl(purl: string | undefined | null): ParsedPurl | null {
   }
 
   const type = segments[0].toLowerCase()
-  const name = segments.length > 1 ? decodeURIComponent(segments[segments.length - 1]) : ''
+  const name = segments.length > 1 ? decodeURIComponent(segments.at(-1) ?? '') : ''
   const namespace = segments.length > 2
     ? segments.slice(1, -1).map((segment) => decodeURIComponent(segment)).join('/')
     : ''
@@ -82,6 +82,29 @@ export function ecosystemKey(ecosystem: string | undefined | null): string {
   }
 
   return aliases[value] ?? value
+}
+
+/**
+ * Ecosystems that advisory providers (OSV) can actually scan. Components whose
+ * ecosystem is not in this set are never scanned, so callers should render a
+ * dash instead of a misleading "0 vulnerabilities".
+ */
+const SCANNABLE_ECOSYSTEMS = new Set([
+  'golang',
+  'npm',
+  'pypi',
+  'maven',
+  'cargo',
+  'nuget',
+  'gem',
+  'packagist',
+  'deb',
+  'apk',
+  'rpm',
+])
+
+export function isScannableEcosystem(ecosystem: string | undefined | null): boolean {
+  return SCANNABLE_ECOSYSTEMS.has(ecosystemKey(ecosystem))
 }
 
 /** Source/advisory-feed key for badge styling (trivy, nvd, ghsa, …). */

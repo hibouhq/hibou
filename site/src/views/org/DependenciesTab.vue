@@ -156,7 +156,7 @@
                   <span
                     class="inline-flex min-w-[1.5rem] items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium"
                     :class="component.vuln_count > 0 ? 'bg-danger/15 text-danger' : 'text-gray-500'"
-                  >{{ component.vuln_count }}</span>
+                  >{{ isScannableEcosystem(component.ecosystem) ? component.vuln_count : '—' }}</span>
                 </td>
                 <td class="px-3 py-2.5">
                   <span
@@ -192,7 +192,7 @@ import { api, type OrgComponent } from '@/api/client'
 import EcosystemSunburst from '@/components/EcosystemSunburst.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import LibraryDetailModal from '@/components/LibraryDetailModal.vue'
-import { ecosystemKey } from '@/lib/purl'
+import { ecosystemKey, isScannableEcosystem } from '@/lib/purl'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)

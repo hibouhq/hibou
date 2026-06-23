@@ -548,8 +548,8 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	if !reflect.DeepEqual(component.Sources, []string{"ghsa", "nvd"}) {
 		t.Fatalf("component sources = %v, want %v", component.Sources, []string{"ghsa", "nvd"})
 	}
-	if !reflect.DeepEqual(component.FixedVersions, []string{"1.2.4", "1.3.0"}) {
-		t.Fatalf("component fixed_versions = %v, want %v", component.FixedVersions, []string{"1.2.4", "1.3.0"})
+	if component.FixedVersions != nil {
+		t.Fatalf("component fixed_versions = %v, want nil when one advisory has no fix", component.FixedVersions)
 	}
 	if len(component.Advisories) != 2 {
 		t.Fatalf("advisory count = %d, want 2", len(component.Advisories))
@@ -586,6 +586,143 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	}
 	if plain.References != nil {
 		t.Fatalf("plain references = %v, want nil", plain.References)
+	}
+}
+
+func TestComputeComponentFixedVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		ecosystem string
+		advisorys [][]string
+		want      []string
+	}{
+		{
+			name:      "single version fixes all advisories",
+			ecosystem: "go",
+			advisorys: [][]string{{"1.2.4", "1.3.0"}, {"1.2.4"}},
+			want:      []string{"1.2.4"},
+		},
+		{
+			name:      "one advisory unfixed yields empty",
+			ecosystem: "go",
+			advisorys: [][]string{{"1.2.4"}, nil},
+			want:      nil,
+		},
+		{
+			name:      "max of advisory minimum fixes is chosen",
+			ecosystem: "go",
+			advisorys: [][]string{{"1.2.4"}, {"1.3.0", "1.4.0"}},
+			want:      []string{"1.3.0"},
+		},
+		{
+			name:      "no advisories yields empty",
+			ecosystem: "go",
+			advisorys: nil,
+			want:      nil,
+		},
+		{
+			name:      "unsupported ecosystem yields empty",
+			ecosystem: "unknown-ecosystem",
+			advisorys: [][]string{{"1.2.4"}},
+			want:      nil,
+		},
+		{
+			name:      "invalid fixed version yields empty",
+			ecosystem: "go",
+			advisorys: [][]string{{"not-a-version"}, {"1.3.0"}},
+			want:      nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeComponentFixedVersions(tt.ecosystem, tt.advisorys)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("computeComponentFixedVersions() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestComputeComponentUsagePaths(t *testing.T) {
+	t.Parallel()
+
+	adjacency := map[string][]string{
+		"pkg:golang/github.com/example/app":    {"pkg:golang/github.com/example/service", "pkg:golang/github.com/example/worker"},
+		"pkg:golang/github.com/example/service": {"pkg:golang/github.com/example/lib"},
+		"pkg:golang/github.com/example/worker":  {"pkg:golang/github.com/example/lib"},
+	}
+	nodeLabels := map[string]string{
+		"pkg:golang/github.com/example/app":     "app",
+		"pkg:golang/github.com/example/service": "service",
+		"pkg:golang/github.com/example/worker":  "worker",
+		"pkg:golang/github.com/example/lib":     "lib",
+	}
+
+	got := computeComponentUsagePaths("pkg:golang/github.com/example/app", adjacency, nodeLabels, "pkg:golang/github.com/example/lib")
+	want := [][]string{{"app", "service", "lib"}, {"app", "worker", "lib"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("computeComponentUsagePaths() = %v, want %v", got, want)
+	}
+
+	missing := computeComponentUsagePaths("pkg:golang/github.com/example/app", adjacency, nodeLabels, "pkg:golang/github.com/example/missing")
+	if missing != nil {
+		t.Fatalf("computeComponentUsagePaths() missing target = %v, want nil", missing)
+	}
+	noRoot := computeComponentUsagePaths("", adjacency, nodeLabels, "pkg:golang/github.com/example/lib")
+	if noRoot != nil {
+		t.Fatalf("computeComponentUsagePaths() empty root = %v, want nil", noRoot)
+	}
+}
+
+func TestShortPurlLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		purl string
+		want string
+	}{
+		{
+			name: "namespace and name",
+			purl: "pkg:golang/github.com/example/lib@v1.2.3",
+			want: "github.com/example/lib",
+		},
+		{
+			name: "query stripped and scope decoded",
+			purl: "pkg:npm/%40scope/pkg-name@1.0.0?package-id=123",
+			want: "@scope/pkg-name",
+		},
+		{
+			name: "subpath stripped",
+			purl: "pkg:golang/github.com/example/lib@v1.2.3#cmd/tool",
+			want: "github.com/example/lib",
+		},
+		{
+			name: "name only",
+			purl: "pkg:cargo/serde@1.0.0",
+			want: "serde",
+		},
+		{
+			name: "empty fallback returns original",
+			purl: "pkg:",
+			want: "pkg:",
+		},
+		{
+			name: "non-purl returns original",
+			purl: "not-a-purl",
+			want: "not-a-purl",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shortPurlLabel(tt.purl); got != tt.want {
+				t.Fatalf("shortPurlLabel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

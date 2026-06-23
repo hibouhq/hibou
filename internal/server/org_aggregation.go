@@ -138,7 +138,7 @@ func (s *Server) handleListOrgComponents(w http.ResponseWriter, r *http.Request)
 			api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerability matches")
 			return
 		}
-		responses, err := s.buildComponentResponses(r, components, vulnerabilities)
+		responses, err := s.buildComponentResponses(r, components, vulnerabilities, nil, nil)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load advisories")
 			return

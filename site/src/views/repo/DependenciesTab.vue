@@ -70,21 +70,33 @@
           v-else
           class="space-y-3"
         >
-          <div class="rounded-xl border border-dashed border-surface-border bg-surface-overlay/30 px-5 py-10 text-center">
+          <DependencyGraph
+            v-if="graph && graph.nodes.length > 0 && graphHasDependencyEdges"
+            :graph="graph"
+            :focused-ref="focusedNodeRef"
+            @select="selectGraphNode"
+          />
+          <div
+            v-else-if="graph && graph.nodes.length > 0"
+            class="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-200"
+          >
+            <TriangleAlert class="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+            <div>
+              <p class="font-medium">Dependency graph unavailable for this SBOM.</p>
+              <p class="mt-0.5 text-xs text-amber-300/70">
+                SPDX SBOMs don't record dependency relationships, so the graph can't be drawn. Upload a CycloneDX SBOM to see the full dependency graph - the components are still listed below.
+              </p>
+            </div>
+          </div>
+          <div
+            v-else
+            class="rounded-xl border border-dashed border-surface-border bg-surface-overlay/30 px-5 py-10 text-center"
+          >
             <p class="text-sm text-gray-400">
-              The interactive dependency graph needs the SBOM dependency relationships
-              (nodes + edges) from the backend.
+              Dependency graph unavailable for this {{ selectedSnapshot ? 'snapshot' : 'ref' }}.
             </p>
             <p class="mt-1 text-[11px] text-gray-600">
-              Tracked in <span class="font-mono">TODO-BACKEND-deps-nodata.md</span> §2. Use the
-              <button
-                type="button"
-                class="text-accent hover:underline"
-                @click="viewMode = 'tree'"
-              >
-                tree view
-              </button>
-              meanwhile.
+              Component details still work; usage chains appear when graph data loads successfully.
             </p>
           </div>
         </div>
@@ -97,8 +109,31 @@
         <h2 class="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
           Components
         </h2>
-        <span class="text-xs text-gray-500">{{ components.length }} total</span>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-gray-500">{{ components.length }} total</span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-surface-border bg-surface-overlay/40 px-2.5 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="scanning || scanUnavailable"
+            :title="scanUnavailable ? scanError : 'Scan current snapshot components against enabled advisory providers'"
+            @click="runComponentScan"
+          >
+            <RefreshCw
+              class="h-3.5 w-3.5"
+              :class="scanning ? 'animate-spin' : ''"
+            />
+            {{ scanning ? 'Scanning...' : 'Scan components' }}
+          </button>
+        </div>
       </div>
+
+      <p
+        v-if="scanMessage || scanError"
+        class="text-xs"
+        :class="scanError ? 'text-danger' : 'text-ok'"
+      >
+        {{ scanError || scanMessage }}
+      </p>
 
       <FilterBar
         v-model="activeFilters"
@@ -185,14 +220,27 @@
                   >{{ component.ecosystem || 'unknown' }}</span>
                 </td>
                 <td class="px-3 py-2.5">
-                  <div class="font-medium text-gray-200">
-                    {{ component.name }}
-                  </div>
-                  <div
-                    class="truncate font-mono text-[11px] text-gray-500"
-                    :title="component.purl"
-                  >
-                    {{ component.purl }}
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="font-medium text-gray-200">
+                        {{ component.name }}
+                      </div>
+                      <div
+                        class="truncate font-mono text-[11px] text-gray-500"
+                        :title="component.purl"
+                      >
+                        {{ component.purl }}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="rounded-md p-1 text-gray-500 transition hover:bg-white/5 hover:text-accent"
+                      :aria-label="`Locate ${component.name} in graph`"
+                      :title="`Locate ${component.name} in graph`"
+                      @click.stop="locateComponent(component)"
+                    >
+                      <Workflow class="h-4 w-4" />
+                    </button>
                   </div>
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs text-gray-300">
@@ -206,8 +254,8 @@
                 <td class="px-3 py-2.5">
                   <span
                     class="inline-flex min-w-[1.5rem] items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium"
-                    :class="component.vuln_count > 0 ? 'bg-danger/15 text-danger' : 'text-gray-500'"
-                  >{{ component.vuln_count }}</span>
+                    :class="component.vuln_count > 0 ? 'vuln-count' : 'text-gray-500'"
+                  >{{ isScannableEcosystem(component.ecosystem) ? component.vuln_count : '—' }}</span>
                 </td>
                 <td class="px-3 py-2.5">
                   <span
@@ -236,14 +284,16 @@
 </template>
 
 <script setup lang="ts">
+import { RefreshCw, TriangleAlert, Workflow } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { api, type ComponentWithVulns } from '@/api/client'
+import { api, type ComponentGraph, type ComponentGraphNode, type ComponentWithVulns } from '@/api/client'
+import DependencyGraph from '@/components/DependencyGraph.vue'
 import EcosystemSunburst from '@/components/EcosystemSunburst.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import LibraryDetailModal from '@/components/LibraryDetailModal.vue'
-import { ecosystemKey, sourceKey } from '@/lib/purl'
+import { ecosystemKey, isScannableEcosystem, parsePurl, sourceKey } from '@/lib/purl'
 
 type ViewMode = 'tree' | 'graph'
 
@@ -256,9 +306,17 @@ const selectedRef = computed(() => typeof route.query.ref === 'string' ? route.q
 const selectedSnapshot = computed(() => typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined)
 
 const components = ref<ComponentWithVulns[]>([])
+const graph = ref<ComponentGraph | null>(null)
+const graphHasDependencyEdges = computed(() =>
+  Boolean(graph.value?.edges?.some((edge) => (edge.depends_on?.length ?? 0) > 0)),
+)
 const loading = ref(true)
+const scanning = ref(false)
+const scanError = ref('')
+const scanMessage = ref('')
 const viewMode = ref<ViewMode>('tree')
 const activeComponent = ref<ComponentWithVulns | null>(null)
+const focusedNodeRef = ref<string | null>(null)
 
 const activeFilters = ref<Record<string, string>>({})
 const searchQuery = ref('')
@@ -288,6 +346,10 @@ const sortDirectionOptions = [
 ]
 
 const hasActiveFilters = computed(() => Object.values(activeFilters.value).some(Boolean) || searchQuery.value.trim().length > 0)
+const scanUnavailable = computed(() => {
+  const message = scanError.value.toLowerCase()
+  return message.includes('advisory scanning is not enabled') || message.includes('no advisory providers are configured')
+})
 
 const tiles = computed(() => {
   const vulnerable = components.value.filter((component) => component.vuln_count > 0).length
@@ -315,8 +377,8 @@ function matchesFilters(component: ComponentWithVulns): boolean {
 
   const sourceFilter = splitFilter(activeFilters.value.source)
   if (sourceFilter.length) {
-    const componentSources = (component.sources ?? []).map((source) => source.toLowerCase())
-    if (!sourceFilter.some((source) => componentSources.includes(source.toLowerCase()))) {
+    const componentSources = new Set((component.sources ?? []).map((source) => source.toLowerCase()))
+    if (!sourceFilter.some((source) => componentSources.has(source.toLowerCase()))) {
       return false
     }
   }
@@ -366,32 +428,102 @@ const filteredComponents = computed(() => {
   })
 })
 
+async function loadComponents(options?: { resetSelection?: boolean; clearScanStatus?: boolean }) {
+  const resetSelection = options?.resetSelection ?? true
+  const clearScanStatus = options?.clearScanStatus ?? true
+
+  if (!provider.value || !slug.value || !repoSlug.value) {
+    components.value = []
+    graph.value = null
+    if (clearScanStatus) {
+      scanError.value = ''
+      scanMessage.value = ''
+    }
+    return
+  }
+
+  loading.value = true
+  if (resetSelection) {
+    activeComponent.value = null
+    focusedNodeRef.value = null
+  }
+  if (clearScanStatus) {
+    scanError.value = ''
+    scanMessage.value = ''
+  }
+
+  try {
+    const params = {
+      ref: selectedRef.value,
+      snapshot: selectedSnapshot.value,
+    }
+    const [componentsRes, graphRes] = await Promise.allSettled([
+      api.listRefComponents(provider.value, slug.value, repoSlug.value, params),
+      api.getComponentGraph(provider.value, slug.value, repoSlug.value, params),
+    ])
+
+    components.value = componentsRes.status === 'fulfilled' ? componentsRes.value.data : []
+    graph.value = graphRes.status === 'fulfilled' ? graphRes.value.data : null
+  } catch {
+    components.value = []
+    graph.value = null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function runComponentScan() {
+  if (!provider.value || !slug.value || !repoSlug.value || scanning.value || scanUnavailable.value) {
+    return
+  }
+
+  scanning.value = true
+  scanError.value = ''
+  scanMessage.value = ''
+
+  try {
+    const response = await api.triggerComponentScan(provider.value, slug.value, repoSlug.value, {
+      ref: selectedRef.value,
+      snapshot: selectedSnapshot.value,
+    })
+    await loadComponents({ resetSelection: false, clearScanStatus: false })
+
+    const providers = response.data.providers.join(', ')
+    scanMessage.value = providers ? `Component scan completed with ${providers}.` : 'Component scan completed.'
+  } catch (error) {
+    scanError.value = error instanceof Error ? error.message : 'Failed to trigger component scan'
+  } finally {
+    scanning.value = false
+  }
+}
+
 watch(
   [provider, slug, repoSlug, selectedRef, selectedSnapshot],
   async () => {
-    if (!provider.value || !slug.value || !repoSlug.value) {
-      components.value = []
-      return
-    }
-
-    loading.value = true
-    try {
-      const res = await api.listRefComponents(provider.value, slug.value, repoSlug.value, {
-        ref: selectedRef.value,
-        snapshot: selectedSnapshot.value,
-      })
-      components.value = res.data
-    } catch {
-      components.value = []
-    } finally {
-      loading.value = false
-    }
+    await loadComponents()
   },
   { immediate: true },
 )
 
 function openComponent(component: ComponentWithVulns) {
-  activeComponent.value = component
+  activeComponent.value = {
+    ...component,
+    usage_paths: computeUsagePaths(component.purl),
+  }
+  focusedNodeRef.value = component.purl
+}
+
+function locateComponent(component: ComponentWithVulns) {
+  viewMode.value = 'graph'
+  focusedNodeRef.value = component.purl
+}
+
+function selectGraphNode(purl: string) {
+  focusedNodeRef.value = purl
+  const component = components.value.find((entry) => entry.purl === purl)
+  if (component) {
+    openComponent(component)
+  }
 }
 
 function applyEcosystem(ecosystem: string) {
@@ -410,5 +542,82 @@ function sevKey(severity: string): string {
   if (value === 'info' || value === 'informational' || value === 'none') return 'info'
   if (!value) return ''
   return 'low'
+}
+
+function computeUsagePaths(targetPurl: string): string[][] {
+  const currentGraph = graph.value
+  if (!currentGraph?.root_ref || !targetPurl) {
+    return []
+  }
+
+  const nodesByRef = new Map(currentGraph.nodes.map((node) => [node.ref, node]))
+  if (!nodesByRef.has(currentGraph.root_ref) || !nodesByRef.has(targetPurl)) {
+    return []
+  }
+
+  const adjacency = new Map<string, string[]>()
+  for (const edge of currentGraph.edges) {
+    adjacency.set(edge.ref, edge.depends_on.filter((child) => nodesByRef.has(child)))
+  }
+
+  const MAX_PATHS = 12
+  const MAX_DEPTH = 14
+  const MAX_STEPS = 5000
+  const paths: string[][] = []
+  const currentPath: string[] = []
+  const visited = new Set<string>()
+  let steps = 0
+
+  const consumeStep = (): boolean => {
+    steps += 1
+    return steps <= MAX_STEPS
+  }
+
+  const walk = (currentRef: string, depth: number) => {
+    if (paths.length >= MAX_PATHS || depth > MAX_DEPTH || visited.has(currentRef)) {
+      return
+    }
+    if (!consumeStep()) {
+      return
+    }
+
+    visited.add(currentRef)
+    currentPath.push(currentRef)
+
+    if (currentRef === targetPurl) {
+      paths.push(currentPath.map((ref) => nodeDisplayLabel(nodesByRef.get(ref))))
+    } else {
+      for (const childRef of adjacency.get(currentRef) ?? []) {
+        if (paths.length >= MAX_PATHS) {
+          break
+        }
+        if (!consumeStep()) {
+          break
+        }
+        walk(childRef, depth + 1)
+      }
+    }
+
+    currentPath.pop()
+    visited.delete(currentRef)
+  }
+
+  walk(currentGraph.root_ref, 0)
+  return paths
+}
+
+function nodeDisplayLabel(node: ComponentGraphNode | undefined): string {
+  if (!node) {
+    return 'unknown'
+  }
+  return node.name || shortPurl(node.ref)
+}
+
+function shortPurl(purl: string): string {
+  const parsed = parsePurl(purl)
+  if (!parsed) {
+    return purl.length > 36 ? `${purl.slice(0, 33)}...` : purl
+  }
+  return parsed.namespace ? `${parsed.namespace}/${parsed.name}` : parsed.name || purl
 }
 </script>
