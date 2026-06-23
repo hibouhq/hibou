@@ -7,12 +7,18 @@
       </p>
       <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 lg:gap-2">
         <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
-          <component :is="headRefIcon" class="h-5 w-5 shrink-0 text-gray-400" />
+          <component
+            :is="headRefIcon"
+            class="h-5 w-5 shrink-0 text-gray-400"
+          />
           <span class="compare-ref min-w-0 truncate">{{ headLabel }}</span>
         </span>
         <span class="compare-arrow flex h-10 w-10 items-center justify-center text-2xl">→</span>
         <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
-          <component :is="baseRefIcon" class="h-5 w-5 shrink-0 text-gray-400" />
+          <component
+            :is="baseRefIcon"
+            class="h-5 w-5 shrink-0 text-gray-400"
+          />
           <span class="compare-ref compare-ref-head min-w-0 truncate">{{ baseLabel }}</span>
         </span>
       </div>
@@ -21,7 +27,10 @@
         class="absolute right-0 top-1/2 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium"
         :class="gateState.badgeClass"
       >
-        <span class="h-1.5 w-1.5 rounded-full" :class="gateState.dotClass" />
+        <span
+          class="h-1.5 w-1.5 rounded-full"
+          :class="gateState.dotClass"
+        />
         {{ gateState.label }}
       </span>
     </div>
@@ -75,30 +84,30 @@
                 v-if="headSnapshotOpen"
                 class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
               >
-              <button
-                v-for="snapshot in headSnapshots"
-                :key="snapshot.id"
-                type="button"
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                :class="headSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
-                @click="headSnapshotId = snapshot.id; headSnapshotOpen = false"
-              >
-                <span
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="snapshotDotClass(snapshot)"
-                />
-                <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
-                <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
-                <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
-                <span
-                  v-if="snapshot.run_number"
-                  class="text-gray-500"
-                >#{{ snapshot.run_number }}</span>
-                <span
-                  v-if="snapshot.tag"
-                  class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
-                >{{ snapshot.tag }}</span>
-              </button>
+                <button
+                  v-for="snapshot in headSnapshots"
+                  :key="snapshot.id"
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                  :class="headSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
+                  @click="headSnapshotId = snapshot.id; headSnapshotOpen = false"
+                >
+                  <span
+                    class="inline-block h-2 w-2 shrink-0 rounded-full"
+                    :class="snapshotDotClass(snapshot)"
+                  />
+                  <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
+                  <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
+                  <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
+                  <span
+                    v-if="snapshot.run_number"
+                    class="text-gray-500"
+                  >#{{ snapshot.run_number }}</span>
+                  <span
+                    v-if="snapshot.tag"
+                    class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
+                  >{{ snapshot.tag }}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -167,30 +176,30 @@
                 v-if="baseSnapshotOpen"
                 class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
               >
-              <button
-                v-for="snapshot in baseSnapshots"
-                :key="snapshot.id"
-                type="button"
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                :class="baseSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
-                @click="baseSnapshotId = snapshot.id; baseSnapshotOpen = false"
-              >
-                <span
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="snapshotDotClass(snapshot)"
-                />
-                <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
-                <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
-                <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
-                <span
-                  v-if="snapshot.run_number"
-                  class="text-gray-500"
-                >#{{ snapshot.run_number }}</span>
-                <span
-                  v-if="snapshot.tag"
-                  class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
-                >{{ snapshot.tag }}</span>
-              </button>
+                <button
+                  v-for="snapshot in baseSnapshots"
+                  :key="snapshot.id"
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
+                  :class="baseSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
+                  @click="baseSnapshotId = snapshot.id; baseSnapshotOpen = false"
+                >
+                  <span
+                    class="inline-block h-2 w-2 shrink-0 rounded-full"
+                    :class="snapshotDotClass(snapshot)"
+                  />
+                  <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
+                  <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
+                  <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
+                  <span
+                    v-if="snapshot.run_number"
+                    class="text-gray-500"
+                  >#{{ snapshot.run_number }}</span>
+                  <span
+                    v-if="snapshot.tag"
+                    class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
+                  >{{ snapshot.tag }}</span>
+                </button>
               </div>
             </div>
             <button

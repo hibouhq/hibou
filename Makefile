@@ -81,10 +81,15 @@ reset: dev-bin ## Reset database and re-seed
 	@echo "Database reset and reseeded."
 
 .PHONY: lint
-lint: ## Run linters
+lint: ## Run linters (CI gate: fails on any warning)
 	sqlc diff
 	golangci-lint run ./...
 	cd $(FRONTEND) && npx eslint . --max-warnings=0
+
+.PHONY: lint-fix
+lint-fix: ## Auto-fix lint issues (Go + frontend) before committing
+	golangci-lint run --fix ./...
+	cd $(FRONTEND) && npx eslint . --fix --max-warnings=0
 
 .PHONY: test-db
 test-db: ## Create a pristine test database (drops + recreates $(TEST_DB))

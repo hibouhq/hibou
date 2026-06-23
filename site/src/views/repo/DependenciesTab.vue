@@ -82,7 +82,9 @@
           >
             <TriangleAlert class="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
             <div>
-              <p class="font-medium">Dependency graph unavailable for this SBOM.</p>
+              <p class="font-medium">
+                Dependency graph unavailable for this SBOM.
+              </p>
               <p class="mt-0.5 text-xs text-amber-300/70">
                 SPDX SBOMs don't record dependency relationships, so the graph can't be drawn. Upload a CycloneDX SBOM to see the full dependency graph - the components are still listed below.
               </p>

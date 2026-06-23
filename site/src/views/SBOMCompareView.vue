@@ -62,7 +62,11 @@
                   @change="handleSnapshotChange('base', ($event.target as HTMLSelectElement).value)"
                 >
                   <option value="">{{ baseSnapshotPlaceholder }}</option>
-                  <option v-for="snapshot in baseSnapshots" :key="snapshot.id" :value="snapshot.id">
+                  <option
+                    v-for="snapshot in baseSnapshots"
+                    :key="snapshot.id"
+                    :value="snapshot.id"
+                  >
                     {{ snapshotOptionLabel(snapshot) }}
                   </option>
                 </select>
@@ -70,8 +74,14 @@
               </div>
             </label>
 
-            <div v-if="selectedBaseSnapshot" class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500">
-              <span class="rounded-full px-2 py-0.5 font-medium" :class="snapshotBadgeClass(selectedBaseSnapshot)">
+            <div
+              v-if="selectedBaseSnapshot"
+              class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
+            >
+              <span
+                class="rounded-full px-2 py-0.5 font-medium"
+                :class="snapshotBadgeClass(selectedBaseSnapshot)"
+              >
                 {{ snapshotStatusLabel(selectedBaseSnapshot) }}
               </span>
               <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedBaseSnapshot) }}</span>
@@ -88,7 +98,11 @@
                   @change="handleArtifactChange('base', ($event.target as HTMLSelectElement).value)"
                 >
                   <option value="">{{ baseArtifactPlaceholder }}</option>
-                  <option v-for="file in baseSBOMFiles" :key="file.id" :value="file.id">
+                  <option
+                    v-for="file in baseSBOMFiles"
+                    :key="file.id"
+                    :value="file.id"
+                  >
                     {{ artifactLabel(file) }}
                   </option>
                 </select>
@@ -96,8 +110,16 @@
               </div>
             </label>
 
-            <p v-if="baseFilesLoading" class="text-xs text-gray-500">Loading SBOM files…</p>
-            <p v-else-if="baseSnapshotId && baseSBOMFiles.length === 0" class="rounded-lg border border-dashed border-surface-border-subtle px-3 py-3 text-xs text-gray-500">
+            <p
+              v-if="baseFilesLoading"
+              class="text-xs text-gray-500"
+            >
+              Loading SBOM files…
+            </p>
+            <p
+              v-else-if="baseSnapshotId && baseSBOMFiles.length === 0"
+              class="rounded-lg border border-dashed border-surface-border-subtle px-3 py-3 text-xs text-gray-500"
+            >
               No SBOM files found in this snapshot.
             </p>
           </template>
@@ -120,7 +142,9 @@
               >
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <p class="truncate text-sm font-medium text-white">{{ baseLocalFile?.name || 'Drop SBOM JSON here' }}</p>
+                  <p class="truncate text-sm font-medium text-white">
+                    {{ baseLocalFile?.name || 'Drop SBOM JSON here' }}
+                  </p>
                   <p class="mt-1 text-xs text-gray-500">
                     {{ baseLocalFile ? `${baseLocalFormat || 'unknown'} · ${formatBytes(baseLocalFile.size)}` : 'Drag and drop or choose an SPDX or CycloneDX JSON file.' }}
                   </p>
@@ -193,7 +217,11 @@
                   @change="handleSnapshotChange('head', ($event.target as HTMLSelectElement).value)"
                 >
                   <option value="">{{ headSnapshotPlaceholder }}</option>
-                  <option v-for="snapshot in headSnapshots" :key="snapshot.id" :value="snapshot.id">
+                  <option
+                    v-for="snapshot in headSnapshots"
+                    :key="snapshot.id"
+                    :value="snapshot.id"
+                  >
                     {{ snapshotOptionLabel(snapshot) }}
                   </option>
                 </select>
@@ -201,8 +229,14 @@
               </div>
             </label>
 
-            <div v-if="selectedHeadSnapshot" class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500">
-              <span class="rounded-full px-2 py-0.5 font-medium" :class="snapshotBadgeClass(selectedHeadSnapshot)">
+            <div
+              v-if="selectedHeadSnapshot"
+              class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
+            >
+              <span
+                class="rounded-full px-2 py-0.5 font-medium"
+                :class="snapshotBadgeClass(selectedHeadSnapshot)"
+              >
                 {{ snapshotStatusLabel(selectedHeadSnapshot) }}
               </span>
               <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedHeadSnapshot) }}</span>
@@ -219,7 +253,11 @@
                   @change="handleArtifactChange('head', ($event.target as HTMLSelectElement).value)"
                 >
                   <option value="">{{ headArtifactPlaceholder }}</option>
-                  <option v-for="file in headSBOMFiles" :key="file.id" :value="file.id">
+                  <option
+                    v-for="file in headSBOMFiles"
+                    :key="file.id"
+                    :value="file.id"
+                  >
                     {{ artifactLabel(file) }}
                   </option>
                 </select>
@@ -227,8 +265,16 @@
               </div>
             </label>
 
-            <p v-if="headFilesLoading" class="text-xs text-gray-500">Loading SBOM files…</p>
-            <p v-else-if="headSnapshotId && headSBOMFiles.length === 0" class="rounded-lg border border-dashed border-surface-border-subtle px-3 py-3 text-xs text-gray-500">
+            <p
+              v-if="headFilesLoading"
+              class="text-xs text-gray-500"
+            >
+              Loading SBOM files…
+            </p>
+            <p
+              v-else-if="headSnapshotId && headSBOMFiles.length === 0"
+              class="rounded-lg border border-dashed border-surface-border-subtle px-3 py-3 text-xs text-gray-500"
+            >
               No SBOM files found in this snapshot.
             </p>
           </template>
@@ -251,7 +297,9 @@
               >
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <p class="truncate text-sm font-medium text-white">{{ headLocalFile?.name || 'Drop SBOM JSON here' }}</p>
+                  <p class="truncate text-sm font-medium text-white">
+                    {{ headLocalFile?.name || 'Drop SBOM JSON here' }}
+                  </p>
                   <p class="mt-1 text-xs text-gray-500">
                     {{ headLocalFile ? `${headLocalFormat || 'unknown'} · ${formatBytes(headLocalFile.size)}` : 'Drag and drop or choose an SPDX or CycloneDX JSON file.' }}
                   </p>
@@ -369,18 +417,32 @@
           <ChevronDown class="details-chevron h-4 w-4 shrink-0 text-gray-500" />
         </summary>
 
-        <div v-if="section.items.length === 0" class="border-t border-surface-border-subtle px-4 py-5 text-sm text-gray-500">
+        <div
+          v-if="section.items.length === 0"
+          class="border-t border-surface-border-subtle px-4 py-5 text-sm text-gray-500"
+        >
           No packages in this section.
         </div>
 
-        <div v-else class="overflow-x-auto border-t border-surface-border-subtle">
+        <div
+          v-else
+          class="overflow-x-auto border-t border-surface-border-subtle"
+        >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay/60 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-4 py-3 font-medium">Package</th>
-                <th class="px-4 py-3 font-medium">Version</th>
-                <th class="px-4 py-3 font-medium">Ecosystem</th>
-                <th class="px-4 py-3 font-medium">PURL</th>
+                <th class="px-4 py-3 font-medium">
+                  Package
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Version
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  Ecosystem
+                </th>
+                <th class="px-4 py-3 font-medium">
+                  PURL
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
@@ -390,7 +452,9 @@
                 class="align-top text-gray-300"
               >
                 <td class="px-4 py-3">
-                  <div class="font-medium text-white">{{ item.name }}</div>
+                  <div class="font-medium text-white">
+                    {{ item.name }}
+                  </div>
                 </td>
                 <td class="px-4 py-3">
                   <template v-if="section.key === 'version_changed'">
