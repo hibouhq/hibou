@@ -249,12 +249,14 @@ func (p *Provider) executeQueryBatch(ctx context.Context, reqBody queryBatchRequ
 }
 
 func (p *Provider) fetchVuln(ctx context.Context, id string) (vulnerability, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v1/vulns/"+url.PathEscape(id), nil)
+	// baseURL is operator-configured and id is path-escaped, so neither the host
+	// nor the scheme can be influenced by the OSV response payload.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/v1/vulns/"+url.PathEscape(id), nil) //nolint:gosec // trusted operator-configured baseURL with path-escaped id
 	if err != nil {
 		return vulnerability{}, fmt.Errorf("osv: create vuln request: %w", err)
 	}
 	req.Header.Set("User-Agent", "hibou/"+version.Version)
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.httpClient.Do(req) //nolint:gosec // request built from trusted baseURL with path-escaped id
 	if err != nil {
 		return vulnerability{}, fmt.Errorf("osv: fetch vuln %s: %w", id, err)
 	}

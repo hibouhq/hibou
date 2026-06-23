@@ -144,7 +144,7 @@ func TestNewDisablesAdvisoryScanningForUnsupportedProviders(t *testing.T) {
 			Providers: []string{"nvd", "nope"},
 			Interval:  6 * time.Hour,
 		},
-		ArtifactPath:  artifactPath,
+		ArtifactPath: artifactPath,
 		UploadWindow: 10 * time.Minute,
 	}, zerolog.New(&logs), nil, nil, nil, nil, os.DirFS(t.TempDir()))
 	if err != nil {

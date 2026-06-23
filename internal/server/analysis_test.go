@@ -593,52 +593,52 @@ func TestComputeComponentFixedVersion(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		ecosystem string
-		advisorys [][]string
-		want      []string
+		name       string
+		ecosystem  string
+		advisories [][]string
+		want       []string
 	}{
 		{
-			name:      "single version fixes all advisories",
-			ecosystem: "go",
-			advisorys: [][]string{{"1.2.4", "1.3.0"}, {"1.2.4"}},
-			want:      []string{"1.2.4"},
+			name:       "single version fixes all advisories",
+			ecosystem:  "go",
+			advisories: [][]string{{"1.2.4", "1.3.0"}, {"1.2.4"}},
+			want:       []string{"1.2.4"},
 		},
 		{
-			name:      "one advisory unfixed yields empty",
-			ecosystem: "go",
-			advisorys: [][]string{{"1.2.4"}, nil},
-			want:      nil,
+			name:       "one advisory unfixed yields empty",
+			ecosystem:  "go",
+			advisories: [][]string{{"1.2.4"}, nil},
+			want:       nil,
 		},
 		{
-			name:      "max of advisory minimum fixes is chosen",
-			ecosystem: "go",
-			advisorys: [][]string{{"1.2.4"}, {"1.3.0", "1.4.0"}},
-			want:      []string{"1.3.0"},
+			name:       "max of advisory minimum fixes is chosen",
+			ecosystem:  "go",
+			advisories: [][]string{{"1.2.4"}, {"1.3.0", "1.4.0"}},
+			want:       []string{"1.3.0"},
 		},
 		{
-			name:      "no advisories yields empty",
-			ecosystem: "go",
-			advisorys: nil,
-			want:      nil,
+			name:       "no advisories yields empty",
+			ecosystem:  "go",
+			advisories: nil,
+			want:       nil,
 		},
 		{
-			name:      "unsupported ecosystem yields empty",
-			ecosystem: "unknown-ecosystem",
-			advisorys: [][]string{{"1.2.4"}},
-			want:      nil,
+			name:       "unsupported ecosystem yields empty",
+			ecosystem:  "unknown-ecosystem",
+			advisories: [][]string{{"1.2.4"}},
+			want:       nil,
 		},
 		{
-			name:      "invalid fixed version yields empty",
-			ecosystem: "go",
-			advisorys: [][]string{{"not-a-version"}, {"1.3.0"}},
-			want:      nil,
+			name:       "invalid fixed version yields empty",
+			ecosystem:  "go",
+			advisories: [][]string{{"not-a-version"}, {"1.3.0"}},
+			want:       nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := computeComponentFixedVersions(tt.ecosystem, tt.advisorys)
+			got := computeComponentFixedVersions(tt.ecosystem, tt.advisories)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("computeComponentFixedVersions() = %v, want %v", got, tt.want)
 			}
@@ -650,7 +650,7 @@ func TestComputeComponentUsagePaths(t *testing.T) {
 	t.Parallel()
 
 	adjacency := map[string][]string{
-		"pkg:golang/github.com/example/app":    {"pkg:golang/github.com/example/service", "pkg:golang/github.com/example/worker"},
+		"pkg:golang/github.com/example/app":     {"pkg:golang/github.com/example/service", "pkg:golang/github.com/example/worker"},
 		"pkg:golang/github.com/example/service": {"pkg:golang/github.com/example/lib"},
 		"pkg:golang/github.com/example/worker":  {"pkg:golang/github.com/example/lib"},
 	}

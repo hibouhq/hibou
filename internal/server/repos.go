@@ -848,11 +848,6 @@ type trendQuery struct {
 	since   *time.Time
 }
 
-func parsePullRequestNumber(raw string) (int, bool) {
-	number, err := strconv.Atoi(raw)
-	return number, err == nil && number > 0
-}
-
 // extractPRNumberFromRefName parses the number from refs/pull/N or refs/merge-requests/N.
 func extractPRNumberFromRefName(name string) int {
 	for _, prefix := range []string{"refs/pull/", "refs/merge-requests/"} {
