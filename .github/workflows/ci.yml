@@ -48,10 +48,27 @@ jobs:
             (cd site && npm ci)
             make check-generate
             make build-all
-            .github/scripts/parallel-run.sh \
-              "lint"      "make lint" \
-              "coverage"  "make coverage" \
-              "frontend"  "(cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)"
+
+      - parallel:
+          - name: Lint
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              run-cmd: make lint
+
+          - name: Coverage
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              run-cmd: make coverage
+
+          - name: Frontend coverage
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              run-cmd: (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
+
+      - name: Check reproducibility
+        uses: ./.github/actions/devcontainer-ci
+        with:
+          run-cmd: |
             make check-reproducible
 
       - name: Get commit info
