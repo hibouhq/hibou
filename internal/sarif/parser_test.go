@@ -40,8 +40,14 @@ func TestParseAndExtractFindings(t *testing.T) {
 	if finding.FilePath != "app/main.go" || finding.StartLine != 12 || finding.EndLine != 12 {
 		t.Fatalf("unexpected location: %#v", finding)
 	}
-	if cwes, ok := finding.Metadata["cwes"].([]string); !ok || len(cwes) != 1 || cwes[0] != "CWE-798" {
-		t.Fatalf("expected CWE metadata, got %#v", finding.Metadata["cwes"])
+	if finding.Rule == nil {
+		t.Fatalf("expected rule descriptor, got nil")
+	}
+	if finding.Rule.Name != "Hardcoded secret" || finding.Rule.HelpURI != "https://example.com/rule-1" {
+		t.Fatalf("unexpected rule descriptor: %#v", finding.Rule)
+	}
+	if len(finding.Rule.CWEs) != 1 || finding.Rule.CWEs[0] != "CWE-798" {
+		t.Fatalf("expected CWE-798 on rule, got %#v", finding.Rule.CWEs)
 	}
 }
 

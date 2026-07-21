@@ -181,6 +181,65 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 
+type scanRuleResponse struct {
+	Tool             string   `json:"tool"`
+	RuleID           string   `json:"rule_id"`
+	Name             string   `json:"name"`
+	ShortDescription string   `json:"short_description,omitempty"`
+	FullDescription  string   `json:"full_description,omitempty"`
+	HelpURI          string   `json:"help_uri,omitempty"`
+	HelpMarkdown     string   `json:"help_markdown,omitempty"`
+	DefaultLevel     string   `json:"default_level,omitempty"`
+	SecuritySeverity string   `json:"security_severity,omitempty"`
+	Precision        string   `json:"precision,omitempty"`
+	CweIDs           []string `json:"cwe_ids"`
+	Tags             []string `json:"tags"`
+}
+
+// handleGetRefRules returns the deduplicated scan-rule catalog for the resolved
+// snapshot. Findings reference these rules by (tool, rule_id); the UI fetches
+// the catalog once and joins locally instead of embedding rule text per finding.
+func (s *Server) handleGetRefRules(w http.ResponseWriter, r *http.Request) {
+	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithVulnerabilitiesByRef)
+	if !ok {
+		return
+	}
+	if snapshot == nil {
+		api.JSON(w, http.StatusOK, []scanRuleResponse{})
+		return
+	}
+
+	rules, err := s.queries.ListScanRulesBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list scan rules")
+		return
+	}
+
+	resp := make([]scanRuleResponse, 0, len(rules))
+	for _, rule := range rules {
+		resp = append(resp, scanRuleResponse{
+			Tool:             rule.Tool,
+			RuleID:           rule.RuleID,
+			Name:             rule.Name,
+			ShortDescription: rule.ShortDescription,
+			FullDescription:  rule.FullDescription,
+			HelpURI:          rule.HelpUri,
+			HelpMarkdown:     rule.HelpMarkdown,
+			DefaultLevel:     rule.DefaultLevel,
+			SecuritySeverity: rule.SecuritySeverity,
+			Precision:        rule.RulePrecision,
+			CweIDs:           rule.CweIds,
+			Tags:             rule.Tags,
+		})
+	}
+	api.JSON(w, http.StatusOK, resp)
+}
+
 // handleGetRefFindingFacets returns per-option result counts for each filter
 // dimension so the UI can badge every option with how many findings it would
 // match under the current filters.

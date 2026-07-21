@@ -55,6 +55,11 @@
         "coverage": {
           "$ref": "#/$defs/coverageThresholds",
           "description": "Optional coverage gate thresholds for matching branches."
+        },
+        "enforcement": {
+          "type": "string",
+          "enum": ["advisory", "blocking"],
+          "description": "Whether a failing gate blocks the PR. 'advisory' (default) publishes an informational, non-blocking forge check; 'blocking' posts a real failure so a required check blocks the merge. Hibou never breaks the CI build itself."
         }
       },
       "description": "A branch-aware quality gate entry."

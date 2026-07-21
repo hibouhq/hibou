@@ -7,9 +7,9 @@ package dbgen
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const attachComponentToSnapshot = `-- name: AttachComponentToSnapshot :exec
@@ -85,15 +85,15 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (purl, version) DO UPDATE SET
 	name = EXCLUDED.name,
 	ecosystem = EXCLUDED.ecosystem
-RETURNING id, purl, name, version, ecosystem, licenses, created_at
+RETURNING id, purl, name, version, ecosystem, created_at, licenses
 `
 
 type UpsertComponentParams struct {
-	Purl      string          `json:"purl"`
-	Name      string          `json:"name"`
-	Version   string          `json:"version"`
-	Ecosystem string          `json:"ecosystem"`
-	Licenses  json.RawMessage `json:"licenses"`
+	Purl      string   `json:"purl"`
+	Name      string   `json:"name"`
+	Version   string   `json:"version"`
+	Ecosystem string   `json:"ecosystem"`
+	Licenses  []string `json:"licenses"`
 }
 
 func (q *Queries) UpsertComponent(ctx context.Context, arg UpsertComponentParams) (Component, error) {
@@ -102,7 +102,7 @@ func (q *Queries) UpsertComponent(ctx context.Context, arg UpsertComponentParams
 		arg.Name,
 		arg.Version,
 		arg.Ecosystem,
-		arg.Licenses,
+		pq.Array(arg.Licenses),
 	)
 	var i Component
 	err := row.Scan(
@@ -111,8 +111,8 @@ func (q *Queries) UpsertComponent(ctx context.Context, arg UpsertComponentParams
 		&i.Name,
 		&i.Version,
 		&i.Ecosystem,
-		&i.Licenses,
 		&i.CreatedAt,
+		pq.Array(&i.Licenses),
 	)
 	return i, err
 }

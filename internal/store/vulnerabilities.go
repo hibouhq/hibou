@@ -35,8 +35,8 @@ type Vulnerability struct {
 	SnapshotID              uuid.UUID       `json:"snapshot_id"`
 	Title                   string          `json:"title"`
 	Description             string          `json:"description"`
-	PrimaryIdentifier       json.RawMessage `json:"primary_identifier,omitempty"`
-	Identifiers             json.RawMessage `json:"identifiers,omitempty"`
+	PrimaryIdentifierKind   string          `json:"primary_identifier_kind,omitempty"`
+	PrimaryIdentifierValue  string          `json:"primary_identifier_value,omitempty"`
 	OriginalSeverity        SeverityLevel   `json:"original_severity"`
 	Severity                SeverityLevel   `json:"severity"`
 	SeverityOverrideReason  *string         `json:"severity_override_reason,omitempty"`
@@ -91,12 +91,6 @@ type Vulnerability struct {
 }
 
 func (q *Queries) CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*Vulnerability, error) {
-	if len(params.PrimaryIdentifier) == 0 {
-		params.PrimaryIdentifier = json.RawMessage(`{}`)
-	}
-	if len(params.Identifiers) == 0 {
-		params.Identifiers = json.RawMessage(`[]`)
-	}
 	if len(params.Metadata) == 0 {
 		params.Metadata = json.RawMessage(`{}`)
 	}
@@ -508,8 +502,8 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		SnapshotID:              row.SnapshotID,
 		Title:                   row.Title,
 		Description:             row.Description,
-		PrimaryIdentifier:       row.PrimaryIdentifier,
-		Identifiers:             row.Identifiers,
+		PrimaryIdentifierKind:   row.PrimaryIdentifierKind,
+		PrimaryIdentifierValue:  row.PrimaryIdentifierValue,
 		OriginalSeverity:        row.OriginalSeverity,
 		Severity:                row.Severity,
 		SeverityOverrideReason:  stringPtrFromNull(row.SeverityOverrideReason),
@@ -564,7 +558,7 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 	}
 }
 
-const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier, identifiers, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at"
+const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at"
 
 //nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
@@ -602,8 +596,8 @@ func scanVulnerabilityRow(scanner interface {
 		&row.SnapshotID,
 		&row.Title,
 		&row.Description,
-		&row.PrimaryIdentifier,
-		&row.Identifiers,
+		&row.PrimaryIdentifierKind,
+		&row.PrimaryIdentifierValue,
 		&row.OriginalSeverity,
 		&row.Severity,
 		&row.SeverityOverrideReason,

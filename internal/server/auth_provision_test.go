@@ -222,6 +222,10 @@ func (p *oauthCallbackTestProvider) CreateCommitStatus(context.Context, string, 
 	return forge.ErrNotImplemented
 }
 
+func (p *oauthCallbackTestProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return nil, nil
+}
+
 func (p *oauthCallbackTestProvider) ValidateWebhookPayload(*http.Request, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

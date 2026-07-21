@@ -24,6 +24,24 @@ type QualityGate struct {
 	Branches   []string            `yaml:"branches" json:"branches"`
 	Weaknesses *WeaknessThresholds `yaml:"weaknesses,omitempty" json:"weaknesses,omitempty"`
 	Coverage   *CoverageThresholds `yaml:"coverage,omitempty" json:"coverage,omitempty"`
+	// Enforcement controls whether a failing gate blocks the PR. "advisory"
+	// (default) publishes an informational, non-blocking forge check — hibou never
+	// breaks the build; "blocking" posts a real failure so a required check blocks.
+	// See ADR-018.
+	Enforcement string `yaml:"enforcement,omitempty" json:"enforcement,omitempty"`
+}
+
+const (
+	EnforcementAdvisory = "advisory"
+	EnforcementBlocking = "blocking"
+)
+
+// EnforcementValue returns the gate's enforcement mode, defaulting to advisory.
+func (g *QualityGate) EnforcementValue() string {
+	if g == nil || strings.TrimSpace(g.Enforcement) == "" {
+		return EnforcementAdvisory
+	}
+	return strings.ToLower(strings.TrimSpace(g.Enforcement))
 }
 
 type CoverageThresholds struct {
@@ -84,6 +102,7 @@ func DefaultYAML() []byte {
 		"# Vulnerability (CVE) gates stay managed in Hibou itself.",
 		"quality_gates:",
 		"  - branches: [\"main\"]",
+		"    # enforcement: advisory   # advisory (default, informational/non-blocking) | blocking",
 		"    weaknesses:",
 		"      max_critical: 0",
 		"      max_high: 0",
@@ -200,10 +219,26 @@ func validateQualityGate(gate *QualityGate, index int) error {
 	if err := validateGateBranches(gate, index); err != nil {
 		return err
 	}
+	if err := validateGateEnforcement(gate, index); err != nil {
+		return err
+	}
 	if err := validateWeaknessThresholds(gate.Weaknesses, index); err != nil {
 		return err
 	}
 	return validateCoverageThresholds(gate.Coverage, index)
+}
+
+func validateGateEnforcement(gate *QualityGate, index int) error {
+	value := strings.TrimSpace(gate.Enforcement)
+	if value == "" {
+		return nil
+	}
+	switch strings.ToLower(value) {
+	case EnforcementAdvisory, EnforcementBlocking:
+		return nil
+	default:
+		return fmt.Errorf("quality_gates[%d].enforcement must be %q or %q", index, EnforcementAdvisory, EnforcementBlocking)
+	}
 }
 
 func validateGateBranches(gate *QualityGate, index int) error {

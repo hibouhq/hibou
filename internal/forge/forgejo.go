@@ -307,6 +307,12 @@ func (f *Forgejo) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo,
 	return &user, nil
 }
 
+// ComparePatch is not yet implemented for Forgejo; patch coverage degrades to
+// the file-level coverage diff. See PatchDiff docs.
+func (f *Forgejo) ComparePatch(context.Context, string, string, string, string) (*PatchDiff, error) {
+	return nil, nil
+}
+
 func (f *Forgejo) ListUserAccess(context.Context, *oauth2.Token) (UserAccess, error) {
 	return UserAccess{}, nil
 }

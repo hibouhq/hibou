@@ -202,7 +202,7 @@ func TestToSQLFreeText(t *testing.T) {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
-	expected := "(title ILIKE '%' || $1 || '%' ESCAPE '\\\\' OR primary_identifier->>'value' ILIKE '%' || $1 || '%' ESCAPE '\\\\')"
+	expected := "(title ILIKE '%' || $1 || '%' ESCAPE '\\\\' OR primary_identifier_value ILIKE '%' || $1 || '%' ESCAPE '\\\\')"
 	if result.Where != expected {
 		t.Fatalf("unexpected where clause: %s", result.Where)
 	}
@@ -222,7 +222,7 @@ func TestToSQLFreeTextWithQualifier(t *testing.T) {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
-	expected := "((title ILIKE '%' || $1 || '%' ESCAPE '\\\\' OR primary_identifier->>'value' ILIKE '%' || $1 || '%' ESCAPE '\\\\') AND type::text = $2)"
+	expected := "((title ILIKE '%' || $1 || '%' ESCAPE '\\\\' OR primary_identifier_value ILIKE '%' || $1 || '%' ESCAPE '\\\\') AND type::text = $2)"
 	if result.Where != expected {
 		t.Fatalf("unexpected where clause: %s", result.Where)
 	}

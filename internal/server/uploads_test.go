@@ -127,6 +127,14 @@ func (*retentionNudgeStoreStub) PurgeSnapshot(context.Context, uuid.UUID) error 
 	panic("unexpected PurgeSnapshot call")
 }
 
+func (*retentionNudgeStoreStub) RollupSnapshotVulnerabilities(context.Context, uuid.UUID) (int64, error) {
+	panic("unexpected RollupSnapshotVulnerabilities call")
+}
+
+func (*retentionNudgeStoreStub) GetSnapshotVulnRollup(context.Context, uuid.UUID) (store.SnapshotVulnRollup, bool, error) {
+	panic("unexpected GetSnapshotVulnRollup call")
+}
+
 func TestUploadAutoReusesSnapshotForSameRefCommit(t *testing.T) {
 	t.Parallel()
 
@@ -635,6 +643,67 @@ func TestProcessCoverageUploadIsIdempotent(t *testing.T) {
 	}
 	if files[0].LinesValid != 2 || files[0].LinesCovered != 1 {
 		t.Fatalf("coverage file = %+v, want stable parsed values", files[0])
+	}
+}
+
+func TestProcessCoverageUploadPersistsPerLineHits(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	srv.cfg.CoverageStoreLines = true
+	repo := createUploadTestRepository(t, srv, org)
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, "main", store.RefTypeBranch, nil, nil, stringPtrForTest(uniqueName(t, "lines-sha")))
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, uniqueName(t, "coverage-lines"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	// Upload twice to prove per-line rows are replaced, not accumulated.
+	srv.processCoverageUpload(context.Background(), snapshot.ID, richerCoberturaForTest(), "cobertura")
+	srv.processCoverageUpload(context.Background(), snapshot.ID, richerCoberturaForTest(), "cobertura")
+
+	lines, err := srv.queries.ListCoverageLinesBySnapshotFormat(context.Background(), snapshot.ID, "cobertura")
+	if err != nil {
+		t.Fatalf("ListCoverageLinesBySnapshotFormat: %v", err)
+	}
+	hits := make(map[int]int, len(lines))
+	for _, line := range lines {
+		if line.FilePath != "main.go" {
+			t.Fatalf("unexpected file path %q", line.FilePath)
+		}
+		hits[line.LineNumber] = line.Hits
+	}
+	if len(hits) != 2 || hits[1] != 1 || hits[2] != 0 {
+		t.Fatalf("per-line hits = %+v, want {1:1, 2:0}", hits)
+	}
+}
+
+func TestProcessCoverageUploadOmitsPerLineHitsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	srv.cfg.CoverageStoreLines = false
+	repo := createUploadTestRepository(t, srv, org)
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, "main", store.RefTypeBranch, nil, nil, stringPtrForTest(uniqueName(t, "no-lines-sha")))
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, uniqueName(t, "coverage-no-lines"), store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	srv.processCoverageUpload(context.Background(), snapshot.ID, richerCoberturaForTest(), "cobertura")
+
+	lines, err := srv.queries.ListCoverageLinesBySnapshotFormat(context.Background(), snapshot.ID, "cobertura")
+	if err != nil {
+		t.Fatalf("ListCoverageLinesBySnapshotFormat: %v", err)
+	}
+	if len(lines) != 0 {
+		t.Fatalf("expected no per-line rows when storage disabled, got %d", len(lines))
 	}
 }
 

@@ -754,6 +754,10 @@ func (s *stubProvider) CreateCommitStatus(context.Context, string, string, strin
 	return forge.ErrNotImplemented
 }
 
+func (s *stubProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return nil, nil
+}
+
 func (s *stubProvider) ValidateWebhookPayload(*http.Request, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

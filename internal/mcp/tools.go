@@ -83,13 +83,13 @@ type vulnerabilityItem struct {
 }
 
 type componentItem struct {
-	ID        uuid.UUID       `json:"id"`
-	Purl      string          `json:"purl"`
-	Name      string          `json:"name"`
-	Version   string          `json:"version"`
-	Ecosystem string          `json:"ecosystem"`
-	Licenses  json.RawMessage `json:"licenses,omitempty"`
-	VulnCount int64           `json:"vuln_count"`
+	ID        uuid.UUID `json:"id"`
+	Purl      string    `json:"purl"`
+	Name      string    `json:"name"`
+	Version   string    `json:"version"`
+	Ecosystem string    `json:"ecosystem"`
+	Licenses  []string  `json:"licenses,omitempty"`
+	VulnCount int64     `json:"vuln_count"`
 }
 
 func (s *service) handleListVulnerabilities(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

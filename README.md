@@ -18,8 +18,8 @@ An Open Security Intelligence Platform for the Software Lifecycle. Unify depende
 - **Reachability analysis** — Go call graph analysis (server-side, RTA/VTA), Java bytecode analysis (CI-side), Rust source parsing (CI-side) to auto-VEX unreachable vulnerabilities
 - **Coverage integration** — multi-format ingestion (Cobertura, JaCoCo, Clover, LCOV, Go cover), PR coverage deltas, and configurable quality gates (min coverage, regression grace, diff minimum)
 - **Malware detection** — flags typosquat, dependency confusion, backdoor, and cryptominer packages from OSV and OpenSSF Package Analysis
-- **PR quality gates** — delta analysis (new/resolved vulns and findings) with configurable thresholds per branch pattern
-- **Forge integrations** — GitHub, Forgejo/Gitea, and GitLab with PR annotations, commit statuses, and webhook events
+- **PR quality gates** — delta analysis (new/resolved vulns and findings) with configurable thresholds per branch pattern; **advisory by default (never breaks the build), blocking opt-in**; the check updates live when a finding is dismissed (VEX) — no CI re-run
+- **Forge integrations** — GitHub, Forgejo/Gitea, and GitLab with a forge-native PR check (commit status everywhere, rich GitHub Check Run in App mode), PR annotations, and webhook events
 - **Config-as-code** — `.hibou.yaml` per-repo configuration with JSON Schema and onboarding PR creation
 - **Compliance reporting** — point-in-time reports with ISO 27001 control mapping and SoA generation
 - **Release & client tracking** — releases, deployments, rollback history, and CVE impact analysis across clients

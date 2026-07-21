@@ -290,6 +290,56 @@ func (g *GitHub) CreateCommitStatus(ctx context.Context, owner, repo, sha string
 	return g.doJSON(ctx, http.MethodPost, path, payload, nil)
 }
 
+// githubCompareResponse is the subset of GitHub's compare API we consume.
+type githubCompareResponse struct {
+	Files []githubCompareFile `json:"files"`
+}
+
+type githubCompareFile struct {
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename"`
+	Status           string `json:"status"`
+	Patch            string `json:"patch"`
+}
+
+// ComparePatch fetches the changed-file line map between base and head via
+// GitHub's compare API (GET /repos/{o}/{r}/compare/{base}...{head}) and parses
+// each file's unified-diff patch into new-side changed line numbers. GitHub
+// returns at most 300 files per response; when more exist the result is marked
+// Truncated so callers never treat a partial patch coverage number as complete.
+func (g *GitHub) ComparePatch(ctx context.Context, owner, repo, base, head string) (*PatchDiff, error) {
+	path := fmt.Sprintf(
+		"/repos/%s/%s/compare/%s...%s",
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		url.PathEscape(base),
+		url.PathEscape(head),
+	)
+
+	var payload githubCompareResponse
+	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+		return nil, err
+	}
+
+	diff := &PatchDiff{
+		Files:     make([]PatchFile, 0, len(payload.Files)),
+		Truncated: len(payload.Files) >= 300,
+	}
+	for _, file := range payload.Files {
+		if strings.TrimSpace(file.Filename) == "" {
+			continue
+		}
+		diff.Files = append(diff.Files, PatchFile{
+			Path:       file.Filename,
+			OldPath:    file.PreviousFilename,
+			Status:     file.Status,
+			AddedLines: sortedUniqueLines(ParseUnifiedPatch(file.Patch)),
+			Hunks:      file.Patch,
+		})
+	}
+	return diff, nil
+}
+
 func (g *GitHub) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {

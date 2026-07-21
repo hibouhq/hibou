@@ -1,2 +1,0 @@
-ALTER TABLE refs DROP COLUMN IF EXISTS pr_number;
-ALTER TABLE refs DROP COLUMN IF EXISTS pr_ref_kind;

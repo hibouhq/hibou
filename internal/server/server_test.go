@@ -361,20 +361,20 @@ func TestFindingsAliasMatchesVulnerabilitiesResponse(t *testing.T) {
 		t.Fatalf("CreateSnapshot: %v", err)
 	}
 	if _, err := srv.queries.CreateVulnerability(context.Background(), dbgen.CreateVulnerabilityParams{
-		Type:              "dependency",
-		SnapshotID:        snapshot.ID,
-		Title:             "Alias finding",
-		Description:       "desc",
-		PrimaryIdentifier: json.RawMessage(`{"type":"cve","value":"CVE-2026-3000"}`),
-		Identifiers:       json.RawMessage(`[{"type":"cve","value":"CVE-2026-3000"}]`),
-		OriginalSeverity:  dbgen.SeverityLevelHigh,
-		Severity:          dbgen.SeverityLevelHigh,
-		Status:            "detected",
-		ScannerName:       "unit-test",
-		ScannerVendor:     "hibou",
-		ScannerVersion:    "1.0",
-		ScannerExternalID: "scanner",
-		Fingerprint:       uuid.NewString(),
+		Type:                   "dependency",
+		SnapshotID:             snapshot.ID,
+		Title:                  "Alias finding",
+		Description:            "desc",
+		PrimaryIdentifierKind:  "cve",
+		PrimaryIdentifierValue: "CVE-2026-3000",
+		OriginalSeverity:       dbgen.SeverityLevelHigh,
+		Severity:               dbgen.SeverityLevelHigh,
+		Status:                 "detected",
+		ScannerName:            "unit-test",
+		ScannerVendor:          "hibou",
+		ScannerVersion:         "1.0",
+		ScannerExternalID:      "scanner",
+		Fingerprint:            uuid.NewString(),
 	}); err != nil {
 		t.Fatalf("CreateVulnerability: %v", err)
 	}

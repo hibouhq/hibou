@@ -403,24 +403,24 @@ func (s *Service) createMatchedVulnerability(ctx context.Context, snapshotID uui
 	}
 	vulnType := matchedVulnerabilityType(advisoryRecord)
 	vulnerability, err := s.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
-		Type:              vulnType,
-		SnapshotID:        snapshotID,
-		Title:             firstNonEmpty(strings.TrimSpace(advisoryRecord.Title), strings.TrimSpace(advisoryRecord.CanonicalID)),
-		Description:       strings.TrimSpace(advisoryRecord.Description),
-		PrimaryIdentifier: advisoryIdentifier(advisoryRecord.CanonicalID),
-		Identifiers:       json.RawMessage(`[]`),
-		OriginalSeverity:  advisoryRecord.Severity,
-		Severity:          advisoryRecord.Severity,
-		Status:            "detected",
-		ScannerName:       providerName,
-		Fingerprint:       dependencyFingerprint(affectedRange.AdvisoryID, component.ID),
-		ComponentID:       uuid.NullUUID{UUID: component.ID, Valid: true},
-		ComponentName:     sql.NullString{String: component.Name, Valid: strings.TrimSpace(component.Name) != ""},
-		ComponentVersion:  sql.NullString{String: component.Version, Valid: strings.TrimSpace(component.Version) != ""},
-		ComponentPurl:     sql.NullString{String: component.Purl, Valid: strings.TrimSpace(component.Purl) != ""},
-		Ecosystem:         sql.NullString{String: component.Ecosystem, Valid: strings.TrimSpace(component.Ecosystem) != ""},
-		AdvisoryID:        uuid.NullUUID{UUID: affectedRange.AdvisoryID, Valid: true},
-		AffectedRangeID:   uuid.NullUUID{UUID: affectedRange.ID, Valid: true},
+		Type:                   vulnType,
+		SnapshotID:             snapshotID,
+		Title:                  firstNonEmpty(strings.TrimSpace(advisoryRecord.Title), strings.TrimSpace(advisoryRecord.CanonicalID)),
+		Description:            strings.TrimSpace(advisoryRecord.Description),
+		PrimaryIdentifierKind:  "advisory",
+		PrimaryIdentifierValue: strings.TrimSpace(advisoryRecord.CanonicalID),
+		OriginalSeverity:       advisoryRecord.Severity,
+		Severity:               advisoryRecord.Severity,
+		Status:                 "detected",
+		ScannerName:            providerName,
+		Fingerprint:            dependencyFingerprint(affectedRange.AdvisoryID, component.ID),
+		ComponentID:            uuid.NullUUID{UUID: component.ID, Valid: true},
+		ComponentName:          sql.NullString{String: component.Name, Valid: strings.TrimSpace(component.Name) != ""},
+		ComponentVersion:       sql.NullString{String: component.Version, Valid: strings.TrimSpace(component.Version) != ""},
+		ComponentPurl:          sql.NullString{String: component.Purl, Valid: strings.TrimSpace(component.Purl) != ""},
+		Ecosystem:              sql.NullString{String: component.Ecosystem, Valid: strings.TrimSpace(component.Ecosystem) != ""},
+		AdvisoryID:             uuid.NullUUID{UUID: affectedRange.AdvisoryID, Valid: true},
+		AffectedRangeID:        uuid.NullUUID{UUID: affectedRange.ID, Valid: true},
 	})
 	if err != nil {
 		return nil, vulnType, err
@@ -600,14 +600,6 @@ func uniqueMatchIDs(values map[uuid.UUID]struct{}) []uuid.UUID {
 func dependencyFingerprint(advisoryID, componentID uuid.UUID) string {
 	sum := sha256.Sum256([]byte(advisoryID.String() + ":" + componentID.String()))
 	return hex.EncodeToString(sum[:])
-}
-
-func advisoryIdentifier(canonicalID string) json.RawMessage {
-	trimmed := strings.TrimSpace(canonicalID)
-	if trimmed == "" {
-		return json.RawMessage(`{}`)
-	}
-	return json.RawMessage(fmt.Sprintf(`{"type":"advisory","value":%q}`, trimmed))
 }
 
 func firstNonEmpty(values ...string) string {

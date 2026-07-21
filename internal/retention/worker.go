@@ -48,6 +48,8 @@ type WorkerStore interface {
 	ArchiveSnapshot(ctx context.Context, id uuid.UUID) error
 	MarkSnapshotFailed(ctx context.Context, id uuid.UUID) error
 	PurgeSnapshot(ctx context.Context, id uuid.UUID) error
+	RollupSnapshotVulnerabilities(ctx context.Context, snapshotID uuid.UUID) (int64, error)
+	GetSnapshotVulnRollup(ctx context.Context, snapshotID uuid.UUID) (store.SnapshotVulnRollup, bool, error)
 }
 
 type auditLogger interface {
@@ -313,6 +315,11 @@ func (w *Worker) applyPlan(ctx context.Context, candidate snapshotCandidate) err
 			if err := w.store.ArchiveSnapshot(ctx, candidate.Snapshot.ID); err != nil {
 				return err
 			}
+			// Downsample: keep a compact severity/type rollup for trend continuity
+			// and drop the detail vulnerability rows (ADR db-review P0.1).
+			if _, err := w.store.RollupSnapshotVulnerabilities(ctx, candidate.Snapshot.ID); err != nil {
+				return err
+			}
 			w.writeAuditLog(ctx, audit.ActionRetentionArchive, candidate)
 		}
 	case thinDecisionPurge:
@@ -370,10 +377,38 @@ func (w *Worker) snapshotSeverity(ctx context.Context, snapshotID uuid.UUID) (in
 	if err != nil {
 		return 0, err
 	}
+	if len(rows) > 0 {
+		highest := 0
+		for _, row := range rows {
+			if score := severityScore(row.Severity); score > highest {
+				highest = score
+			}
+		}
+		return highest, nil
+	}
+	// No detail rows: the snapshot may have been downsampled on archive. Derive
+	// severity from the retained rollup so tier selection stays correct.
+	return w.rollupSeverity(ctx, snapshotID)
+}
+
+func (w *Worker) rollupSeverity(ctx context.Context, snapshotID uuid.UUID) (int, error) {
+	rollup, ok, err := w.store.GetSnapshotVulnRollup(ctx, snapshotID)
+	if err != nil || !ok {
+		return 0, err
+	}
+	counts := map[string]map[string]int64{}
+	if err := json.Unmarshal(rollup.Counts, &counts); err != nil {
+		return 0, nil //nolint:nilerr // a malformed rollup should not stall retention; treat as no severity signal.
+	}
 	highest := 0
-	for _, row := range rows {
-		if score := severityScore(row.Severity); score > highest {
-			highest = score
+	for _, bySeverity := range counts {
+		for severity, count := range bySeverity {
+			if count == 0 {
+				continue
+			}
+			if score := severityScore(severity); score > highest {
+				highest = score
+			}
 		}
 	}
 	return highest, nil

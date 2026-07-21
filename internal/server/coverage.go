@@ -204,7 +204,8 @@ func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID
 	}
 
 	for _, file := range report.Files {
-		if _, err := tx.ExecContext(ctx, `
+		var fileID uuid.UUID
+		if err := tx.QueryRowContext(ctx, `
 			INSERT INTO coverage_files (
 				coverage_report_id,
 				file_path,
@@ -224,6 +225,7 @@ func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID
 				lines_covered = EXCLUDED.lines_covered,
 				branches_valid = EXCLUDED.branches_valid,
 				branches_covered = EXCLUDED.branches_covered
+			RETURNING id
 		`,
 			storedReport.ID,
 			file.Path,
@@ -233,7 +235,12 @@ func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID
 			file.LinesCovered,
 			file.BranchesValid,
 			file.BranchesCovered,
-		); err != nil {
+		).Scan(&fileID); err != nil {
+			s.failCoverageUpload(snapshotID, report.Format, err)
+			return
+		}
+
+		if err := s.persistCoverageLines(ctx, tx, fileID, file.Lines); err != nil {
 			s.failCoverageUpload(snapshotID, report.Format, err)
 			return
 		}
@@ -243,6 +250,34 @@ func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID
 		s.failCoverageUpload(snapshotID, report.Format, err)
 		return
 	}
+}
+
+// persistCoverageLines replaces the per-line hit rows for a coverage file.
+// It is a no-op when line storage is disabled (HIBOU_COVERAGE_STORE_LINES=false)
+// so large monorepos can opt out of the per-line row cost. Rows are always
+// cleared first so a re-upload with fewer instrumented lines does not leave
+// stale lines behind.
+func (s *Server) persistCoverageLines(ctx context.Context, tx *sql.Tx, fileID uuid.UUID, lines []coverageparser.LineCoverage) error {
+	if !s.cfg.CoverageStoreLines {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM coverage_lines WHERE coverage_file_id = $1`, fileID); err != nil {
+		return err
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	numbers := make([]int32, len(lines))
+	hits := make([]int32, len(lines))
+	for i, line := range lines {
+		numbers[i] = int32(line.Number) //nolint:gosec // G115: source line numbers are bounded by file size
+		hits[i] = int32(line.Hits)      //nolint:gosec // G115: hit counts are bounded by test executions
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO coverage_lines (coverage_file_id, line_number, hits)
+		SELECT $1, unnest($2::int[]), unnest($3::int[])
+	`, fileID, pq.Array(numbers), pq.Array(hits))
+	return err
 }
 
 func (s *Server) failCoverageUpload(snapshotID uuid.UUID, format string, cause error) {

@@ -64,6 +64,10 @@ func (p *testForgeProvider) GetBranch(_ context.Context, _, _, _ string) (*forge
 func (p *testForgeProvider) CreateCommitStatus(context.Context, string, string, string, forge.CommitStatus) error {
 	return forge.ErrNotImplemented
 }
+
+func (p *testForgeProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return nil, nil
+}
 func (p *testForgeProvider) ValidateWebhookPayload(*http.Request, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

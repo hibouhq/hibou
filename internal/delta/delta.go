@@ -264,7 +264,7 @@ func vulnerabilityKey(vuln store.Vulnerability) string {
 		strings.TrimSpace(vuln.Type),
 		strings.TrimSpace(vuln.ScannerName),
 		strings.TrimSpace(vuln.ScannerExternalID),
-		strings.TrimSpace(string(vuln.PrimaryIdentifier)),
+		strings.TrimSpace(vuln.PrimaryIdentifierValue),
 		strings.TrimSpace(ptrString(vuln.ComponentPurl)),
 		strings.TrimSpace(ptrString(vuln.FilePath)),
 	}

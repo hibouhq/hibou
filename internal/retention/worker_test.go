@@ -2,6 +2,7 @@ package retention
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
 	"time"
@@ -30,6 +31,8 @@ type workerStoreStub struct {
 	staleBefore    time.Time
 	staleLimit     int32
 	staleListCalls int
+	rolledUpIDs    []uuid.UUID
+	rollups        map[uuid.UUID]storepkg.SnapshotVulnRollup
 }
 
 func (s *workerStoreStub) ListRepositoriesForRetention(context.Context) ([]storepkg.Repository, error) {
@@ -91,6 +94,33 @@ func (s *workerStoreStub) PurgeSnapshot(_ context.Context, id uuid.UUID) error {
 func (s *workerStoreStub) MarkSnapshotFailed(_ context.Context, id uuid.UUID) error {
 	s.failedIDs = append(s.failedIDs, id)
 	return nil
+}
+
+func (s *workerStoreStub) RollupSnapshotVulnerabilities(_ context.Context, snapshotID uuid.UUID) (int64, error) {
+	s.rolledUpIDs = append(s.rolledUpIDs, snapshotID)
+	// Simulate the DB: detail rows are gone, a rollup remains.
+	rows := s.severityByID[snapshotID]
+	if s.rollups == nil {
+		s.rollups = map[uuid.UUID]storepkg.SnapshotVulnRollup{}
+	}
+	counts := map[string]map[string]int64{}
+	var total int64
+	for _, row := range rows {
+		if counts["generic"] == nil {
+			counts["generic"] = map[string]int64{}
+		}
+		counts["generic"][row.Severity] += row.Count
+		total += row.Count
+	}
+	countsJSON, _ := json.Marshal(counts)
+	s.rollups[snapshotID] = storepkg.SnapshotVulnRollup{SnapshotID: snapshotID, Counts: countsJSON, Total: int32(total)}
+	delete(s.severityByID, snapshotID)
+	return total, nil
+}
+
+func (s *workerStoreStub) GetSnapshotVulnRollup(_ context.Context, snapshotID uuid.UUID) (storepkg.SnapshotVulnRollup, bool, error) {
+	rollup, ok := s.rollups[snapshotID]
+	return rollup, ok, nil
 }
 
 func (s *workerStoreStub) CreateAuditLog(_ context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error) {
@@ -200,6 +230,11 @@ func TestWorkerFailedRetentionAndEnvelopeAreIdempotent(t *testing.T) {
 	}
 	if got := storeStub.archivedIDs; len(got) != 1 || got[0] != oldestID {
 		t.Fatalf("archived IDs = %v, want [%s]", got, oldestID)
+	}
+	// Archiving must downsample: the archived snapshot's detail rows are rolled
+	// up (ADR db-review P0.1). Purged snapshots are removed outright, not rolled up.
+	if got := storeStub.rolledUpIDs; len(got) != 1 || got[0] != oldestID {
+		t.Fatalf("rolled-up IDs = %v, want [%s]", got, oldestID)
 	}
 	if got := storeStub.purgedIDs; len(got) != 1 || got[0] != failedID {
 		t.Fatalf("purged IDs = %v, want [%s]", got, failedID)

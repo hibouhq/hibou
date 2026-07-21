@@ -127,6 +127,36 @@ func (q *Queries) GetLatestCoverageSnapshotIDByRef(ctx context.Context, refID uu
 	return &id, nil
 }
 
+// CoverageLine is one instrumented source line's hit count within a snapshot,
+// joined back to its file path. It powers line-level patch coverage.
+type CoverageLine struct {
+	FilePath   string `json:"file_path"`
+	LineNumber int    `json:"line_number"`
+	Hits       int    `json:"hits"`
+}
+
+// ListCoverageLinesBySnapshotFormat returns every stored per-line hit for the
+// given snapshot's coverage report of a specific format, ordered by file then
+// line. Callers pick the primary format (most lines_valid) before calling.
+func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, snapshotID uuid.UUID, format string) ([]CoverageLine, error) {
+	rows, err := q.db.ListCoverageLinesBySnapshotFormat(ctx, dbgen.ListCoverageLinesBySnapshotFormatParams{
+		SnapshotID: snapshotID,
+		Format:     format,
+	})
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]CoverageLine, len(rows))
+	for i, row := range rows {
+		lines[i] = CoverageLine{
+			FilePath:   row.FilePath,
+			LineNumber: int(row.LineNumber),
+			Hits:       int(row.Hits),
+		}
+	}
+	return lines, nil
+}
+
 func (q *Queries) ListCoverageFilesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]CoverageFile, error) {
 	rows, err := q.db.ListCoverageFilesBySnapshot(ctx, snapshotID)
 	if err != nil {

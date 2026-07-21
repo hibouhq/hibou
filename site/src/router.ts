@@ -44,6 +44,11 @@ const router = createRouter({
           component: () => import('@/views/SBOMCompareView.vue'),
         },
         {
+          path: 'orgs/:provider/:slug/repos/:repoSlug/pulls/:pr',
+          name: 'repo-pr-gate',
+          component: () => import('@/views/PRGateView.vue'),
+        },
+        {
           path: 'orgs/:provider/:slug/repos/:repoSlug',
           component: () => import('@/views/RepoDetailView.vue'),
           children: [

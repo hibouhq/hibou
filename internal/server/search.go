@@ -186,7 +186,7 @@ func (s *Server) searchVulnerabilities(r *http.Request, orgID uuid.UUID, query, 
 		severityValue := string(vulnerability.Severity)
 		title := strings.TrimSpace(vulnerability.Title)
 		if title == "" {
-			title = stringValueFromJSONMap(vulnerability.PrimaryIdentifier, "value")
+			title = vulnerability.PrimaryIdentifierValue
 		}
 		results = append(results, searchResultResponse{
 			Type:     "vulnerability",

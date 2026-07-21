@@ -120,6 +120,8 @@ type discoveryTestForgeProvider struct {
 	webhookPayloadErr     error
 	webhookEvent          forge.WebhookEvent
 	webhookErr            error
+	comparePatchDiff      *forge.PatchDiff
+	comparePatchErr       error
 }
 
 func (p *discoveryTestForgeProvider) ID() string {
@@ -165,6 +167,10 @@ func (p *discoveryTestForgeProvider) CreatePullRequest(context.Context, string, 
 
 func (p *discoveryTestForgeProvider) CreateCommitStatus(context.Context, string, string, string, forge.CommitStatus) error {
 	return forge.ErrNotImplemented
+}
+
+func (p *discoveryTestForgeProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return p.comparePatchDiff, p.comparePatchErr
 }
 
 func (p *discoveryTestForgeProvider) ValidateWebhookPayload(*http.Request, string) ([]byte, error) {

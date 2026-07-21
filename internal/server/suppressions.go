@@ -88,6 +88,11 @@ func (s *Server) handleCreateVEXStatement(w http.ResponseWriter, r *http.Request
 		"status":           statement.Status,
 	})
 
+	// A VEX statement (e.g. dismissing a false positive) changes the PR delta, so
+	// re-evaluate and re-post the forge gate check for the repo's open PRs — no CI
+	// re-run required. See ADR-018.
+	s.publishGateRecompute(r.Context(), repo.ID)
+
 	api.JSON(w, http.StatusCreated, statement)
 }
 
@@ -176,6 +181,8 @@ func (s *Server) handleUpdateVEXStatement(w http.ResponseWriter, r *http.Request
 		"status":  statement.Status,
 	})
 
+	s.publishGateRecompute(r.Context(), repo.ID)
+
 	api.JSON(w, http.StatusOK, statement)
 }
 
@@ -205,6 +212,8 @@ func (s *Server) handleDeleteVEXStatement(w http.ResponseWriter, r *http.Request
 	s.writeVEXAuditLog(r, user, org.ID, statement.ID, audit.ActionVEXRevoke, map[string]any{
 		"repo_id": repo.ID,
 	})
+
+	s.publishGateRecompute(r.Context(), repo.ID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -297,7 +297,7 @@ func buildSQL(node Node, param int, depth int) (string, []interface{}, int, erro
 }
 
 func textNodeToSQL(node TextNode, param int) string {
-	return fmt.Sprintf("(title ILIKE '%%' || $%d || '%%' ESCAPE '\\\\' OR primary_identifier->>'value' ILIKE '%%' || $%d || '%%' ESCAPE '\\\\')", param, param)
+	return fmt.Sprintf("(title ILIKE '%%' || $%d || '%%' ESCAPE '\\\\' OR primary_identifier_value ILIKE '%%' || $%d || '%%' ESCAPE '\\\\')", param, param)
 }
 
 func buildBinarySQL(operator string, left Node, right Node, param int, depth int) (string, []interface{}, int, error) {

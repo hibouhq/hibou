@@ -1,5 +1,7 @@
 package sarif
 
+import "encoding/json"
+
 type Document struct {
 	Version string `json:"version"`
 	Schema  string `json:"$schema"`
@@ -22,15 +24,31 @@ type ToolComponent struct {
 }
 
 type ReportingDescriptor struct {
-	ID               string                  `json:"id"`
-	Name             string                  `json:"name"`
-	ShortDescription *Message                `json:"shortDescription,omitempty"`
-	HelpURI          string                  `json:"helpUri"`
-	Properties       ReportingDescriptorInfo `json:"properties"`
+	ID                   string                  `json:"id"`
+	Name                 string                  `json:"name"`
+	ShortDescription     *Message                `json:"shortDescription,omitempty"`
+	FullDescription      *Message                `json:"fullDescription,omitempty"`
+	Help                 *MultiformatMessage     `json:"help,omitempty"`
+	HelpURI              string                  `json:"helpUri"`
+	DefaultConfiguration *ReportingConfiguration `json:"defaultConfiguration,omitempty"`
+	Properties           json.RawMessage         `json:"properties,omitempty"`
 }
 
-type ReportingDescriptorInfo struct {
-	Tags []string `json:"tags"`
+type MultiformatMessage struct {
+	Text     string `json:"text"`
+	Markdown string `json:"markdown"`
+}
+
+type ReportingConfiguration struct {
+	Level string `json:"level"`
+}
+
+// reportingDescriptorProperties is the typed view of the rule's properties bag.
+// The full bag is preserved verbatim in RuleDescriptor.Properties.
+type reportingDescriptorProperties struct {
+	Tags             []string `json:"tags"`
+	SecuritySeverity string   `json:"security-severity"`
+	Precision        string   `json:"precision"`
 }
 
 type Result struct {
@@ -68,15 +86,33 @@ type Message struct {
 	Text string `json:"text"`
 }
 
+// RuleDescriptor is the normalized, per-rule catalog record extracted from a
+// SARIF reportingDescriptor. It maps 1:1 onto the scan_rules table so rule text
+// is stored once instead of copied onto every finding.
+type RuleDescriptor struct {
+	RuleID           string          `json:"rule_id"`
+	Name             string          `json:"name"`
+	ShortDescription string          `json:"short_description"`
+	FullDescription  string          `json:"full_description"`
+	HelpURI          string          `json:"help_uri"`
+	HelpMarkdown     string          `json:"help_markdown"`
+	DefaultLevel     string          `json:"default_level"`
+	SecuritySeverity string          `json:"security_severity"`
+	Precision        string          `json:"precision"`
+	CWEs             []string        `json:"cwes"`
+	Tags             []string        `json:"tags"`
+	Properties       json.RawMessage `json:"properties"`
+}
+
 type Finding struct {
-	Tool         string         `json:"tool"`
-	RuleID       string         `json:"rule_id"`
-	Severity     string         `json:"severity"`
-	FilePath     string         `json:"file_path"`
-	StartLine    int32          `json:"start_line"`
-	EndLine      int32          `json:"end_line"`
-	Message      string         `json:"message"`
-	Fingerprint  string         `json:"fingerprint"`
-	LocationHash string         `json:"location_hash"`
-	Metadata     map[string]any `json:"metadata"`
+	Tool         string          `json:"tool"`
+	RuleID       string          `json:"rule_id"`
+	Severity     string          `json:"severity"`
+	FilePath     string          `json:"file_path"`
+	StartLine    int32           `json:"start_line"`
+	EndLine      int32           `json:"end_line"`
+	Message      string          `json:"message"`
+	Fingerprint  string          `json:"fingerprint"`
+	LocationHash string          `json:"location_hash"`
+	Rule         *RuleDescriptor `json:"rule,omitempty"`
 }

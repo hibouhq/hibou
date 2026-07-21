@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/google/uuid"
 
@@ -15,7 +14,7 @@ func (q *Queries) UpsertComponent(ctx context.Context, purl, name, version, ecos
 		Name:      name,
 		Version:   version,
 		Ecosystem: ecosystem,
-		Licenses:  json.RawMessage(`[]`),
+		Licenses:  []string{},
 	})
 }
 

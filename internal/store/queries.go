@@ -326,9 +326,7 @@ func (q *Queries) LatestScanCompletedAtByOrg(ctx context.Context, orgID uuid.UUI
 		SELECT COALESCE(MAX(sc.completed_at), TIMESTAMPTZ '1970-01-01 00:00:00+00')
 		FROM scans sc
 		JOIN snapshots s ON s.id = sc.snapshot_id
-		JOIN refs r ON r.id = s.ref_id
-		JOIN repositories repo ON repo.id = r.repo_id
-		WHERE repo.org_id = $1
+		WHERE s.org_id = $1
 		  AND sc.status = 'complete'
 	`
 	var latest time.Time

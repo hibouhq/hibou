@@ -508,7 +508,7 @@
                   {{ vuln.type }}
                 </td>
                 <td class="px-4 py-4 font-mono text-xs text-accent">
-                  {{ vuln.primary_identifier?.value || vuln.scanner_name || 'n/a' }}
+                  {{ vuln.primary_identifier_value || vuln.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-4 py-4 text-gray-300">
                   {{ vuln.title }}
@@ -535,6 +535,120 @@
         </div>
 
         <template v-else>
+          <!-- Patch (diff) coverage — the headline PR signal: of the lines this
+               change added or modified, which are actually tested. -->
+          <div
+            v-if="patchCoverage"
+            class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4"
+          >
+            <div class="flex flex-wrap items-end gap-x-6 gap-y-3">
+              <div>
+                <p class="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-gray-500">
+                  <GitPullRequest class="h-4 w-4 text-accent" />
+                  Patch coverage
+                </p>
+                <div class="mt-2 flex items-baseline gap-2">
+                  <span
+                    class="text-3xl font-semibold"
+                    :style="{ color: rateColor(patchCoverage.rate) }"
+                  >{{ formatRate(patchCoverage.rate) }}</span>
+                  <span class="text-sm text-gray-400">
+                    {{ patchCoverage.covered_lines }}/{{ patchTotalLines(patchCoverage) }} new lines covered
+                  </span>
+                </div>
+              </div>
+              <div
+                v-if="patchCoverage.uncovered_lines > 0"
+                class="ml-auto rounded-full border border-danger/40 bg-danger/10 px-3 py-1 text-xs font-medium text-danger"
+              >
+                {{ patchCoverage.uncovered_lines }} uncovered new {{ patchCoverage.uncovered_lines === 1 ? 'line' : 'lines' }}
+              </div>
+              <div
+                v-else
+                class="ml-auto rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300"
+              >
+                Every new line covered
+              </div>
+            </div>
+
+            <div class="mt-3 h-1.5 w-full rounded-full bg-surface-overlay">
+              <div
+                class="h-1.5 rounded-full transition-all"
+                :style="coverageBarStyle(patchCoverage.rate)"
+              />
+            </div>
+
+            <p
+              v-if="patchCoverage.truncated"
+              class="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+            >
+              The forge truncated the diff; patch coverage reflects the first files only.
+            </p>
+
+            <div
+              v-if="patchCoverage.files.length"
+              class="mt-4 space-y-2"
+            >
+              <div
+                v-for="file in patchCoverage.files"
+                :key="file.file_path"
+                class="rounded-xl border border-surface-border-subtle bg-surface-base/40 p-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <button
+                    v-if="file.hunks"
+                    type="button"
+                    class="flex min-w-0 items-center gap-1.5 text-left transition hover:text-white"
+                    @click="togglePatchFile(file.file_path)"
+                  >
+                    <ChevronDown
+                      class="h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform"
+                      :class="expandedPatchFiles.has(file.file_path) ? '' : '-rotate-90'"
+                    />
+                    <span class="truncate font-mono text-xs text-gray-200">{{ file.file_path }}</span>
+                  </button>
+                  <span
+                    v-else
+                    class="truncate font-mono text-xs text-gray-200"
+                  >{{ file.file_path }}</span>
+                  <span
+                    class="shrink-0 text-xs font-medium"
+                    :style="{ color: rateColor(file.rate) }"
+                  >
+                    {{ formatRate(file.rate) }} · {{ file.covered_lines }}/{{ patchTotalLines(file) }}
+                  </span>
+                </div>
+                <div
+                  v-if="file.uncovered_line_numbers && file.uncovered_line_numbers.length"
+                  class="mt-2 flex flex-wrap items-center gap-1.5"
+                >
+                  <span class="text-[11px] uppercase tracking-wide text-gray-500">Uncovered</span>
+                  <span
+                    v-for="range in formatLineRanges(file.uncovered_line_numbers)"
+                    :key="range"
+                    class="rounded bg-danger/15 px-1.5 py-0.5 font-mono text-[11px] text-danger"
+                  >L{{ range }}</span>
+                </div>
+                <div
+                  v-else
+                  class="mt-2 text-[11px] text-emerald-300"
+                >
+                  All changed lines covered
+                </div>
+                <div
+                  v-if="file.hunks && expandedPatchFiles.has(file.file_path)"
+                  class="mt-3"
+                >
+                  <PatchDiffFile
+                    :hunks="file.hunks"
+                    :covered-lines="file.covered_line_numbers ?? []"
+                    :uncovered-lines="file.uncovered_line_numbers ?? []"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="grid gap-3 sm:grid-cols-2">
             <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
               <p class="text-xs uppercase tracking-[0.18em] text-gray-500">
@@ -885,6 +999,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type EnhancedRef, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import PatchDiffFile from '@/components/PatchDiffFile.vue'
 
 type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
 type ComponentRow = ComponentEntry & { change: 'added' | 'removed' }
@@ -909,6 +1024,14 @@ const headSnapshotId = ref('')
 const baseSnapshotOpen = ref(false)
 const headSnapshotOpen = ref(false)
 const activeTab = ref<TabId>('overview')
+const expandedPatchFiles = ref<Set<string>>(new Set())
+
+function togglePatchFile(path: string) {
+  const next = new Set(expandedPatchFiles.value)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  expandedPatchFiles.value = next
+}
 
 function closeSnapshotDropdowns() {
   baseSnapshotOpen.value = false
@@ -947,6 +1070,7 @@ const selectedBaseSnapshot = computed(() => resolveSelectedSnapshot(baseSnapshot
 const selectedHeadSnapshot = computed(() => resolveSelectedSnapshot(headSnapshots.value, headSnapshotId.value))
 
 const coverageDiff = computed(() => comparison.value?.coverage_diff ?? null)
+const patchCoverage = computed(() => comparison.value?.patch_coverage ?? null)
 const testDiff = computed(() => comparison.value?.test_diff ?? null)
 const gateReasons = computed(() => comparison.value?.gate?.reasons ?? [])
 const isPRAgainstTarget = computed(() => {
@@ -1364,6 +1488,31 @@ function formatDateTime(value: string) {
 function formatRate(rate: number | null) {
   if (rate === null || rate === undefined) return 'n/a'
   return `${(rate * 100).toFixed(1)}%`
+}
+
+// formatLineRanges compresses a sorted list of line numbers into human-readable
+// ranges, e.g. [11, 45, 46, 47] -> ["11", "45–47"], for the uncovered-line chips.
+function formatLineRanges(numbers: number[] | null | undefined): string[] {
+  if (!numbers || numbers.length === 0) return []
+  const sorted = [...numbers].sort((a, b) => a - b)
+  const ranges: string[] = []
+  let start = sorted[0]
+  let prev = sorted[0]
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === prev + 1) {
+      prev = sorted[i]
+      continue
+    }
+    ranges.push(start === prev ? `${start}` : `${start}–${prev}`)
+    start = sorted[i]
+    prev = sorted[i]
+  }
+  ranges.push(start === prev ? `${start}` : `${start}–${prev}`)
+  return ranges
+}
+
+function patchTotalLines(cov: { covered_lines: number; uncovered_lines: number }) {
+  return cov.covered_lines + cov.uncovered_lines
 }
 
 function formatRateDelta(delta: number | null) {

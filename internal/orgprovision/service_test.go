@@ -823,6 +823,10 @@ func (p *fakeForgeProvider) CreateCommitStatus(context.Context, string, string, 
 	return forge.ErrNotImplemented
 }
 
+func (p *fakeForgeProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return nil, nil
+}
+
 func (p *fakeForgeProvider) ValidateWebhookPayload(*http.Request, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

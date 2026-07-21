@@ -1,2 +1,0 @@
-ALTER TABLE refs ADD COLUMN pr_ref_kind TEXT NOT NULL DEFAULT '';
-ALTER TABLE refs ADD COLUMN pr_number TEXT;

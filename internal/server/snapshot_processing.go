@@ -354,7 +354,7 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 			EndLine:     finding.EndLine,
 			Message:     finding.Message,
 			Fingerprint: finding.Fingerprint,
-			Metadata:    finding.Metadata,
+			Rule:        scanRuleInput(finding.Rule),
 		})
 	}
 	_, err = findings.NewIngester(queries, s.log).Ingest(ctx, snapshot.ID, genericFindings)
@@ -362,6 +362,27 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 		return fmt.Errorf("ingest sarif findings %s: %w", artifact.artifact.ID, err)
 	}
 	return nil
+}
+
+// scanRuleInput maps a parsed SARIF rule descriptor onto the generic ingest
+// input consumed by the findings package (keeps sarif and findings decoupled).
+func scanRuleInput(rule *sarif.RuleDescriptor) *findings.ScanRuleInput {
+	if rule == nil {
+		return nil
+	}
+	return &findings.ScanRuleInput{
+		Name:             rule.Name,
+		ShortDescription: rule.ShortDescription,
+		FullDescription:  rule.FullDescription,
+		HelpURI:          rule.HelpURI,
+		HelpMarkdown:     rule.HelpMarkdown,
+		DefaultLevel:     rule.DefaultLevel,
+		SecuritySeverity: rule.SecuritySeverity,
+		Precision:        rule.Precision,
+		CWEs:             rule.CWEs,
+		Tags:             rule.Tags,
+		Properties:       rule.Properties,
+	}
 }
 
 func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) (int, error) {

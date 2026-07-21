@@ -29,10 +29,16 @@ const (
 	SecretDiscovered     Type = "secret.discovered"
 	GatePassed           Type = "gate.passed"
 	GateFailed           Type = "gate.failed"
-	RetentionWarnAt      Type = "retention.warn_at"
-	RetentionEviction    Type = "retention.eviction_started"
-	RetentionProtected   Type = "retention.protected_exceeds_budget"
-	NotificationNew      Type = "notification.new"
+	// GateRecomputeRequested asks the forge annotator to re-evaluate and re-post
+	// the PR gate check without a CI re-run. Payload: one of "ref_id" (single PR
+	// ref), "repo_id" (all open PRs in the repo), or "org_id" (all open PRs in the
+	// org). Published by gate-affecting changes: VEX/false-positive dismissal,
+	// manual override, advisory re-evaluation.
+	GateRecomputeRequested Type = "gate.recompute_requested"
+	RetentionWarnAt        Type = "retention.warn_at"
+	RetentionEviction      Type = "retention.eviction_started"
+	RetentionProtected     Type = "retention.protected_exceeds_budget"
+	NotificationNew        Type = "notification.new"
 )
 
 type Event struct {

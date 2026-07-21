@@ -49,6 +49,7 @@ func parseLCOV(content []byte) (*Report, error) {
 	for _, file := range filesByPath {
 		file.LineRate = rate(file.LinesCovered, file.LinesValid)
 		file.BranchRate = rate(file.BranchesCovered, file.BranchesValid)
+		file.Lines = finalizeLines(file.Lines)
 		report.LinesValid += file.LinesValid
 		report.LinesCovered += file.LinesCovered
 		report.BranchesValid += file.BranchesValid
@@ -115,6 +116,7 @@ func processLCOVDALine(line string, current *lcovRecord) error {
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid DA line: %s", line)
 	}
+	number, numberOK := parseOptionalInt(parts[0])
 	count, ok := parseOptionalInt(parts[1])
 	if !ok {
 		return fmt.Errorf("invalid DA line: %s", line)
@@ -122,6 +124,9 @@ func processLCOVDALine(line string, current *lcovRecord) error {
 	current.derivedLinesValid++
 	if count > 0 {
 		current.derivedLinesCovered++
+	}
+	if numberOK && number > 0 {
+		current.file.Lines = append(current.file.Lines, LineCoverage{Number: number, Hits: count})
 	}
 	return nil
 }
@@ -173,4 +178,5 @@ func flushLCOVRecord(filesByPath map[string]*FileCoverage, current *lcovRecord) 
 	target.LinesCovered += current.file.LinesCovered
 	target.BranchesValid += current.file.BranchesValid
 	target.BranchesCovered += current.file.BranchesCovered
+	target.Lines = append(target.Lines, current.file.Lines...)
 }

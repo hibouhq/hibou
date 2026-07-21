@@ -33,7 +33,7 @@ func init() {
 	case "hibou":
 		rootCmd.Use = "hibou"
 		rootCmd.Short = "Unified DevSecOps security platform"
-		rootCmd.AddCommand(loginCmd, logoutCmd, statusCmd, uploadCmd, reposCmd, configCmd)
+		rootCmd.AddCommand(loginCmd, logoutCmd, statusCmd, uploadCmd, gateCmd, reposCmd, configCmd)
 	case "hibou-server":
 		rootCmd.Use = "hibou-server"
 		rootCmd.Short = "Hibou server - API, workers, and MCP endpoint"
@@ -41,7 +41,7 @@ func init() {
 	default:
 		rootCmd.Use = "hibou"
 		rootCmd.Short = "Unified DevSecOps security platform"
-		rootCmd.AddCommand(serveCmd, seedCmd, loginCmd, logoutCmd, statusCmd, uploadCmd, reposCmd, configCmd)
+		rootCmd.AddCommand(serveCmd, seedCmd, loginCmd, logoutCmd, statusCmd, uploadCmd, gateCmd, reposCmd, configCmd)
 	}
 }
 

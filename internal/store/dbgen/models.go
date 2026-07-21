@@ -892,24 +892,19 @@ type ApiKey struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
-// Immutable operational audit trail. Records all user, CI, and system actions for accountability. Rows must never be updated or deleted.
 type AuditLog struct {
-	ID      uuid.UUID     `json:"id"`
-	ActorID uuid.NullUUID `json:"actor_id"`
-	// user, api_key, system, webhook
-	ActorType    string `json:"actor_type"`
-	ActorDisplay string `json:"actor_display"`
-	// e.g. scan.trigger, vex.create, vex.update, vex.revoke, release.create, release.update, release.delete, client.create, gate.override, integration.create, setting.update
-	Action string `json:"action"`
-	// e.g. scan, advisory, vuln_match, release, client, repository, quality_gate, integration, notification_rule
-	ResourceType string        `json:"resource_type"`
-	ResourceID   string        `json:"resource_id"`
-	OrgID        uuid.NullUUID `json:"org_id"`
-	// Action-specific metadata: old/new values for updates, provider list for scans, reason for suppressions
-	Context   json.RawMessage `json:"context"`
-	IpAddress string          `json:"ip_address"`
-	UserAgent string          `json:"user_agent"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID           uuid.UUID       `json:"id"`
+	ActorID      uuid.NullUUID   `json:"actor_id"`
+	ActorType    string          `json:"actor_type"`
+	ActorDisplay string          `json:"actor_display"`
+	Action       string          `json:"action"`
+	ResourceType string          `json:"resource_type"`
+	ResourceID   string          `json:"resource_id"`
+	OrgID        uuid.NullUUID   `json:"org_id"`
+	Context      json.RawMessage `json:"context"`
+	IpAddress    string          `json:"ip_address"`
+	UserAgent    string          `json:"user_agent"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 type CasbinRule struct {
@@ -939,13 +934,13 @@ type Client struct {
 }
 
 type Component struct {
-	ID        uuid.UUID       `json:"id"`
-	Purl      string          `json:"purl"`
-	Name      string          `json:"name"`
-	Version   string          `json:"version"`
-	Ecosystem string          `json:"ecosystem"`
-	Licenses  json.RawMessage `json:"licenses"`
-	CreatedAt time.Time       `json:"created_at"`
+	ID        uuid.UUID `json:"id"`
+	Purl      string    `json:"purl"`
+	Name      string    `json:"name"`
+	Version   string    `json:"version"`
+	Ecosystem string    `json:"ecosystem"`
+	CreatedAt time.Time `json:"created_at"`
+	Licenses  []string  `json:"licenses"`
 }
 
 type ComponentDependency struct {
@@ -966,6 +961,12 @@ type CoverageFile struct {
 	LinesCovered     int32           `json:"lines_covered"`
 	BranchesValid    int32           `json:"branches_valid"`
 	BranchesCovered  int32           `json:"branches_covered"`
+}
+
+type CoverageLine struct {
+	CoverageFileID uuid.UUID `json:"coverage_file_id"`
+	LineNumber     int32     `json:"line_number"`
+	Hits           int32     `json:"hits"`
 }
 
 type CoverageReport struct {
@@ -1107,6 +1108,26 @@ type Organization struct {
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
+type PrCheck struct {
+	ID            uuid.UUID       `json:"id"`
+	RepoID        uuid.UUID       `json:"repo_id"`
+	RefID         uuid.NullUUID   `json:"ref_id"`
+	HeadSha       string          `json:"head_sha"`
+	Context       string          `json:"context"`
+	State         string          `json:"state"`
+	Conclusion    string          `json:"conclusion"`
+	Enforcement   string          `json:"enforcement"`
+	Passed        bool            `json:"passed"`
+	Reasons       json.RawMessage `json:"reasons"`
+	DeltaSummary  json.RawMessage `json:"delta_summary"`
+	ExternalID    string          `json:"external_id"`
+	TargetUrl     string          `json:"target_url"`
+	ForgeSyncedAt sql.NullTime    `json:"forge_synced_at"`
+	LastError     string          `json:"last_error"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
 type QualityGate struct {
 	ID                uuid.UUID     `json:"id"`
 	OrgID             uuid.UUID     `json:"org_id"`
@@ -1142,10 +1163,9 @@ type Ref struct {
 }
 
 type Release struct {
-	ID     uuid.UUID `json:"id"`
-	RepoID uuid.UUID `json:"repo_id"`
-	RefID  uuid.UUID `json:"ref_id"`
-	// Invariant: when snapshot_id is set, it must reference a snapshot whose ref belongs to releases.repo_id. PostgreSQL cannot enforce this declaratively because snapshots do not store repo_id directly; the store layer must validate the snapshot -> ref -> repository lineage on writes.
+	ID            uuid.UUID       `json:"id"`
+	RepoID        uuid.UUID       `json:"repo_id"`
+	RefID         uuid.UUID       `json:"ref_id"`
 	SnapshotID    uuid.NullUUID   `json:"snapshot_id"`
 	Version       string          `json:"version"`
 	BuildMetadata json.RawMessage `json:"build_metadata"`
@@ -1199,6 +1219,25 @@ type ScanProvider struct {
 	CompletedAt     sql.NullTime  `json:"completed_at"`
 }
 
+type ScanRule struct {
+	ID               uuid.UUID       `json:"id"`
+	Tool             string          `json:"tool"`
+	RuleID           string          `json:"rule_id"`
+	Name             string          `json:"name"`
+	ShortDescription string          `json:"short_description"`
+	FullDescription  string          `json:"full_description"`
+	HelpUri          string          `json:"help_uri"`
+	HelpMarkdown     string          `json:"help_markdown"`
+	DefaultLevel     string          `json:"default_level"`
+	SecuritySeverity string          `json:"security_severity"`
+	RulePrecision    string          `json:"rule_precision"`
+	CweIds           []string        `json:"cwe_ids"`
+	Tags             []string        `json:"tags"`
+	Properties       json.RawMessage `json:"properties"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
 type Snapshot struct {
 	ID                               uuid.UUID       `json:"id"`
 	RefID                            uuid.UUID       `json:"ref_id"`
@@ -1225,6 +1264,8 @@ type Snapshot struct {
 	ArtifactProcessingFinishedAt     sql.NullTime    `json:"artifact_processing_finished_at"`
 	ArtifactProcessingAttempts       int32           `json:"artifact_processing_attempts"`
 	ArtifactProcessingLastError      sql.NullString  `json:"artifact_processing_last_error"`
+	OrgID                            uuid.UUID       `json:"org_id"`
+	RepoID                           uuid.UUID       `json:"repo_id"`
 }
 
 type SnapshotArtifact struct {
@@ -1251,6 +1292,13 @@ type SnapshotDependencyRoot struct {
 	SnapshotID  uuid.UUID `json:"snapshot_id"`
 	ComponentID uuid.UUID `json:"component_id"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type SnapshotVulnRollup struct {
+	SnapshotID uuid.UUID       `json:"snapshot_id"`
+	Counts     json.RawMessage `json:"counts"`
+	Total      int32           `json:"total"`
+	RolledUpAt time.Time       `json:"rolled_up_at"`
 }
 
 type Team struct {
@@ -1316,7 +1364,6 @@ type UserRepoAccess struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-// VEX statements. When repo_id is set, it must belong to org_id. The store layer validates this lineage on writes.
 type VexStatement struct {
 	ID                uuid.UUID            `json:"id"`
 	OrgID             uuid.UUID            `json:"org_id"`
@@ -1342,8 +1389,6 @@ type Vulnerability struct {
 	SnapshotID              uuid.UUID           `json:"snapshot_id"`
 	Title                   string              `json:"title"`
 	Description             string              `json:"description"`
-	PrimaryIdentifier       json.RawMessage     `json:"primary_identifier"`
-	Identifiers             json.RawMessage     `json:"identifiers"`
 	OriginalSeverity        SeverityLevel       `json:"original_severity"`
 	Severity                SeverityLevel       `json:"severity"`
 	SeverityOverrideReason  sql.NullString      `json:"severity_override_reason"`
@@ -1395,6 +1440,12 @@ type Vulnerability struct {
 	UpdatedAt               time.Time           `json:"updated_at"`
 	FirstSeenAt             time.Time           `json:"first_seen_at"`
 	LastSeenAt              time.Time           `json:"last_seen_at"`
+	SeverityRank            sql.NullInt16       `json:"severity_rank"`
+	RuleRefID               uuid.NullUUID       `json:"rule_ref_id"`
+	PrimaryIdentifierKind   string              `json:"primary_identifier_kind"`
+	PrimaryIdentifierValue  string              `json:"primary_identifier_value"`
+	OrgID                   uuid.UUID           `json:"org_id"`
+	RepoID                  uuid.UUID           `json:"repo_id"`
 }
 
 type VulnerabilityExternalIssue struct {

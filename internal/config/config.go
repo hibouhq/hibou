@@ -39,11 +39,16 @@ type Config struct {
 	MaxUploadSize     int64
 	SessionSecret     string
 	AutoProvisionOrgs bool
-	RetentionPolicy   retention.RetentionPolicy
-	Background        BackgroundConfig
-	AdvisoryScan      AdvisoryScanConfig
-	Worker            WorkerConfig
-	SecretScan        SecretScanConfig
+	// CoverageStoreLines controls whether per-line coverage hit data is
+	// persisted on upload (powers line-level patch coverage). Defaults to
+	// true; set HIBOU_COVERAGE_STORE_LINES=false to opt out on very large
+	// monorepos where per-line rows would balloon the database.
+	CoverageStoreLines bool
+	RetentionPolicy    retention.RetentionPolicy
+	Background         BackgroundConfig
+	AdvisoryScan       AdvisoryScanConfig
+	Worker             WorkerConfig
+	SecretScan         SecretScanConfig
 
 	Forges []ForgeConfig
 }
@@ -181,6 +186,7 @@ func Load() (Config, error) {
 	v.SetDefault("max.upload.size", int64(104857600))
 	v.SetDefault("session.secret", DefaultSessionSecret)
 	v.SetDefault("auto.provision.orgs", false)
+	v.SetDefault("coverage.store_lines", true)
 	v.SetDefault("background.artifact_processing.enabled", true)
 	v.SetDefault("background.retention.enabled", true)
 	v.SetDefault("background.stale_scan.enabled", true)
@@ -277,12 +283,13 @@ func Load() (Config, error) {
 			UsePathStyle:    v.GetBool("artifact.s3.use_path_style"),
 			UseSSL:          v.GetBool("artifact.s3.use_ssl"),
 		},
-		UploadWindow:      uploadWindow,
-		ShutdownTimeout:   shutdownTimeout,
-		MaxUploadSize:     v.GetInt64("max.upload.size"),
-		SessionSecret:     v.GetString("session.secret"),
-		AutoProvisionOrgs: v.GetBool("auto.provision.orgs"),
-		RetentionPolicy:   retentionPolicy,
+		UploadWindow:       uploadWindow,
+		ShutdownTimeout:    shutdownTimeout,
+		MaxUploadSize:      v.GetInt64("max.upload.size"),
+		SessionSecret:      v.GetString("session.secret"),
+		AutoProvisionOrgs:  v.GetBool("auto.provision.orgs"),
+		CoverageStoreLines: v.GetBool("coverage.store_lines"),
+		RetentionPolicy:    retentionPolicy,
 		Background: BackgroundConfig{
 			ArtifactProcessingEnabled: v.GetBool("background.artifact_processing.enabled"),
 			RetentionEnabled:          v.GetBool("background.retention.enabled"),

@@ -235,7 +235,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 		&notify.EmailSender{},
 	)
 	s.staleScanChecker = notify.NewStaleScanChecker(s.queries, s.bus, log)
-	s.annotator = forge.NewAnnotator(forges, s.deltaSvc, s.bus, forge.NewAnnotatorStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, log)
+	s.annotator = forge.NewAnnotator(forges, s.deltaSvc, s.bus, forge.NewAnnotatorStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, cfg.BaseURL, log)
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
 	s.annotator.Subscribe()
@@ -516,6 +516,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/findings/facets", s.handleGetRefFindingFacets)
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/vulnerabilities/facets", s.handleGetRefFindingFacets)
+						r.Get("/{repoSlug}/vulnerabilities/rules", s.handleGetRefRules)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
@@ -535,6 +536,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Route("/{repoSlug}/delta", func(r chi.Router) {
 							r.Get("/", s.handleGetDelta)
 						})
+						r.Get("/{repoSlug}/pulls/{pr}/gate", s.handleGetPRGate)
 					})
 				})
 			})
@@ -576,17 +578,9 @@ func (s *Server) webhookProtection(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) ListenAndServe(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.cfg.ListenAddr())
-	if err != nil {
-		return err
-	}
-
-	runtimeCtx := s.lifecycleCtx
-	if runtimeCtx == nil {
-		runtimeCtx = context.Background()
-	}
-
+// startBackgroundLoops launches the enabled background workers as goroutines
+// bound to runtimeCtx.
+func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	if s.retentionWorker != nil && s.cfg.Background.RetentionEnabled {
 		go s.runRetentionLoop(runtimeCtx)
 	}
@@ -602,9 +596,26 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		go s.staleScanChecker.Start(runtimeCtx)
 	}
+	if s.annotator != nil {
+		go s.annotator.StartReconcileLoop(runtimeCtx, 5*time.Minute)
+	}
 	if s.updateChecker != nil {
 		go s.updateChecker.Start(runtimeCtx)
 	}
+}
+
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	ln, err := net.Listen("tcp", s.cfg.ListenAddr())
+	if err != nil {
+		return err
+	}
+
+	runtimeCtx := s.lifecycleCtx
+	if runtimeCtx == nil {
+		runtimeCtx = context.Background()
+	}
+
+	s.startBackgroundLoops(runtimeCtx)
 
 	s.log.Info().
 		Str("addr", ln.Addr().String()).

@@ -332,9 +332,22 @@ Examples include:
 
 ### Provider feedback loop
 
-- Publish a GitHub Check Run summary for each analyzed PR.
-- Optionally publish inline review comments for SARIF-backed findings with stable file/line anchors.
-- Keep updates idempotent so reruns refresh prior checks instead of spamming new ones.
+- Publish the gate outcome to the forge as a **PR check the repo admin can require**:
+  a commit status (`hibou/security`) on every forge (GitHub, GitLab, Forgejo/Gitea),
+  upgraded to a rich **GitHub Check Run** (markdown summary of reasons, deep link)
+  when the GitHub App is configured. See ADR-018.
+- **Advisory by default, blocking opt-in** (`.hibou.yaml` `enforcement`): Hibou never
+  breaks the CI build; advisory checks are informational and non-blocking, and a team
+  can opt a check into blocking (and mark it required) when they want a hard gate.
+- **Live updates without a CI re-run**: the check re-posts whenever the gate outcome
+  changes on the server — a VEX/false-positive dismissal, a manual override, or an
+  advisory re-evaluation flips it in place.
+- Keep updates idempotent (persisted per `(repo, head SHA, context)`) so re-evaluations
+  refresh the prior check instead of spamming new ones.
+- Optionally publish inline review comments for SARIF-backed findings with stable
+  file/line anchors (future).
+- The CLI (`hibou gate`) offers an **opt-in, default-off** build-break for pipelines
+  that want to fail locally without relying on branch protection.
 
 This behavior follows the familiar PR-decoration pattern used by modern code analysis platforms, but generalizes it across dependency and security findings.
 

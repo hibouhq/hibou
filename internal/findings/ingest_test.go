@@ -15,6 +15,20 @@ type mockIngestStore struct {
 	vulnerabilities []*store.Vulnerability
 	err             error
 	seen            map[string]bool
+	rules           map[string]uuid.UUID
+}
+
+func (m *mockIngestStore) UpsertScanRule(_ context.Context, params dbgen.UpsertScanRuleParams) (uuid.UUID, error) {
+	if m.rules == nil {
+		m.rules = map[string]uuid.UUID{}
+	}
+	key := params.Tool + "\x00" + params.RuleID
+	if id, ok := m.rules[key]; ok {
+		return id, nil
+	}
+	id := uuid.New()
+	m.rules[key] = id
+	return id, nil
 }
 
 func (m *mockIngestStore) CreateVulnerability(_ context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error) {
@@ -65,13 +79,16 @@ func TestIngestCreatesFindingsAndComputesFingerprint(t *testing.T) {
 		StartLine: 10,
 		EndLine:   11,
 		Message:   "Issue",
-		Metadata:  map[string]any{"source": "test"},
+		Rule:      &ScanRuleInput{Name: "Test rule", HelpURI: "https://example.com/rule-1", CWEs: []string{"CWE-798"}},
 	}})
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
 	}
 	if count != 1 || len(store.vulnerabilities) != 1 {
 		t.Fatalf("expected 1 created vulnerability, got count=%d len=%d", count, len(store.vulnerabilities))
+	}
+	if len(store.rules) != 1 {
+		t.Fatalf("expected rule to be upserted once into the catalog, got %d", len(store.rules))
 	}
 	if store.vulnerabilities[0].LocationHash == nil || store.vulnerabilities[0].Fingerprint != *store.vulnerabilities[0].LocationHash {
 		t.Fatalf("expected fingerprint to default to location hash, got fingerprint=%q location_hash=%#v", store.vulnerabilities[0].Fingerprint, store.vulnerabilities[0].LocationHash)

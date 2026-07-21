@@ -85,14 +85,15 @@ type componentDiffResponse struct {
 }
 
 type compareResultResponse struct {
-	Base          refSnapshotResponse      `json:"base"`
-	Head          refSnapshotResponse      `json:"head"`
-	Delta         *delta.DeltaResult       `json:"delta"`
-	ComponentDiff componentDiffResponse    `json:"component_diff"`
-	CoverageDiff  *comparison.CoverageDiff `json:"coverage_diff"`
-	TestDiff      *comparison.TestDiff     `json:"test_diff"`
-	Gate          *delta.GateResult        `json:"gate,omitempty"`
-	PR            *comparePRInfo           `json:"pr,omitempty"`
+	Base          refSnapshotResponse       `json:"base"`
+	Head          refSnapshotResponse       `json:"head"`
+	Delta         *delta.DeltaResult        `json:"delta"`
+	ComponentDiff componentDiffResponse     `json:"component_diff"`
+	CoverageDiff  *comparison.CoverageDiff  `json:"coverage_diff"`
+	PatchCoverage *comparison.PatchCoverage `json:"patch_coverage,omitempty"`
+	TestDiff      *comparison.TestDiff      `json:"test_diff"`
+	Gate          *delta.GateResult         `json:"gate,omitempty"`
+	PR            *comparePRInfo            `json:"pr,omitempty"`
 }
 
 type trendPointResponse struct {
@@ -767,29 +768,76 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 		TestDiff:      testDiff,
 	}
 
-	// Auto-detect PR: if head ref is a pull request, enrich with gate + PR metadata
+	// Auto-detect PR: if head ref is a pull request, enrich with gate + PR
+	// metadata + line-level patch coverage.
 	if headRef.RefType == store.RefTypePullRequest {
-		weaknessGate := s.resolveRepoWeaknessGate(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, baseSnapshot.ID)
-		gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, deltaResult, weaknessGate)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
+		if !s.enrichComparePR(r, w, comparePREnrichment{
+			org:          org,
+			repo:         repo,
+			baseRef:      baseRef,
+			headRef:      headRef,
+			baseSnapshot: baseSnapshot,
+			headSnapshot: headSnapshot,
+			deltaResult:  deltaResult,
+			coverageDiff: coverageDiff,
+		}, &response) {
 			return
-		}
-		response.Gate = gate
-		prNum := extractPRNumberFromRefName(headRef.Name)
-		if headRef.PrNumber != nil {
-			prNum, _ = strconv.Atoi(*headRef.PrNumber)
-		}
-		response.PR = &comparePRInfo{
-			Number:       prNum,
-			Title:        headRef.PrTitle,
-			SourceBranch: headRef.PrSourceBranch,
-			TargetBranch: baseRef.Name,
-			State:        optionalStringValue(headRef.PrState),
 		}
 	}
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+// comparePREnrichment bundles the inputs enrichComparePR needs so the handler
+// stays flat and the helper stays under the parameter limit.
+type comparePREnrichment struct {
+	org          *store.Organization
+	repo         *store.Repository
+	baseRef      *store.Ref
+	headRef      *store.Ref
+	baseSnapshot *store.Snapshot
+	headSnapshot *store.Snapshot
+	deltaResult  *delta.DeltaResult
+	coverageDiff *comparison.CoverageDiff
+}
+
+// enrichComparePR fills the PR-specific parts of a compare response: the
+// quality gate (vulnerability/weakness + coverage), PR metadata, and
+// line-level patch coverage. It writes an HTTP error and returns false only
+// when gate evaluation fails; all coverage enrichment degrades gracefully.
+func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comparePREnrichment, response *compareResultResponse) bool {
+	weaknessGate := s.resolveRepoWeaknessGate(r.Context(), in.repo.Provider, in.repo.DefaultBranch, in.repo.ProviderID, in.repo.Name, in.repo.Slug, in.baseSnapshot.ID)
+	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), in.repo.ID, in.org.ID, in.deltaResult, weaknessGate)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
+		return false
+	}
+	response.Gate = gate
+
+	prNum := extractPRNumberFromRefName(in.headRef.Name)
+	if in.headRef.PrNumber != nil {
+		prNum, _ = strconv.Atoi(*in.headRef.PrNumber)
+	}
+	response.PR = &comparePRInfo{
+		Number:       prNum,
+		Title:        in.headRef.PrTitle,
+		SourceBranch: in.headRef.PrSourceBranch,
+		TargetBranch: in.baseRef.Name,
+		State:        optionalStringValue(in.headRef.PrState),
+	}
+
+	// Line-level patch coverage + coverage quality gate matched from
+	// .hibou.yaml against the PR target branch. Both degrade to nil/no-op.
+	cfg := s.loadCompareRepoConfig(r.Context(), in.repo)
+	response.PatchCoverage = s.buildPatchCoverage(r.Context(), in.repo, in.baseSnapshot, in.headSnapshot, cfg)
+	if reasons := evaluateCoverageGate(cfg, in.baseRef.Name, in.coverageDiff, response.PatchCoverage); len(reasons) > 0 {
+		if response.Gate == nil {
+			response.Gate = &delta.GateResult{Passed: true}
+		}
+		response.Gate.Reasons = append(response.Gate.Reasons, reasons...)
+		response.Gate.Passed = len(response.Gate.Reasons) == 0
+	}
+	return true
 }
 
 func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {

@@ -60,17 +60,50 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 				Message:      strings.TrimSpace(result.Message.Text),
 				Fingerprint:  fingerprint,
 				LocationHash: sha256Hex(toolName + "/" + ruleID + "/" + filePath + "/" + strconv.Itoa(int(startLine))),
-				Metadata: map[string]any{
-					"cwes":      extractCWEs(rule.Properties.Tags),
-					"rule_name": strings.TrimSpace(rule.Name),
-					"help_uri":  strings.TrimSpace(rule.HelpURI),
-				},
+				Rule:         ruleDescriptor(ruleID, rule),
 			}
 			findings = append(findings, finding)
 		}
 	}
 
 	return findings, nil
+}
+
+// ruleDescriptor normalizes a SARIF reportingDescriptor into the per-rule
+// catalog record. Returns nil when there is no rule id to key on.
+func ruleDescriptor(ruleID string, rule ReportingDescriptor) *RuleDescriptor {
+	if ruleID == "" {
+		return nil
+	}
+
+	var props reportingDescriptorProperties
+	if len(rule.Properties) > 0 {
+		_ = json.Unmarshal(rule.Properties, &props)
+	}
+
+	desc := &RuleDescriptor{
+		RuleID:           ruleID,
+		Name:             strings.TrimSpace(rule.Name),
+		HelpURI:          strings.TrimSpace(rule.HelpURI),
+		SecuritySeverity: strings.TrimSpace(props.SecuritySeverity),
+		Precision:        strings.TrimSpace(props.Precision),
+		CWEs:             extractCWEs(props.Tags),
+		Tags:             props.Tags,
+		Properties:       rule.Properties,
+	}
+	if rule.ShortDescription != nil {
+		desc.ShortDescription = strings.TrimSpace(rule.ShortDescription.Text)
+	}
+	if rule.FullDescription != nil {
+		desc.FullDescription = strings.TrimSpace(rule.FullDescription.Text)
+	}
+	if rule.Help != nil {
+		desc.HelpMarkdown = strings.TrimSpace(rule.Help.Markdown)
+	}
+	if rule.DefaultConfiguration != nil {
+		desc.DefaultLevel = strings.TrimSpace(rule.DefaultConfiguration.Level)
+	}
+	return desc
 }
 
 func resolveRule(rules []ReportingDescriptor, result Result) ReportingDescriptor {

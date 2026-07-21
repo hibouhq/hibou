@@ -20,7 +20,14 @@ type jaCoCoPackage struct {
 
 type jaCoCoSourceFile struct {
 	Name     string          `xml:"name,attr"`
+	Lines    []jaCoCoLine    `xml:"line"`
 	Counters []jaCoCoCounter `xml:"counter"`
+}
+
+type jaCoCoLine struct {
+	Nr int `xml:"nr,attr"` // source line number
+	Mi int `xml:"mi,attr"` // missed instructions
+	Ci int `xml:"ci,attr"` // covered instructions
 }
 
 type jaCoCoCounter struct {
@@ -83,9 +90,33 @@ func newJaCoCoFileCoverage(pkgName string, sourceFile jaCoCoSourceFile) (FileCov
 	}
 	file := FileCoverage{Path: path}
 	applyJaCoCoCountersToFile(&file, sourceFile.Counters)
+	file.Lines = jaCoCoLineCoverage(sourceFile.Lines)
 	file.LineRate = rate(file.LinesCovered, file.LinesValid)
 	file.BranchRate = rate(file.BranchesCovered, file.BranchesValid)
 	return file, true
+}
+
+// jaCoCoLineCoverage converts JaCoCo per-line instruction counters into
+// per-line hit records. JaCoCo reports covered (ci) and missed (mi)
+// instructions rather than raw hit counts, so a line is treated as covered
+// (Hits = 1) when it has any covered instructions, uncovered (Hits = 0)
+// otherwise.
+func jaCoCoLineCoverage(lines []jaCoCoLine) []LineCoverage {
+	if len(lines) == 0 {
+		return nil
+	}
+	result := make([]LineCoverage, 0, len(lines))
+	for _, line := range lines {
+		if line.Nr <= 0 {
+			continue
+		}
+		hits := 0
+		if line.Ci > 0 {
+			hits = 1
+		}
+		result = append(result, LineCoverage{Number: line.Nr, Hits: hits})
+	}
+	return finalizeLines(result)
 }
 
 func accumulateJaCoCoSummary(report *Report, files []FileCoverage) {

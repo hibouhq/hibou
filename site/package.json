@@ -16,6 +16,11 @@
   },
   "dependencies": {
     "chart.js": "^4.5.1",
+    "d3-drag": "^3.0.0",
+    "d3-force": "^3.0.0",
+    "d3-selection": "^3.0.0",
+    "d3-transition": "^3.0.1",
+    "d3-zoom": "^3.0.0",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^2.2.0",
     "vue": "^3.5.0",
@@ -25,6 +30,11 @@
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "@playwright/test": "^1.60.0",
+    "@types/d3-drag": "^3.0.7",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-transition": "^3.0.9",
+    "@types/d3-zoom": "^3.0.8",
     "@types/node": "^25.9.1",
     "@vitejs/plugin-vue": "^5.1.0",
     "@vitest/coverage-v8": "^2.0.0",

@@ -240,7 +240,8 @@ export interface Vulnerability {
   snapshot_id: string
   title: string
   description: string
-  primary_identifier?: { type: string; value: string }
+  primary_identifier_kind?: string
+  primary_identifier_value?: string
   severity: string
   original_severity?: string
   status: string
@@ -265,6 +266,23 @@ export interface Vulnerability {
   metadata?: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+// A deduplicated scan-rule descriptor (one per tool+rule_id). Findings link to
+// it by (scanner_name, primary_identifier_value); the UI joins locally.
+export interface ScanRule {
+  tool: string
+  rule_id: string
+  name: string
+  short_description?: string
+  full_description?: string
+  help_uri?: string
+  help_markdown?: string
+  default_level?: string
+  security_severity?: string
+  precision?: string
+  cwe_ids: string[]
+  tags: string[]
 }
 
 // Per-option result counts for each vulnerability filter dimension. Each record
@@ -393,6 +411,24 @@ export interface CoverageDiff {
   unchanged_files: number
 }
 
+export interface PatchFileCoverage {
+  file_path: string
+  covered_lines: number
+  uncovered_lines: number
+  rate: number | null
+  covered_line_numbers: number[] | null
+  uncovered_line_numbers: number[] | null
+  hunks?: string
+}
+
+export interface PatchCoverage {
+  covered_lines: number
+  uncovered_lines: number
+  rate: number | null
+  truncated: boolean
+  files: PatchFileCoverage[]
+}
+
 export interface TestDiffTotals {
   format: string
   total: number
@@ -449,6 +485,7 @@ export interface CompareResult {
     unchanged: number
   }
   coverage_diff: CoverageDiff | null
+  patch_coverage?: PatchCoverage | null
   test_diff: TestDiff | null
   gate?: {
     passed: boolean
@@ -461,6 +498,21 @@ export interface CompareResult {
     target_branch: string
     state: string
   } | null
+}
+
+// Quality-gate outcome for a pull request (deep-link target of forge PR checks).
+export interface PRGate {
+  pr_number: number
+  head_sha: string
+  context: string
+  state: 'success' | 'failure' | 'pending'
+  conclusion?: 'success' | 'failure' | 'neutral'
+  enforcement: 'advisory' | 'blocking'
+  passed: boolean
+  reasons: string[]
+  target_url?: string
+  source: 'persisted' | 'computed' | 'pending'
+  updated_at?: string
 }
 
 export interface TrendPoint {
@@ -945,6 +997,12 @@ class ApiClient {
     )
   }
 
+  getPRGate(provider: string, slug: string, repoSlug: string, pr: string | number) {
+    return this.request<ApiResponse<PRGate>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/pulls/${pr}/gate`,
+    )
+  }
+
   compareSBOMs(provider: string, slug: string, repoSlug: string, body: CompareSBOMsRequest) {
     return this.request<ApiResponse<SBOMDiff>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/sbom/compare`,
@@ -1072,6 +1130,23 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<VulnerabilityFacets>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/facets${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  // Deduplicated scan-rule catalog for the resolved snapshot. Fetch once and
+  // join to findings locally by (tool, rule_id) instead of embedding rule text
+  // in every vulnerability row.
+  listRefRules(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) {
+      query.set('ref', params.ref)
+    }
+    if (params?.snapshot) {
+      query.set('snapshot', params.snapshot)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<ScanRule[]>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/rules${qs ? `?${qs}` : ''}`,
     )
   }
 

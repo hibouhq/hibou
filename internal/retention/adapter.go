@@ -59,6 +59,14 @@ func (a *StoreAdapter) MarkSnapshotFailed(ctx context.Context, id uuid.UUID) err
 	return err
 }
 
+func (a *StoreAdapter) RollupSnapshotVulnerabilities(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
+	return a.queries.RollupSnapshotVulnerabilities(ctx, snapshotID)
+}
+
+func (a *StoreAdapter) GetSnapshotVulnRollup(ctx context.Context, snapshotID uuid.UUID) (store.SnapshotVulnRollup, bool, error) {
+	return a.queries.GetSnapshotVulnRollup(ctx, snapshotID)
+}
+
 func snapshotsToRows(rows []store.Snapshot) []dbgen.Snapshot {
 	result := make([]dbgen.Snapshot, 0, len(rows))
 	for _, row := range rows {

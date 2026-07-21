@@ -291,7 +291,7 @@ func (q *Queries) SearchClients(ctx context.Context, arg SearchClientsParams) ([
 }
 
 const searchComponents = `-- name: SearchComponents :many
-SELECT DISTINCT c.id, c.purl, c.name, c.version, c.ecosystem, c.licenses, c.created_at
+SELECT DISTINCT c.id, c.purl, c.name, c.version, c.ecosystem, c.created_at, c.licenses
 FROM components c
 JOIN snapshot_components sc ON sc.component_id = c.id
 JOIN snapshots s ON s.id = sc.snapshot_id
@@ -328,8 +328,8 @@ func (q *Queries) SearchComponents(ctx context.Context, arg SearchComponentsPara
 			&i.Name,
 			&i.Version,
 			&i.Ecosystem,
-			&i.Licenses,
 			&i.CreatedAt,
+			pq.Array(&i.Licenses),
 		); err != nil {
 			return nil, err
 		}

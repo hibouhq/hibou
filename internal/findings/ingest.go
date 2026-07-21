@@ -28,7 +28,24 @@ type GenericFinding struct {
 	EndLine     int32
 	Message     string
 	Fingerprint string
-	Metadata    map[string]any
+	Rule        *ScanRuleInput
+}
+
+// ScanRuleInput is the per-rule descriptor extracted from scanner output. It is
+// upserted into the scan_rules catalog once per (tool, rule_id); the resulting
+// vulnerability references it by FK instead of embedding the rule text.
+type ScanRuleInput struct {
+	Name             string
+	ShortDescription string
+	FullDescription  string
+	HelpURI          string
+	HelpMarkdown     string
+	DefaultLevel     string
+	SecuritySeverity string
+	Precision        string
+	CWEs             []string
+	Tags             []string
+	Properties       json.RawMessage
 }
 
 type Ingester struct {
@@ -38,6 +55,7 @@ type Ingester struct {
 
 type IngestStore interface {
 	CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error)
+	UpsertScanRule(ctx context.Context, params dbgen.UpsertScanRuleParams) (uuid.UUID, error)
 }
 
 func NewIngester(store IngestStore, log zerolog.Logger) *Ingester {
@@ -56,9 +74,9 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 			return created, err
 		}
 
-		metadata, err := json.Marshal(finding.Metadata)
+		ruleRef, err := i.upsertRule(ctx, finding)
 		if err != nil {
-			return created, fmt.Errorf("marshal finding metadata: %w", err)
+			return created, err
 		}
 
 		startLine := finding.StartLine
@@ -68,31 +86,24 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		if fingerprint == "" {
 			fingerprint = locationHash
 		}
-		identifier, err := json.Marshal(map[string]string{
-			"type":  "rule",
-			"value": strings.TrimSpace(finding.RuleID),
-		})
-		if err != nil {
-			return created, fmt.Errorf("marshal finding primary identifier: %w", err)
-		}
-
 		_, err = i.store.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
-			Type:              "sast",
-			SnapshotID:        snapshotID,
-			Title:             truncateMessage(strings.TrimSpace(finding.Message), 200),
-			Description:       strings.TrimSpace(finding.Message),
-			PrimaryIdentifier: identifier,
-			Identifiers:       json.RawMessage(`[]`),
-			OriginalSeverity:  severity,
-			Severity:          severity,
-			Status:            "detected",
-			ScannerName:       strings.TrimSpace(finding.Tool),
-			FilePath:          nullString(strings.TrimSpace(finding.FilePath)),
-			StartLine:         sql.NullInt32{Int32: startLine, Valid: startLine > 0},
-			EndLine:           sql.NullInt32{Int32: endLine, Valid: endLine > 0},
-			LocationHash:      nullString(locationHash),
-			Fingerprint:       fingerprint,
-			Metadata:          metadata,
+			Type:                   "sast",
+			SnapshotID:             snapshotID,
+			Title:                  truncateMessage(strings.TrimSpace(finding.Message), 200),
+			Description:            strings.TrimSpace(finding.Message),
+			PrimaryIdentifierKind:  "rule",
+			PrimaryIdentifierValue: strings.TrimSpace(finding.RuleID),
+			OriginalSeverity:       severity,
+			Severity:               severity,
+			Status:                 "detected",
+			ScannerName:            strings.TrimSpace(finding.Tool),
+			FilePath:               nullString(strings.TrimSpace(finding.FilePath)),
+			StartLine:              sql.NullInt32{Int32: startLine, Valid: startLine > 0},
+			EndLine:                sql.NullInt32{Int32: endLine, Valid: endLine > 0},
+			LocationHash:           nullString(locationHash),
+			Fingerprint:            fingerprint,
+			Metadata:               json.RawMessage(`{}`),
+			RuleRefID:              ruleRef,
 		})
 		if err != nil {
 			if isDuplicateFinding(err) {
@@ -104,6 +115,49 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 	}
 
 	return created, nil
+}
+
+// upsertRule stores the finding's rule descriptor once in the scan_rules catalog
+// and returns the FK to link from the vulnerability. Returns a null ref when the
+// finding carries no rule descriptor.
+func (i *Ingester) upsertRule(ctx context.Context, finding GenericFinding) (uuid.NullUUID, error) {
+	if finding.Rule == nil {
+		return uuid.NullUUID{}, nil
+	}
+
+	properties := finding.Rule.Properties
+	if len(properties) == 0 {
+		properties = json.RawMessage(`{}`)
+	}
+
+	id, err := i.store.UpsertScanRule(ctx, dbgen.UpsertScanRuleParams{
+		Tool:             strings.TrimSpace(finding.Tool),
+		RuleID:           strings.TrimSpace(finding.RuleID),
+		Name:             finding.Rule.Name,
+		ShortDescription: finding.Rule.ShortDescription,
+		FullDescription:  finding.Rule.FullDescription,
+		HelpUri:          finding.Rule.HelpURI,
+		HelpMarkdown:     finding.Rule.HelpMarkdown,
+		DefaultLevel:     finding.Rule.DefaultLevel,
+		SecuritySeverity: finding.Rule.SecuritySeverity,
+		RulePrecision:    finding.Rule.Precision,
+		CweIds:           nonNilSlice(finding.Rule.CWEs),
+		Tags:             nonNilSlice(finding.Rule.Tags),
+		Properties:       properties,
+	})
+	if err != nil {
+		return uuid.NullUUID{}, fmt.Errorf("upsert scan rule %s/%s: %w", finding.Tool, finding.RuleID, err)
+	}
+	return uuid.NullUUID{UUID: id, Valid: true}, nil
+}
+
+// nonNilSlice guarantees a non-nil slice so pq.Array writes '{}' (the column is
+// NOT NULL) rather than NULL.
+func nonNilSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func severityFromString(value string) (store.SeverityLevel, error) {

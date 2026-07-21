@@ -75,7 +75,7 @@
                   <span class="rounded-full bg-surface-overlay px-2 py-0.5 text-xs text-gray-300">{{ vulnerability.type }}</span>
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs text-accent">
-                  {{ vulnerability.primary_identifier?.value || vulnerability.scanner_name || 'n/a' }}
+                  {{ vulnerability.primary_identifier_value || vulnerability.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-3 py-2.5">
                   <LinkedText

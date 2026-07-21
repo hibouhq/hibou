@@ -75,7 +75,9 @@
                   </span>
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs text-accent">
-                  {{ vulnerability.primary_identifier?.value || vulnerability.scanner_name || 'n/a' }}
+                  <span :title="ruleName(vulnerability) || undefined">
+                    {{ vulnerability.primary_identifier_value || vulnerability.scanner_name || 'n/a' }}
+                  </span>
                 </td>
                 <td class="px-3 py-2.5">
                   <LinkedText
@@ -136,7 +138,7 @@
 import { computed, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { api, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { api, type ScanRule, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import LinkedText from '@/components/LinkedText.vue'
 
@@ -154,6 +156,18 @@ const searchQuery = ref('')
 const currentSort = ref('detected')
 const currentSortDirection = ref('desc')
 const pagination = ref({ page: 1, per_page: 50, total: 0 })
+// Rule catalog for the current snapshot, keyed by `${tool}::${rule_id}`.
+// Fetched once per load and joined to findings locally (dedup on the wire).
+const ruleMap = ref<Map<string, ScanRule>>(new Map())
+
+function ruleKey(tool: string | undefined, ruleID: string | undefined): string {
+  return `${tool ?? ''}::${ruleID ?? ''}`
+}
+
+function ruleName(vulnerability: Vulnerability): string {
+  const rule = ruleMap.value.get(ruleKey(vulnerability.scanner_name, vulnerability.primary_identifier_value))
+  return rule?.name ?? ''
+}
 const seenTools = ref<Set<string>>(new Set())
 const seenFiles = ref<Set<string>>(new Set())
 const facetCounts = ref<VulnerabilityFacets>({ type: {}, severity: {}, status: {}, tool: {}, file: {} })
@@ -293,6 +307,22 @@ watch(
       seenTools.value = nextSeenTools
       seenFiles.value = nextSeenFiles
       pagination.value = res.pagination
+
+      // Load the deduplicated rule catalog once and join locally; failure here
+      // must not break the findings list, so degrade to an empty map.
+      try {
+        const rulesRes = await api.listRefRules(provider.value, slug.value, repoSlug.value, {
+          ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
+          snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
+        })
+        const nextRuleMap = new Map<string, ScanRule>()
+        for (const rule of rulesRes.data) {
+          nextRuleMap.set(ruleKey(rule.tool, rule.rule_id), rule)
+        }
+        ruleMap.value = nextRuleMap
+      } catch {
+        ruleMap.value = new Map()
+      }
     } catch {
       vulnerabilities.value = []
       pagination.value = { ...pagination.value, total: 0 }

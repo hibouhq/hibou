@@ -35,6 +35,7 @@ type coberturaClass struct {
 }
 
 type coberturaLine struct {
+	Number            int    `xml:"number,attr"`
 	Hits              int    `xml:"hits,attr"`
 	Branch            string `xml:"branch,attr"`
 	ConditionCoverage string `xml:"condition-coverage,attr"`
@@ -68,6 +69,7 @@ func reportFromCobertura(doc coberturaDocument) *Report {
 	for _, file := range filesByPath {
 		file.LineRate = rate(file.LinesCovered, file.LinesValid)
 		file.BranchRate = rate(file.BranchesCovered, file.BranchesValid)
+		file.Lines = finalizeLines(file.Lines)
 		files = append(files, *file)
 	}
 
@@ -129,6 +131,9 @@ func applyCoberturaLine(file *FileCoverage, line coberturaLine) {
 	file.LinesValid++
 	if line.Hits > 0 {
 		file.LinesCovered++
+	}
+	if line.Number > 0 {
+		file.Lines = append(file.Lines, LineCoverage{Number: line.Number, Hits: line.Hits})
 	}
 	covered, valid := parseBranchCoverage(line)
 	file.BranchesCovered += covered

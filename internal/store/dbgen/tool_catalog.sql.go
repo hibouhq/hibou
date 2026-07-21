@@ -16,7 +16,7 @@ SELECT
     sp.provider,
     MAX(sp.completed_at) AS last_completed_at,
     COALESCE(SUM(sp.advisories_found), 0)::bigint AS total_advisories,
-    COUNT(DISTINCT repo.id)::bigint AS repo_count,
+    COUNT(DISTINCT s.repo_id)::bigint AS repo_count,
     MAX(CASE WHEN sp.status = 'failed' THEN sp.completed_at END) AS last_error_at,
     (
         ARRAY_AGG(NULLIF(sp.error_message, '') ORDER BY sp.completed_at DESC)
@@ -25,9 +25,7 @@ SELECT
 FROM scan_providers sp
 JOIN scans sc ON sc.id = sp.scan_id
 JOIN snapshots s ON s.id = sc.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1
+WHERE s.org_id = $1
 GROUP BY sp.provider
 ORDER BY sp.provider
 `
@@ -73,14 +71,12 @@ func (q *Queries) ListAdvisoryProviderStats(ctx context.Context, orgID uuid.UUID
 
 const listComponentEcosystemStats = `-- name: ListComponentEcosystemStats :many
 WITH latest_repo_snapshots AS (
-    SELECT DISTINCT ON (r.repo_id)
+    SELECT DISTINCT ON (s.repo_id)
         s.id AS snapshot_id,
-        r.repo_id
+        s.repo_id
     FROM snapshots s
-    JOIN refs r ON r.id = s.ref_id
-    JOIN repositories repo ON repo.id = r.repo_id
-    WHERE repo.org_id = $1
-    ORDER BY r.repo_id, s.created_at DESC, s.id DESC
+    WHERE s.org_id = $1
+    ORDER BY s.repo_id, s.created_at DESC, s.id DESC
 )
 SELECT
     c.ecosystem,
@@ -135,12 +131,10 @@ SELECT
         COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown') AS format,
     MAX(s.created_at) AS last_seen_at,
     COUNT(*)::bigint AS snapshot_count,
-    COUNT(DISTINCT repo.id)::bigint AS repo_count
+    COUNT(DISTINCT s.repo_id)::bigint AS repo_count
 FROM snapshots s
 JOIN coverage_reports cr ON cr.snapshot_id = s.id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1
+WHERE s.org_id = $1
     AND LOWER(COALESCE(cr.format, '')) IN ('cobertura', 'jacoco', 'clover', 'lcov', 'gocover')
 GROUP BY COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown')
 ORDER BY COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown')
@@ -186,12 +180,9 @@ SELECT
         v.scanner_name AS tool,
         MAX(v.last_seen_at) AS last_seen_at,
     COUNT(*)::bigint AS finding_count,
-    COUNT(DISTINCT repo.id)::bigint AS repo_count
+    COUNT(DISTINCT v.repo_id)::bigint AS repo_count
 FROM vulnerabilities v
-JOIN snapshots s ON s.id = v.snapshot_id
-JOIN refs r ON r.id = s.ref_id
-JOIN repositories repo ON repo.id = r.repo_id
-WHERE repo.org_id = $1
+WHERE v.org_id = $1
     AND v.type != 'dependency'
     AND v.type != 'malware'
 GROUP BY v.scanner_name

@@ -328,6 +328,10 @@ func (f fakeProvider) CreatePullRequest(context.Context, string, string, forge.C
 func (f fakeProvider) CreateCommitStatus(context.Context, string, string, string, forge.CommitStatus) error {
 	return nil
 }
+
+func (f fakeProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return nil, nil
+}
 func (f fakeProvider) ValidateWebhookPayload(*http.Request, string) ([]byte, error) { return nil, nil }
 func (f fakeProvider) ParseWebhookEvent(string, []byte) (forge.WebhookEvent, error) { return nil, nil }
 func (f fakeProvider) OAuth2Config(string) *oauth2.Config                           { return nil }

@@ -208,7 +208,7 @@ func (q *Queries) GetAdvisoryIDByAlias(ctx context.Context, alias string) (uuid.
 }
 
 const getComponentByID = `-- name: GetComponentByID :one
-SELECT id, purl, name, version, ecosystem, licenses, created_at FROM components WHERE id = $1
+SELECT id, purl, name, version, ecosystem, created_at, licenses FROM components WHERE id = $1
 `
 
 func (q *Queries) GetComponentByID(ctx context.Context, id uuid.UUID) (Component, error) {
@@ -220,14 +220,14 @@ func (q *Queries) GetComponentByID(ctx context.Context, id uuid.UUID) (Component
 		&i.Name,
 		&i.Version,
 		&i.Ecosystem,
-		&i.Licenses,
 		&i.CreatedAt,
+		pq.Array(&i.Licenses),
 	)
 	return i, err
 }
 
 const getComponentsByIDs = `-- name: GetComponentsByIDs :many
-SELECT id, purl, name, version, ecosystem, licenses, created_at FROM components WHERE id = ANY($1::uuid[])
+SELECT id, purl, name, version, ecosystem, created_at, licenses FROM components WHERE id = ANY($1::uuid[])
 `
 
 func (q *Queries) GetComponentsByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]Component, error) {
@@ -245,8 +245,8 @@ func (q *Queries) GetComponentsByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 			&i.Name,
 			&i.Version,
 			&i.Ecosystem,
-			&i.Licenses,
 			&i.CreatedAt,
+			pq.Array(&i.Licenses),
 		); err != nil {
 			return nil, err
 		}

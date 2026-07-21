@@ -43,6 +43,11 @@ type Provider interface {
 	// CreateCommitStatus sets a commit status (for PR feedback).
 	CreateCommitStatus(ctx context.Context, owner, repo, sha string, status CommitStatus) error
 
+	// ComparePatch returns the changed-file line map between base and head refs
+	// (a PR's target and source), used for line-level patch coverage. Providers
+	// without support return nil, nil so callers degrade to file-level diffs.
+	ComparePatch(ctx context.Context, owner, repo, base, head string) (*PatchDiff, error)
+
 	// ValidateWebhookPayload validates and returns the raw webhook payload.
 	ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error)
 

@@ -195,6 +195,22 @@ func (l repoConfigGateLoader) LoadWeaknessGate(ctx context.Context, providerID, 
 	return matchedWeaknessGate(cfg, targetBranch), nil
 }
 
+// LoadEnforcement returns the enforcement mode (advisory|blocking) of the gate
+// matching targetBranch, defaulting to advisory when no repo config or match.
+func (l repoConfigGateLoader) LoadEnforcement(ctx context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (string, error) {
+	if l.loader == nil {
+		return repoconfig.EnforcementAdvisory, nil
+	}
+	cfg, err := l.loader.Load(ctx, providerID, owner, repo, defaultBranch)
+	if err != nil {
+		return repoconfig.EnforcementAdvisory, err
+	}
+	if cfg == nil {
+		return repoconfig.EnforcementAdvisory, nil
+	}
+	return cfg.MatchGate(targetBranch).EnforcementValue(), nil
+}
+
 func (s *Server) dbBackedRepoConfig(ctx context.Context, repoID, orgID uuid.UUID) (*repoconfig.RepoConfig, error) {
 	if s == nil || s.queries == nil {
 		return &repoconfig.RepoConfig{Version: repoconfig.CurrentVersion}, nil

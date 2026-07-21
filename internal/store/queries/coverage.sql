@@ -30,3 +30,11 @@ SELECT cf.* FROM coverage_files cf
 JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
 WHERE cr.snapshot_id = $1
 ORDER BY cf.file_path;
+
+-- name: ListCoverageLinesBySnapshotFormat :many
+SELECT cf.file_path, cl.line_number, cl.hits
+FROM coverage_lines cl
+JOIN coverage_files cf ON cf.id = cl.coverage_file_id
+JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
+WHERE cr.snapshot_id = $1 AND cr.format = $2
+ORDER BY cf.file_path, cl.line_number;
