@@ -2,13 +2,18 @@ import { defineStore } from 'pinia'
 import { onScopeDispose, ref } from 'vue'
 
 import { api, type Notification } from '@/api/client'
+import { type GateUpdatedPayload, useGateEventsStore } from '@/stores/gateEvents'
 
 const MAX_RECONNECT_MS = 30_000
 
 export const useNotificationsStore = defineStore('notifications', () => {
+  const gateEvents = useGateEventsStore()
   const unreadCount = ref(0)
   const items = ref<Notification[]>([])
   const loading = ref(false)
+  // Reactive WS connection state; consumers (e.g. the PR gate page) use it to fall
+  // back to polling only while the live channel is down.
+  const connected = ref(false)
   let hasFetched = false
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -115,6 +120,12 @@ export const useNotificationsStore = defineStore('notifications', () => {
       unreadCount.value += 1
       // Invalidate cached list so the next panel open pulls the new item.
       hasFetched = false
+      return
+    }
+
+    if (message.type === 'gate.updated' && message.payload) {
+      // Fan out to the gate-events store so PR gate views can refresh live.
+      gateEvents.record(message.payload as GateUpdatedPayload)
     }
   }
 
@@ -136,11 +147,12 @@ export const useNotificationsStore = defineStore('notifications', () => {
       }
 
       reconnectAttempt = 0
+      connected.value = true
       socket.send(
         JSON.stringify({
           type: 'topic.subscribe',
           payload: {
-            topics: ['notification.new'],
+            topics: ['notification.new', 'gate.updated'],
           },
         }),
       )
@@ -162,6 +174,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
     socket.addEventListener('close', () => {
       if (ws === socket) {
         ws = null
+        connected.value = false
       }
 
       scheduleReconnect()
@@ -172,6 +185,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
     shouldReconnect = false
     clearReconnectTimer()
     reconnectAttempt = 0
+    connected.value = false
 
     if (ws === null) {
       return
@@ -186,5 +200,5 @@ export const useNotificationsStore = defineStore('notifications', () => {
     disconnect()
   })
 
-  return { unreadCount, items, loading, fetchUnreadCount, fetchItems, markRead, markAllRead, connect, disconnect }
+  return { unreadCount, items, loading, connected, fetchUnreadCount, fetchItems, markRead, markAllRead, connect, disconnect }
 })

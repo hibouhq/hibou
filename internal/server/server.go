@@ -84,7 +84,7 @@ type Server struct {
 	dispatcher         *notify.Dispatcher
 	staleScanChecker   backgroundStarter
 	updateChecker      *updatecheck.Checker
-	annotator          *forge.Annotator
+	gatePublisher      *forge.GatePublisher
 	forgeIPAllowlists  map[string]*forgeIPAllowlist
 	forgeLimiters      map[string]*ipRateLimiter
 	webhookHandlers    map[string][]forgeEventHandler
@@ -235,10 +235,10 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 		&notify.EmailSender{},
 	)
 	s.staleScanChecker = notify.NewStaleScanChecker(s.queries, s.bus, log)
-	s.annotator = forge.NewAnnotator(forges, s.deltaSvc, s.bus, forge.NewAnnotatorStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, cfg.BaseURL, log)
+	s.gatePublisher = forge.NewGatePublisher(forges, s.deltaSvc, s.bus, forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, wsGateNotifier{live: s.wsFanout}, cfg.BaseURL, log)
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
-	s.annotator.Subscribe()
+	s.gatePublisher.Subscribe()
 	s.registerDefaultWebhookHandlers()
 	success = true
 	return nil
@@ -537,6 +537,7 @@ func (s *Server) routes(siteFS fs.FS) {
 							r.Get("/", s.handleGetDelta)
 						})
 						r.Get("/{repoSlug}/pulls/{pr}/gate", s.handleGetPRGate)
+						r.Post("/{repoSlug}/pulls/{pr}/gate/override", s.handleOverridePRGate)
 					})
 				})
 			})
@@ -596,8 +597,8 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		go s.staleScanChecker.Start(runtimeCtx)
 	}
-	if s.annotator != nil {
-		go s.annotator.StartReconcileLoop(runtimeCtx, 5*time.Minute)
+	if s.gatePublisher != nil {
+		go s.gatePublisher.StartReconcileLoop(runtimeCtx, 5*time.Minute)
 	}
 	if s.updateChecker != nil {
 		go s.updateChecker.Start(runtimeCtx)

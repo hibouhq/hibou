@@ -1109,23 +1109,27 @@ type Organization struct {
 }
 
 type PrCheck struct {
-	ID            uuid.UUID       `json:"id"`
-	RepoID        uuid.UUID       `json:"repo_id"`
-	RefID         uuid.NullUUID   `json:"ref_id"`
-	HeadSha       string          `json:"head_sha"`
-	Context       string          `json:"context"`
-	State         string          `json:"state"`
-	Conclusion    string          `json:"conclusion"`
-	Enforcement   string          `json:"enforcement"`
-	Passed        bool            `json:"passed"`
-	Reasons       json.RawMessage `json:"reasons"`
-	DeltaSummary  json.RawMessage `json:"delta_summary"`
-	ExternalID    string          `json:"external_id"`
-	TargetUrl     string          `json:"target_url"`
-	ForgeSyncedAt sql.NullTime    `json:"forge_synced_at"`
-	LastError     string          `json:"last_error"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	ID             uuid.UUID       `json:"id"`
+	RepoID         uuid.UUID       `json:"repo_id"`
+	RefID          uuid.NullUUID   `json:"ref_id"`
+	HeadSha        string          `json:"head_sha"`
+	Context        string          `json:"context"`
+	State          string          `json:"state"`
+	Conclusion     string          `json:"conclusion"`
+	Enforcement    string          `json:"enforcement"`
+	Passed         bool            `json:"passed"`
+	Reasons        json.RawMessage `json:"reasons"`
+	DeltaSummary   json.RawMessage `json:"delta_summary"`
+	ExternalID     string          `json:"external_id"`
+	TargetUrl      string          `json:"target_url"`
+	ForgeSyncedAt  sql.NullTime    `json:"forge_synced_at"`
+	LastError      string          `json:"last_error"`
+	OverrideState  string          `json:"override_state"`
+	OverrideReason string          `json:"override_reason"`
+	OverrideBy     uuid.NullUUID   `json:"override_by"`
+	OverrideAt     sql.NullTime    `json:"override_at"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 type QualityGate struct {

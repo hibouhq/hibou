@@ -13,8 +13,10 @@ import (
 )
 
 // PrCheck is the persisted quality-gate outcome published to a forge as a commit
-// status / check run. See migration 00022 and ADR-018.
+// status / check run. See ADR-018.
 type PrCheck = dbgen.PrCheck
+
+const defaultGateContext = "hibou/security"
 
 // UpsertPRCheckInput is the domain-friendly input for persisting a gate outcome.
 // Reasons is stored as a JSON array; DeltaSummary as a JSON object.
@@ -48,7 +50,7 @@ func (q *Queries) UpsertPRCheck(ctx context.Context, in UpsertPRCheckInput) (*Pr
 	}
 	context := in.Context
 	if context == "" {
-		context = "hibou/security"
+		context = defaultGateContext
 	}
 	enforcement := in.Enforcement
 	if enforcement == "" {
@@ -81,7 +83,7 @@ func (q *Queries) UpsertPRCheck(ctx context.Context, in UpsertPRCheckInput) (*Pr
 // nil when none exists.
 func (q *Queries) GetPRCheck(ctx context.Context, repoID uuid.UUID, headSha, context string) (*PrCheck, error) {
 	if context == "" {
-		context = "hibou/security"
+		context = defaultGateContext
 	}
 	row, err := q.db.GetPRCheck(ctx, dbgen.GetPRCheckParams{RepoID: repoID, HeadSha: headSha, Context: context})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -100,4 +102,38 @@ func (q *Queries) ListUnsyncedPRChecks(ctx context.Context, limit int32) ([]PrCh
 		limit = 100
 	}
 	return q.db.ListUnsyncedPRChecks(ctx, limit)
+}
+
+// PRCheckOverrideInput sets (or clears, with State "") a manual gate override for
+// a PR head. RefID/By may be nil. State is "" | "pass" | "fail".
+type PRCheckOverrideInput struct {
+	RepoID  uuid.UUID
+	RefID   *uuid.UUID
+	HeadSha string
+	Context string
+	State   string
+	Reason  string
+	By      *uuid.UUID
+}
+
+// SetPRCheckOverride creates a pending row if none exists; otherwise updates only
+// the override columns so a subsequent scan/re-eval preserves it.
+func (q *Queries) SetPRCheckOverride(ctx context.Context, in PRCheckOverrideInput) (*PrCheck, error) {
+	context := in.Context
+	if context == "" {
+		context = defaultGateContext
+	}
+	row, err := q.db.SetPRCheckOverride(ctx, dbgen.SetPRCheckOverrideParams{
+		RepoID:         in.RepoID,
+		RefID:          nullUUIDFromPtr(in.RefID),
+		HeadSha:        in.HeadSha,
+		Context:        context,
+		OverrideState:  in.State,
+		OverrideReason: in.Reason,
+		OverrideBy:     nullUUIDFromPtr(in.By),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
 }

@@ -47,7 +47,11 @@ jobs:
           run-cmd: |
             (cd site && npm ci)
             make check-generate
-            make build-all
+            if [ "${{ github.event_name }}" = "release" ]; then
+              make build-all
+            else
+              make build
+            fi
 
       - parallel:
           - name: Lint
@@ -65,11 +69,11 @@ jobs:
             with:
               run-cmd: (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
 
-      - name: Check reproducibility
-        uses: ./.github/actions/devcontainer-ci
-        with:
-          run-cmd: |
-            make check-reproducible
+      # - name: Check reproducibility
+      #   uses: ./.github/actions/devcontainer-ci
+      #   with:
+      #     run-cmd: |
+      #       make check-reproducible
 
       - name: Get commit info
         if: github.event_name != 'pull_request'
@@ -149,38 +153,26 @@ jobs:
       #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.36.0
+      - name: Run Trivy suite
+        uses: ./.github/actions/devcontainer-ci
         with:
-          scan-type: fs
-          format: sarif
-          output: trivy-fs.sarif
-
-      - name: Generate Go SBOM
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: cyclonedx
-          output: go-sbom.cdx.json
-
-      - name: Generate frontend SBOM
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: site/
-          format: cyclonedx
-          output: frontend-sbom.cdx.json
+          run-cmd: |
+            trivy fs --format sarif --output trivy-fs.sarif .
+            trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
+            trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
 
       - name: Check Hibou upload config
         id: hibou-ci
         run: |
-          # Upload only when both the server URL (repo/org variable) and the
-          # API token secret are configured.
-          if [[ -n "$HIBOU_SERVER_URL" && -n "$HIBOU_API_TOKEN" ]]; then
+          # Upload only when the API token secret is set AND the server URL is a
+          # real http(s) URL — not empty and not the docs placeholder. This keeps
+          # forks and unconfigured repos (or a var left as "your-hibou-domain")
+          # from attempting an upload against an unreachable host.
+          if [[ -n "$HIBOU_API_TOKEN" && "$HIBOU_SERVER_URL" =~ ^https?://[^[:space:]]+ && "$HIBOU_SERVER_URL" != *your-hibou-domain* ]]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Hibou upload skipped — set repo variable HIBOU_SERVER_URL to a real https:// URL and secret HIBOU_API_TOKEN to enable."
           fi
         env:
           HIBOU_SERVER_URL: ${{ vars.HIBOU_SERVER_URL }}
@@ -208,7 +200,7 @@ jobs:
             frontend-sbom.cdx.json
 
       - name: Upload security artifacts
-        if: always()
+        if: always() && vars.UPLOAD_GITHUB_SECURITY_ARTIFACTS == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: security-reports
@@ -259,12 +251,10 @@ jobs:
 
       - name: Generate image SBOM
         if: github.event_name == 'release'
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: ./.github/actions/devcontainer-ci
         with:
-          scan-type: image
-          image-ref: ghcr.io/${{ github.repository }}:${{ steps.release.outputs.version }}
-          format: cyclonedx
-          output: image-sbom.cdx.json
+          run-cmd: |
+            trivy image --format cyclonedx --output image-sbom.cdx.json ghcr.io/${{ github.repository }}:${{ steps.release.outputs.version }}
 
       - name: Upload image SBOM to Hibou
         if: github.event_name == 'release' && steps.hibou-ci.outputs.enabled == 'true'

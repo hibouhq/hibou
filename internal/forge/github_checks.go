@@ -13,7 +13,7 @@ import (
 // SupportsCheckRuns reports whether this provider can publish a native GitHub
 // check run. Check runs require a GitHub App installation token with the
 // `checks:write` permission, so they are only available in App mode. In OAuth-only
-// mode the annotator falls back to the commit status.
+// mode the gatePublisher falls back to the commit status.
 func (g *GitHub) SupportsCheckRuns() bool {
 	return g.isAppMode()
 }
@@ -35,15 +35,19 @@ func (g *GitHub) CreateOrUpdateCheckRun(ctx context.Context, owner, repo string,
 		return "", err
 	}
 
+	output := map[string]any{
+		"title":   run.Title,
+		"summary": run.Summary,
+	}
+	if annotations := githubAnnotations(run.Annotations); len(annotations) > 0 {
+		output["annotations"] = annotations
+	}
 	payload := map[string]any{
 		"name":       run.Name,
 		"head_sha":   run.HeadSHA,
 		"status":     "completed",
 		"conclusion": run.Conclusion,
-		"output": map[string]string{
-			"title":   run.Title,
-			"summary": run.Summary,
-		},
+		"output":     output,
 	}
 	if strings.TrimSpace(run.DetailsURL) != "" {
 		payload["details_url"] = run.DetailsURL
@@ -77,6 +81,42 @@ func (g *GitHub) CreateOrUpdateCheckRun(ctx context.Context, owner, repo string,
 		return "", fmt.Errorf("create/update check run: %w", err)
 	}
 	return strconv.FormatInt(result.ID, 10), nil
+}
+
+// githubAnnotations maps hibou's inline annotations to GitHub's Checks API shape.
+// annotation_level must be one of notice|warning|failure.
+func githubAnnotations(annotations []CheckRunAnnotation) []map[string]any {
+	if len(annotations) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(annotations))
+	for _, a := range annotations {
+		if strings.TrimSpace(a.Path) == "" || a.StartLine <= 0 {
+			continue
+		}
+		level := a.Level
+		switch level {
+		case "notice", "warning", "failure":
+		default:
+			level = "notice"
+		}
+		end := a.EndLine
+		if end < a.StartLine {
+			end = a.StartLine
+		}
+		annotation := map[string]any{
+			"path":             a.Path,
+			"start_line":       a.StartLine,
+			"end_line":         end,
+			"annotation_level": level,
+			"message":          a.Message,
+		}
+		if strings.TrimSpace(a.Title) != "" {
+			annotation["title"] = a.Title
+		}
+		out = append(out, annotation)
+	}
+	return out
 }
 
 // findCheckRunID returns the id of an existing check run with the given name on

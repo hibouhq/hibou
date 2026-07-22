@@ -94,6 +94,37 @@
         </div>
       </div>
 
+      <!-- Manual override banner -->
+      <div
+        v-if="overrideActive"
+        class="mt-4 flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-accent/40 bg-accent/10 p-4"
+      >
+        <div class="flex min-w-0 items-start gap-3">
+          <Gavel class="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-white">
+              Gate manually overridden to {{ overrideLabel }} by a release manager
+            </p>
+            <p
+              v-if="gate?.override_reason"
+              class="mt-1 max-w-2xl text-sm text-gray-300"
+            >
+              {{ gate.override_reason }}
+            </p>
+          </div>
+        </div>
+        <button
+          v-if="canOverride"
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="overrideSubmitting"
+          @click="clearOverride"
+        >
+          <Undo2 class="h-3.5 w-3.5" />
+          Clear override
+        </button>
+      </div>
+
       <!-- Reasons -->
       <div
         v-if="gate.reasons.length > 0"
@@ -166,6 +197,90 @@
         </a>
       </div>
 
+      <!-- Manual override action (maintainers) -->
+      <div
+        v-if="canOverride"
+        class="mt-6 rounded-2xl border border-surface-border-subtle bg-surface-overlay/40 p-5"
+      >
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="flex items-start gap-3">
+            <Gavel class="mt-0.5 h-5 w-5 shrink-0 text-accent" />
+            <div class="min-w-0">
+              <p class="text-sm font-semibold text-white">
+                Override gate
+              </p>
+              <p class="mt-1 max-w-2xl text-sm text-gray-400">
+                Overriding re-posts the forge check without a CI re-run. Dismissing a false positive
+                via VEX (below) is usually preferable.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="overrideSubmitting"
+            @click="toggleOverrideForm"
+          >
+            {{ overrideFormOpen ? 'Cancel' : 'Override gate' }}
+          </button>
+        </div>
+
+        <form
+          v-if="overrideFormOpen"
+          class="mt-4 space-y-3"
+          @submit.prevent="submitOverride"
+        >
+          <div class="flex items-center gap-2">
+            <button
+              v-for="choice in (['pass', 'fail'] as const)"
+              :key="choice"
+              type="button"
+              class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium capitalize transition"
+              :class="overrideChoice === choice
+                ? 'border-accent/50 bg-accent/10 text-white'
+                : 'border-surface-border bg-surface-overlay text-gray-300 hover:border-accent/50 hover:text-white'"
+              @click="overrideChoice = choice"
+            >
+              <ShieldCheck
+                v-if="choice === 'pass'"
+                class="h-3.5 w-3.5"
+              />
+              <ShieldAlert
+                v-else
+                class="h-3.5 w-3.5"
+              />
+              {{ choice }}
+            </button>
+          </div>
+          <textarea
+            v-model="overrideReason"
+            rows="3"
+            placeholder="Reason for overriding the gate (recorded on the check)…"
+            class="w-full rounded-xl border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600"
+          />
+          <button
+            type="submit"
+            class="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="overrideSubmitting"
+          >
+            {{ overrideSubmitting ? 'Submitting…' : `Override to ${overrideChoice.toUpperCase()}` }}
+          </button>
+        </form>
+
+        <p
+          v-if="overrideError"
+          class="mt-3 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+        >
+          {{ overrideError }}
+        </p>
+        <p
+          v-else-if="overrideMessage"
+          class="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300"
+        >
+          {{ overrideMessage }}
+        </p>
+      </div>
+
       <!-- Triage call-to-action -->
       <div class="mt-6 rounded-2xl border border-surface-border-subtle bg-surface-overlay/40 p-5">
         <div class="flex items-start gap-3">
@@ -194,13 +309,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { ArrowRight, Clock, ExternalLink, GitCommitHorizontal, GitPullRequest, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-vue-next'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { ArrowRight, Clock, ExternalLink, Gavel, GitCommitHorizontal, GitPullRequest, RefreshCw, ShieldAlert, ShieldCheck, Undo2 } from 'lucide-vue-next'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type PRGate } from '@/api/client'
+import { useGateEventsStore } from '@/stores/gateEvents'
+import { useNotificationsStore } from '@/stores/notifications'
+import { useOrgStore } from '@/stores/org'
 
 const route = useRoute()
+const orgStore = useOrgStore()
+const gateEvents = useGateEventsStore()
+const notifications = useNotificationsStore()
 
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
@@ -242,6 +363,7 @@ async function load(opts: { silent?: boolean } = {}) {
     if (token === requestToken) {
       loading.value = false
       refreshing.value = false
+      syncPolling()
     }
   }
 }
@@ -250,6 +372,58 @@ function refresh() {
   void load({ silent: true })
 }
 
+// Live updates arrive push-based over the shared notifications WebSocket via the
+// `gate.updated` topic (see stores/gateEvents.ts). The pending-state poll below
+// is kept only as a fallback for when the WS is unavailable.
+watch(
+  () => gateEvents.version,
+  () => {
+    const event = gateEvents.lastEvent
+    if (!event) {
+      return
+    }
+    // Only react to events for the PR currently on screen.
+    if (
+      event.provider === provider.value &&
+      event.org_slug === slug.value &&
+      event.repo_slug === repoSlug.value &&
+      String(event.pr_number) === pr.value
+    ) {
+      void load({ silent: true })
+    }
+  },
+)
+
+// Fallback poll while the gate is pending, in case the WebSocket is down, so a
+// freshly-opened PR still resolves without a manual refresh; stops once settled.
+let pollTimer: number | null = null
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+// Live updates arrive over the shared WebSocket (`gate.updated`), which also covers
+// the pending -> settled transition. Poll only as a fallback while the gate is
+// pending AND the WebSocket is down, so a healthy connection does no polling.
+function syncPolling() {
+  if (gate.value?.state === 'pending' && !notifications.connected) {
+    if (pollTimer === null) {
+      pollTimer = window.setInterval(() => {
+        void load({ silent: true })
+      }, 10000)
+    }
+    return
+  }
+  stopPolling()
+}
+
+// Re-evaluate the fallback poll when the WS connection flips (drops -> start
+// polling while pending; reconnects -> stop).
+watch(() => notifications.connected, () => syncPolling())
+
 watch(
   () => [provider.value, slug.value, repoSlug.value, pr.value] as const,
   () => {
@@ -257,6 +431,67 @@ watch(
   },
   { immediate: true },
 )
+
+onUnmounted(stopPolling)
+
+// Maintainers (release_manager/admin) may manually override the gate. The org
+// role comes from the shared org store; if it isn't known yet we still show the
+// control and let the server enforce it (403 handled inline below).
+const canOverride = computed(() => {
+  const role = orgStore.currentOrg?.role
+  return !role || role === 'admin' || role === 'release_manager'
+})
+
+const overrideActive = computed(() => Boolean(gate.value?.override_state))
+const overrideLabel = computed(() => (gate.value?.override_state === 'pass' ? 'PASS' : 'FAIL'))
+
+const overrideFormOpen = ref(false)
+const overrideChoice = ref<'pass' | 'fail'>('pass')
+const overrideReason = ref('')
+const overrideSubmitting = ref(false)
+const overrideError = ref('')
+const overrideMessage = ref('')
+
+function toggleOverrideForm() {
+  overrideFormOpen.value = !overrideFormOpen.value
+  overrideError.value = ''
+  overrideMessage.value = ''
+}
+
+function submitOverride() {
+  if (!overrideReason.value.trim()) {
+    overrideError.value = 'A reason is required to override the gate.'
+    return
+  }
+  void applyOverride(overrideChoice.value, overrideReason.value.trim())
+}
+
+function clearOverride() {
+  void applyOverride('', '')
+}
+
+async function applyOverride(state: '' | 'pass' | 'fail', reason: string) {
+  if (!provider.value || !slug.value || !repoSlug.value || !pr.value) {
+    return
+  }
+  overrideSubmitting.value = true
+  overrideError.value = ''
+  overrideMessage.value = ''
+  try {
+    const res = await api.overridePRGate(provider.value, slug.value, repoSlug.value, pr.value, { state, reason })
+    gate.value = res.data
+    overrideFormOpen.value = false
+    overrideReason.value = ''
+    overrideMessage.value = state === ''
+      ? 'Override cleared — the forge check now reflects the computed gate.'
+      : `Gate overridden to ${state.toUpperCase()} and re-posted to the forge.`
+    syncPolling()
+  } catch (err) {
+    overrideError.value = err instanceof Error ? err.message : 'Failed to update the gate override.'
+  } finally {
+    overrideSubmitting.value = false
+  }
+}
 
 const shortSha = computed(() => gate.value?.head_sha?.slice(0, 7) ?? '')
 

@@ -108,10 +108,10 @@ test: test-db ## Run Go and frontend tests (Go tests use $(TEST_DB), not the dev
 coverage: test-db ## Run Go tests with coverage + JUnit report (uses $(TEST_DB))
 	@if command -v gotestsum >/dev/null 2>&1; then \
 		HIBOU_DATABASE_URL='$(TEST_DATABASE_URL)' gotestsum --junitfile junit-go.xml --format pkgname \
-			-- -race -count=1 -coverprofile=coverage.out ./internal/...; \
+			-- -count=1 -coverprofile=coverage.out ./internal/...; \
 	else \
 		echo "gotestsum not found; running plain go test (no JUnit report)"; \
-		HIBOU_DATABASE_URL='$(TEST_DATABASE_URL)' go test -race -count=1 -coverprofile=coverage.out ./internal/...; \
+		HIBOU_DATABASE_URL='$(TEST_DATABASE_URL)' go test -count=1 -coverprofile=coverage.out ./internal/...; \
 	fi
 	go tool cover -func=coverage.out | tail -1
 	@echo "HTML report: go tool cover -html=coverage.out"

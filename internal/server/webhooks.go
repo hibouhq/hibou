@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -221,6 +222,16 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 	}
 	if ref == nil {
 		return nil
+	}
+
+	// A new head push (synchronize) or reopen changes the PR delta, so re-evaluate
+	// and re-post the gate check for this ref — no CI re-run. Skip closed/merged.
+	// A no-op when the new head has no analyzed snapshot yet (CI upload covers that).
+	if !event.Merged && !strings.Contains(strings.ToLower(event.Action), "clos") {
+		s.bus.Publish(r.Context(), events.Event{
+			Type:    events.GateRecomputeRequested,
+			Payload: map[string]any{"ref_id": ref.ID.String()},
+		})
 	}
 
 	prState, prMergedAt, prClosedAt, shouldUpdate := pullRequestLifecycleState(event.Action, event.Merged)

@@ -206,6 +206,8 @@ postgresql:
   persistence:
     enabled: true
     size: 10Gi
+    # -- StorageClass name for bundled PostgreSQL. Leave empty for the cluster default.
+    storageClass: ""
   resources:
     requests:
       cpu: 250m

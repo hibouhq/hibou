@@ -743,9 +743,14 @@ CREATE TABLE pr_checks (
     target_url text DEFAULT ''::text NOT NULL,
     forge_synced_at timestamp with time zone,
     last_error text DEFAULT ''::text NOT NULL,
+    override_state text DEFAULT ''::text NOT NULL,
+    override_reason text DEFAULT ''::text NOT NULL,
+    override_by uuid,
+    override_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT pr_checks_enforcement_check CHECK ((enforcement = ANY (ARRAY['advisory'::text, 'blocking'::text])))
+    CONSTRAINT pr_checks_enforcement_check CHECK ((enforcement = ANY (ARRAY['advisory'::text, 'blocking'::text]))),
+    CONSTRAINT pr_checks_override_state_check CHECK ((override_state = ANY (ARRAY[''::text, 'pass'::text, 'fail'::text])))
 );
 
 

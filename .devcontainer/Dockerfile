@@ -20,6 +20,8 @@ ARG GOTESTSUM_VERSION='1.13.0'
 ARG HELM_VERSION='4.2.0'
 # renovate: datasource=github-releases packageName=oras-project/oras
 ARG ORAS_VERSION='1.3.0'
+# renovate: datasource=github-releases depName=aquasecurity/trivy extractVersion=^v(?<version>.+)$
+ARG TRIVY_VERSION='0.72.0'
 # renovate: datasource=node-version packageName=node
 ARG NODE_MAJOR='26'
 # renovate: datasource=github-releases packageName=opentofu/opentofu
@@ -39,7 +41,7 @@ ARG DIND_FEATURE_VERSION='3.0.1'
 FROM mcr.microsoft.com/devcontainers/base:noble AS base
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
-ARG GH_CLI_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION GOTESTSUM_VERSION NODE_MAJOR RTK_VERSION SQLC_VERSION SWAG_VERSION
+ARG GH_CLI_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION GOTESTSUM_VERSION NODE_MAJOR RTK_VERSION SQLC_VERSION SWAG_VERSION TRIVY_VERSION
 
 RUN <<EOF
     packages=(
@@ -77,6 +79,10 @@ RUN <<EOF
     arch="$(echo "${TARGETARCH}" | sed 's/arm64/aarch64/' | sed 's/amd64/x86_64/')"
     # swag release assets use x86_64/arm64 naming (not aarch64)
     swag_arch="$(echo "${TARGETARCH}" | sed 's/amd64/x86_64/')"
+    trivy_arch='64bit'
+    if [ "${TARGETARCH}" = 'arm64' ]; then
+        trivy_arch='ARM64'
+    fi
 
     # Install Go tools from prebuilt release binaries rather than `go install`.
     # `go install` compiles from source under Go ${GO_VERSION}, and these pinned
@@ -105,6 +111,10 @@ RUN <<EOF
     curl -fsSL "https://github.com/gotestyourself/gotestsum/releases/download/v${GOTESTSUM_VERSION}/gotestsum_${GOTESTSUM_VERSION}_linux_${TARGETARCH}.tar.gz" \
         | tar -xzf - -C /usr/local/bin gotestsum
     gotestsum --version
+
+    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${trivy_arch}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin trivy
+    trivy --version
 
     rtk_target='unknown-linux-gnu'
     if [ "${TARGETARCH}" = 'amd64' ]; then

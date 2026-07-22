@@ -29,7 +29,7 @@ const (
 	SecretDiscovered     Type = "secret.discovered"
 	GatePassed           Type = "gate.passed"
 	GateFailed           Type = "gate.failed"
-	// GateRecomputeRequested asks the forge annotator to re-evaluate and re-post
+	// GateRecomputeRequested asks the forge gatePublisher to re-evaluate and re-post
 	// the PR gate check without a CI re-run. Payload: one of "ref_id" (single PR
 	// ref), "repo_id" (all open PRs in the repo), or "org_id" (all open PRs in the
 	// org). Published by gate-affecting changes: VEX/false-positive dismissal,
