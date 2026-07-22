@@ -41,25 +41,30 @@ jobs:
           registry: ghcr.io
           push-pr-cache: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
 
-      - name: Build and test
+      - name: Prepare workspace
         uses: ./.github/actions/devcontainer-ci
         with:
           run-cmd: |
             (cd site && npm ci)
             make check-generate
-            if [ "${{ github.event_name }}" = "release" ]; then
-              make build-all
-            else
-              make build
-            fi
 
       - parallel:
+          - name: Build binaries
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              run-cmd: |
+                if [ "${{ github.event_name }}" = "release" ]; then
+                  make build-all
+                else
+                  make build-image-binaries
+                fi
+
           - name: Lint
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: make lint
 
-          - name: Coverage
+          - name: Go coverage
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: make coverage
@@ -68,6 +73,15 @@ jobs:
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
+
+          - name: Security suite
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              run-cmd: |
+                gosec -fmt sarif -out gosec.sarif ./... || true
+                trivy fs --format sarif --output trivy-fs.sarif .
+                trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
+                trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
 
       # - name: Check reproducibility
       #   uses: ./.github/actions/devcontainer-ci
@@ -126,6 +140,11 @@ jobs:
             export GIT_BRANCH="$(sanitize "${GIT_BRANCH}")"
             export GIT_TARGET_BRANCH="$(sanitize "${GIT_TARGET_BRANCH}")"
             export GIT_DEFAULT_BRANCH="$(sanitize "${GIT_DEFAULT_BRANCH}")"
+            if [ "${IS_RELEASE}" = "true" ]; then
+              export INCLUDE_EXTRA_CLI_BINARIES=true
+            else
+              export INCLUDE_EXTRA_CLI_BINARIES=false
+            fi
             export PUSH=true
             export CACHE_PUSH=true
 
@@ -141,25 +160,12 @@ jobs:
 
             docker buildx bake -f docker-bake.hcl
 
-      - name: Run gosec
-        uses: ./.github/actions/devcontainer-ci
-        with:
-          run-cmd: gosec -fmt sarif -out gosec.sarif ./... || true
-
       # - name: SonarCloud scan
       #   uses: SonarSource/sonarcloud-github-action@v3
       #   continue-on-error: true
       #   env:
       #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - name: Run Trivy suite
-        uses: ./.github/actions/devcontainer-ci
-        with:
-          run-cmd: |
-            trivy fs --format sarif --output trivy-fs.sarif .
-            trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
-            trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
 
       - name: Check Hibou upload config
         id: hibou-ci

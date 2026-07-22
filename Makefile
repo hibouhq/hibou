@@ -23,6 +23,7 @@ TEST_DATABASE_URL := postgres://hibou:hibou@localhost:5432/$(TEST_DB)?sslmode=di
 
 # Build targets: linux/amd64, linux/arm64, windows/amd64, windows/arm64, darwin/arm64
 PLATFORMS := linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64
+IMAGE_PLATFORMS := linux/amd64 linux/arm64
 
 .PHONY: all
 all: generate lint test build ## Default: generate, lint, test, build
@@ -208,6 +209,19 @@ build-all: generate build-frontend ## Cross-compile for all target platforms
 		  if [ "$$goos" = "linux" ]; then \
 			ln -sf $(BINARY)-$$goos-$$goarch$$ext $(DIST)/$(BINARY)-server-$$goarch; \
 		  fi ) & pids="$$pids $$!"; \
+	done; \
+	for pid in $$pids; do wait $$pid || fail=1; done; \
+	[ $$fail -eq 0 ]
+
+.PHONY: build-image-binaries
+build-image-binaries: generate build-frontend ## Cross-compile only the Linux binaries needed by container image builds
+	@mkdir -p $(DIST); \
+	pids=""; fail=0; \
+	for platform in $(IMAGE_PLATFORMS); do \
+		goos=$${platform%%/*}; goarch=$${platform##*/}; \
+		( GOOS=$$goos GOARCH=$$goarch $(GO_BUILD) \
+			-o $(DIST)/$(BINARY)-$$goos-$$goarch . && \
+		  ln -sf $(BINARY)-$$goos-$$goarch $(DIST)/$(BINARY)-server-$$goarch ) & pids="$$pids $$!"; \
 	done; \
 	for pid in $$pids; do wait $$pid || fail=1; done; \
 	[ $$fail -eq 0 ]

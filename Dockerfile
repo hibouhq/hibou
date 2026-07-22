@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Slim runtime image: copies pre-built binaries from build context.
-# Build binaries first with: make build-all
+# Build binaries first with: make build-image-binaries (main) or make build-all (release)
 # Build base image first with: make base-image
 #
 # Reproducible builds: pass --build-arg SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
@@ -9,6 +9,7 @@
 ARG SOURCE_DATE_EPOCH=0
 ARG TARGETARCH
 ARG BASE_IMAGE=hibou-base:latest
+ARG INCLUDE_EXTRA_CLI_BINARIES=false
 
 # --- Runtime (Wolfi-based, reproducible, 0 CVE) ---
 # Built from apko.yaml. CI publishes a multi-arch base image and passes BASE_IMAGE.
@@ -25,10 +26,14 @@ COPY dist/hibou-* /staged/
 #     so clients (e.g. the hibou-upload CI action) can self-download a version-matched CLI.
 RUN set -eux; \
 	mkdir -p /out; \
-	for f in hibou-linux-amd64 hibou-linux-arm64 hibou-darwin-arm64 \
-	         hibou-windows-amd64.exe hibou-windows-arm64.exe; do \
+	for f in hibou-linux-amd64 hibou-linux-arm64; do \
 		install -m 0555 "/staged/$f" "/out/$f"; \
 	done; \
+	if [ "${INCLUDE_EXTRA_CLI_BINARIES}" = 'true' ]; then \
+		for f in hibou-darwin-arm64 hibou-windows-amd64.exe hibou-windows-arm64.exe; do \
+			install -m 0555 "/staged/$f" "/out/$f"; \
+		done; \
+	fi; \
 	install -m 0555 "/staged/hibou-linux-${TARGETARCH}" /out/hibou; \
 	ln -sf hibou /out/hibou-server
 

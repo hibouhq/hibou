@@ -54,6 +54,10 @@ variable "GIT_DEFAULT_BRANCH" {
     default = "main"
 }
 
+variable "INCLUDE_EXTRA_CLI_BINARIES" {
+    default = false
+}
+
 variable "PLATFORMS" {
     default = "linux/amd64,linux/arm64"
 }
@@ -81,8 +85,9 @@ target "default" {
         "index,manifest:org.opencontainers.image.created=${timestamp()}",
     ]
     args = {
-        SOURCE_DATE_EPOCH = SOURCE_DATE_EPOCH
-        BASE_IMAGE        = BASE_IMAGE
+        SOURCE_DATE_EPOCH          = SOURCE_DATE_EPOCH
+        BASE_IMAGE                 = BASE_IMAGE
+        INCLUDE_EXTRA_CLI_BINARIES = INCLUDE_EXTRA_CLI_BINARIES ? "true" : "false"
     }
     cache-from = compact([
     "type=registry,ref=${CACHE_REPO}:buildcache-${GIT_DEFAULT_BRANCH}",
