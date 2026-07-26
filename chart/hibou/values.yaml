@@ -269,13 +269,22 @@ trivy:
     repository: aquasec/trivy
     tag: latest
     pullPolicy: IfNotPresent
+  cache:
+    # -- Cap on the vulnerability DB cache. Trivy re-downloads a ~1 GB DB on a
+    # schedule; without a bound it grows into the node's ephemeral storage and
+    # takes every other pod on the node down with it via DiskPressure.
+    sizeLimit: 3Gi
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
+      # An explicit ephemeral-storage request is what keeps the kubelet from
+      # picking this pod first when it starts evicting under disk pressure.
+      ephemeral-storage: 3Gi
     limits:
       cpu: 500m
       memory: 512Mi
+      ephemeral-storage: 4Gi
 
 ingress:
   enabled: false

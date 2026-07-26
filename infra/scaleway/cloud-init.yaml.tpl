@@ -40,10 +40,18 @@ runcmd:
       curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
       test -s /tmp/k3s-install.sh
       chmod +x /tmp/k3s-install.sh
+      # terminated-pod-gc-threshold: upstream default is 12500, so evicted pods
+      #   are never collected in a cluster this size and pile up in the hundreds.
+      # image-gc-*-threshold: the 85%/80% defaults reclaim far too late on a disk
+      #   this small, which is shared with every local-path PVC. Reclaiming at
+      #   70% keeps DiskPressure from ever firing and evicting the namespace.
       INSTALL_K3S_VERSION="${k3s_version}" /tmp/k3s-install.sh server \
         --tls-san $(curl -sf http://169.254.169.254/latest/meta-data/public-ipv4) \
         --node-name "${server_name}" \
-        --write-kubeconfig-mode 644
+        --write-kubeconfig-mode 644 \
+        --kube-controller-manager-arg=terminated-pod-gc-threshold=50 \
+        --kubelet-arg=image-gc-high-threshold=70 \
+        --kubelet-arg=image-gc-low-threshold=50
       k3s --version | grep -F "${k3s_version}"
       rm -f /tmp/k3s-install.sh
   - systemctl enable --now fail2ban

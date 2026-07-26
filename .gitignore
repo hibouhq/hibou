@@ -52,6 +52,7 @@ infra/**/*.tfstate.backup
 infra/**/.terraform/
 infra/**/terraform.tfvars
 infra/**/kubeconfig.yaml
+infra/**/kubeconfig.*.yaml
 
 
 .agents/skills/cave*
@@ -66,3 +67,4 @@ skills-lock.json
 infra/hetzner/.terraform.lock.hcl
 infra/scaleway/.terraform.lock.hcl
 *.pem
+example_old_project/

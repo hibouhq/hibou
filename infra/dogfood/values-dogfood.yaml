@@ -40,6 +40,9 @@ seaweedfs:
   enabled: true
   bucket: hibou-artifacts
   storage:
+    # Use a retained/block-backed StorageClass for dogfood. The cluster default
+    # on single-node k3s is often node-local and disappears with instance rebuilds.
+    storageClass: ""
     size: 10Gi
 
 postgresql:
@@ -49,7 +52,14 @@ postgresql:
     username: hibou
     database: hibou
   persistence:
-    enabled: false
+    # Persistent storage is REQUIRED: with emptyDir, a pod restart wipes the
+    # database (orgs, users, scan history) and disconnects all forge orgs.
+    enabled: true
+    # Set this to a retained/block-backed StorageClass for dogfood. Leaving it
+    # empty uses the cluster default, which may be node-local and not survive
+    # instance replacement.
+    storageClass: ""
+    size: 4Gi
   resources:
     requests:
       cpu: 250m
@@ -60,13 +70,19 @@ postgresql:
 
 trivy:
   enabled: true
+  cache:
+    # Dogfood runs on a single small node whose disk is shared with the
+    # local-path PVCs, so keep the DB cache well under the free space.
+    sizeLimit: 2Gi
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 2Gi
     limits:
       cpu: 500m
       memory: 512Mi
+      ephemeral-storage: 3Gi
 
 ingress:
   enabled: true

@@ -27,6 +27,12 @@ variable "instance_type" {
   default     = "DEV1-M"
 }
 
+variable "root_volume_size_gb" {
+  description = "Root volume size in GB for the server. This disk also backs every local-path PVC (PostgreSQL, SeaweedFS) and the container image store, so 30 GB leaves no headroom and trips DiskPressure."
+  type        = number
+  default     = 80
+}
+
 variable "zone" {
   description = "Scaleway availability zone"
   type        = string

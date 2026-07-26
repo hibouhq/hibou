@@ -26,10 +26,26 @@ spec:
             - server
             - --listen
             - 0.0.0.0:4954
+          env:
+            # Pin the cache location so the vulnerability DB lands on the mounted
+            # volume below rather than the container's writable layer, which is
+            # node ephemeral storage and is not bounded by anything.
+            - name: TRIVY_CACHE_DIR
+              value: /var/cache/trivy
           ports:
             - name: http
               containerPort: 4954
               protocol: TCP
           resources:
             {{- toYaml .Values.trivy.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/trivy
+      volumes:
+        # The Trivy DB is ~1 GB and is refreshed periodically. Unbounded, it
+        # fills the node disk, trips DiskPressure and gets the whole namespace
+        # evicted. sizeLimit caps it so only this pod is ever at risk.
+        - name: cache
+          emptyDir:
+            sizeLimit: {{ .Values.trivy.cache.sizeLimit }}
 {{- end }}
