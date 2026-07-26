@@ -1,7 +1,10 @@
 version: "2"
 
 run:
-  timeout: 5m
+  # CI runs 5 CPU-heavy jobs concurrently in one shared container (parallel
+  # steps) with a cold Go build cache, so golangci-lint gets starved well past
+  # the ~2-3m it needs uncontended. 10m gives headroom without masking a hang.
+  timeout: 10m
 
 issues:
   max-issues-per-linter: 0

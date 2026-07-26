@@ -24,9 +24,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Free disk space
-        run: .github/scripts/free-disk-space.sh
-
       - name: Log in to GHCR
         if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
         uses: docker/login-action@v4
@@ -35,11 +32,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push devcontainer
-        uses: ./.github/actions/devcontainer-ci
-        with:
-          registry: ghcr.io
-          push-pr-cache: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+      - parallel:
+          - name: Free disk space
+            run: .github/scripts/free-disk-space.sh
+
+          - name: Build and push devcontainer
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              registry: ghcr.io
+              push-pr-cache: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
 
       - name: Prepare workspace
         uses: ./.github/actions/devcontainer-ci
