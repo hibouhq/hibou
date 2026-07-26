@@ -48,9 +48,28 @@ jobs:
           run-cmd: |
             (cd site && npm ci)
             make check-generate
+            # Warm the shared Go build cache once, uncontended. golangci-lint,
+            # go test and gosec all load the same package graph; without this
+            # each compiles the dependencies from cold while fighting the
+            # others for the same two cores.
+            go build ./...
 
+      # Two waves of two, not one wave of five.
+      #
+      # `ubuntu-latest` on a private repo is 2 vCPU / 7 GB. The previous
+      # five-way fan-out oversubscribed it ~3x, and the three Go-heavy branches
+      # spent most of their time waiting rather than working: lint 11m16s
+      # (blew its 10m deadline), Go coverage 9m16s, security suite 9m05s —
+      # roughly 10 core-minutes of real work stretched over 11 wall-minutes.
+      #
+      # Same work, two at a time, so each branch gets a core.
       - parallel:
-          - name: Build binaries
+          - name: Lint
+            uses: ./.github/actions/devcontainer-ci
+            with:
+              run-cmd: make lint
+
+          - name: Build binaries and frontend coverage
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: |
@@ -59,21 +78,13 @@ jobs:
                 else
                   make build-image-binaries
                 fi
+                (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
 
-          - name: Lint
-            uses: ./.github/actions/devcontainer-ci
-            with:
-              run-cmd: make lint
-
+      - parallel:
           - name: Go coverage
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: make coverage
-
-          - name: Frontend coverage
-            uses: ./.github/actions/devcontainer-ci
-            with:
-              run-cmd: (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
 
           - name: Security suite
             uses: ./.github/actions/devcontainer-ci
