@@ -19,6 +19,8 @@ FROM ${BASE_IMAGE} AS runtime
 
 FROM busybox:stable AS prep
 ARG TARGETARCH
+
+ARG INCLUDE_EXTRA_CLI_BINARIES
 COPY dist/hibou-* /staged/
 # Assemble exactly what ships in /usr/local/bin:
 #   - hibou / hibou-server: this image's native (linux/$TARGETARCH) binary + entrypoint alias
