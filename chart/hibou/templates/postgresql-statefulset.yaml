@@ -65,10 +65,13 @@ spec:
       {{- end }}
   {{- if .Values.postgresql.persistence.enabled }}
   volumeClaimTemplates:
+    # Immutable after creation, so only stable labels here. hibou.labels carries
+    # app + chart version, which change every release and make every upgrade fail
+    # with "updates to statefulset spec ... are forbidden".
     - metadata:
         name: data
         labels:
-          {{- include "hibou.labels" . | nindent 10 }}
+          {{- include "hibou.selectorLabels" . | nindent 10 }}
           app.kubernetes.io/component: postgresql
       spec:
         accessModes:
