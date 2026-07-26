@@ -14,7 +14,11 @@ SQLC      := $(if $(wildcard /usr/local/bin/sqlc),/usr/local/bin/sqlc,sqlc)
 SWAG      := $(if $(wildcard /usr/local/bin/swag),/usr/local/bin/swag,swag)
 
 # Reproducible release build (callers append: -o <out> .)
-GO_BUILD  := CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -ldflags '$(LDFLAGS)'
+# -tags withui embeds the built SPA (internal/ui). Only shipped binaries use
+# GO_BUILD and they all run `build-frontend` first; dev/test/lint build without
+# the tag and get the no-SPA stub (internal/ui/embed_stub.go), so they don't
+# need a frontend build to compile.
+GO_BUILD  := CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -tags withui -ldflags '$(LDFLAGS)'
 # psql inside the dev postgres container
 PSQL      := docker compose exec -T postgres psql -U hibou -d hibou
 # Dedicated test database — keeps integration tests out of the dev database.
@@ -215,6 +219,35 @@ build-all: generate build-frontend ## Cross-compile for all target platforms
 
 .PHONY: build-image-binaries
 build-image-binaries: generate build-frontend ## Cross-compile only the Linux binaries needed by container image builds
+	@mkdir -p $(DIST); \
+	pids=""; fail=0; \
+	for platform in $(IMAGE_PLATFORMS); do \
+		goos=$${platform%%/*}; goarch=$${platform##*/}; \
+		( GOOS=$$goos GOARCH=$$goarch $(GO_BUILD) \
+			-o $(DIST)/$(BINARY)-$$goos-$$goarch . && \
+		  ln -sf $(BINARY)-$$goos-$$goarch $(DIST)/$(BINARY)-server-$$goarch ) & pids="$$pids $$!"; \
+	done; \
+	for pid in $$pids; do wait $$pid || fail=1; done; \
+	[ $$fail -eq 0 ]
+
+.PHONY: build-all-ci
+build-all-ci: generate ## Cross-compile all release binaries, assuming frontend dist is already prepared
+	@mkdir -p $(DIST); \
+	pids=""; fail=0; \
+	for platform in $(PLATFORMS); do \
+		goos=$${platform%%/*}; goarch=$${platform##*/}; \
+		ext=; [ "$$goos" = "windows" ] && ext=.exe; \
+		( GOOS=$$goos GOARCH=$$goarch $(GO_BUILD) \
+			-o $(DIST)/$(BINARY)-$$goos-$$goarch$$ext . && \
+		  if [ "$$goos" = "linux" ]; then \
+			ln -sf $(BINARY)-$$goos-$$goarch$$ext $(DIST)/$(BINARY)-server-$$goarch; \
+		  fi ) & pids="$$pids $$!"; \
+	done; \
+	for pid in $$pids; do wait $$pid || fail=1; done; \
+	[ $$fail -eq 0 ]
+
+.PHONY: build-image-binaries-ci
+build-image-binaries-ci: generate ## Cross-compile only Linux image binaries, assuming frontend dist is already prepared
 	@mkdir -p $(DIST); \
 	pids=""; fail=0; \
 	for platform in $(IMAGE_PLATFORMS); do \
