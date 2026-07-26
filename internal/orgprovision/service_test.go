@@ -87,6 +87,97 @@ func TestRecordInstallationAutoProvisionOnExistingUserGrantsAdmin(t *testing.T) 
 	}
 }
 
+func TestRecordInstallationProvisionsFromReplayableActions(t *testing.T) {
+	t.Parallel()
+
+	// A rebuilt database can only be recovered from an action GitHub will send
+	// again; "created" expires from the delivery list.
+	for _, action := range []string{"created", "unsuspend", "new_permissions_accepted"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+
+			st := newFakeStore()
+			user := st.addUser("github", "installer-1")
+			svc := NewService(st, &fakeRBACSeeder{}, nil, true, zerolog.New(io.Discard))
+
+			if err := svc.RecordInstallation(context.Background(), "github", forge.InstallationEvent{
+				Action:       action,
+				Installation: forge.Installation{AccountName: "Acme"},
+				Sender:       forge.UserInfo{ProviderID: "installer-1"},
+			}); err != nil {
+				t.Fatalf("record installation: %v", err)
+			}
+			org := st.organizations[orgKey("github", "acme")]
+			if org == nil {
+				t.Fatalf("action %q did not provision the org", action)
+			}
+			if role := st.membershipRole(org.ID, user.ID); role != "admin" {
+				t.Fatalf("action %q gave role %q, want admin", action, role)
+			}
+		})
+	}
+}
+
+func TestRecordInstallationIgnoresAccessRevokingActions(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []string{"suspend", "deleted"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+
+			st := newFakeStore()
+			st.addUser("github", "installer-1")
+			svc := NewService(st, &fakeRBACSeeder{}, nil, true, zerolog.New(io.Discard))
+
+			if err := svc.RecordInstallation(context.Background(), "github", forge.InstallationEvent{
+				Action:       action,
+				Installation: forge.Installation{AccountName: "Acme"},
+				Sender:       forge.UserInfo{ProviderID: "installer-1"},
+			}); err != nil {
+				t.Fatalf("record installation: %v", err)
+			}
+			if st.organizations[orgKey("github", "acme")] != nil {
+				t.Fatalf("action %q must not provision an org", action)
+			}
+		})
+	}
+}
+
+func TestRecordInstallationRepositoriesProvisions(t *testing.T) {
+	t.Parallel()
+
+	for action, wantOrg := range map[string]bool{"added": true, "removed": true, "": false} {
+		t.Run("action="+action, func(t *testing.T) {
+			t.Parallel()
+
+			st := newFakeStore()
+			user := st.addUser("github", "installer-1")
+			svc := NewService(st, &fakeRBACSeeder{}, nil, true, zerolog.New(io.Discard))
+
+			if err := svc.RecordInstallationRepositories(context.Background(), "github", forge.InstallationRepositoriesEvent{
+				Action:       action,
+				Installation: forge.Installation{AccountName: "Acme"},
+				Sender:       forge.UserInfo{ProviderID: "installer-1"},
+			}); err != nil {
+				t.Fatalf("record installation repositories: %v", err)
+			}
+			org := st.organizations[orgKey("github", "acme")]
+			if wantOrg {
+				if org == nil {
+					t.Fatalf("action %q did not provision the org", action)
+				}
+				if role := st.membershipRole(org.ID, user.ID); role != "admin" {
+					t.Fatalf("action %q gave role %q, want admin", action, role)
+				}
+				return
+			}
+			if org != nil {
+				t.Fatalf("action %q must not provision an org", action)
+			}
+		})
+	}
+}
+
 func TestRecordInstallationAutoProvisionOnWithoutUserLeavesPending(t *testing.T) {
 	t.Parallel()
 

@@ -145,6 +145,16 @@ func (s *Server) registerDefaultWebhookHandlers() {
 		}
 		return s.inventorySvc.ApplyInstallationRepositories(ctx, providerID, typed)
 	})
+	s.registerWebhookHandler("installation_repositories", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.InstallationRepositoriesEvent)
+		if !ok {
+			return fmt.Errorf("unexpected installation_repositories webhook event type %T", event)
+		}
+		if s.orgProvisionSvc == nil {
+			return nil
+		}
+		return s.orgProvisionSvc.RecordInstallationRepositories(ctx, providerID, typed)
+	})
 	s.registerWebhookHandler("repository", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
 		typed, ok := event.(forge.RepositoryEvent)
 		if !ok {

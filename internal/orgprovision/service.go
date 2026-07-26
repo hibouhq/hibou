@@ -68,12 +68,39 @@ func NewService(store Store, rbac RBACSeeder, forges map[string]forge.Provider, 
 }
 
 func (s *Service) RecordInstallation(ctx context.Context, providerID string, ev forge.InstallationEvent) error {
-	if s.store == nil || !strings.EqualFold(strings.TrimSpace(ev.Action), "created") {
+	if s.store == nil {
 		return nil
 	}
+	// "created" fires once and expires. The others prove the same admin rights and
+	// can be re-fired from App settings. "suspend"/"deleted" revoke access.
+	switch strings.ToLower(strings.TrimSpace(ev.Action)) {
+	case "created", "unsuspend", "new_permissions_accepted":
+	default:
+		return nil
+	}
+	return s.recordInstallationAccess(ctx, providerID, ev.Installation.AccountName, ev.Sender.ProviderID)
+}
 
-	account := strings.TrimSpace(ev.Installation.AccountName)
-	installerID := strings.TrimSpace(ev.Sender.ProviderID)
+// RecordInstallationRepositories provisions from a repository-selection change.
+// Same admin proof as an install, but re-triggerable, so a rebuilt database has
+// a way back to a provisioned org.
+func (s *Service) RecordInstallationRepositories(ctx context.Context, providerID string, ev forge.InstallationRepositoriesEvent) error {
+	if s.store == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(ev.Action)) {
+	case "added", "removed":
+	default:
+		return nil
+	}
+	return s.recordInstallationAccess(ctx, providerID, ev.Installation.AccountName, ev.Sender.ProviderID)
+}
+
+// recordInstallationAccess binds the account to its admin and, when
+// auto-provisioning is on, creates the org.
+func (s *Service) recordInstallationAccess(ctx context.Context, providerID, accountName, senderProviderID string) error {
+	account := strings.TrimSpace(accountName)
+	installerID := strings.TrimSpace(senderProviderID)
 	if account == "" || installerID == "" {
 		return nil
 	}
