@@ -182,6 +182,54 @@ func TestUploadAutoReusesSnapshotForSameRefCommit(t *testing.T) {
 	}
 }
 
+func TestUploadAutoEnrollsUnknownRepository(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	slug := uniqueName(t, "unenrolled-repo")
+
+	performUploadAuto(t, srv, admin, uploadPayloadForTest(org.Slug, slug, minimalSBOMForTest(), map[string]any{
+		"ref":        "refs/heads/release",
+		"commit_sha": "enroll-sha",
+	}))
+
+	repo, err := srv.queries.GetRepositoryBySlug(context.Background(), org.ID, slug)
+	if err != nil {
+		t.Fatalf("GetRepositoryBySlug: %v", err)
+	}
+	if repo == nil {
+		t.Fatal("expected the upload to enroll the repository")
+	}
+	if repo.SyncState != "enrolled" {
+		t.Fatalf("sync_state = %q, want enrolled", repo.SyncState)
+	}
+	if repo.DefaultBranch != "release" {
+		t.Fatalf("default_branch = %q, want release", repo.DefaultBranch)
+	}
+	if want := org.Slug + "/" + slug; repo.ProviderID != want {
+		t.Fatalf("provider_id = %q, want %q", repo.ProviderID, want)
+	}
+}
+
+func TestUploadDefaultBranchFromRef(t *testing.T) {
+	t.Parallel()
+
+	// Only a branch push says anything about the default branch; tags and pull
+	// requests must not enroll a repository pointing at a throwaway ref.
+	cases := map[string]string{
+		"refs/heads/main":    "main",
+		"refs/heads/develop": "develop",
+		"refs/tags/v1.2.3":   "main",
+		"refs/pull/42/merge": "main",
+		"":                   "main",
+	}
+	for ref, want := range cases {
+		if got := uploadDefaultBranchFromRef(ref); got != want {
+			t.Errorf("uploadDefaultBranchFromRef(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
 func TestUploadAutoCreatesDistinctSnapshotsForDifferentRunAttempt(t *testing.T) {
 	t.Parallel()
 

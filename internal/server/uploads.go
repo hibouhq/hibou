@@ -21,6 +21,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/metrics"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -889,10 +890,91 @@ func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, use
 		return nil, nil, err
 	}
 	if repo == nil {
-		return nil, nil, errNotFound("repository not found")
+		repo, err = s.enrollUploadRepository(r, org, userID, input)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return org, repo, nil
+}
+
+// enrollUploadRepository registers a repository the first time CI uploads for
+// it. Explicit enrolment is an org-admin action, which made every new pipeline
+// fail with a 404 until someone enrolled the repo by hand — the artifacts were
+// already built and then thrown away. The caller has proven org membership, so
+// the upload itself is treated as the enrolment signal.
+//
+// This deliberately runs outside the caller's transaction: a losing race would
+// abort that transaction on the unique violation, and the repository row is
+// independent of the snapshot being written. A row left behind by a rolled-back
+// upload is a repository the member was uploading to anyway.
+func (s *Server) enrollUploadRepository(r *http.Request, org *store.Organization, userID uuid.UUID, input uploadRequest) (*store.Repository, error) {
+	providerKey := org.Slug + "/" + input.Repo
+	defaultBranch := ""
+
+	// Prefer the forge's own metadata when the inventory has been synced; it
+	// carries the real default branch and the canonical provider key.
+	if inv, invErr := s.queries.GetForgeRepositoryByProviderKey(r.Context(), org.Provider, providerKey); invErr == nil && inv != nil {
+		if key := strings.TrimSpace(inv.ProviderKey); key != "" {
+			providerKey = key
+		}
+		defaultBranch = strings.TrimSpace(inv.DefaultBranch)
+	}
+	if defaultBranch == "" {
+		defaultBranch = uploadDefaultBranchFromRef(input.Ref)
+	}
+
+	repo, err := s.queries.CreateRepository(
+		r.Context(),
+		org.ID,
+		nil,
+		input.Repo,
+		input.Repo,
+		org.Provider,
+		providerKey,
+		defaultBranch,
+		"enrolled",
+	)
+	if err != nil {
+		// A parallel job in the same pipeline may have won the insert. Its row
+		// is equivalent to ours, so adopt it rather than failing the upload.
+		if isUniqueViolation(err) {
+			existing, lookupErr := s.queries.GetRepositoryBySlug(r.Context(), org.ID, input.Repo)
+			if lookupErr == nil && existing != nil {
+				return existing, nil
+			}
+		}
+		return nil, err
+	}
+
+	if user := UserFromContext(r.Context()); user != nil {
+		s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionRepoEnrolled, map[string]any{
+			"name":   repo.Name,
+			"slug":   repo.Slug,
+			"source": "upload",
+		})
+	}
+	s.log.Info().
+		Str("provider", org.Provider).
+		Str("org", org.Slug).
+		Str("repo", repo.Slug).
+		Str("actor", userID.String()).
+		Msg("repository auto-enrolled from upload")
+
+	return repo, nil
+}
+
+// uploadDefaultBranchFromRef guesses a default branch for a repository being
+// enrolled without forge inventory. A branch push is the best available signal;
+// tags and pull requests say nothing about the default, so those fall back.
+func uploadDefaultBranchFromRef(ref string) string {
+	if refTypeFromName(ref) == store.RefTypeBranch {
+		if name := normalizeStoredRefName(ref); name != "" {
+			return name
+		}
+	}
+	return "main"
 }
 
 func parseUploadedVEXStatements(format string, content []byte) ([]vex.Statement, error) {

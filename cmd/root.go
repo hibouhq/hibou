@@ -13,6 +13,10 @@ var rootCmd = &cobra.Command{
 	Use:   "hibou",
 	Short: "Unified DevSecOps security platform",
 	Long:  `Hibou is a unified DevSecOps security platform that ingests SBOMs, SARIF, and generic findings to provide comprehensive security intelligence across your organization.`,
+	// Execute below already reports the error, so cobra must not print it a
+	// second time. Usage stays enabled here so genuine argument errors still
+	// show the flag reference; commands silence it once their args validate.
+	SilenceErrors: true,
 }
 
 func personality() string {

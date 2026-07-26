@@ -89,6 +89,11 @@ Examples:
   hibou upload --expect 3 --no-complete cov.xml  # expect 3 distinct upload API calls`,
 	Args: cobra.MinimumNArgs(0),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Past this point every failure is a server or network error, not a
+		// usage mistake, so stop cobra from appending the flag reference and
+		// burying the actual response in the CI log.
+		cmd.SilenceUsage = true
+
 		if uploadNoComplete {
 			uploadComplete = false
 		}
