@@ -1026,6 +1026,17 @@ const headSnapshotOpen = ref(false)
 const activeTab = ref<TabId>('overview')
 const expandedPatchFiles = ref<Set<string>>(new Set())
 
+watch(
+  () => comparison.value?.patch_coverage,
+  (patch) => {
+    expandedPatchFiles.value = new Set(
+      (patch?.files ?? [])
+        .filter((file) => file.hunks && (file.uncovered_line_numbers?.length ?? 0) > 0)
+        .map((file) => file.file_path),
+    )
+  },
+)
+
 function togglePatchFile(path: string) {
   const next = new Set(expandedPatchFiles.value)
   if (next.has(path)) next.delete(path)

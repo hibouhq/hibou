@@ -73,7 +73,7 @@
           <span class="dep-graph-meta-accent">{{ searchMatchCount }} match{{ searchMatchCount > 1 ? 'es' : '' }}</span>
           <span> · </span>
         </template>
-        {{ visibleNodeCount }} nodes · click to expand · scroll to zoom
+        {{ visibleNodeCount }} nodes · click to expand · double-click for details · scroll to zoom
       </span>
     </div>
 
@@ -529,7 +529,12 @@ function render() {
           expandedSet.add(node.id)
         }
         rebuild()
+        return
       }
+      emit('select', node.id)
+    })
+    .on('dblclick', (event: MouseEvent, node: GNode) => {
+      event.preventDefault()
       emit('select', node.id)
     })
     .on('mouseenter', (event: MouseEvent, node: GNode) => {

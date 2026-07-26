@@ -22,7 +22,6 @@ func TestBuildCoverageDiffNilWhenNoData(t *testing.T) {
 func TestBuildCoverageDiffClassifiesFiles(t *testing.T) {
 	base := CoverageInput{
 		HasData:      true,
-		Format:       "lcov",
 		LineRate:     floatPtr(0.50),
 		LinesValid:   100,
 		LinesCovered: 50,
@@ -35,7 +34,6 @@ func TestBuildCoverageDiffClassifiesFiles(t *testing.T) {
 	}
 	head := CoverageInput{
 		HasData:      true,
-		Format:       "lcov",
 		LineRate:     floatPtr(0.65),
 		LinesValid:   110,
 		LinesCovered: 71,
@@ -74,7 +72,7 @@ func TestBuildCoverageDiffClassifiesFiles(t *testing.T) {
 }
 
 func TestBuildCoverageDiffOneSidedTotals(t *testing.T) {
-	head := CoverageInput{HasData: true, Format: "lcov", LineRate: floatPtr(0.5), LinesValid: 10, LinesCovered: 5}
+	head := CoverageInput{HasData: true, LineRate: floatPtr(0.5), LinesValid: 10, LinesCovered: 5}
 	diff := BuildCoverageDiff(CoverageInput{}, head)
 	if diff == nil || diff.Base != nil || diff.Head == nil {
 		t.Fatalf("expected head-only diff, got %+v", diff)

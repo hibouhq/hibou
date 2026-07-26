@@ -738,7 +738,7 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 
 	componentDiff := buildComponentDiff(baseComponents, headComponents)
 
-	coverageDiff, err := s.buildSnapshotCoverageDiff(r.Context(), baseSnapshot.ID, headSnapshot.ID)
+	coverageDiff, err := s.buildSnapshotCoverageDiff(r.Context(), repo.Slug, baseSnapshot.ID, headSnapshot.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to compare coverage")
 		return
@@ -1143,53 +1143,80 @@ func componentDiffKey(entry componentEntryResponse) string {
 // buildSnapshotCoverageDiff loads the primary coverage report for each snapshot
 // (the report with the most valid lines, mirroring the Coverage tab) and diffs
 // them. It returns nil when neither snapshot has coverage data.
-func (s *Server) buildSnapshotCoverageDiff(ctx context.Context, baseSnapshotID, headSnapshotID uuid.UUID) (*comparison.CoverageDiff, error) {
-	baseInput, err := s.loadCoverageInput(ctx, baseSnapshotID)
+func (s *Server) buildSnapshotCoverageDiff(ctx context.Context, repoSlug string, baseSnapshotID, headSnapshotID uuid.UUID) (*comparison.CoverageDiff, error) {
+	baseInput, err := s.loadCoverageInput(ctx, baseSnapshotID, repoSlug)
 	if err != nil {
 		return nil, err
 	}
-	headInput, err := s.loadCoverageInput(ctx, headSnapshotID)
+	headInput, err := s.loadCoverageInput(ctx, headSnapshotID, repoSlug)
 	if err != nil {
 		return nil, err
 	}
 	return comparison.BuildCoverageDiff(baseInput, headInput), nil
 }
 
-func (s *Server) loadCoverageInput(ctx context.Context, snapshotID uuid.UUID) (comparison.CoverageInput, error) {
+// loadCoverageInput aggregates EVERY coverage report of the snapshot, keyed by
+// canonical path. Diffing only a single "primary" report meant a multi-language
+// repo could compare one language's report against another's whenever a change
+// shifted which report had the most instrumented lines — producing large fake
+// regressions and files falsely reported added/removed.
+func (s *Server) loadCoverageInput(ctx context.Context, snapshotID uuid.UUID, repoSlug string) (comparison.CoverageInput, error) {
 	reports, err := s.queries.ListCoverageReportsBySnapshot(ctx, snapshotID)
 	if err != nil {
 		return comparison.CoverageInput{}, err
 	}
-	primary := primaryCoverageReport(reports)
-	if primary == nil {
+	if len(reports) == 0 {
 		return comparison.CoverageInput{}, nil
 	}
 
-	files, err := s.queries.ListCoverageFilesByReport(ctx, primary.ID)
+	best, err := s.unionCoverageFiles(ctx, reports, repoSlug)
 	if err != nil {
 		return comparison.CoverageInput{}, err
 	}
-	fileInputs := make([]comparison.CoverageFileInput, len(files))
-	for i, file := range files {
-		fileInputs[i] = comparison.CoverageFileInput{
-			FilePath:     file.FilePath,
-			LineRate:     file.LineRate,
-			LinesValid:   file.LinesValid,
-			LinesCovered: file.LinesCovered,
+
+	totals := comparison.CoverageInput{HasData: true}
+	for _, report := range reports {
+		totals.BranchesValid += report.BranchesValid
+		totals.BranchesCovered += report.BranchesCovered
+	}
+	totals.Files = make([]comparison.CoverageFileInput, 0, len(best))
+	for _, file := range best {
+		totals.Files = append(totals.Files, file)
+		totals.LinesValid += file.LinesValid
+		totals.LinesCovered += file.LinesCovered
+	}
+	totals.LineRate = ratio(totals.LinesCovered, totals.LinesValid)
+	totals.BranchRate = ratio(totals.BranchesCovered, totals.BranchesValid)
+	return totals, nil
+}
+
+// unionCoverageFiles merges every report's files keyed by canonical path; on a
+// collision (two tools measuring the same file) the better-covered row wins,
+// matching the summary endpoint's aggregation so the two views cannot disagree.
+func (s *Server) unionCoverageFiles(ctx context.Context, reports []store.CoverageReport, repoSlug string) (map[string]comparison.CoverageFileInput, error) {
+	best := make(map[string]comparison.CoverageFileInput)
+	for _, report := range reports {
+		files, err := s.queries.ListCoverageFilesByReport(ctx, report.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
+			key := canonicalCoveragePath(file.FilePath, repoSlug)
+			if key == "" {
+				key = file.FilePath
+			}
+			input := comparison.CoverageFileInput{
+				FilePath:     key,
+				LineRate:     file.LineRate,
+				LinesValid:   file.LinesValid,
+				LinesCovered: file.LinesCovered,
+			}
+			if existing, seen := best[key]; !seen || input.LinesCovered > existing.LinesCovered {
+				best[key] = input
+			}
 		}
 	}
-
-	return comparison.CoverageInput{
-		HasData:         true,
-		Format:          primary.Format,
-		LineRate:        primary.LineRate,
-		BranchRate:      primary.BranchRate,
-		LinesValid:      primary.LinesValid,
-		LinesCovered:    primary.LinesCovered,
-		BranchesValid:   primary.BranchesValid,
-		BranchesCovered: primary.BranchesCovered,
-		Files:           fileInputs,
-	}, nil
+	return best, nil
 }
 
 func primaryCoverageReport(reports []store.CoverageReport) *store.CoverageReport {

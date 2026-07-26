@@ -537,7 +537,11 @@ func (s *Server) loadUploadSnapshotForCompletion(r *http.Request, userID uuid.UU
 	}
 
 	refName := normalizeStoredRefName(input.Ref)
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(input.Ref), buildUploadRefOptions(input))
+	refOptions, err := uploadRefOptions(r.Context(), queries, repo.ID, input)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(input.Ref), refOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -815,7 +819,11 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 
 	refType := refTypeFromName(input.Ref)
 	refName := normalizeStoredRefName(input.Ref)
-	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, buildUploadRefOptions(input))
+	refOptions, err := uploadRefOptions(r.Context(), queries, repo.ID, input)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := queries.UpsertRef(r.Context(), repo.ID, refName, refType, refOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -1264,6 +1272,29 @@ func buildUploadRefOptions(input uploadRequest) store.UpsertRefOptions {
 		options.PRNumber = optionalTrimmedString(prNumberFromName(input.Ref))
 	}
 	return options
+}
+
+// uploadRefOptions extends buildUploadRefOptions with the PR merge target.
+// The pull_request webhook also sets it, but arrives before the repo exists
+// when the repo is auto-enrolled by its first upload — without this the gate
+// check is never published for that PR.
+func uploadRefOptions(ctx context.Context, queries *store.Queries, repoID uuid.UUID, input uploadRequest) (store.UpsertRefOptions, error) {
+	options := buildUploadRefOptions(input)
+	if refTypeFromName(input.Ref) != store.RefTypePullRequest {
+		return options, nil
+	}
+	target := normalizeStoredRefName(strings.TrimSpace(input.PRTargetBranch))
+	if target == "" {
+		return options, nil
+	}
+	targetRef, err := queries.UpsertRef(ctx, repoID, target, store.RefTypeBranch, store.UpsertRefOptions{})
+	if err != nil {
+		return options, err
+	}
+	if targetRef != nil {
+		options.MergeTargetRefID = &targetRef.ID
+	}
+	return options, nil
 }
 
 func validateUploadRequest(input uploadRequest) error {

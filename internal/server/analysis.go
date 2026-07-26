@@ -79,10 +79,12 @@ type componentGraphResponse struct {
 }
 
 type refSummaryResponse struct {
-	Vulnerabilities severityCounts `json:"vulnerabilities"`
-	ComponentsTotal int            `json:"components_total"`
-	SnapshotDate    *time.Time     `json:"snapshot_date,omitempty"`
-	SnapshotStatus  *string        `json:"snapshot_status,omitempty"`
+	Vulnerabilities  severityCounts `json:"vulnerabilities"`
+	ComponentsTotal  int            `json:"components_total"`
+	CoverageLineRate *float64       `json:"coverage_line_rate,omitempty"`
+	TestsTotal       *int           `json:"tests_total,omitempty"`
+	SnapshotDate     *time.Time     `json:"snapshot_date,omitempty"`
+	SnapshotStatus   *string        `json:"snapshot_status,omitempty"`
 }
 
 type repoDashboardEntryResponse struct {
@@ -494,7 +496,7 @@ func (s *Server) handleGetRefSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary, err := s.buildRefSummary(r, snapshot)
+	summary, err := s.buildRefSummary(r, repo, snapshot)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load reference summary")
 		return
@@ -503,7 +505,7 @@ func (s *Server) handleGetRefSummary(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, summary)
 }
 
-func (s *Server) buildRefSummary(r *http.Request, snapshot *store.Snapshot) (refSummaryResponse, error) {
+func (s *Server) buildRefSummary(r *http.Request, repo *store.Repository, snapshot *store.Snapshot) (refSummaryResponse, error) {
 	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 	if err != nil {
 		return refSummaryResponse{}, err
@@ -515,12 +517,30 @@ func (s *Server) buildRefSummary(r *http.Request, snapshot *store.Snapshot) (ref
 
 	status := string(snapshot.Status)
 	createdAt := snapshot.CreatedAt
-	return refSummaryResponse{
+	summary := refSummaryResponse{
 		Vulnerabilities: countVulnerabilitySeverities(vulnerabilities),
 		ComponentsTotal: len(components),
 		SnapshotDate:    &createdAt,
 		SnapshotStatus:  &status,
-	}, nil
+	}
+
+	coverage, err := s.loadCoverageInput(r.Context(), snapshot.ID, repo.Slug)
+	if err != nil {
+		return refSummaryResponse{}, err
+	}
+	if coverage.HasData {
+		summary.CoverageLineRate = coverage.LineRate
+	}
+
+	testReport, err := s.queries.GetTestReportBySnapshot(r.Context(), snapshot.ID)
+	if err != nil {
+		return refSummaryResponse{}, err
+	}
+	if testReport != nil {
+		summary.TestsTotal = &testReport.Total
+	}
+
+	return summary, nil
 }
 
 func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {

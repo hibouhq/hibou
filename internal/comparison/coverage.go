@@ -10,7 +10,6 @@ import "sort"
 // the primary report's totals plus its per-file rows.
 type CoverageInput struct {
 	HasData         bool
-	Format          string
 	LineRate        *float64
 	BranchRate      *float64
 	LinesValid      int
@@ -30,7 +29,6 @@ type CoverageFileInput struct {
 
 // CoverageTotals is the snapshot-level coverage summary used on each side of a diff.
 type CoverageTotals struct {
-	Format          string   `json:"format"`
 	LineRate        *float64 `json:"line_rate"`
 	BranchRate      *float64 `json:"branch_rate"`
 	LinesValid      int      `json:"lines_valid"`
@@ -116,7 +114,6 @@ func BuildCoverageDiff(base, head CoverageInput) *CoverageDiff {
 
 func coverageTotalsFromInput(in CoverageInput) *CoverageTotals {
 	return &CoverageTotals{
-		Format:          in.Format,
 		LineRate:        in.LineRate,
 		BranchRate:      in.BranchRate,
 		LinesValid:      in.LinesValid,

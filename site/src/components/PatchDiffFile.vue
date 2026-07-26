@@ -108,8 +108,8 @@ const hiddenRowCount = computed(() => Math.max(0, rows.value.length - MAX_ROWS))
 
 function rowClass(row: DiffRow): string {
   if (row.kind === 'hunk') return 'bg-surface-overlay/80 text-gray-500'
-  if (row.coverage === 'covered') return 'bg-emerald-500/10'
-  if (row.coverage === 'uncovered') return 'bg-danger/10'
+  if (row.coverage === 'covered') return 'bg-emerald-500/20 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
+  if (row.coverage === 'uncovered') return 'bg-danger/25 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
   if (row.kind === 'del') return 'bg-danger/5'
   if (row.kind === 'add') return 'bg-white/[0.03]'
   return ''

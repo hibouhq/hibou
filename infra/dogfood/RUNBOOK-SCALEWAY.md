@@ -224,7 +224,9 @@ spec:
 
    With `argocd-image-updater.argoproj.io/write-back-method: argocd`, Image Updater patches the live `Application` resource instead of committing a new `hibou.image.tag` into `infra/dogfood/values-dogfood.yaml` on `main`.
 
-This removes the old Argo CD password-injection blocker without committing the password: bootstrap creates `hibou-db-url` once, then Argo CD can render and sync from Git plus that pre-created secret. Tradeoff: dogfood PostgreSQL persistence is disabled, so data survives normal syncs and ordinary container restarts in the same pod, but is lost when the PostgreSQL pod is deleted and recreated, evicted, or rescheduled/replaced. That makes the database ephemeral, not guaranteed to reset on every Argo CD sync.
+This removes the old Argo CD password-injection blocker without committing the password: bootstrap creates `hibou-db-url` once, then Argo CD can render and sync from Git plus that pre-created secret. Dogfood is intended to run with persistent PostgreSQL storage enabled; durability still depends on the selected Kubernetes `StorageClass`.
+
+Important: set `postgresql.persistence.storageClass` and `seaweedfs.storage.storageClass` in `infra/dogfood/values-dogfood.yaml` to a retained CSI/block-backed class for the cluster instead of relying on the default local-path storage. If those values stay empty, a single-node rebuild can still wipe both the database and stored artifacts.
 
 ## Phase 5: GitHub Login and App Setup
 
@@ -260,6 +262,7 @@ printf '%s\n' "$GITHUB_APP_WEBHOOK_SECRET"
    - Contents: Read and write
    - Pull requests: Read and write
    - Commit statuses: Read and write
+   - Checks: Read and write (quality-gate check runs + line annotations; without it the "Hibou - Quality Gate" check never appears on PRs)
 
 5. Subscribe to webhook events:
    - Push

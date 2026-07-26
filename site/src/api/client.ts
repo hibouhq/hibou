@@ -370,6 +370,8 @@ export interface OrgComponent extends ComponentWithVulns {
 export interface RefSummary {
   vulnerabilities: SeverityCounts
   components_total: number
+  coverage_line_rate?: number | null
+  tests_total?: number | null
   snapshot_date?: string
   snapshot_status?: string
 }
@@ -530,6 +532,9 @@ export interface TrendPoint {
   components_total: number
 }
 
+// Top-level numbers are the aggregate of every report in the snapshot;
+// per-tool reports (identified by report_id, since formats can repeat) are
+// listed under `reports`.
 export interface CoverageReport {
   line_rate: number | null
   branch_rate: number | null
@@ -539,11 +544,25 @@ export interface CoverageReport {
   branches_covered: number
   format: string
   files: CoverageFile[]
-  reports?: CoverageReport[]
+  reports?: CoverageFormatReport[]
+}
+
+export interface CoverageFormatReport {
+  report_id: string
+  scope?: string
+  line_rate: number | null
+  branch_rate: number | null
+  lines_valid: number
+  lines_covered: number
+  branches_valid: number
+  branches_covered: number
+  format: string
+  files: CoverageFile[]
 }
 
 export interface CoverageFile {
   file_path: string
+  canonical_path: string
   line_rate: number | null
   branch_rate: number | null
   lines_valid: number

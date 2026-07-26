@@ -89,30 +89,8 @@
               </h2>
             </div>
             <p class="mt-1 text-sm text-gray-400">
-              {{ sortedFiles.length }} files in {{ activeReport.format || 'unknown' }} format
+              {{ activeLabel }}
             </p>
-          </div>
-
-          <div class="flex flex-wrap items-center justify-end gap-2">
-            <div
-              v-if="reportOptions.length > 1"
-              class="flex flex-wrap items-center gap-2"
-            >
-              <button
-                v-for="formatReport in reportOptions"
-                :key="formatReport.format"
-                type="button"
-                class="inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] transition"
-                :class="selectedFormat === formatReport.format ? 'border-accent bg-accent/15 text-white' : 'border-surface-border bg-surface-overlay text-gray-300 hover:border-surface-border-subtle hover:text-white'"
-                @click="selectedFormat = formatReport.format"
-              >
-                {{ formatReport.format || 'unknown' }}
-              </button>
-            </div>
-
-            <span class="inline-flex items-center rounded-full border border-surface-border bg-surface-overlay px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-gray-300">
-              {{ activeReport.format || 'unknown' }}
-            </span>
           </div>
         </div>
 
@@ -213,26 +191,71 @@
         </div>
       </section>
 
+      <FilterBar
+        v-model="activeFilters"
+        v-model:search-query="searchQuery"
+        v-model:sort-value="currentSort"
+        v-model:sort-direction="currentSortDirection"
+        :filters="filterDefs"
+        :sort-options="sortOptions"
+        :sort-direction-options="sortDirectionOptions"
+        :total-count="activeFiles.length"
+        :filtered-count="filteredFiles.length"
+        placeholder="Filter files… (format:lcov file:go/)"
+      />
+
       <section class="overflow-hidden rounded-xl border border-surface-border bg-surface-raised">
-        <div class="flex items-center justify-between gap-3 border-b border-surface-border-subtle px-4 py-3">
-          <div>
-            <h3 class="text-sm font-semibold text-white">
-              File coverage
-            </h3>
-            <p class="mt-1 text-xs text-gray-500">
-              Sort by file path or line coverage to spot weak files quickly.
-            </p>
-          </div>
-          <div class="text-xs text-gray-500">
-            {{ sortedFiles.length }} rows
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-surface-border-subtle px-4 py-3">
+          <h3 class="text-sm font-semibold text-white">
+            Files
+          </h3>
+          <div class="flex overflow-hidden rounded-lg border border-surface-border">
+            <button
+              v-for="mode in viewModes"
+              :key="mode.key"
+              type="button"
+              class="px-2.5 py-1.5 transition"
+              :class="viewMode === mode.key ? 'bg-accent/15 text-white' : 'bg-surface-overlay text-gray-400 hover:text-white'"
+              :aria-label="mode.label"
+              :title="mode.label"
+              @click="viewMode = mode.key"
+            >
+              <component
+                :is="mode.icon"
+                class="h-3.5 w-3.5"
+              />
+            </button>
           </div>
         </div>
 
         <div
-          v-if="sortedFiles.length === 0"
+          v-if="activeFiles.length === 0"
           class="px-4 py-10 text-sm text-gray-500"
         >
           Coverage totals were parsed, but this report did not include per-file data.
+        </div>
+
+        <div
+          v-else-if="filteredFiles.length === 0"
+          class="px-4 py-10 text-sm text-gray-500"
+        >
+          No files match the current filters.
+        </div>
+
+        <CoverageTreeView
+          v-else-if="viewMode === 'tree'"
+          :files="treeFiles"
+          @select-file="onSelectFile"
+        />
+
+        <div
+          v-else-if="viewMode === 'treemap'"
+          class="p-4"
+        >
+          <CoverageTreemap
+            :files="treeFiles"
+            @select-file="onSelectFile"
+          />
         </div>
 
         <div
@@ -242,40 +265,22 @@
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="sticky top-0 bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
-                <th class="px-3 py-2 font-medium">
+                <th
+                  v-for="column in columnHeaders"
+                  :key="column.field"
+                  class="px-3 py-2 font-medium"
+                >
                   <button
                     class="inline-flex items-center gap-1.5 transition hover:text-gray-200"
                     type="button"
-                    @click="toggleSort('file_path')"
+                    @click="toggle(column.field)"
                   >
-                    File path
+                    {{ column.label }}
                     <component
-                      :is="sortIcon('file_path')"
+                      :is="icon(column.field)"
                       class="h-3.5 w-3.5"
                     />
                   </button>
-                </th>
-                <th class="px-3 py-2 font-medium">
-                  <button
-                    class="inline-flex items-center gap-1.5 transition hover:text-gray-200"
-                    type="button"
-                    @click="toggleSort('line_rate')"
-                  >
-                    Line coverage
-                    <component
-                      :is="sortIcon('line_rate')"
-                      class="h-3.5 w-3.5"
-                    />
-                  </button>
-                </th>
-                <th class="px-3 py-2 font-medium">
-                  Branch coverage
-                </th>
-                <th class="px-3 py-2 font-medium">
-                  Lines
-                </th>
-                <th class="px-3 py-2 font-medium">
-                  Branches
                 </th>
               </tr>
             </thead>
@@ -286,8 +291,11 @@
                 class="transition hover:bg-white/5"
               >
                 <td class="px-3 py-3 align-top text-gray-200">
-                  <div class="font-mono text-xs leading-6 text-gray-200">
-                    {{ file.file_path }}
+                  <div
+                    class="font-mono text-xs leading-6 text-gray-200"
+                    :title="file.file_path"
+                  >
+                    {{ file.canonical_path || file.file_path }}
                   </div>
                 </td>
                 <td class="px-3 py-3 align-top">
@@ -346,13 +354,14 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ArrowUpDown, BarChart3, ChevronDown, ChevronUp, FileCode2, GitBranch, Upload } from 'lucide-vue-next'
+import { BarChart3, FileCode2, FolderTree, GitBranch, LayoutGrid, TableProperties, Upload } from 'lucide-vue-next'
 import { useRoute } from 'vue-router'
 
-import { api, type CoverageReport } from '@/api/client'
-
-type SortField = 'file_path' | 'line_rate'
-type SortDirection = 'asc' | 'desc'
+import { api, type CoverageFile, type CoverageReport } from '@/api/client'
+import CoverageTreemap from '@/components/CoverageTreemap.vue'
+import CoverageTreeView from '@/components/CoverageTreeView.vue'
+import FilterBar from '@/components/FilterBar.vue'
+import { useTableSort } from '@/composables/useTableSort'
 
 const route = useRoute()
 
@@ -365,55 +374,143 @@ const snapshotParam = computed(() => route.query.snapshot as string | undefined)
 const loading = ref(true)
 const error = ref('')
 const report = ref<CoverageReport | null>(null)
-const selectedFormat = ref<string | null>(null)
-const sortField = ref<SortField>('line_rate')
-const sortDirection = ref<SortDirection>('asc')
+const viewMode = ref<'tree' | 'table' | 'treemap'>('tree')
 
-const reportOptions = computed(() => {
-  if (!report.value) {
-    return []
+const activeFilters = ref<Record<string, string>>({})
+const searchQuery = ref('')
+const currentSort = ref('')
+const currentSortDirection = ref('')
+
+const viewModes = [
+  { key: 'tree', label: 'Tree view', icon: FolderTree },
+  { key: 'table', label: 'Table view', icon: TableProperties },
+  { key: 'treemap', label: 'Treemap view', icon: LayoutGrid },
+] as const
+
+const reportOptions = computed(() => report.value?.reports ?? [])
+
+const activeReport = computed(() => report.value)
+
+const activeLabel = computed(() => {
+  const active = report.value
+  if (!active) return ''
+  if (reportOptions.value.length > 1) {
+    return `${active.files.length} files aggregated across ${reportOptions.value.length} reports`
   }
-
-  if (Array.isArray(report.value.reports) && report.value.reports.length > 0) {
-    return report.value.reports
-  }
-
-  return [report.value]
+  return `${active.files.length} files in ${active.format || 'unknown'} format`
 })
 
-const activeReport = computed(() => {
-  const primaryReport = report.value
-  if (!primaryReport) {
-    return null
-  }
+const formatOptions = computed(() => [...new Set(reportOptions.value.map((option) => option.format || 'unknown'))].sort())
+const fileOptions = computed(() => (report.value?.files ?? []).map((file) => file.canonical_path || file.file_path).sort())
 
-  if (!selectedFormat.value) {
-    return primaryReport
-  }
+const filterDefs = computed(() => [
+  { key: 'format', label: 'Format', options: formatOptions.value, multi: true },
+  { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
+])
 
-  return reportOptions.value.find((entry) => entry.format === selectedFormat.value) ?? primaryReport
+const sortOptions = [
+  { key: 'coverage', label: 'Line coverage', ascLabel: 'Least covered', descLabel: 'Most covered' },
+  { key: 'lines', label: 'Instrumented lines', ascLabel: 'Smallest', descLabel: 'Largest' },
+  { key: 'path', label: 'File path', ascLabel: 'Path A→Z', descLabel: 'Path Z→A' },
+]
+const sortDirectionOptions = [
+  { key: 'asc', label: '↑ Ascending' },
+  { key: 'desc', label: '↓ Descending' },
+]
+
+const activeFiles = computed<CoverageFile[]>(() => {
+  const formats = splitFilter(activeFilters.value.format)
+  if (formats.length === 0) {
+    return report.value?.files ?? []
+  }
+  const best = new Map<string, CoverageFile>()
+  for (const option of reportOptions.value) {
+    if (!formats.includes((option.format || 'unknown').toLowerCase())) continue
+    for (const file of option.files) {
+      const key = file.canonical_path || file.file_path
+      const existing = best.get(key)
+      if (!existing || file.lines_covered > existing.lines_covered) {
+        best.set(key, file)
+      }
+    }
+  }
+  return [...best.values()]
 })
 
-const sortedFiles = computed(() => {
-  const files = [...(activeReport.value?.files ?? [])]
-
-  files.sort((left, right) => {
-    if (sortField.value === 'file_path') {
-      const comparison = left.file_path.localeCompare(right.file_path)
-      return sortDirection.value === 'asc' ? comparison : -comparison
+const filteredFiles = computed(() => {
+  const patterns = splitFilter(activeFilters.value.file)
+  const search = searchQuery.value.trim().toLowerCase()
+  return activeFiles.value.filter((file) => {
+    const path = (file.canonical_path || file.file_path).toLowerCase()
+    if (patterns.length > 0 && !patterns.some((pattern) => matchPathPattern(path, pattern))) {
+      return false
     }
-
-    const leftRate = sortableRate(left.line_rate)
-    const rightRate = sortableRate(right.line_rate)
-    if (leftRate !== rightRate) {
-      return sortDirection.value === 'asc' ? leftRate - rightRate : rightRate - leftRate
-    }
-
-    return left.file_path.localeCompare(right.file_path)
+    return search.length === 0 || path.includes(search)
   })
-
-  return files
 })
+
+function splitFilter(value: string | undefined): string[] {
+  return (value ?? '').split(',').map((entry) => entry.trim().toLowerCase()).filter(Boolean)
+}
+
+function matchPathPattern(path: string, pattern: string): boolean {
+  if (!pattern.includes('*')) {
+    return path.includes(pattern)
+  }
+  const regex = new RegExp(pattern.split('*').map(escapeRegex).join('.*'))
+  return regex.test(path)
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const presortedFiles = computed(() => {
+  const sort = currentSort.value
+  if (!sort) return filteredFiles.value
+  const direction = currentSortDirection.value === 'desc' ? -1 : 1
+  return [...filteredFiles.value].sort((a, b) => {
+    if (sort === 'coverage') return ((a.line_rate ?? -1) - (b.line_rate ?? -1)) * direction
+    if (sort === 'lines') return (a.lines_valid - b.lines_valid) * direction
+    return (a.canonical_path || a.file_path).localeCompare(b.canonical_path || b.file_path) * direction
+  })
+})
+
+type ColumnField = 'file_path' | 'line_rate' | 'branch_rate' | 'lines' | 'branches'
+
+const columnHeaders: Array<{ field: ColumnField; label: string }> = [
+  { field: 'file_path', label: 'File path' },
+  { field: 'line_rate', label: 'Line coverage' },
+  { field: 'branch_rate', label: 'Branch coverage' },
+  { field: 'lines', label: 'Lines' },
+  { field: 'branches', label: 'Branches' },
+]
+
+const { sorted: sortedFiles, toggle, icon } = useTableSort<CoverageFile, ColumnField>(
+  presortedFiles,
+  {
+    file_path: { value: (file) => file.canonical_path || file.file_path },
+    line_rate: { value: (file) => file.line_rate, initial: 'asc' },
+    branch_rate: { value: (file) => file.branch_rate, initial: 'asc' },
+    lines: { value: (file) => file.lines_valid, initial: 'desc' },
+    branches: { value: (file) => file.branches_valid, initial: 'desc' },
+  },
+  'line_rate',
+)
+
+const treeFiles = computed(() =>
+  filteredFiles.value.map((file) => ({
+    path: file.canonical_path || file.file_path,
+    valid: file.lines_valid,
+    covered: file.lines_covered,
+    rate: file.line_rate,
+  })),
+)
+
+function onSelectFile(path: string) {
+  activeFilters.value = { ...activeFilters.value, file: path }
+  viewMode.value = 'table'
+}
 
 const highestLineRate = computed(() => {
   const rates = (activeReport.value?.files ?? [])
@@ -450,36 +547,14 @@ async function loadCoverage() {
   try {
     const response = await api.getCoverage(provider.value, slug.value, repoSlug.value, { ref: refParam.value, snapshot: snapshotParam.value })
     report.value = response.data ?? null
-    selectedFormat.value = response.data?.format ?? null
   } catch {
     report.value = null
-    selectedFormat.value = null
     error.value = 'Failed to load coverage data. Please try again later.'
   } finally {
     loading.value = false
+    activeFilters.value = {}
+    searchQuery.value = ''
   }
-}
-
-function toggleSort(field: SortField) {
-  if (sortField.value === field) {
-    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
-    return
-  }
-
-  sortField.value = field
-  sortDirection.value = field === 'file_path' ? 'asc' : 'desc'
-}
-
-function sortIcon(field: SortField) {
-  if (sortField.value !== field) {
-    return ArrowUpDown
-  }
-
-  return sortDirection.value === 'asc' ? ChevronUp : ChevronDown
-}
-
-function sortableRate(rate: number | null) {
-  return rate ?? -1
 }
 
 function formatRate(rate: number | null) {

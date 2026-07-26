@@ -15,6 +15,10 @@ import (
 	"github.com/hibouhq/hibou/internal/store"
 )
 
+// The top-level numbers and file list are the AGGREGATE of every report in the
+// snapshot (multi-language repos upload one report per tool); per-tool views
+// remain available under reports. Format is kept for API compatibility and
+// reads "aggregate" when more than one report contributed.
 type coverageSummaryResponse struct {
 	LineRate        *float64               `json:"line_rate"`
 	BranchRate      *float64               `json:"branch_rate"`
@@ -28,6 +32,13 @@ type coverageSummaryResponse struct {
 }
 
 type coverageFormatReport struct {
+	// ReportID identifies the report row; two reports can share a format (e.g.
+	// lcov from both TypeScript and Rust), so format is not an identity.
+	ReportID string `json:"report_id"`
+	// Scope is the top-level directory shared by every file in the report
+	// ("ts", "rust"), letting the UI label same-format reports apart. Empty
+	// when the report spans multiple roots.
+	Scope           string                 `json:"scope,omitempty"`
 	LineRate        *float64               `json:"line_rate"`
 	BranchRate      *float64               `json:"branch_rate"`
 	LinesValid      int                    `json:"lines_valid"`
@@ -39,7 +50,11 @@ type coverageFormatReport struct {
 }
 
 type coverageFileResponse struct {
-	FilePath        string   `json:"file_path"`
+	FilePath string `json:"file_path"`
+	// CanonicalPath is repo-root-relative, with tool prefixes (Go module path,
+	// Java package root) stripped, so the same file keys identically across
+	// tools, snapshots, and the forge tree.
+	CanonicalPath   string   `json:"canonical_path"`
 	LineRate        *float64 `json:"line_rate"`
 	BranchRate      *float64 `json:"branch_rate"`
 	LinesValid      int      `json:"lines_valid"`
@@ -100,7 +115,10 @@ func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load coverage files")
 			return
 		}
+		fileResponses := coverageFilesResponse(files, repo.Slug)
 		responseReports = append(responseReports, coverageFormatReport{
+			ReportID:        report.ID.String(),
+			Scope:           coverageReportScope(fileResponses),
 			LineRate:        report.LineRate,
 			BranchRate:      report.BranchRate,
 			LinesValid:      report.LinesValid,
@@ -108,22 +126,26 @@ func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
 			BranchesValid:   report.BranchesValid,
 			BranchesCovered: report.BranchesCovered,
 			Format:          report.Format,
-			Files:           coverageFilesResponse(files),
+			Files:           fileResponses,
 		})
 	}
 
 	orderedReports := orderCoverageReports(responseReports)
-	primary := orderedReports[0]
+	aggregateFiles, totals := aggregateCoverageReports(orderedReports)
+	format := "aggregate"
+	if len(orderedReports) == 1 {
+		format = orderedReports[0].Format
+	}
 
 	response := coverageSummaryResponse{
-		LineRate:        primary.LineRate,
-		BranchRate:      primary.BranchRate,
-		LinesValid:      primary.LinesValid,
-		LinesCovered:    primary.LinesCovered,
-		BranchesValid:   primary.BranchesValid,
-		BranchesCovered: primary.BranchesCovered,
-		Format:          primary.Format,
-		Files:           primary.Files,
+		LineRate:        totals.LineRate,
+		BranchRate:      totals.BranchRate,
+		LinesValid:      totals.LinesValid,
+		LinesCovered:    totals.LinesCovered,
+		BranchesValid:   totals.BranchesValid,
+		BranchesCovered: totals.BranchesCovered,
+		Format:          format,
+		Files:           aggregateFiles,
 		Reports:         orderedReports,
 	}
 
@@ -302,11 +324,12 @@ func coverageRateValue(value *float64) any {
 	return *value
 }
 
-func coverageFilesResponse(files []store.CoverageFile) []coverageFileResponse {
+func coverageFilesResponse(files []store.CoverageFile, repoSlug string) []coverageFileResponse {
 	response := make([]coverageFileResponse, len(files))
 	for i, file := range files {
 		response[i] = coverageFileResponse{
 			FilePath:        file.FilePath,
+			CanonicalPath:   canonicalCoveragePath(file.FilePath, repoSlug),
 			LineRate:        file.LineRate,
 			BranchRate:      file.BranchRate,
 			LinesValid:      file.LinesValid,

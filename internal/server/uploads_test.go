@@ -211,6 +211,37 @@ func TestUploadAutoEnrollsUnknownRepository(t *testing.T) {
 	}
 }
 
+func TestUploadSetsPRMergeTargetWithoutWebhook(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+
+	performUploadAuto(t, srv, admin, uploadPayloadForTest(org.Slug, repo.Slug, minimalSBOMForTest(), map[string]any{
+		"ref":              "refs/pull/7/merge",
+		"commit_sha":       "pr-head-sha",
+		"pr_target_branch": "main",
+	}))
+
+	prRef, err := srv.queries.GetRefByRepoAndName(context.Background(), repo.ID, "refs/pull/7", store.RefTypePullRequest)
+	if err != nil {
+		t.Fatalf("GetRefByRepoAndName: %v", err)
+	}
+	if prRef == nil {
+		t.Fatal("expected PR ref to exist")
+	}
+	if prRef.MergeTargetRefID == nil {
+		t.Fatal("expected upload to set the PR merge target")
+	}
+	targetRef, err := srv.queries.GetRefByRepoAndName(context.Background(), repo.ID, "main", store.RefTypeBranch)
+	if err != nil {
+		t.Fatalf("GetRefByRepoAndName(main): %v", err)
+	}
+	if targetRef == nil || *prRef.MergeTargetRefID != targetRef.ID {
+		t.Fatalf("merge target = %v, want the main branch ref", prRef.MergeTargetRefID)
+	}
+}
+
 func TestUploadDefaultBranchFromRef(t *testing.T) {
 	t.Parallel()
 
@@ -809,14 +840,19 @@ end_of_record`), "lcov")
 	if response.Data == nil {
 		t.Fatal("expected coverage response data")
 	}
-	if response.Data.Format != "gocover" {
-		t.Fatalf("primary format = %q, want gocover", response.Data.Format)
+	if response.Data.Format != "aggregate" {
+		t.Fatalf("format = %q, want aggregate", response.Data.Format)
 	}
-	if response.Data.LinesValid != 15 {
-		t.Fatalf("primary lines_valid = %d, want 15", response.Data.LinesValid)
+	// Union of both reports: gocover alpha.go (10/10) + beta.go (0/5) + lcov
+	// /repo/alpha.go (5/10; different canonical path, so no collision).
+	if response.Data.LinesValid != 25 {
+		t.Fatalf("aggregate lines_valid = %d, want 25", response.Data.LinesValid)
 	}
-	if len(response.Data.Files) != 2 {
-		t.Fatalf("primary file count = %d, want 2", len(response.Data.Files))
+	if response.Data.LinesCovered != 15 {
+		t.Fatalf("aggregate lines_covered = %d, want 15", response.Data.LinesCovered)
+	}
+	if len(response.Data.Files) != 3 {
+		t.Fatalf("aggregate file count = %d, want 3", len(response.Data.Files))
 	}
 	if len(response.Data.Reports) != 2 {
 		t.Fatalf("reports count = %d, want 2", len(response.Data.Reports))

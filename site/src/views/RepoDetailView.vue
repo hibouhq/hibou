@@ -602,11 +602,16 @@ function totalSeverity(counts?: { critical: number; high: number; medium: number
   return counts.critical + counts.high + counts.medium + counts.low + counts.info
 }
 
-function tabCount(name: string): number | null {
-  const counts: Record<string, number | null> = {
-    'repo-vulnerabilities': summary.value ? totalSeverity(summary.value.vulnerabilities) : null,
-    'repo-coverage': null,
-    'repo-dependencies': summary.value ? summary.value.components_total : null,
+function tabCount(name: string): string | number | null {
+  if (!summary.value) {
+    return null
+  }
+  const rate = summary.value.coverage_line_rate
+  const counts: Record<string, string | number | null> = {
+    'repo-vulnerabilities': totalSeverity(summary.value.vulnerabilities),
+    'repo-coverage': typeof rate === 'number' ? `${(rate * 100).toFixed(1)}%` : null,
+    'repo-tests': summary.value.tests_total ?? null,
+    'repo-dependencies': summary.value.components_total,
   }
 
   return counts[name] ?? null
