@@ -157,6 +157,27 @@ func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, snapsho
 	return lines, nil
 }
 
+// ListCoverageLinesBySnapshotPath returns per-line hits for files whose path
+// equals or suffix-matches the given repo-relative path, across all reports.
+func (q *Queries) ListCoverageLinesBySnapshotPath(ctx context.Context, snapshotID uuid.UUID, path string) ([]CoverageLine, error) {
+	rows, err := q.db.ListCoverageLinesBySnapshotPath(ctx, dbgen.ListCoverageLinesBySnapshotPathParams{
+		SnapshotID: snapshotID,
+		FilePath:   path,
+	})
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]CoverageLine, len(rows))
+	for i, row := range rows {
+		lines[i] = CoverageLine{
+			FilePath:   row.FilePath,
+			LineNumber: int(row.LineNumber),
+			Hits:       int(row.Hits),
+		}
+	}
+	return lines, nil
+}
+
 func (q *Queries) ListCoverageFilesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]CoverageFile, error) {
 	rows, err := q.db.ListCoverageFilesBySnapshot(ctx, snapshotID)
 	if err != nil {

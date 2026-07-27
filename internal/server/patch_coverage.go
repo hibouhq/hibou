@@ -114,6 +114,14 @@ func coverageExcludeGlobs(cfg *repoconfig.RepoConfig) []string {
 	return cfg.Coverage.Exclude
 }
 
+func coverageGateConfigured(cfg *repoconfig.RepoConfig, targetBranch string) bool {
+	if cfg == nil {
+		return false
+	}
+	gate := cfg.MatchGate(targetBranch)
+	return gate != nil && gate.Coverage != nil
+}
+
 // evaluateCoverageGate applies the branch-matched coverage thresholds from
 // .hibou.yaml (min_coverage, grace, diff_minimum) against the coverage diff and
 // patch coverage, returning a human-readable reason per failing threshold.

@@ -491,6 +491,7 @@ export interface CompareResult {
   test_diff: TestDiff | null
   gate?: {
     passed: boolean
+    configured: boolean
     reasons: string[]
   } | null
   pr?: {
@@ -536,6 +537,7 @@ export interface TrendPoint {
 // per-tool reports (identified by report_id, since formats can repeat) are
 // listed under `reports`.
 export interface CoverageReport {
+  snapshot_id: string
   line_rate: number | null
   branch_rate: number | null
   lines_valid: number
@@ -558,6 +560,13 @@ export interface CoverageFormatReport {
   branches_covered: number
   format: string
   files: CoverageFile[]
+}
+
+export interface CoverageSource {
+  path: string
+  commit_sha: string
+  content: string
+  lines: Array<{ number: number; hits: number }>
 }
 
 export interface CoverageFile {
@@ -1229,6 +1238,13 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<RefSummary>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/summary${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  getCoverageSource(provider: string, slug: string, repoSlug: string, snapshotID: string, path: string) {
+    const query = new URLSearchParams({ path })
+    return this.request<ApiResponse<CoverageSource>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/snapshots/${snapshotID}/coverage-source?${query.toString()}`,
     )
   }
 

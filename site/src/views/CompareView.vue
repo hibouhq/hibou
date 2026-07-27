@@ -1100,6 +1100,13 @@ const gateState = computed(() => {
       dotClass: 'bg-danger',
     }
   }
+  if (!comparison.value.gate.configured) {
+    return {
+      label: 'QG — no thresholds configured',
+      badgeClass: 'border-surface-border bg-surface-overlay text-gray-400',
+      dotClass: 'bg-gray-500',
+    }
+  }
   return {
     label: 'QG Passed',
     badgeClass: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',

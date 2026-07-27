@@ -288,7 +288,8 @@
               <tr
                 v-for="file in sortedFiles"
                 :key="file.file_path"
-                class="transition hover:bg-white/5"
+                class="cursor-pointer transition hover:bg-white/5"
+                @click="onSelectFile(file.canonical_path || file.file_path)"
               >
                 <td class="px-3 py-3 align-top text-gray-200">
                   <div
@@ -341,6 +342,16 @@
           </table>
         </div>
       </section>
+
+      <CoverageSourceModal
+        v-if="sourceFile && report"
+        :provider="provider"
+        :slug="slug"
+        :repo-slug="repoSlug"
+        :snapshot-id="report.snapshot_id"
+        :path="sourceFile"
+        @close="sourceFile = null"
+      />
     </template>
 
     <div
@@ -507,9 +518,10 @@ const treeFiles = computed(() =>
   })),
 )
 
+const sourceFile = ref<string | null>(null)
+
 function onSelectFile(path: string) {
-  activeFilters.value = { ...activeFilters.value, file: path }
-  viewMode.value = 'table'
+  sourceFile.value = path
 }
 
 const highestLineRate = computed(() => {

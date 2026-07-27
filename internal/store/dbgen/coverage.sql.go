@@ -262,6 +262,52 @@ func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, arg Lis
 	return items, nil
 }
 
+const listCoverageLinesBySnapshotPath = `-- name: ListCoverageLinesBySnapshotPath :many
+SELECT cf.file_path, cl.line_number, cl.hits
+FROM coverage_lines cl
+JOIN coverage_files cf ON cf.id = cl.coverage_file_id
+JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
+WHERE cr.snapshot_id = $1
+  AND (cf.file_path = $2 OR cf.file_path LIKE '%/' || $2)
+ORDER BY cf.file_path, cl.line_number
+`
+
+type ListCoverageLinesBySnapshotPathParams struct {
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	FilePath   string    `json:"file_path"`
+}
+
+type ListCoverageLinesBySnapshotPathRow struct {
+	FilePath   string `json:"file_path"`
+	LineNumber int32  `json:"line_number"`
+	Hits       int32  `json:"hits"`
+}
+
+// Suffix match narrows to candidate rows (tool prefixes like Go module paths);
+// the caller verifies each hit canonicalizes to the requested path.
+func (q *Queries) ListCoverageLinesBySnapshotPath(ctx context.Context, arg ListCoverageLinesBySnapshotPathParams) ([]ListCoverageLinesBySnapshotPathRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCoverageLinesBySnapshotPath, arg.SnapshotID, arg.FilePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoverageLinesBySnapshotPathRow{}
+	for rows.Next() {
+		var i ListCoverageLinesBySnapshotPathRow
+		if err := rows.Scan(&i.FilePath, &i.LineNumber, &i.Hits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCoverageReportsBySnapshot = `-- name: ListCoverageReportsBySnapshot :many
 SELECT id, snapshot_id, format, line_rate, branch_rate, lines_valid, lines_covered, branches_valid, branches_covered, created_at FROM coverage_reports WHERE snapshot_id = $1 ORDER BY format
 `

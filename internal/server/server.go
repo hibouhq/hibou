@@ -509,6 +509,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/files", s.handleListSnapshotFiles)
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/files.zip", s.handleDownloadSnapshotArchive)
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/files/{artifactID}", s.handleDownloadSnapshotFile)
+						r.Get("/{repoSlug}/snapshots/{snapshotID}/coverage-source", s.handleGetCoverageSource)
 						r.Post("/{repoSlug}/sbom/compare", s.handleCompareSBOMs)
 						r.Get("/{repoSlug}/compare", s.handleCompareRefs)
 						r.Get("/{repoSlug}/trends", s.handleGetTrends)

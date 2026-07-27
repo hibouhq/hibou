@@ -179,6 +179,26 @@ definitions:
       updated_at:
         type: string
     type: object
+  server.coverageSourceLine:
+    properties:
+      hits:
+        type: integer
+      number:
+        type: integer
+    type: object
+  server.coverageSourceResponse:
+    properties:
+      commit_sha:
+        type: string
+      content:
+        type: string
+      lines:
+        items:
+          $ref: '#/definitions/server.coverageSourceLine'
+        type: array
+      path:
+        type: string
+    type: object
   server.createAPIKeyRequest:
     properties:
       expires_at:
@@ -3158,6 +3178,66 @@ paths:
       summary: Create release
       tags:
       - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/snapshots/{snapshotID}/coverage-source:
+    get:
+      description: Streams the file blob at the snapshot's commit from the forge together
+        with its per-line hit counts. Source is never stored; the forge token stays
+        server-side.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Snapshot ID
+        in: path
+        name: snapshotID
+        required: true
+        type: string
+      - description: Canonical repo-root-relative file path
+        in: query
+        name: path
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.coverageSourceResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Annotated source for a covered file
+      tags:
+      - coverage
   /orgs/{provider}/{slug}/repos/{repoSlug}/tests:
     get:
       description: Returns the latest test report (JUnit) for a ref or snapshot.

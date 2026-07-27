@@ -15,11 +15,10 @@ import (
 	"github.com/hibouhq/hibou/internal/store"
 )
 
-// The top-level numbers and file list are the AGGREGATE of every report in the
-// snapshot (multi-language repos upload one report per tool); per-tool views
-// remain available under reports. Format is kept for API compatibility and
-// reads "aggregate" when more than one report contributed.
+// Top-level numbers aggregate every report in the snapshot; per-tool views
+// live under reports.
 type coverageSummaryResponse struct {
+	SnapshotID      string                 `json:"snapshot_id"`
 	LineRate        *float64               `json:"line_rate"`
 	BranchRate      *float64               `json:"branch_rate"`
 	LinesValid      int                    `json:"lines_valid"`
@@ -138,6 +137,7 @@ func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := coverageSummaryResponse{
+		SnapshotID:      snapshotID.String(),
 		LineRate:        totals.LineRate,
 		BranchRate:      totals.BranchRate,
 		LinesValid:      totals.LinesValid,

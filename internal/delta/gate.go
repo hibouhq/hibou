@@ -13,8 +13,11 @@ import (
 )
 
 type GateResult struct {
-	Passed  bool     `json:"passed"`
-	Reasons []string `json:"reasons"`
+	Passed bool `json:"passed"`
+	// Configured is false when no threshold of any kind applies, so a green
+	// "passed" can be told apart from "nothing was checked".
+	Configured bool     `json:"configured"`
+	Reasons    []string `json:"reasons"`
 }
 
 type GateStore interface {
@@ -48,7 +51,11 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 		return nil, err
 	}
 	reasons := append(evaluateStoredVulnerabilityGates(gates, delta.New), evaluateConfiguredWeaknessGates(gates, delta.New, weaknessGate)...)
-	return &GateResult{Passed: len(reasons) == 0, Reasons: reasons}, nil
+	return &GateResult{
+		Passed:     len(reasons) == 0,
+		Configured: len(gates) > 0 || weaknessGate != nil,
+		Reasons:    reasons,
+	}, nil
 }
 
 func (s *Service) loadQualityGates(ctx context.Context, repoID, orgID uuid.UUID) ([]dbgen.QualityGate, error) {
