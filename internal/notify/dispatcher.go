@@ -58,8 +58,22 @@ type Dispatcher struct {
 	store   DispatcherStore
 	senders map[string]Sender
 	bus     *events.Bus
+	baseURL string
 	log     zerolog.Logger
 	limiter *rateLimiter
+}
+
+// absoluteLink turns a server-relative SPA route into a full URL for external
+// senders (Slack/webhook), which cannot resolve relative paths. Already-
+// absolute and empty links pass through.
+func (d *Dispatcher) absoluteLink(link string) string {
+	if link == "" || d.baseURL == "" || strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+		return link
+	}
+	if !strings.HasPrefix(link, "/") {
+		link = "/" + link
+	}
+	return d.baseURL + link
 }
 
 type rateLimiter struct {
@@ -89,7 +103,7 @@ type DispatcherStore interface {
 	CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error)
 }
 
-func NewDispatcher(store DispatcherStore, bus *events.Bus, log zerolog.Logger, senders ...Sender) *Dispatcher {
+func NewDispatcher(store DispatcherStore, bus *events.Bus, baseURL string, log zerolog.Logger, senders ...Sender) *Dispatcher {
 	registry := make(map[string]Sender, len(senders))
 	for _, sender := range senders {
 		if sender == nil {
@@ -101,6 +115,7 @@ func NewDispatcher(store DispatcherStore, bus *events.Bus, log zerolog.Logger, s
 		store:   store,
 		senders: registry,
 		bus:     bus,
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		log:     log.With().Str("component", "notify.dispatcher").Logger(),
 		limiter: &rateLimiter{windows: make(map[uuid.UUID][]time.Time)},
 	}
@@ -152,6 +167,7 @@ func (d *Dispatcher) handleEvent(_ context.Context, eventType events.Type, rawPa
 	defer cancel()
 
 	payload := buildDispatchPayload(eventType, rawPayload)
+	payload.Link = d.absoluteLink(payload.Link)
 	if payload.OrgID == uuid.Nil {
 		d.log.Debug().Str("event_type", string(eventType)).Msg("skip notification dispatch without org id")
 		return
@@ -604,7 +620,7 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 	payload := Payload{
 		EventType: string(eventType),
 		Severity:  defaultDispatchSeverity(eventType, data),
-		Link:      stringValue(data, "link", repoLink(uuidFromPayload(data, "repo_id"))),
+		Link:      stringValue(data, "link", ""),
 		OrgID:     uuidFromPayload(data, "org_id"),
 		RepoName:  stringValue(data, "repo_name", "repository"),
 		Metadata:  cloneMetadata(data),

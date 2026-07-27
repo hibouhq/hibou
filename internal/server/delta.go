@@ -74,8 +74,12 @@ func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to compute delta")
 		return
 	}
-	weaknessGate := s.resolveRepoWeaknessGate(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshotID)
-	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, result, weaknessGate)
+	gateConfig := s.resolveRepoGateConfig(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshotID)
+	if gateConfig == nil {
+		gateConfig = &delta.GateConfig{}
+	}
+	gateConfig.HeadSnapshotID = prSnapshotID
+	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, result, gateConfig)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate quality gates")
 		return

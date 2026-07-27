@@ -7,9 +7,10 @@ func TestFromPurl(t *testing.T) {
 		purl, family, release string
 	}{
 		{"pkg:apk/alpine/busybox@1.36.1-r5?arch=x86_64&distro=alpine-3.18.4", "alpine", "3.18.4"},
-		{"pkg:apk/alpine/busybox@1.36.1-r5?distro=3.18.4", "", "3.18.4"},
-		{"pkg:deb/debian/libssl3@3.0.11-1~deb12u2?distro=debian-12", "debian", "12"},
-		{"pkg:rpm/redhat/openssl-libs@3.0.7?distro=redhat-9.4", "redhat", "9.4"},
+		// Family comes from the namespace even when the qualifier omits it (real Trivy alpine output).
+		{"pkg:apk/alpine/busybox@1.36.1-r5?arch=x86_64&distro=3.9.6", "alpine", "3.9.6"},
+		{"pkg:deb/debian/libssl3@3.0.11-1~deb12u2?arch=amd64&distro=debian-10.13", "debian", "10.13"},
+		{"pkg:rpm/redhat/openssl-libs@3.0.7?arch=x86_64&distro=redhat-8.5", "redhat", "8.5"},
 		{"pkg:rpm/rocky/bash@5.1.8?distro=rocky-9.3", "rocky", "9.3"},
 		{"pkg:npm/lodash@4.17.11", "", ""},
 	}

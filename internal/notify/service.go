@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -35,6 +36,7 @@ type recipientResolver interface {
 	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
 	GetRefByID(ctx context.Context, id uuid.UUID) (*store.Ref, error)
 	GetRepositoryByID(ctx context.Context, id uuid.UUID) (*store.Repository, error)
+	GetOrganizationByID(ctx context.Context, id uuid.UUID) (*store.Organization, error)
 	ListOrgMembers(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]store.OrgMember, int, error)
 }
 
@@ -84,7 +86,7 @@ func (s *Service) handleScanCompleted(ctx context.Context, payload any) {
 		Type:     string(events.ScanCompleted),
 		Title:    "Scan completed",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoTabLink(ctx, repoID, "dependencies", ""),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelInfo, Valid: true},
 	})
 }
@@ -100,7 +102,7 @@ func (s *Service) handleScanFailed(ctx context.Context, payload any) {
 		Type:     string(events.ScanFailed),
 		Title:    "Scan failed",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoTabLink(ctx, repoID, "dependencies", ""),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
 	})
 }
@@ -118,7 +120,7 @@ func (s *Service) handleScanStale(ctx context.Context, payload any) {
 		Type:     string(events.ScanStale),
 		Title:    "Repository scan stale",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoTabLink(ctx, repoID, "dependencies", ""),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelMedium, Valid: true},
 	})
 }
@@ -141,7 +143,7 @@ func (s *Service) handleVulnDiscovered(ctx context.Context, payload any) {
 		Type:     string(events.VulnDiscovered),
 		Title:    "New vulnerability discovered",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(vulnID)),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
 	})
 }
@@ -164,7 +166,7 @@ func (s *Service) handleVulnerabilityCreated(ctx context.Context, payload any) {
 		Type:     string(events.VulnerabilityCreated),
 		Title:    "New vulnerability created",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(vulnID)),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
 	})
 }
@@ -181,7 +183,7 @@ func (s *Service) handleRetentionWarnAt(ctx context.Context, payload any) {
 		Type:     string(events.RetentionWarnAt),
 		Title:    "Retention budget warning",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoLink(ctx, repoID),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelMedium, Valid: true},
 	})
 }
@@ -197,7 +199,7 @@ func (s *Service) handleRetentionEviction(ctx context.Context, payload any) {
 		Type:     string(events.RetentionEviction),
 		Title:    "Retention reclaim started",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoLink(ctx, repoID),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
 	})
 }
@@ -213,7 +215,7 @@ func (s *Service) handleRetentionProtected(ctx context.Context, payload any) {
 		Type:     string(events.RetentionProtected),
 		Title:    "Protected snapshots exceed budget",
 		Body:     body,
-		Link:     repoLink(repoID),
+		Link:     s.repoLink(ctx, repoID),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
 	})
 }
@@ -302,11 +304,51 @@ func listRecipientUserIDs(ctx context.Context, resolver recipientResolver, orgID
 	return recipients, nil
 }
 
-func repoLink(repoID uuid.UUID) string {
+// repoLink resolves the SPA route for a repository. Routes are org-scoped and
+// slug-based (/orgs/{provider}/{orgSlug}/repos/{repoSlug}); the old
+// /repos/{uuid} shape matched no route, so every notification click was a
+// silent no-op. Unresolvable repos yield "" and the panel renders no link.
+func (s *Service) repoLink(ctx context.Context, repoID uuid.UUID) string {
 	if repoID == uuid.Nil {
 		return ""
 	}
-	return "/repos/" + repoID.String()
+	resolver, ok := s.store.(recipientResolver)
+	if !ok {
+		return ""
+	}
+	repo, err := resolver.GetRepositoryByID(ctx, repoID)
+	if err != nil || repo == nil {
+		return ""
+	}
+	org, err := resolver.GetOrganizationByID(ctx, repo.OrgID)
+	if err != nil || org == nil {
+		return ""
+	}
+	return "/orgs/" + org.Provider + "/" + org.Slug + "/repos/" + repo.Slug
+}
+
+// repoTabLink deep-links a notification to the tab (and optional query) where
+// the event is actually visible, instead of the repo overview.
+func (s *Service) repoTabLink(ctx context.Context, repoID uuid.UUID, tab, rawQuery string) string {
+	base := s.repoLink(ctx, repoID)
+	if base == "" {
+		return ""
+	}
+	link := base + "/" + tab
+	if rawQuery != "" {
+		link += "?" + rawQuery
+	}
+	return link
+}
+
+// vulnSearchQuery pre-fills the vulnerabilities tab's free-text search with the
+// advisory identifier; the tab reads managed filters from the route query.
+func vulnSearchQuery(vulnID string) string {
+	vulnID = strings.TrimSpace(vulnID)
+	if vulnID == "" || vulnID == "unknown" {
+		return ""
+	}
+	return "search=" + url.QueryEscape(vulnID)
 }
 
 func stringValue(data map[string]any, key, fallback string) string {

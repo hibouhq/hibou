@@ -102,7 +102,7 @@ func TestDispatcherFansOutToMultipleSenders(t *testing.T) {
 	store := &mockDispatcherStore{integrations: []dbgen.Integration{slackIntegration, teamsIntegration}}
 	slackSender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
 	teamsSender := &mockSender{typ: "teams", calledCh: make(chan Payload, 1)}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), slackSender, teamsSender)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), slackSender, teamsSender)
 
 	dispatcher.handleEvent(context.Background(), events.ScanCompleted, map[string]any{
 		"org_id":    orgID.String(),
@@ -135,7 +135,7 @@ func TestDispatcherSenderFailureDoesNotCrash(t *testing.T) {
 	}}
 	failing := &mockSender{typ: "slack", err: errors.New("boom"), calledCh: make(chan Payload, 1)}
 	success := &mockSender{typ: "discord", calledCh: make(chan Payload, 1)}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), failing, success)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), failing, success)
 
 	dispatcher.handleEvent(context.Background(), events.GateFailed, map[string]any{
 		"org_id":    orgID.String(),
@@ -173,7 +173,7 @@ func TestDispatcherSubscribeHandlesPublishedEvents(t *testing.T) {
 	}}}
 	bus := events.New(zerolog.Nop())
 	sender := &mockSender{typ: "webhook", calledCh: make(chan Payload, 1)}
-	dispatcher := NewDispatcher(store, bus, zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(store, bus, "", zerolog.Nop(), sender)
 	dispatcher.Subscribe()
 
 	bus.Publish(context.Background(), events.Event{Type: events.VulnDiscovered, Payload: map[string]any{
@@ -211,7 +211,7 @@ func TestDispatcherRulesFilterIntegrationsBySeverityAndRepo(t *testing.T) {
 		}},
 	}
 	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 2)}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 
 	dispatcher.handleEvent(context.Background(), events.VulnDiscovered, map[string]any{
 		"org_id":    orgID.String(),
@@ -241,7 +241,7 @@ func TestDispatcherSkipsOpenCircuitWithoutProbe(t *testing.T) {
 	}
 	store := &mockDispatcherStore{integrations: []dbgen.Integration{integration}}
 	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 
 	dispatcher.handleEvent(context.Background(), events.ScanFailed, map[string]any{"org_id": orgID.String(), "repo_name": "api"})
 
@@ -265,7 +265,7 @@ func TestDispatcherAllowsProbeAfterCircuitResetWindow(t *testing.T) {
 	}
 	store := &mockDispatcherStore{integrations: []dbgen.Integration{integration}}
 	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 
 	dispatcher.handleEvent(context.Background(), events.ScanFailed, map[string]any{"org_id": orgID.String(), "repo_name": "api"})
 
@@ -277,7 +277,7 @@ func TestDispatcherSkipsWhenRateLimitExceeded(t *testing.T) {
 	integration := dbgen.Integration{ID: uuid.New(), OrgID: orgID, Name: "slack", IntegrationType: "slack", Enabled: true}
 	store := &mockDispatcherStore{integrations: []dbgen.Integration{integration}}
 	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 1)}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 	recent := make([]time.Time, notificationRateLimitPerMinute)
 	for i := range recent {
 		recent[i] = time.Now().UTC()
@@ -297,7 +297,7 @@ func TestDispatchIntegrationAsyncDetachesFromCanceledContext(t *testing.T) {
 	orgID := uuid.New()
 	integration := dbgen.Integration{ID: uuid.New(), OrgID: orgID, Name: "webhook", IntegrationType: "webhook", Enabled: true}
 	sender := &contextCheckingSender{typ: "webhook", errCh: make(chan error, 1)}
-	dispatcher := NewDispatcher(&mockDispatcherStore{}, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(&mockDispatcherStore{}, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -326,7 +326,7 @@ func TestHandleEventDetachesFromCanceledContext(t *testing.T) {
 		Enabled:         true,
 		Config:          mustJSON(t, map[string]any{"url": "https://example.com/webhook"}),
 	}}}
-	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), zerolog.Nop(), sender)
+	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

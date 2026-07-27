@@ -341,3 +341,7 @@ func (q *Queries) CountMalwareAdvisoriesByOrg(ctx context.Context, orgID uuid.UU
 func (q *Queries) CountComponentsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
 	return q.db.CountDistinctComponentsByOrg(ctx, orgID)
 }
+
+func (q *Queries) ListScansBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Scan, error) {
+	return q.db.ListScansBySnapshot(ctx, snapshotID)
+}

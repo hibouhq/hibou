@@ -460,10 +460,16 @@
         class="overflow-hidden rounded-2xl border border-surface-border-subtle"
       >
         <div
+          v-if="headScanRunning"
+          class="border-b border-surface-border-subtle bg-surface-overlay/40 px-4 py-2 text-xs text-amber-300"
+        >
+          Scanning components against advisory providers… this list may still change.
+        </div>
+        <div
           v-if="vulnRows.length === 0"
           class="px-4 py-10 text-sm text-gray-500"
         >
-          No vulnerability changes between these refs.
+          {{ headScanRunning ? 'No vulnerability changes yet — scan in progress.' : 'No vulnerability changes between these refs.' }}
         </div>
         <div
           v-else
@@ -762,6 +768,9 @@
                       Δ
                     </th>
                     <th class="px-4 py-3 font-medium">
+                      New lines
+                    </th>
+                    <th class="px-4 py-3 font-medium">
                       Lines
                     </th>
                   </tr>
@@ -800,6 +809,19 @@
                       :style="{ color: deltaColor(file.line_rate_delta) }"
                     >
                       {{ formatRateDelta(file.line_rate_delta) }}
+                    </td>
+                    <td class="px-4 py-3 align-top text-xs">
+                      <template v-if="patchFileByPath.has(file.file_path)">
+                        <span class="font-medium text-blue-300">+{{ patchFileByPath.get(file.file_path)!.covered_lines }} covered</span>
+                        <span
+                          v-if="patchFileByPath.get(file.file_path)!.uncovered_lines > 0"
+                          class="ml-2 font-medium text-orange-300"
+                        >+{{ patchFileByPath.get(file.file_path)!.uncovered_lines }} uncovered</span>
+                      </template>
+                      <span
+                        v-else
+                        class="text-gray-600"
+                      >—</span>
                     </td>
                     <td class="px-4 py-3 align-top text-gray-300">
                       {{ file.base_lines_covered }}/{{ file.base_lines_valid }} → {{ file.head_lines_covered }}/{{ file.head_lines_valid }}
@@ -980,6 +1002,76 @@
         class="overflow-hidden rounded-2xl border border-surface-border-subtle"
       >
         <div
+          v-if="headScanRunning"
+          class="border-b border-surface-border-subtle bg-surface-overlay/40 px-4 py-2 text-xs text-amber-300"
+        >
+          Scanning components against advisory providers… vulnerability counts may still change.
+        </div>
+        <div
+          v-if="newLicenses.length > 0"
+          class="border-b border-surface-border-subtle px-4 py-3"
+        >
+          <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+            New licenses introduced by this change
+          </div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              v-for="[licenseId, count] in newLicenses"
+              :key="licenseId"
+              type="button"
+              class="rounded-full border border-amber-400/40 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-200 transition hover:bg-amber-400/20"
+              :title="`${count} component(s) — click to filter`"
+              @click="componentSearch = licenseId"
+            >
+              {{ licenseId }} <span class="text-amber-400/70">×{{ count }}</span>
+            </button>
+          </div>
+        </div>
+        <div
+          v-if="componentRows.length > 0"
+          class="flex flex-wrap items-center gap-2 border-b border-surface-border-subtle px-4 py-2.5"
+        >
+          <input
+            v-model="componentSearch"
+            type="text"
+            placeholder="Filter by name, purl, license…"
+            class="w-64 rounded-lg border border-surface-border bg-surface-overlay/40 px-2.5 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-accent/50 focus:outline-none"
+          >
+          <select
+            v-model="componentChangeFilter"
+            class="rounded-lg border border-surface-border bg-surface-overlay/40 px-2 py-1.5 text-xs text-gray-300"
+          >
+            <option value="">
+              all changes
+            </option>
+            <option value="added">
+              added
+            </option>
+            <option value="updated">
+              updated
+            </option>
+            <option value="removed">
+              removed
+            </option>
+          </select>
+          <select
+            v-model="componentEcosystemFilter"
+            class="rounded-lg border border-surface-border bg-surface-overlay/40 px-2 py-1.5 text-xs text-gray-300"
+          >
+            <option value="">
+              all ecosystems
+            </option>
+            <option
+              v-for="eco in componentEcosystems"
+              :key="eco"
+              :value="eco"
+            >
+              {{ eco }}
+            </option>
+          </select>
+          <span class="ml-auto text-xs text-gray-500">{{ filteredComponentRows.length }} / {{ componentRows.length }}</span>
+        </div>
+        <div
           v-if="componentRows.length === 0"
           class="px-4 py-10 text-sm text-gray-500"
         >
@@ -1005,13 +1097,16 @@
                   Ecosystem
                 </th>
                 <th class="px-4 py-3 font-medium">
+                  License
+                </th>
+                <th class="px-4 py-3 font-medium">
                   Vulns
                 </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
               <tr
-                v-for="component in componentRows"
+                v-for="component in filteredComponentRows"
                 :key="`${component.change}-${component.purl || `${component.name}-${component.version}`}`"
                 class="transition hover:bg-white/5"
               >
@@ -1033,6 +1128,28 @@
                   <span class="rounded-full border border-surface-border px-2.5 py-1 text-xs uppercase tracking-[0.14em] text-gray-300">
                     {{ component.ecosystem }}
                   </span>
+                </td>
+                <td class="px-4 py-4 text-xs">
+                  <div
+                    v-if="component.licenses?.length"
+                    class="flex flex-wrap gap-1"
+                  >
+                    <span
+                      v-for="licenseId in component.licenses.slice(0, 2)"
+                      :key="licenseId"
+                      class="rounded border border-surface-border px-1.5 py-0.5 font-mono text-[11px] text-gray-300"
+                    >{{ licenseId }}</span>
+                    <span
+                      v-if="component.licenses.length > 2"
+                      class="text-gray-500"
+                      :title="component.licenses.join(', ')"
+                    >+{{ component.licenses.length - 2 }}</span>
+                  </div>
+                  <span
+                    v-else
+                    class="rounded border border-amber-400/40 px-1.5 py-0.5 text-[11px] text-amber-300"
+                    title="No license metadata — fails the gate when deny_unknown is on"
+                  >unknown</span>
                 </td>
                 <td class="px-4 py-4 text-gray-300">
                   {{ component.vuln_count }}
@@ -1056,7 +1173,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, FlaskConical, GaugeCircle, GitBranch, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert, Tag } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
+import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
@@ -1136,6 +1253,16 @@ const compareListRows = computed<CompareListRow[]>(() => {
       head_lines_valid: file.lines_valid,
     }))
   return [...diffRows, ...unchanged]
+})
+
+// Per-file "new lines" counts come from patch coverage (changed, instrumented
+// lines by outcome); only PR compares carry it.
+const patchFileByPath = computed(() => {
+  const map = new Map<string, PatchFileCoverage>()
+  for (const file of comparison.value?.patch_coverage?.files ?? []) {
+    map.set(file.file_path, file)
+  }
+  return map
 })
 
 function openCompareSource(path: string) {
@@ -1275,11 +1402,54 @@ const componentRows = computed<ComponentRow[]>(() => {
       version: `${c.base_version} → ${c.head_version}`,
       vuln_count: c.head_vuln_count,
       vuln_delta: c.head_vuln_count - c.base_vuln_count,
+      licenses: c.licenses ?? [],
       change: 'updated' as const,
     })),
-    ...diff.added.map((c) => ({ ...c, vuln_delta: null, change: 'added' as const })),
-    ...diff.removed.map((c) => ({ ...c, vuln_delta: null, change: 'removed' as const })),
+    ...diff.added.map((c) => ({ ...c, licenses: c.licenses ?? [], vuln_delta: null, change: 'added' as const })),
+    ...diff.removed.map((c) => ({ ...c, licenses: c.licenses ?? [], vuln_delta: null, change: 'removed' as const })),
   ]
+})
+
+// Component-tab filters: free text + change kind + ecosystem.
+const componentSearch = ref('')
+const componentChangeFilter = ref('')
+const componentEcosystemFilter = ref('')
+
+const componentEcosystems = computed(() =>
+  Array.from(new Set(componentRows.value.map((c) => c.ecosystem || 'unknown'))).sort())
+
+const filteredComponentRows = computed(() => {
+  const query = componentSearch.value.trim().toLowerCase()
+  return componentRows.value.filter((row) => {
+    if (componentChangeFilter.value && row.change !== componentChangeFilter.value) return false
+    if (componentEcosystemFilter.value && (row.ecosystem || 'unknown') !== componentEcosystemFilter.value) return false
+    if (!query) return true
+    const haystack = [row.name, row.purl, row.version, ...(row.licenses ?? [])]
+    return haystack.some((value) => value?.toLowerCase().includes(query))
+  })
+})
+
+// Licenses this PR introduces that main does not have anywhere — the
+// reviewable event for license policy.
+const newLicenses = computed(() => {
+  const diff = comparison.value?.component_diff
+  if (!diff) return []
+  const baseLicenses = new Set<string>()
+  for (const c of diff.removed) for (const l of c.licenses ?? []) baseLicenses.add(l)
+  // removed = base-only; unchanged components exist on both sides so their
+  // licenses cannot be new. Added + updated carry the head side.
+  const introduced = new Map<string, number>()
+  for (const c of [...diff.added, ...(diff.updated ?? [])]) {
+    for (const l of c.licenses ?? []) {
+      if (!baseLicenses.has(l)) introduced.set(l, (introduced.get(l) ?? 0) + 1)
+    }
+  }
+  return Array.from(introduced.entries()).sort((a, b) => b[1] - a[1])
+})
+
+const headScanRunning = computed(() => {
+  const status = comparison.value?.head?.scan_status
+  return status === 'running' || status === 'pending'
 })
 
 const testChangeCount = computed(() => {

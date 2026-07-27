@@ -57,7 +57,7 @@ type GatePublisherStore interface {
 }
 
 type RepoConfigLoader interface {
-	LoadWeaknessGate(ctx context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.WeaknessGate, error)
+	LoadGateConfig(ctx context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.GateConfig, error)
 	// LoadEnforcement returns the gate enforcement mode ("advisory"|"blocking") for
 	// the target branch; advisory (the default) never blocks the PR.
 	LoadEnforcement(ctx context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (string, error)
@@ -409,8 +409,12 @@ func (a *GatePublisher) evaluateGate(ctx context.Context, annotation *gateContex
 		a.log.Error().Err(err).Str("snapshot_id", annotation.snapshot.ID.String()).Msg("compute PR delta")
 		return nil, nil, false
 	}
-	weaknessGate := a.loadWeaknessGateConfig(ctx, annotation)
-	gateResult, err := a.delta.EvaluateGatesWithConfig(ctx, annotation.repo.ID, annotation.repo.OrgID, deltaResult, weaknessGate)
+	gateConfig := a.loadGateConfig(ctx, annotation)
+	if gateConfig == nil {
+		gateConfig = &delta.GateConfig{}
+	}
+	gateConfig.HeadSnapshotID = annotation.snapshot.ID
+	gateResult, err := a.delta.EvaluateGatesWithConfig(ctx, annotation.repo.ID, annotation.repo.OrgID, deltaResult, gateConfig)
 	if err != nil {
 		a.log.Error().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("evaluate PR gates")
 		return nil, nil, false
@@ -418,16 +422,16 @@ func (a *GatePublisher) evaluateGate(ctx context.Context, annotation *gateContex
 	return gateResult, deltaResult, true
 }
 
-func (a *GatePublisher) loadWeaknessGateConfig(ctx context.Context, annotation *gateContext) *delta.WeaknessGate {
+func (a *GatePublisher) loadGateConfig(ctx context.Context, annotation *gateContext) *delta.GateConfig {
 	if a.repoConfigLoader == nil {
 		return nil
 	}
-	weaknessGate, err := a.repoConfigLoader.LoadWeaknessGate(ctx, annotation.repo.Provider, annotation.owner, annotation.name, annotation.repo.DefaultBranch, annotation.targetRef.Name)
+	gateConfig, err := a.repoConfigLoader.LoadGateConfig(ctx, annotation.repo.Provider, annotation.owner, annotation.name, annotation.repo.DefaultBranch, annotation.targetRef.Name)
 	if err != nil {
 		a.log.Warn().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("load repo config for gatePublisher, falling back to DB gates")
 		return nil
 	}
-	return weaknessGate
+	return gateConfig
 }
 
 func (a *GatePublisher) loadEnforcementMode(ctx context.Context, annotation *gateContext) string {

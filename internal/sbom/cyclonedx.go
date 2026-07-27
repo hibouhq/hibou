@@ -12,6 +12,7 @@ type ParsedComponent struct {
 	Name      string
 	Version   string
 	Ecosystem string
+	Licenses  []string
 	BomRefs   []string
 }
 
@@ -34,7 +35,39 @@ type cycloneDXComponent struct {
 	Version    string               `json:"version"`
 	PURL       string               `json:"purl"`
 	BomRef     string               `json:"bom-ref"`
+	Licenses   []cycloneDXLicense   `json:"licenses"`
 	Components []cycloneDXComponent `json:"components"`
+}
+
+type cycloneDXLicense struct {
+	Expression string `json:"expression"`
+	License    struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"license"`
+}
+
+func componentLicenses(entries []cycloneDXLicense) []string {
+	out := make([]string, 0, len(entries))
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		value := strings.TrimSpace(entry.License.ID)
+		if value == "" {
+			value = strings.TrimSpace(entry.Expression)
+		}
+		if value == "" {
+			value = strings.TrimSpace(entry.License.Name)
+		}
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 type cycloneDXDependency struct {
@@ -129,6 +162,7 @@ func collectCycloneDXComponent(component cycloneDXComponent, seen map[string]int
 					Name:      name,
 					Version:   version,
 					Ecosystem: ecosystem,
+					Licenses:  componentLicenses(component.Licenses),
 					BomRefs:   nil,
 				})
 				appendComponentBomRef(parsed, len(parsed.Components)-1, bomRef)

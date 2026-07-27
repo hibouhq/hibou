@@ -85,6 +85,9 @@ func (m *mockNotifyStore) GetRefByID(context.Context, uuid.UUID) (*store.Ref, er
 func (m *mockNotifyStore) GetRepositoryByID(context.Context, uuid.UUID) (*store.Repository, error) {
 	return m.repo, nil
 }
+func (m *mockNotifyStore) GetOrganizationByID(context.Context, uuid.UUID) (*store.Organization, error) {
+	return &store.Organization{Provider: "github", Slug: "acme"}, nil
+}
 func (m *mockNotifyStore) ListOrgMembers(context.Context, uuid.UUID, int, int) ([]store.OrgMember, int, error) {
 	return m.members, len(m.members), nil
 }
@@ -94,7 +97,7 @@ func TestHandleScanCompletedCreatesNotifications(t *testing.T) {
 	store := &mockNotifyStore{
 		snapshot: &store.Snapshot{ID: uuid.New(), RefID: uuid.New()},
 		ref:      &store.Ref{ID: uuid.New(), RepoID: uuid.New()},
-		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api"},
+		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api", Slug: "api"},
 		members:  []store.OrgMember{{UserID: userID}},
 	}
 	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())
@@ -108,6 +111,12 @@ func TestHandleScanCompletedCreatesNotifications(t *testing.T) {
 	if store.notifications[0].UserID != userID || store.notifications[0].Type != string(events.ScanCompleted) {
 		t.Fatalf("unexpected notification: %#v", store.notifications[0])
 	}
+	// The link must be a real SPA route (org-scoped, slug-based) deep-linking
+	// to the tab where the event is visible; the old /repos/{uuid} shape
+	// matched nothing and clicks were silent no-ops.
+	if want := "/orgs/github/acme/repos/" + store.repo.Slug + "/dependencies"; store.notifications[0].Link != want {
+		t.Fatalf("link = %q, want %q", store.notifications[0].Link, want)
+	}
 }
 
 func TestHandleVulnDiscoveredCreatesCriticalNotification(t *testing.T) {
@@ -115,7 +124,7 @@ func TestHandleVulnDiscoveredCreatesCriticalNotification(t *testing.T) {
 	store := &mockNotifyStore{
 		snapshot: &store.Snapshot{ID: uuid.New(), RefID: uuid.New()},
 		ref:      &store.Ref{ID: uuid.New(), RepoID: uuid.New()},
-		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api"},
+		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api", Slug: "api"},
 		members:  []store.OrgMember{{UserID: userID}},
 	}
 	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())

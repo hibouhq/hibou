@@ -137,7 +137,7 @@ func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Reque
 	return org, repo, user, true
 }
 
-func (s *Server) resolveRepoWeaknessGate(ctx context.Context, providerID, defaultBranch, candidatesA, candidatesB, candidatesC string, targetSnapshotID uuid.UUID) *delta.WeaknessGate {
+func (s *Server) resolveRepoGateConfig(ctx context.Context, providerID, defaultBranch, candidatesA, candidatesB, candidatesC string, targetSnapshotID uuid.UUID) *delta.GateConfig {
 	if s.repoConfigLoader == nil {
 		return nil
 	}
@@ -161,30 +161,53 @@ func (s *Server) resolveRepoWeaknessGate(ctx context.Context, providerID, defaul
 		return nil
 	}
 
-	return matchedWeaknessGate(cfg, targetRef.Name)
+	return matchedGateConfig(cfg, targetRef.Name)
 }
 
-func matchedWeaknessGate(cfg *repoconfig.RepoConfig, targetBranch string) *delta.WeaknessGate {
+func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.GateConfig {
 	if cfg == nil {
 		return nil
 	}
 	gate := cfg.MatchGate(targetBranch)
-	if gate == nil || gate.Weaknesses == nil {
+	if gate == nil {
 		return nil
 	}
-	return &delta.WeaknessGate{
-		Enabled:     gate.Weaknesses.Enabled,
-		MaxCritical: gate.Weaknesses.MaxCritical,
-		MaxHigh:     gate.Weaknesses.MaxHigh,
-		MaxMedium:   gate.Weaknesses.MaxMedium,
+	out := &delta.GateConfig{}
+	if gate.Weaknesses != nil {
+		out.Weakness = &delta.WeaknessGate{
+			Enabled:     gate.Weaknesses.Enabled,
+			MaxCritical: gate.Weaknesses.MaxCritical,
+			MaxHigh:     gate.Weaknesses.MaxHigh,
+			MaxMedium:   gate.Weaknesses.MaxMedium,
+		}
 	}
+	if gate.Vulnerabilities != nil {
+		out.Vulnerabilities = &delta.VulnerabilityGate{
+			MaxCritical: gate.Vulnerabilities.MaxCritical,
+			MaxHigh:     gate.Vulnerabilities.MaxHigh,
+			MaxMedium:   gate.Vulnerabilities.MaxMedium,
+			MaxNewTotal: gate.Vulnerabilities.MaxNewTotal,
+		}
+	}
+	if gate.Licenses != nil {
+		out.Licenses = &delta.LicenseGate{
+			DenyCategories: gate.Licenses.DenyCategories,
+			Deny:           gate.Licenses.Deny,
+			Allow:          gate.Licenses.Allow,
+			DenyUnknown:    gate.Licenses.DenyUnknownValue(),
+		}
+	}
+	if !out.Configured() {
+		return nil
+	}
+	return out
 }
 
 type repoConfigGateLoader struct {
 	loader *repoconfig.Loader
 }
 
-func (l repoConfigGateLoader) LoadWeaknessGate(ctx context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.WeaknessGate, error) {
+func (l repoConfigGateLoader) LoadGateConfig(ctx context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.GateConfig, error) {
 	if l.loader == nil {
 		return nil, nil
 	}
@@ -192,7 +215,7 @@ func (l repoConfigGateLoader) LoadWeaknessGate(ctx context.Context, providerID, 
 	if err != nil {
 		return nil, err
 	}
-	return matchedWeaknessGate(cfg, targetBranch), nil
+	return matchedGateConfig(cfg, targetBranch), nil
 }
 
 // LoadEnforcement returns the enforcement mode (advisory|blocking) of the gate

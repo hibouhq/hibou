@@ -27,30 +27,47 @@ func IsDistroEcosystem(ecosystem string) bool {
 	return false
 }
 
-// FromPurlQualifiers extracts (family, release) from a purl's raw qualifier
-// string ("arch=x86_64&distro=alpine-3.18.4"). Trivy sometimes emits the bare
-// version ("distro=3.18.4"); the family is then unknown and left empty.
-func FromPurlQualifiers(qualifiers string) (string, string) {
+// FromPurl extracts (family, release version) from an OS-package purl.
+//
+// The family is the purl namespace (pkg:apk/alpine/… → "alpine",
+// pkg:rpm/redhat/… → "redhat"), which every distro purl carries. The release
+// version is the distro qualifier's value, minus any family prefix — Trivy
+// emits "distro=alpine-3.18.4" for some ecosystems and a bare "distro=3.9.6"
+// for others, so the namespace is the only reliable family source.
+func FromPurl(purl string) (string, string) {
+	head, qualifiers, _ := strings.Cut(purl, "?")
+	if idx := strings.Index(qualifiers, "#"); idx >= 0 {
+		qualifiers = qualifiers[:idx]
+	}
+
+	family := purlNamespace(head)
+	release := ""
 	for _, pair := range strings.Split(qualifiers, "&") {
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok || key != "distro" || value == "" {
 			continue
 		}
-		return splitDistro(value)
+		qualifierFamily, version := splitDistro(value)
+		release = version
+		if family == "" {
+			family = qualifierFamily
+		}
+		break
 	}
-	return "", ""
+	return family, release
 }
 
-// FromPurl extracts (family, release) from a full purl string.
-func FromPurl(purl string) (string, string) {
-	_, after, ok := strings.Cut(purl, "?")
-	if !ok {
-		return "", ""
+// purlNamespace returns the namespace segment of "pkg:type/namespace/name@ver".
+func purlNamespace(head string) string {
+	rest := strings.TrimPrefix(strings.TrimSpace(head), "pkg:")
+	if at := strings.Index(rest, "@"); at >= 0 {
+		rest = rest[:at]
 	}
-	if idx := strings.Index(after, "#"); idx >= 0 {
-		after = after[:idx]
+	segments := strings.Split(rest, "/")
+	if len(segments) < 3 {
+		return ""
 	}
-	return FromPurlQualifiers(after)
+	return strings.ToLower(strings.TrimSpace(segments[1]))
 }
 
 // splitDistro parses "alpine-3.18.4" / "debian-12" / "redhat-9.4" / "3.18.4".

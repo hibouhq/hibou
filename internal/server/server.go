@@ -227,7 +227,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 		})
 	}
 	s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, s.queries, s.bus, log, cfg.RetentionPolicy, cfg.UploadWindow)
-	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, log,
+	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, cfg.BaseURL, log,
 		&notify.SlackSender{},
 		&notify.TeamsSender{},
 		&notify.DiscordSender{},
@@ -519,6 +519,8 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/vulnerabilities/facets", s.handleGetRefFindingFacets)
 						r.Get("/{repoSlug}/vulnerabilities/rules", s.handleGetRefRules)
+						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/acceptance", s.handleSetFindingAcceptance)
+						r.Get("/{repoSlug}/finding-acceptances", s.handleListFindingAcceptances)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)

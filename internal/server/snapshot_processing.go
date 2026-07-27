@@ -435,7 +435,7 @@ func (s *Server) ingestCycloneDXSBOMArtifact(ctx context.Context, queries *store
 	}
 	componentIDsByBomRef := make(map[string]uuid.UUID, len(bomRefIndex))
 	for _, component := range components {
-		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem)
+		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem, component.Licenses)
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}
@@ -461,7 +461,7 @@ func (s *Server) ingestSPDXSBOMArtifact(ctx context.Context, queries *store.Quer
 		return fmt.Errorf("parse sbom artifact %s: %w", artifact.artifact.ID, err)
 	}
 	for _, component := range components {
-		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem)
+		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem, component.Licenses)
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}

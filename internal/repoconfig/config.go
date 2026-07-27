@@ -21,9 +21,11 @@ type RepoConfig struct {
 }
 
 type QualityGate struct {
-	Branches   []string            `yaml:"branches" json:"branches"`
-	Weaknesses *WeaknessThresholds `yaml:"weaknesses,omitempty" json:"weaknesses,omitempty"`
-	Coverage   *CoverageThresholds `yaml:"coverage,omitempty" json:"coverage,omitempty"`
+	Branches        []string                 `yaml:"branches" json:"branches"`
+	Weaknesses      *WeaknessThresholds      `yaml:"weaknesses,omitempty" json:"weaknesses,omitempty"`
+	Vulnerabilities *VulnerabilityThresholds `yaml:"vulnerabilities,omitempty" json:"vulnerabilities,omitempty"`
+	Licenses        *LicensePolicy           `yaml:"licenses,omitempty" json:"licenses,omitempty"`
+	Coverage        *CoverageThresholds      `yaml:"coverage,omitempty" json:"coverage,omitempty"`
 	// Enforcement controls whether a failing gate blocks the PR. "advisory"
 	// (default) publishes an informational, non-blocking forge check — hibou never
 	// breaks the build; "blocking" posts a real failure so a required check blocks.
@@ -55,6 +57,35 @@ type WeaknessThresholds struct {
 	MaxCritical *int  `yaml:"max_critical,omitempty" json:"max_critical,omitempty"`
 	MaxHigh     *int  `yaml:"max_high,omitempty" json:"max_high,omitempty"`
 	MaxMedium   *int  `yaml:"max_medium,omitempty" json:"max_medium,omitempty"`
+}
+
+// VulnerabilityThresholds caps NEW dependency vulnerabilities introduced by a
+// PR (evaluated against the delta, not the whole snapshot).
+type VulnerabilityThresholds struct {
+	MaxCritical *int `yaml:"max_critical,omitempty" json:"max_critical,omitempty"`
+	MaxHigh     *int `yaml:"max_high,omitempty" json:"max_high,omitempty"`
+	MaxMedium   *int `yaml:"max_medium,omitempty" json:"max_medium,omitempty"`
+	// MaxNewTotal caps new vulnerabilities of any severity.
+	MaxNewTotal *int `yaml:"max_new_total,omitempty" json:"max_new_total,omitempty"`
+}
+
+// LicensePolicy denies license categories and/or SPDX id globs; explicit
+// allow entries override everything.
+type LicensePolicy struct {
+	DenyCategories []string `yaml:"deny_categories,omitempty" json:"deny_categories,omitempty"`
+	Deny           []string `yaml:"deny,omitempty" json:"deny,omitempty"`
+	Allow          []string `yaml:"allow,omitempty" json:"allow,omitempty"`
+	// DenyUnknown defaults to TRUE: an unknown/missing license is an
+	// unreviewed legal risk. Set false explicitly to allow unknowns through.
+	DenyUnknown *bool `yaml:"deny_unknown,omitempty" json:"deny_unknown,omitempty"`
+}
+
+// DenyUnknownValue applies the fail-closed default.
+func (p *LicensePolicy) DenyUnknownValue() bool {
+	if p == nil || p.DenyUnknown == nil {
+		return true
+	}
+	return *p.DenyUnknown
 }
 
 type CoverageConfig struct {
@@ -225,7 +256,44 @@ func validateQualityGate(gate *QualityGate, index int) error {
 	if err := validateWeaknessThresholds(gate.Weaknesses, index); err != nil {
 		return err
 	}
+	if err := validateVulnerabilityThresholds(gate.Vulnerabilities, index); err != nil {
+		return err
+	}
+	if err := validateLicensePolicy(gate.Licenses, index); err != nil {
+		return err
+	}
 	return validateCoverageThresholds(gate.Coverage, index)
+}
+
+func validateVulnerabilityThresholds(thresholds *VulnerabilityThresholds, index int) error {
+	if thresholds == nil {
+		return nil
+	}
+	for fieldName, value := range map[string]*int{
+		"max_critical":  thresholds.MaxCritical,
+		"max_high":      thresholds.MaxHigh,
+		"max_medium":    thresholds.MaxMedium,
+		"max_new_total": thresholds.MaxNewTotal,
+	} {
+		if value != nil && *value < 0 {
+			return fmt.Errorf("quality_gates[%d].vulnerabilities.%s must be >= 0", index, fieldName)
+		}
+	}
+	return nil
+}
+
+func validateLicensePolicy(policy *LicensePolicy, index int) error {
+	if policy == nil {
+		return nil
+	}
+	for _, category := range policy.DenyCategories {
+		switch strings.ToLower(strings.TrimSpace(category)) {
+		case "permissive", "weak-copyleft", "copyleft", "network-copyleft", "source-available", "public-domain", "unknown":
+		default:
+			return fmt.Errorf("quality_gates[%d].licenses.deny_categories: unknown category %q", index, category)
+		}
+	}
+	return nil
 }
 
 func validateGateEnforcement(gate *QualityGate, index int) error {

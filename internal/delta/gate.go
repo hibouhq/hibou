@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -25,6 +26,37 @@ type GateStore interface {
 	ListOrgWideQualityGates(ctx context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error)
 }
 
+// GateConfig carries every file-managed gate section matched for the PR's
+// target branch, plus the head snapshot whose components license checks run
+// against. Sections are nil when unconfigured.
+type GateConfig struct {
+	Weakness        *WeaknessGate
+	Vulnerabilities *VulnerabilityGate
+	Licenses        *LicenseGate
+	HeadSnapshotID  uuid.UUID
+}
+
+// Configured reports whether any file-managed section carries thresholds.
+func (c *GateConfig) Configured() bool {
+	return c != nil && (c.Weakness != nil || c.Vulnerabilities != nil || c.Licenses != nil)
+}
+
+// VulnerabilityGate caps NEW dependency vulnerabilities introduced by the PR.
+type VulnerabilityGate struct {
+	MaxCritical *int
+	MaxHigh     *int
+	MaxMedium   *int
+	MaxNewTotal *int
+}
+
+// LicenseGate is the matched license policy (see internal/license).
+type LicenseGate struct {
+	DenyCategories []string
+	Deny           []string
+	Allow          []string
+	DenyUnknown    bool
+}
+
 type WeaknessGate struct {
 	Enabled     *bool
 	MaxCritical *int
@@ -37,8 +69,9 @@ func (s *Service) EvaluateGates(ctx context.Context, repoID, orgID uuid.UUID, de
 	return s.EvaluateGatesWithConfig(ctx, repoID, orgID, delta, nil)
 }
 
-// EvaluateGatesWithConfig checks DB-managed vulnerability gates and optional file-managed weakness gates.
-func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uuid.UUID, delta *DeltaResult, weaknessGate *WeaknessGate) (*GateResult, error) {
+// EvaluateGatesWithConfig checks DB-managed vulnerability gates plus the
+// file-managed weakness / new-vulnerability / license sections.
+func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uuid.UUID, delta *DeltaResult, cfg *GateConfig) (*GateResult, error) {
 	if delta == nil {
 		delta = &DeltaResult{}
 	}
@@ -50,12 +83,106 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	if err != nil {
 		return nil, err
 	}
+	var weaknessGate *WeaknessGate
+	if cfg != nil {
+		weaknessGate = cfg.Weakness
+	}
 	reasons := append(evaluateStoredVulnerabilityGates(gates, delta.New), evaluateConfiguredWeaknessGates(gates, delta.New, weaknessGate)...)
+	if cfg != nil && cfg.Vulnerabilities != nil {
+		reasons = append(reasons, evaluateNewVulnerabilityGate(delta.New, cfg.Vulnerabilities)...)
+	}
+	if cfg != nil && cfg.Licenses != nil {
+		licenseReasons, licenseErr := s.evaluateLicenseGate(ctx, cfg.HeadSnapshotID, cfg.Licenses)
+		if licenseErr != nil {
+			return nil, licenseErr
+		}
+		reasons = append(reasons, licenseReasons...)
+	}
 	return &GateResult{
 		Passed:     len(reasons) == 0,
-		Configured: len(gates) > 0 || weaknessGate != nil,
+		Configured: len(gates) > 0 || cfg.Configured(),
 		Reasons:    reasons,
 	}, nil
+}
+
+// evaluateNewVulnerabilityGate caps the vulnerabilities a PR introduces,
+// counting only dependency-type rows (weakness gates own SAST findings).
+func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *VulnerabilityGate) []string {
+	counts := map[store.SeverityLevel]int{}
+	total := 0
+	for _, vuln := range newVulns {
+		if !strings.EqualFold(strings.TrimSpace(vuln.Type), "dependency") {
+			continue
+		}
+		counts[vuln.Severity]++
+		total++
+	}
+	reasons := make([]string, 0, 4)
+	check := func(threshold *int, count int, label string) {
+		if threshold != nil && count > *threshold {
+			reasons = append(reasons, fmt.Sprintf("%d new %s dependency vulnerabilities exceed the maximum %d", count, label, *threshold))
+		}
+	}
+	check(gate.MaxCritical, counts[store.SeverityLevelCritical], "critical")
+	check(gate.MaxHigh, counts[store.SeverityLevelHigh], "high")
+	check(gate.MaxMedium, counts[store.SeverityLevelMedium], "medium")
+	if gate.MaxNewTotal != nil && total > *gate.MaxNewTotal {
+		reasons = append(reasons, fmt.Sprintf("%d new dependency vulnerabilities exceed the maximum %d", total, *gate.MaxNewTotal))
+	}
+	return reasons
+}
+
+// componentLister is satisfied by the store when license gating is available.
+type componentLister interface {
+	ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Component, error)
+}
+
+// evaluateLicenseGate checks every head-snapshot component against the license
+// policy. Capped to 20 reasons so a policy rollout over a large tree cannot
+// produce a megabyte check run; the count is included when truncated.
+func (s *Service) evaluateLicenseGate(ctx context.Context, headSnapshotID uuid.UUID, gate *LicenseGate) ([]string, error) {
+	if headSnapshotID == uuid.Nil {
+		return nil, nil
+	}
+	lister, ok := s.store.(componentLister)
+	if !ok {
+		return nil, nil
+	}
+	components, err := lister.ListComponentsBySnapshot(ctx, headSnapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("list components for license gate: %w", err)
+	}
+	policy := license.Policy{
+		DenyCategories: gate.DenyCategories,
+		Deny:           gate.Deny,
+		Allow:          gate.Allow,
+		DenyUnknown:    gate.DenyUnknown,
+	}
+	if policy.Empty() {
+		return nil, nil
+	}
+	const maxReasons = 20
+	reasons := make([]string, 0, maxReasons)
+	violations := 0
+	for _, component := range components {
+		violation := policy.Evaluate(component.Licenses)
+		if violation == nil {
+			continue
+		}
+		violations++
+		if len(reasons) >= maxReasons {
+			continue
+		}
+		licenseName := violation.License
+		if licenseName == "" {
+			licenseName = "no license metadata"
+		}
+		reasons = append(reasons, fmt.Sprintf("%s@%s introduces denied license %s (category %s)", component.Name, component.Version, licenseName, violation.Category))
+	}
+	if violations > len(reasons) {
+		reasons = append(reasons, fmt.Sprintf("… and %d more license violations", violations-len(reasons)))
+	}
+	return reasons, nil
 }
 
 func (s *Service) loadQualityGates(ctx context.Context, repoID, orgID uuid.UUID) ([]dbgen.QualityGate, error) {

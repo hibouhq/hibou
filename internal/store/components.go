@@ -8,13 +8,16 @@ import (
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
-func (q *Queries) UpsertComponent(ctx context.Context, purl, name, version, ecosystem string) (dbgen.Component, error) {
+func (q *Queries) UpsertComponent(ctx context.Context, purl, name, version, ecosystem string, licenses []string) (dbgen.Component, error) {
+	if licenses == nil {
+		licenses = []string{}
+	}
 	return q.db.UpsertComponent(ctx, dbgen.UpsertComponentParams{
 		Purl:      purl,
 		Name:      name,
 		Version:   version,
 		Ecosystem: ecosystem,
-		Licenses:  []string{},
+		Licenses:  licenses,
 	})
 }
 

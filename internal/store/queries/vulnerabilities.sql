@@ -195,3 +195,21 @@ FROM vulnerabilities
 WHERE org_id = $1 AND status != 'resolved'
 GROUP BY scanner_name, type
 ORDER BY count DESC;
+
+-- name: UpsertFindingAcceptance :one
+INSERT INTO finding_acceptances (repo_id, fingerprint, status, reason, accepted_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (repo_id, fingerprint) DO UPDATE SET
+	status = EXCLUDED.status,
+	reason = EXCLUDED.reason,
+	accepted_by = EXCLUDED.accepted_by,
+	expires_at = EXCLUDED.expires_at,
+	created_at = now()
+RETURNING *;
+
+-- name: DeleteFindingAcceptance :execrows
+DELETE FROM finding_acceptances WHERE repo_id = $1 AND fingerprint = $2;
+
+-- name: ListActiveFindingAcceptancesByRepo :many
+SELECT * FROM finding_acceptances
+WHERE repo_id = $1 AND (expires_at IS NULL OR expires_at > now());

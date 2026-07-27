@@ -3,7 +3,8 @@ INSERT INTO components (purl, name, version, ecosystem, licenses)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (purl, version) DO UPDATE SET
 	name = EXCLUDED.name,
-	ecosystem = EXCLUDED.ecosystem
+	ecosystem = EXCLUDED.ecosystem,
+	licenses = CASE WHEN cardinality(EXCLUDED.licenses) > 0 THEN EXCLUDED.licenses ELSE components.licenses END
 RETURNING *;
 
 -- name: AttachComponentToSnapshot :exec

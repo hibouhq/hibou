@@ -95,14 +95,20 @@ func (m *mockForgeProvider) ListUserAccess(context.Context, *oauth2.Token) (User
 	return UserAccess{}, nil
 }
 
-func (m *mockRepoConfigLoader) LoadWeaknessGate(_ context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.WeaknessGate, error) {
+func (m *mockRepoConfigLoader) LoadGateConfig(_ context.Context, providerID, owner, repo, defaultBranch, targetBranch string) (*delta.GateConfig, error) {
 	m.loadWeaknessCalls++
 	m.providerID = providerID
 	m.owner = owner
 	m.repo = repo
 	m.defaultBranch = defaultBranch
 	m.targetBranch = targetBranch
-	return m.weaknessGate, m.err
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.weaknessGate == nil {
+		return nil, nil
+	}
+	return &delta.GateConfig{Weakness: m.weaknessGate}, nil
 }
 
 func (m *mockRepoConfigLoader) LoadEnforcement(_ context.Context, _, _, _, _, _ string) (string, error) {

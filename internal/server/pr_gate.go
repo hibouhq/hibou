@@ -14,6 +14,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -105,8 +106,12 @@ func (s *Server) computePRGate(ctx context.Context, orgID uuid.UUID, repo *store
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("compute PR gate delta")
 		return pending
 	}
-	weaknessGate := s.resolveRepoWeaknessGate(ctx, repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshot.ID)
-	gate, err := s.deltaSvc.EvaluateGatesWithConfig(ctx, repo.ID, orgID, deltaResult, weaknessGate)
+	gateConfig := s.resolveRepoGateConfig(ctx, repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshot.ID)
+	if gateConfig == nil {
+		gateConfig = &delta.GateConfig{}
+	}
+	gateConfig.HeadSnapshotID = prSnapshot.ID
+	gate, err := s.deltaSvc.EvaluateGatesWithConfig(ctx, repo.ID, orgID, deltaResult, gateConfig)
 	if err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("evaluate PR gate")
 		return pending

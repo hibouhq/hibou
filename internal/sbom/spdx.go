@@ -14,10 +14,12 @@ type spdxDocument struct {
 }
 
 type spdxPackage struct {
-	SPDXID       string            `json:"SPDXID"`
-	Name         string            `json:"name"`
-	VersionInfo  string            `json:"versionInfo"`
-	ExternalRefs []spdxExternalRef `json:"externalRefs"`
+	SPDXID           string            `json:"SPDXID"`
+	Name             string            `json:"name"`
+	VersionInfo      string            `json:"versionInfo"`
+	LicenseConcluded string            `json:"licenseConcluded"`
+	LicenseDeclared  string            `json:"licenseDeclared"`
+	ExternalRefs     []spdxExternalRef `json:"externalRefs"`
 }
 
 type spdxExternalRef struct {
@@ -54,6 +56,7 @@ func ParseSPDXJSON(data []byte) ([]ParsedComponent, error) {
 			Name:      name,
 			Version:   version,
 			Ecosystem: ecosystem,
+			Licenses:  spdxLicenses(pkg),
 		})
 	}
 
@@ -87,4 +90,28 @@ func spdxPackagePURL(refs []spdxExternalRef) string {
 		}
 	}
 	return ""
+}
+
+// spdxLicenses extracts usable license identifiers; SPDX's NOASSERTION/NONE
+// placeholders mean "unknown" and must not masquerade as licenses.
+func spdxLicenses(pkg spdxPackage) []string {
+	out := make([]string, 0, 2)
+	for _, candidate := range []string{pkg.LicenseConcluded, pkg.LicenseDeclared} {
+		value := strings.TrimSpace(candidate)
+		upper := strings.ToUpper(value)
+		if value == "" || upper == "NOASSERTION" || upper == "NONE" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range out {
+			if existing == value {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, value)
+		}
+	}
+	return out
 }

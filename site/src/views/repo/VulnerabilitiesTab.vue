@@ -55,6 +55,7 @@
                 <th class="px-3 py-2 font-medium">
                   Detected
                 </th>
+                <th class="px-3 py-2 font-medium" />
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
@@ -96,12 +97,40 @@
                   {{ vulnerability.scanner_name || 'n/a' }}
                 </td>
                 <td class="px-3 py-2.5">
-                  <span :class="statusBadgeClass(vulnerability.status)">
+                  <span
+                    v-if="acceptanceFor(vulnerability)"
+                    class="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-300"
+                    :title="acceptanceFor(vulnerability)!.reason"
+                  >{{ acceptanceFor(vulnerability)!.status === 'false_positive' ? 'false positive' : 'accepted' }}</span>
+                  <span
+                    v-else
+                    :class="statusBadgeClass(vulnerability.status)"
+                  >
                     {{ vulnerability.status }}
                   </span>
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   {{ formatDetected(vulnerability.detected_at) }}
+                </td>
+                <td class="px-3 py-2.5">
+                  <button
+                    v-if="acceptanceFor(vulnerability)"
+                    type="button"
+                    class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    title="Reopen: the finding fails the gate again"
+                    @click.stop="unacceptFinding(vulnerability)"
+                  >
+                    Unaccept
+                  </button>
+                  <button
+                    v-else
+                    type="button"
+                    class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    title="Accept with a reason: stops failing the gate, stays visible"
+                    @click.stop="openAcceptDialog(vulnerability)"
+                  >
+                    Accept…
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -138,7 +167,7 @@
 import { computed, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { api, type ScanRule, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { api, type FindingAcceptance, type ScanRule, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import LinkedText from '@/components/LinkedText.vue'
 
@@ -150,6 +179,9 @@ const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 
 const vulnerabilities = ref<Vulnerability[]>([])
+const acceptances = ref<Map<string, FindingAcceptance>>(new Map())
+
+watch([provider, slug, repoSlug], () => { void loadAcceptances() }, { immediate: true })
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected,confirmed' })
 const searchQuery = ref('')
@@ -507,6 +539,44 @@ function typeBadgeClass(type: string) {
   }
 
   return classes[type] || classes.generic
+}
+
+function acceptanceFor(vulnerability: Vulnerability): FindingAcceptance | undefined {
+  return acceptances.value.get(vulnerability.fingerprint)
+}
+
+async function loadAcceptances() {
+  try {
+    const res = await api.listFindingAcceptances(provider.value, slug.value, repoSlug.value)
+    acceptances.value = new Map((res.data ?? []).map((a) => [a.fingerprint, a]))
+  } catch {
+    acceptances.value = new Map()
+  }
+}
+
+// Sonar-style accept: reason required; the gate recomputes server-side
+// immediately, no CI re-run.
+async function openAcceptDialog(vulnerability: Vulnerability) {
+  const reason = window.prompt('Reason for accepting this finding (required):')
+  if (!reason || !reason.trim()) return
+  try {
+    await api.setFindingAcceptance(provider.value, slug.value, repoSlug.value, vulnerability.id, {
+      status: 'accepted',
+      reason: reason.trim(),
+    })
+    await loadAcceptances()
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : 'Failed to accept finding')
+  }
+}
+
+async function unacceptFinding(vulnerability: Vulnerability) {
+  try {
+    await api.setFindingAcceptance(provider.value, slug.value, repoSlug.value, vulnerability.id, { status: 'open' })
+    await loadAcceptances()
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : 'Failed to reopen finding')
+  }
 }
 
 function statusBadgeClass(status: string) {

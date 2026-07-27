@@ -541,9 +541,12 @@ func buildPackageQueries(components []dbgen.Component) []provider.PackageQuery {
 			continue
 		}
 		seen[key] = struct{}{}
+		// Normalize to "family-version" (family always present, from the purl
+		// namespace) so every provider parses the distro identically regardless
+		// of whether Trivy emitted the family in the qualifier.
 		distroQualifier := ""
-		if family, release := distro.FromPurl(component.Purl); release != "" {
-			distroQualifier = strings.TrimPrefix(family+"-"+release, "-")
+		if family, release := distro.FromPurl(component.Purl); family != "" && release != "" {
+			distroQualifier = family + "-" + release
 		}
 		queries = append(queries, provider.PackageQuery{
 			Ecosystem: component.Ecosystem,

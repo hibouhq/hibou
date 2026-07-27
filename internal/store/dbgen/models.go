@@ -996,6 +996,17 @@ type Deployment struct {
 	CreatedAt        time.Time        `json:"created_at"`
 }
 
+type FindingAcceptance struct {
+	ID          uuid.UUID     `json:"id"`
+	RepoID      uuid.UUID     `json:"repo_id"`
+	Fingerprint string        `json:"fingerprint"`
+	Status      string        `json:"status"`
+	Reason      string        `json:"reason"`
+	AcceptedBy  uuid.NullUUID `json:"accepted_by"`
+	ExpiresAt   sql.NullTime  `json:"expires_at"`
+	CreatedAt   time.Time     `json:"created_at"`
+}
+
 type ForgeOrgAdmin struct {
 	ID             uuid.UUID     `json:"id"`
 	Provider       string        `json:"provider"`

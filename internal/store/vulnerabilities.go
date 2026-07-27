@@ -362,10 +362,10 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 		return strings.Join(conds, " AND "), args
 	}
 
-	facetMap := func(exclude, column, extra string) (map[string]int, error) {
+	facetMap := func(exclude, column, extraWhere, extra string) (map[string]int, error) {
 		where, args := buildConds(exclude)
-		//nolint:gosec // G201: `column` is a constant identifier; all filter values use positional params.
-		query := fmt.Sprintf("SELECT %s::text AS k, COUNT(*)::bigint FROM vulnerabilities WHERE %s GROUP BY %s%s", column, where, column, extra)
+		//nolint:gosec // G201: `column`/`extraWhere` are constant fragments; all filter values use positional params.
+		query := fmt.Sprintf("SELECT %s::text AS k, COUNT(*)::bigint FROM vulnerabilities WHERE %s%s GROUP BY %s%s", column, where, extraWhere, column, extra)
 		rows, err := q.sqlDB.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, err
@@ -389,20 +389,23 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 
 	facets := &VulnerabilityFacets{}
 	var err error
-	if facets.Type, err = facetMap("type", "type", ""); err != nil {
+	if facets.Type, err = facetMap("type", "type", "", ""); err != nil {
 		return nil, err
 	}
-	if facets.Severity, err = facetMap("severity", "severity", ""); err != nil {
+	if facets.Severity, err = facetMap("severity", "severity", "", ""); err != nil {
 		return nil, err
 	}
-	if facets.Status, err = facetMap("status", "status", ""); err != nil {
+	if facets.Status, err = facetMap("status", "status", "", ""); err != nil {
 		return nil, err
 	}
-	if facets.Tool, err = facetMap("tool", "scanner_name", ""); err != nil {
+	if facets.Tool, err = facetMap("tool", "scanner_name", "", ""); err != nil {
 		return nil, err
 	}
-	// File paths are unbounded; cap to the busiest 100 so the payload stays small.
-	if facets.File, err = facetMap("file", "file_path", " ORDER BY COUNT(*) DESC LIMIT 100"); err != nil {
+	// File paths are unbounded; cap to the busiest 100 so the payload stays
+	// small. Dependency findings are excluded: their location is a package
+	// coordinate (gopkg.in/yaml.v2@v2.2.2), not a repository file, and offering
+	// those as file filters is nonsense.
+	if facets.File, err = facetMap("file", "file_path", " AND type <> 'dependency'", " ORDER BY COUNT(*) DESC LIMIT 100"); err != nil {
 		return nil, err
 	}
 	return facets, nil
@@ -675,4 +678,72 @@ func reachabilityPtrFromNull(value dbgen.NullReachability) *string {
 	}
 	v := string(value.Reachability)
 	return &v
+}
+
+// FindingAcceptance is an accept/false-positive decision on a finding, keyed
+// by fingerprint so it survives snapshot recreation.
+type FindingAcceptance struct {
+	ID          uuid.UUID  `json:"id"`
+	RepoID      uuid.UUID  `json:"repo_id"`
+	Fingerprint string     `json:"fingerprint"`
+	Status      string     `json:"status"`
+	Reason      string     `json:"reason"`
+	AcceptedBy  *uuid.UUID `json:"accepted_by,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+func findingAcceptanceFromRow(row dbgen.FindingAcceptance) FindingAcceptance {
+	out := FindingAcceptance{
+		ID:          row.ID,
+		RepoID:      row.RepoID,
+		Fingerprint: row.Fingerprint,
+		Status:      row.Status,
+		Reason:      row.Reason,
+		CreatedAt:   row.CreatedAt,
+	}
+	if row.AcceptedBy.Valid {
+		id := row.AcceptedBy.UUID
+		out.AcceptedBy = &id
+	}
+	if row.ExpiresAt.Valid {
+		expires := row.ExpiresAt.Time
+		out.ExpiresAt = &expires
+	}
+	return out
+}
+
+func (q *Queries) UpsertFindingAcceptance(ctx context.Context, repoID uuid.UUID, fingerprint, status, reason string, acceptedBy *uuid.UUID, expiresAt *time.Time) (FindingAcceptance, error) {
+	row, err := q.db.UpsertFindingAcceptance(ctx, dbgen.UpsertFindingAcceptanceParams{
+		RepoID:      repoID,
+		Fingerprint: fingerprint,
+		Status:      status,
+		Reason:      reason,
+		AcceptedBy:  nullUUIDFromPtr(acceptedBy),
+		ExpiresAt:   nullTimeFromPtr(expiresAt),
+	})
+	if err != nil {
+		return FindingAcceptance{}, err
+	}
+	return findingAcceptanceFromRow(row), nil
+}
+
+func (q *Queries) DeleteFindingAcceptance(ctx context.Context, repoID uuid.UUID, fingerprint string) (bool, error) {
+	affected, err := q.db.DeleteFindingAcceptance(ctx, dbgen.DeleteFindingAcceptanceParams{RepoID: repoID, Fingerprint: fingerprint})
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]FindingAcceptance, error) {
+	rows, err := q.db.ListActiveFindingAcceptancesByRepo(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FindingAcceptance, len(rows))
+	for i, row := range rows {
+		out[i] = findingAcceptanceFromRow(row)
+	}
+	return out, nil
 }

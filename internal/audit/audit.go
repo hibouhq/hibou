@@ -34,6 +34,7 @@ const (
 	ActionIntegrationUpdate = "integration.update"
 	ActionIntegrationDelete = "integration.delete"
 	ActionRepoEnrolled      = "repo.enrolled"
+	ActionFindingAcceptance = "finding.acceptance"
 	ActionRepoDetected      = "repo.detected"
 	ActionRepoArchived      = "repo.archived"
 	ActionRepoUnarchived    = "repo.unarchived"

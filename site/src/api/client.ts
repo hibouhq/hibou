@@ -337,6 +337,18 @@ export interface ComponentUpdate {
   head_version: string
   base_vuln_count: number
   head_vuln_count: number
+  licenses?: string[]
+}
+
+export interface FindingAcceptance {
+  id: string
+  repo_id: string
+  fingerprint: string
+  status: 'accepted' | 'false_positive'
+  reason: string
+  accepted_by?: string
+  expires_at?: string
+  created_at: string
 }
 
 export interface ComponentEntry {
@@ -345,6 +357,7 @@ export interface ComponentEntry {
   ecosystem: string
   purl: string
   vuln_count: number
+  licenses?: string[]
 }
 
 export interface ComponentGraphNode {
@@ -487,12 +500,14 @@ export interface CompareResult {
     snapshot_id: string
     commit_sha: string
     date: string
+    scan_status?: string
   }
   head: {
     ref_name: string
     snapshot_id: string
     commit_sha: string
     date: string
+    scan_status?: string
   }
   delta: DeltaResult
   component_diff: {
@@ -1223,6 +1238,19 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<ComponentWithVulns[]>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/components${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  setFindingAcceptance(provider: string, slug: string, repoSlug: string, vulnID: string, body: { status: string; reason?: string; expires_at?: string }) {
+    return this.request<ApiResponse<FindingAcceptance | { status: string }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/acceptance`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    )
+  }
+
+  listFindingAcceptances(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<FindingAcceptance[]>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/finding-acceptances`,
     )
   }
 

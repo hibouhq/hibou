@@ -68,24 +68,30 @@ type refSnapshotResponse struct {
 	SnapshotID uuid.UUID `json:"snapshot_id"`
 	CommitSHA  string    `json:"commit_sha"`
 	Date       time.Time `json:"date"`
+	// ScanStatus is the latest advisory scan's state for this snapshot
+	// (running|complete|failed|none) so the UI can say "scanning components…"
+	// instead of rendering zero vulnerabilities as a final answer.
+	ScanStatus string `json:"scan_status,omitempty"`
 }
 
 type componentEntryResponse struct {
-	Name      string `json:"name"`
-	Version   string `json:"version"`
-	Ecosystem string `json:"ecosystem"`
-	Purl      string `json:"purl"`
-	VulnCount int    `json:"vuln_count"`
+	Name      string   `json:"name"`
+	Version   string   `json:"version"`
+	Ecosystem string   `json:"ecosystem"`
+	Purl      string   `json:"purl"`
+	VulnCount int      `json:"vuln_count"`
+	Licenses  []string `json:"licenses"`
 }
 
 type componentUpdateResponse struct {
-	Name          string `json:"name"`
-	Ecosystem     string `json:"ecosystem"`
-	Purl          string `json:"purl"`
-	BaseVersion   string `json:"base_version"`
-	HeadVersion   string `json:"head_version"`
-	BaseVulnCount int    `json:"base_vuln_count"`
-	HeadVulnCount int    `json:"head_vuln_count"`
+	Name          string   `json:"name"`
+	Ecosystem     string   `json:"ecosystem"`
+	Purl          string   `json:"purl"`
+	BaseVersion   string   `json:"base_version"`
+	HeadVersion   string   `json:"head_version"`
+	BaseVulnCount int      `json:"base_vuln_count"`
+	HeadVulnCount int      `json:"head_vuln_count"`
+	Licenses      []string `json:"licenses"`
 }
 
 type componentDiffResponse struct {
@@ -772,6 +778,7 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 			SnapshotID: headSnapshot.ID,
 			CommitSHA:  headSnapshot.CommitSHA,
 			Date:       headSnapshot.CreatedAt,
+			ScanStatus: s.latestScanStatus(r.Context(), headSnapshot.ID),
 		},
 		Delta:         deltaResult,
 		ComponentDiff: componentDiff,
@@ -817,8 +824,12 @@ type comparePREnrichment struct {
 // line-level patch coverage. It writes an HTTP error and returns false only
 // when gate evaluation fails; all coverage enrichment degrades gracefully.
 func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comparePREnrichment, response *compareResultResponse) bool {
-	weaknessGate := s.resolveRepoWeaknessGate(r.Context(), in.repo.Provider, in.repo.DefaultBranch, in.repo.ProviderID, in.repo.Name, in.repo.Slug, in.baseSnapshot.ID)
-	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), in.repo.ID, in.org.ID, in.deltaResult, weaknessGate)
+	gateConfig := s.resolveRepoGateConfig(r.Context(), in.repo.Provider, in.repo.DefaultBranch, in.repo.ProviderID, in.repo.Name, in.repo.Slug, in.baseSnapshot.ID)
+	if gateConfig == nil {
+		gateConfig = &delta.GateConfig{}
+	}
+	gateConfig.HeadSnapshotID = in.headSnapshot.ID
+	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), in.repo.ID, in.org.ID, in.deltaResult, gateConfig)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
 		return false
@@ -852,6 +863,15 @@ func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comp
 		}
 	}
 	return true
+}
+
+// latestScanStatus reports the newest advisory scan's status for a snapshot.
+func (s *Server) latestScanStatus(ctx context.Context, snapshotID uuid.UUID) string {
+	scans, err := s.queries.ListScansBySnapshot(ctx, snapshotID)
+	if err != nil || len(scans) == 0 {
+		return "none"
+	}
+	return scans[0].Status
 }
 
 func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
@@ -1094,12 +1114,17 @@ func reverseSnapshots(snapshots []store.Snapshot) {
 
 func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithVulnsRow) componentDiffResponse {
 	toEntry := func(row store.ListComponentsBySnapshotWithVulnsRow) componentEntryResponse {
+		licenses := row.Licenses
+		if licenses == nil {
+			licenses = []string{}
+		}
 		return componentEntryResponse{
 			Name:      row.Name,
 			Version:   row.Version,
 			Ecosystem: row.Ecosystem,
 			Purl:      row.Purl,
 			VulnCount: int(row.VulnCount),
+			Licenses:  licenses,
 		}
 	}
 	baseByKey := make(map[string]componentEntryResponse, len(baseRows))
@@ -1139,6 +1164,7 @@ func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithV
 			HeadVersion:   head.Version,
 			BaseVulnCount: base.VulnCount,
 			HeadVulnCount: head.VulnCount,
+			Licenses:      head.Licenses,
 		})
 	}
 	for key, entry := range baseByKey {

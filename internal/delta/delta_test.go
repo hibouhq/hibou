@@ -315,7 +315,7 @@ func TestEvaluateGatesWithConfigOverridesDBWeaknessGates(t *testing.T) {
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
 		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelMedium}},
-	}, weaknessGate)
+	}, &GateConfig{Weakness: weaknessGate})
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestEvaluateGatesWithConfigCanDisableWeaknessGates(t *testing.T) {
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
 		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelMedium}},
-	}, weaknessGate)
+	}, &GateConfig{Weakness: weaknessGate})
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestEvaluateGatesWithConfigKeepsDBVulnerabilityGates(t *testing.T) {
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
 		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelCritical}},
-	}, weaknessGate)
+	}, &GateConfig{Weakness: weaknessGate})
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
 	}

@@ -84,12 +84,17 @@ func (s *Service) ComputeDelta(ctx context.Context, prSnapshotID, targetSnapshot
 	if err != nil {
 		return nil, err
 	}
+	filteredNewVulns, err = s.filterAcceptedNewVulnerabilities(ctx, prSnapshotID, filteredNewVulns)
+	if err != nil {
+		return nil, err
+	}
 	for fingerprint, vuln := range targetSet {
 		if _, ok := prSet[fingerprint]; ok {
 			continue
 		}
 		resolved = append(resolved, vuln)
 	}
+	filteredNewVulns, resolved = cancelIdentityPairs(filteredNewVulns, resolved)
 	// Always emit empty (not nil) slices so the JSON arrays are [] not null.
 	if filteredNewVulns == nil {
 		filteredNewVulns = []store.Vulnerability{}
@@ -99,6 +104,54 @@ func (s *Service) ComputeDelta(ctx context.Context, prSnapshotID, targetSnapshot
 	result.Unchanged = unchanged
 
 	return result, nil
+}
+
+// acceptanceStore is satisfied by the real store; acceptance filtering
+// degrades to a no-op on test stores that don't implement it.
+type acceptanceStore interface {
+	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
+	GetRefByID(ctx context.Context, id uuid.UUID) (*store.Ref, error)
+	ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]store.FindingAcceptance, error)
+}
+
+// filterAcceptedNewVulnerabilities drops findings the repo has accepted (or
+// marked false positive), keyed by fingerprint. Sonar-style: accepted issues
+// stop failing the gate but remain queryable; unaccepting resurfaces them.
+func (s *Service) filterAcceptedNewVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulns []store.Vulnerability) ([]store.Vulnerability, error) {
+	if len(vulns) == 0 {
+		return vulns, nil
+	}
+	scopeStore, ok := s.store.(acceptanceStore)
+	if !ok {
+		return vulns, nil
+	}
+	snapshot, err := scopeStore.GetSnapshotByID(ctx, snapshotID)
+	if err != nil || snapshot == nil {
+		return vulns, err
+	}
+	ref, err := scopeStore.GetRefByID(ctx, snapshot.RefID)
+	if err != nil || ref == nil {
+		return vulns, err
+	}
+	acceptances, err := scopeStore.ListActiveFindingAcceptancesByRepo(ctx, ref.RepoID)
+	if err != nil {
+		return nil, fmt.Errorf("list finding acceptances: %w", err)
+	}
+	if len(acceptances) == 0 {
+		return vulns, nil
+	}
+	accepted := make(map[string]struct{}, len(acceptances))
+	for _, acceptance := range acceptances {
+		accepted[acceptance.Fingerprint] = struct{}{}
+	}
+	filtered := make([]store.Vulnerability, 0, len(vulns))
+	for _, vuln := range vulns {
+		if _, ok := accepted[strings.TrimSpace(vuln.Fingerprint)]; ok {
+			continue
+		}
+		filtered = append(filtered, vuln)
+	}
+	return filtered, nil
 }
 
 func (s *Service) filterVEXedNewVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulns []store.Vulnerability) ([]store.Vulnerability, error) {
@@ -280,6 +333,66 @@ func vulnerabilityKey(vuln store.Vulnerability) string {
 		return vuln.ID.String()
 	}
 	return ""
+}
+
+// cancelIdentityPairs drops new/resolved pairs that are the same finding whose
+// fingerprint drifted between snapshots (a scanner rename or a fingerprint
+// algorithm change re-keys every row). Without this, one ingestion change makes
+// every existing finding read as simultaneously "new" and "resolved".
+func cancelIdentityPairs(newVulns, resolved []store.Vulnerability) ([]store.Vulnerability, []store.Vulnerability) {
+	if len(newVulns) == 0 || len(resolved) == 0 {
+		return newVulns, resolved
+	}
+	resolvedByIdentity := make(map[string][]int, len(resolved))
+	for i, vuln := range resolved {
+		key := identityKey(vuln)
+		resolvedByIdentity[key] = append(resolvedByIdentity[key], i)
+	}
+	drop := make(map[int]struct{})
+	keptNew := newVulns[:0]
+	for _, vuln := range newVulns {
+		key := identityKey(vuln)
+		if indices := resolvedByIdentity[key]; key != "" && len(indices) > 0 {
+			drop[indices[0]] = struct{}{}
+			resolvedByIdentity[key] = indices[1:]
+			continue
+		}
+		keptNew = append(keptNew, vuln)
+	}
+	keptResolved := make([]store.Vulnerability, 0, len(resolved))
+	for i, vuln := range resolved {
+		if _, ok := drop[i]; ok {
+			continue
+		}
+		keptResolved = append(keptResolved, vuln)
+	}
+	return keptNew, keptResolved
+}
+
+// identityKey is a fingerprint-independent content identity: what the finding
+// is and where it lives. Scanner name is case-normalized (SARIF driver names
+// changed casing once already).
+func identityKey(vuln store.Vulnerability) string {
+	identifier := strings.TrimSpace(vuln.PrimaryIdentifierValue)
+	purl := strings.TrimSpace(ptrString(vuln.ComponentPurl))
+	filePath := strings.TrimSpace(ptrString(vuln.FilePath))
+	// Without something that names WHAT the finding is or WHERE it lives, two
+	// rows cannot be asserted identical — return no key rather than cancel
+	// unrelated findings that merely share a type.
+	if identifier == "" && purl == "" && filePath == "" {
+		return ""
+	}
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(vuln.Type)),
+		strings.ToLower(strings.TrimSpace(vuln.ScannerName)),
+		identifier,
+		purl,
+		filePath,
+	}
+	if vuln.StartLine != nil {
+		parts = append(parts, strconv.FormatInt(int64(*vuln.StartLine), 10))
+	}
+	return strings.Join(parts, "|")
 }
 
 func ptrString(s *string) string {

@@ -458,6 +458,23 @@ func (q *Queries) DeleteExternalIssue(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const deleteFindingAcceptance = `-- name: DeleteFindingAcceptance :execrows
+DELETE FROM finding_acceptances WHERE repo_id = $1 AND fingerprint = $2
+`
+
+type DeleteFindingAcceptanceParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+func (q *Queries) DeleteFindingAcceptance(ctx context.Context, arg DeleteFindingAcceptanceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteFindingAcceptance, arg.RepoID, arg.Fingerprint)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getVulnerabilityByID = `-- name: GetVulnerabilityByID :one
 SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id FROM vulnerabilities WHERE id = $1
 `
@@ -530,6 +547,43 @@ func (q *Queries) GetVulnerabilityByID(ctx context.Context, id uuid.UUID) (Vulne
 		&i.RepoID,
 	)
 	return i, err
+}
+
+const listActiveFindingAcceptancesByRepo = `-- name: ListActiveFindingAcceptancesByRepo :many
+SELECT id, repo_id, fingerprint, status, reason, accepted_by, expires_at, created_at FROM finding_acceptances
+WHERE repo_id = $1 AND (expires_at IS NULL OR expires_at > now())
+`
+
+func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]FindingAcceptance, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveFindingAcceptancesByRepo, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindingAcceptance{}
+	for rows.Next() {
+		var i FindingAcceptance
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.Fingerprint,
+			&i.Status,
+			&i.Reason,
+			&i.AcceptedBy,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAllVulnerabilitiesBySnapshot = `-- name: ListAllVulnerabilitiesBySnapshot :many
@@ -1231,6 +1285,50 @@ func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, arg UpdateVulne
 		&i.PrimaryIdentifierValue,
 		&i.OrgID,
 		&i.RepoID,
+	)
+	return i, err
+}
+
+const upsertFindingAcceptance = `-- name: UpsertFindingAcceptance :one
+INSERT INTO finding_acceptances (repo_id, fingerprint, status, reason, accepted_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (repo_id, fingerprint) DO UPDATE SET
+	status = EXCLUDED.status,
+	reason = EXCLUDED.reason,
+	accepted_by = EXCLUDED.accepted_by,
+	expires_at = EXCLUDED.expires_at,
+	created_at = now()
+RETURNING id, repo_id, fingerprint, status, reason, accepted_by, expires_at, created_at
+`
+
+type UpsertFindingAcceptanceParams struct {
+	RepoID      uuid.UUID     `json:"repo_id"`
+	Fingerprint string        `json:"fingerprint"`
+	Status      string        `json:"status"`
+	Reason      string        `json:"reason"`
+	AcceptedBy  uuid.NullUUID `json:"accepted_by"`
+	ExpiresAt   sql.NullTime  `json:"expires_at"`
+}
+
+func (q *Queries) UpsertFindingAcceptance(ctx context.Context, arg UpsertFindingAcceptanceParams) (FindingAcceptance, error) {
+	row := q.db.QueryRowContext(ctx, upsertFindingAcceptance,
+		arg.RepoID,
+		arg.Fingerprint,
+		arg.Status,
+		arg.Reason,
+		arg.AcceptedBy,
+		arg.ExpiresAt,
+	)
+	var i FindingAcceptance
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Fingerprint,
+		&i.Status,
+		&i.Reason,
+		&i.AcceptedBy,
+		&i.ExpiresAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }
