@@ -734,6 +734,10 @@ func (s *stubProvider) GetBranch(context.Context, string, string, string) (*forg
 	return nil, forge.ErrNotImplemented
 }
 
+func (s *stubProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *stubProvider) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

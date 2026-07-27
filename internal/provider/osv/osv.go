@@ -207,6 +207,10 @@ func buildOSVBatchRequest(queries []provider.PackageQuery) (queryBatchRequest, [
 			continue
 		}
 		for _, osvEcosystem := range osvEcosystems {
+			// Version deliberately omitted: all of the package's advisories are
+			// fetched and their ranges stored, and the vulnerability matcher does
+			// the version comparison. OSV's server-side matching would also choke
+			// on RPM epoch formats.
 			reqBody.Queries = append(reqBody.Queries, osvQuery{Package: queryPackage{Name: query.Name, Ecosystem: osvEcosystem}})
 			expandedQueries = append(expandedQueries, provider.PackageQuery{
 				Ecosystem: strings.ToLower(strings.TrimSpace(query.Ecosystem)),
@@ -514,7 +518,11 @@ func mapAffectedPackageRanges(pkg affectedPackage) []advisory.AffectedRange {
 	ecosystem := normalizeOSVEcosystem(pkg.Package.Ecosystem)
 	ranges := make([]advisory.AffectedRange, 0)
 	for _, osvRange := range pkg.Ranges {
-		if !strings.EqualFold(osvRange.Type, "ECOSYSTEM") {
+		// ECOSYSTEM and SEMVER both carry introduced/fixed version events; GHSA
+		// uses SEMVER for npm/Go/cargo, so accepting only ECOSYSTEM silently
+		// dropped nearly every advisory in those ecosystems. GIT ranges are
+		// commit hashes, not versions, and stay excluded.
+		if !strings.EqualFold(osvRange.Type, "ECOSYSTEM") && !strings.EqualFold(osvRange.Type, "SEMVER") {
 			continue
 		}
 		ranges = append(ranges, mapAffectedRangeEvents(pkg.Package.Name, ecosystem, osvRange.Events)...)

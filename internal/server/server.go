@@ -422,6 +422,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/dashboard", s.handleGetOrgDashboard)
 					r.Get("/vulnerabilities", s.handleListOrgVulnerabilities)
 					r.Get("/components", s.handleListOrgComponents)
+					r.Post("/components/scan", s.handleTriggerOrgComponentScan)
 					r.Get("/compliance/export", s.handleComplianceExport)
 					r.Get("/compliance/iso27001", s.handleISO27001Export)
 					r.Get("/compliance/soa", s.handleSoAExport)

@@ -448,7 +448,7 @@
               <span class="text-sm text-gray-500">added</span>
             </div>
             <p class="mt-2 text-sm text-gray-400">
-              {{ comparison.component_diff.removed.length }} removed
+              {{ comparison.component_diff.updated?.length ?? 0 }} updated · {{ comparison.component_diff.removed.length }} removed
             </p>
           </button>
         </div>
@@ -737,10 +737,10 @@
               No coverage files to show{{ showUnchangedCoverage ? '' : ' — try "show unchanged files"' }}.
             </div>
             <div
-              v-else-if="coverageDiff.files.length === 0"
+              v-else-if="compareListRows.length === 0"
               class="px-4 py-8 text-sm text-gray-500"
             >
-              No per-file coverage changes between these refs.
+              No per-file coverage changes between these refs{{ showUnchangedCoverage ? '' : ' — "show unchanged files" lists the rest' }}.
             </div>
             <div
               v-else
@@ -768,7 +768,7 @@
                 </thead>
                 <tbody class="divide-y divide-surface-border-subtle">
                   <tr
-                    v-for="file in coverageDiff.files"
+                    v-for="file in compareListRows"
                     :key="`${file.change}-${file.file_path}`"
                     class="cursor-pointer transition hover:bg-white/5"
                     @click="openCompareSource(file.file_path)"
@@ -983,7 +983,7 @@
           v-if="componentRows.length === 0"
           class="px-4 py-10 text-sm text-gray-500"
         >
-          No component additions or removals between these refs.
+          No component changes between these refs.
         </div>
         <div
           v-else
@@ -1036,6 +1036,11 @@
                 </td>
                 <td class="px-4 py-4 text-gray-300">
                   {{ component.vuln_count }}
+                  <span
+                    v-if="component.vuln_delta !== null && component.vuln_delta !== 0"
+                    :class="component.vuln_delta < 0 ? 'text-emerald-400' : 'text-danger'"
+                    class="ml-1 text-xs"
+                  >({{ component.vuln_delta > 0 ? '+' : '' }}{{ component.vuln_delta }})</span>
                 </td>
               </tr>
             </tbody>
@@ -1058,7 +1063,11 @@ import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
 
 type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
-type ComponentRow = ComponentEntry & { change: 'added' | 'removed' }
+type ComponentRow = Omit<ComponentEntry, 'version'> & {
+  version: string
+  vuln_delta: number | null
+  change: 'added' | 'removed' | 'updated'
+}
 type TabId = 'overview' | 'security' | 'coverage' | 'tests' | 'components'
 
 const route = useRoute()
@@ -1069,7 +1078,7 @@ const repo = ref<Repository | null>(null)
 const refs = ref<EnhancedRef[]>([])
 const comparison = ref<CompareResult | null>(null)
 const headCoverage = ref<CoverageReport | null>(null)
-const coverageFilesView = ref<'list' | 'tree'>('list')
+const coverageFilesView = ref<'list' | 'tree'>('tree')
 const showUnchangedCoverage = ref(false)
 const compareSourceFile = ref<string | null>(null)
 
@@ -1103,6 +1112,30 @@ const compareTreeFiles = computed(() => {
   })
   if (showUnchangedCoverage.value) return files
   return files.filter((file) => deltas.has(file.path))
+})
+
+type CompareListRow = Omit<CoverageFileDelta, 'change'> & { change: CoverageFileDelta['change'] | 'unchanged' }
+
+// The list mirrors the tree's "show unchanged files" toggle: diff rows first,
+// then synthetic unchanged rows built from the head snapshot's file set.
+const compareListRows = computed<CompareListRow[]>(() => {
+  const diffRows: CompareListRow[] = comparison.value?.coverage_diff?.files ?? []
+  if (!showUnchangedCoverage.value) return diffRows
+  const changed = new Set(diffRows.map((row) => row.file_path))
+  const unchanged: CompareListRow[] = (headCoverage.value?.files ?? [])
+    .filter((file) => !changed.has(file.canonical_path || file.file_path))
+    .map((file) => ({
+      file_path: file.canonical_path || file.file_path,
+      change: 'unchanged',
+      base_line_rate: file.line_rate,
+      head_line_rate: file.line_rate,
+      line_rate_delta: null,
+      base_lines_covered: file.lines_covered,
+      head_lines_covered: file.lines_covered,
+      base_lines_valid: file.lines_valid,
+      head_lines_valid: file.lines_valid,
+    }))
+  return [...diffRows, ...unchanged]
 })
 
 function openCompareSource(path: string) {
@@ -1233,9 +1266,19 @@ const vulnRows = computed<VulnRow[]>(() => {
 
 const componentRows = computed<ComponentRow[]>(() => {
   if (!comparison.value) return []
+  const diff = comparison.value.component_diff
   return [
-    ...comparison.value.component_diff.added.map((c) => ({ ...c, change: 'added' as const })),
-    ...comparison.value.component_diff.removed.map((c) => ({ ...c, change: 'removed' as const })),
+    ...(diff.updated ?? []).map((c) => ({
+      name: c.name,
+      ecosystem: c.ecosystem,
+      purl: c.purl,
+      version: `${c.base_version} → ${c.head_version}`,
+      vuln_count: c.head_vuln_count,
+      vuln_delta: c.head_vuln_count - c.base_vuln_count,
+      change: 'updated' as const,
+    })),
+    ...diff.added.map((c) => ({ ...c, vuln_delta: null, change: 'added' as const })),
+    ...diff.removed.map((c) => ({ ...c, vuln_delta: null, change: 'removed' as const })),
   ]
 })
 
@@ -1568,9 +1611,13 @@ function severityBadgeClass(severity: string) {
 }
 
 function changeBadgeClass(change: string) {
-  return change === 'new' || change === 'added'
-    ? 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-300'
-    : 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-danger'
+  if (change === 'new' || change === 'added') {
+    return 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-300'
+  }
+  if (change === 'updated') {
+    return 'rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-blue-300'
+  }
+  return 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-danger'
 }
 
 function pillClass(color: 'emerald' | 'red' | 'amber') {
@@ -1578,9 +1625,10 @@ function pillClass(color: 'emerald' | 'red' | 'amber') {
   return `rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] ${palette[color]}`
 }
 
-function coverageChangeBadgeClass(change: CoverageFileDelta['change']) {
+function coverageChangeBadgeClass(change: CompareListRow['change']) {
   if (change === 'improved' || change === 'added') return pillClass('emerald')
   if (change === 'regressed' || change === 'removed') return pillClass('red')
+  if (change === 'unchanged') return 'rounded-full bg-surface-overlay px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400'
   return pillClass('amber')
 }
 

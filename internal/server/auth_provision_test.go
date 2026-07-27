@@ -202,6 +202,10 @@ func (p *oauthCallbackTestProvider) GetBranch(context.Context, string, string, s
 	return nil, forge.ErrNotImplemented
 }
 
+func (p *oauthCallbackTestProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (p *oauthCallbackTestProvider) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

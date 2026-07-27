@@ -228,7 +228,7 @@ func extractSARIFToolName(content []byte) string {
 		} `json:"runs"`
 	}
 	if json.Unmarshal(content, &sarif) == nil && len(sarif.Runs) > 0 {
-		return sarif.Runs[0].Tool.Driver.Name
+		return strings.ToLower(strings.TrimSpace(sarif.Runs[0].Tool.Driver.Name))
 	}
 	return ""
 }

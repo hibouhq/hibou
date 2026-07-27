@@ -617,3 +617,22 @@ func TestQueryPackagesInvalidJSON(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestMapAffectedPackageRangesAcceptsSemver(t *testing.T) {
+	// GHSA publishes SEMVER ranges for npm/Go/cargo; only accepting ECOSYSTEM
+	// dropped nearly every advisory in those ecosystems.
+	pkg := affectedPackage{
+		Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
+		Ranges: []affectedRange{
+			{Type: "SEMVER", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}}},
+			{Type: "GIT", Events: []rangeEvent{{Introduced: "abc123"}}},
+		},
+	}
+	ranges := mapAffectedPackageRanges(pkg)
+	if len(ranges) != 1 {
+		t.Fatalf("expected 1 range (SEMVER kept, GIT dropped), got %d", len(ranges))
+	}
+	if ranges[0].Fixed != "4.17.21" || ranges[0].Ecosystem != "npm" {
+		t.Fatalf("unexpected range: %+v", ranges[0])
+	}
+}

@@ -344,7 +344,16 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 		return fmt.Errorf("extract sarif findings %s: %w", artifact.artifact.ID, err)
 	}
 	genericFindings := make([]findings.GenericFinding, 0, len(parsedFindings))
+	droppedAdvisories := 0
 	for _, finding := range parsedFindings {
+		// Scanners that also do dependency scanning interleave advisories
+		// (rule ID = CVE/GHSA/…) with real SAST results; the SBOM pipeline
+		// already reports those with component context, so keeping them would
+		// double-count every dependency vulnerability as a SAST finding.
+		if sarif.IsAdvisoryFinding(finding.RuleID, finding.Rule) {
+			droppedAdvisories++
+			continue
+		}
 		genericFindings = append(genericFindings, findings.GenericFinding{
 			Tool:        finding.Tool,
 			RuleID:      finding.RuleID,
@@ -356,6 +365,12 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 			Fingerprint: finding.Fingerprint,
 			Rule:        scanRuleInput(finding.Rule),
 		})
+	}
+	if droppedAdvisories > 0 {
+		s.log.Info().
+			Str("snapshot", snapshot.ID.String()).
+			Int("dropped", droppedAdvisories).
+			Msg("skipped dependency advisories reported as SAST findings")
 	}
 	_, err = findings.NewIngester(queries, s.log).Ingest(ctx, snapshot.ID, genericFindings)
 	if err != nil {

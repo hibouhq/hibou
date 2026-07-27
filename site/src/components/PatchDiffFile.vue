@@ -10,8 +10,8 @@
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-surface-border-subtle bg-surface-overlay/40 px-3 py-1.5 text-[10px] uppercase tracking-wide text-gray-500">
         <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-emerald-500/50" /> covered</span>
         <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-red-500/50" /> uncovered</span>
-        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-cyan-400/60" /> newly covered</span>
-        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-amber-400/60" /> newly uncovered</span>
+        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-blue-500/70" /> new covered</span>
+        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-orange-500/70" /> new uncovered</span>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full border-collapse font-mono text-xs leading-relaxed">
@@ -140,13 +140,13 @@ function rowClass(row: DiffRow): string {
   if (row.kind === 'hunk') return 'bg-surface-overlay/80 text-gray-500'
   switch (row.coverage) {
     case 'gained':
-      return 'bg-cyan-400/20 shadow-[inset_3px_0_0_0_theme(colors.cyan.400)]'
+      return 'bg-blue-500/30 shadow-[inset_3px_0_0_0_theme(colors.blue.400)]'
     case 'lost':
-      return 'bg-amber-400/20 shadow-[inset_3px_0_0_0_theme(colors.amber.400)]'
+      return 'bg-orange-500/30 shadow-[inset_3px_0_0_0_theme(colors.orange.400)]'
     case 'covered':
-      return 'bg-emerald-500/10 shadow-[inset_3px_0_0_0_theme(colors.emerald.500/50%)]'
+      return 'bg-emerald-500/15 shadow-[inset_3px_0_0_0_theme(colors.emerald.500)]'
     case 'uncovered':
-      return 'bg-red-500/10 shadow-[inset_3px_0_0_0_theme(colors.red.500/50%)]'
+      return 'bg-red-500/15 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
     default:
       break
   }
@@ -159,9 +159,9 @@ function contentClass(row: DiffRow): string {
   if (row.kind === 'hunk') return 'text-gray-500'
   switch (row.coverage) {
     case 'gained':
-      return 'text-cyan-100'
+      return 'text-blue-100'
     case 'lost':
-      return 'text-amber-100'
+      return 'text-orange-100'
     case 'covered':
       return 'text-emerald-200/90'
     case 'uncovered':
@@ -177,11 +177,11 @@ function contentClass(row: DiffRow): string {
 function badgeFor(row: DiffRow): { text: string; className: string } | null {
   if (row.coverage === 'lost') {
     return row.kind === 'add'
-      ? { text: 'new · uncovered', className: 'bg-amber-400/20 text-amber-300' }
-      : { text: 'lost coverage', className: 'bg-amber-400/20 text-amber-300' }
+      ? { text: 'new · uncovered', className: 'bg-orange-500/25 text-orange-300' }
+      : { text: 'lost coverage', className: 'bg-orange-500/25 text-orange-300' }
   }
   if (row.coverage === 'gained' && row.kind === 'context') {
-    return { text: 'gained coverage', className: 'bg-cyan-400/20 text-cyan-300' }
+    return { text: 'gained coverage', className: 'bg-blue-500/25 text-blue-300' }
   }
   return null
 }

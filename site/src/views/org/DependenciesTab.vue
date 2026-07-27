@@ -54,8 +54,31 @@
         <h2 class="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
           Components
         </h2>
-        <span class="text-xs text-gray-500">{{ components.length }} total</span>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-gray-500">{{ components.length }} total</span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-surface-border bg-surface-overlay/40 px-2.5 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="scanning"
+            title="Scan every enrolled repository's current snapshot against enabled advisory providers"
+            @click="runOrgComponentScan"
+          >
+            <RefreshCw
+              class="h-3.5 w-3.5"
+              :class="scanning ? 'animate-spin' : ''"
+            />
+            {{ scanning ? 'Scanning...' : 'Scan components' }}
+          </button>
+        </div>
       </div>
+
+      <p
+        v-if="scanMessage || scanError"
+        class="text-xs"
+        :class="scanError ? 'text-danger' : 'text-ok'"
+      >
+        {{ scanError || scanMessage }}
+      </p>
 
       <FilterBar
         v-model="activeFilters"
@@ -91,6 +114,9 @@
             <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.16em] text-gray-500">
               <tr>
                 <th class="px-3 py-2 font-medium">
+                  Sources
+                </th>
+                <th class="px-3 py-2 font-medium">
                   Ecosystem
                 </th>
                 <th class="px-3 py-2 font-medium">
@@ -118,6 +144,22 @@
                 :class="component.vuln_count > 0 ? 'border-l-2 border-l-danger/70' : 'border-l-2 border-l-transparent'"
                 @click="activeComponent = component"
               >
+                <td class="px-3 py-2.5">
+                  <div
+                    v-if="component.sources?.length"
+                    class="flex flex-wrap gap-1"
+                  >
+                    <span
+                      v-for="source in component.sources"
+                      :key="source"
+                      class="rounded-full border border-surface-border px-2 py-0.5 font-mono text-[11px] text-gray-300"
+                    >{{ source }}</span>
+                  </div>
+                  <span
+                    v-else
+                    class="text-gray-600"
+                  >—</span>
+                </td>
                 <td class="px-3 py-2.5">
                   <span
                     class="eco-badge"
@@ -187,6 +229,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { RefreshCw } from 'lucide-vue-next'
 
 import { api, type OrgComponent } from '@/api/client'
 import EcosystemSunburst from '@/components/EcosystemSunburst.vue'
@@ -200,6 +243,9 @@ const slug = computed(() => route.params.slug as string)
 
 const components = ref<OrgComponent[]>([])
 const loading = ref(true)
+const scanning = ref(false)
+const scanError = ref('')
+const scanMessage = ref('')
 const activeComponent = ref<OrgComponent | null>(null)
 
 const activeFilters = ref<Record<string, string>>({})
@@ -310,6 +356,24 @@ function matchesFilters(component: OrgComponent): boolean {
     }
   }
   return true
+}
+
+async function runOrgComponentScan() {
+  if (!provider.value || !slug.value || scanning.value) return
+  scanning.value = true
+  scanError.value = ''
+  scanMessage.value = ''
+  try {
+    const response = await api.triggerOrgComponentScan(provider.value, slug.value)
+    const res = await api.listOrgComponents(provider.value, slug.value)
+    components.value = res.data
+    const failed = response.data.failed?.length ? ` (${response.data.failed.length} repos failed)` : ''
+    scanMessage.value = `Scanned ${response.data.scans.length} repositories with ${response.data.providers.join(', ')}${failed}.`
+  } catch (error) {
+    scanError.value = error instanceof Error ? error.message : 'Failed to trigger component scan'
+  } finally {
+    scanning.value = false
+  }
 }
 
 function applyEcosystem(ecosystem: string) {

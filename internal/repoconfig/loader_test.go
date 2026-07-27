@@ -81,6 +81,10 @@ func (p *testForgeProvider) UserInfo(context.Context, *oauth2.Token) (*forge.Use
 func (p *testForgeProvider) ListUserAccess(context.Context, *oauth2.Token) (forge.UserAccess, error) {
 	return forge.UserAccess{}, nil
 }
+func (p *testForgeProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (p *testForgeProvider) GetFileContent(_ context.Context, _, _, _, _ string) ([]byte, error) {
 	if p.fileErr != nil {
 		return nil, p.fileErr

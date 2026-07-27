@@ -57,6 +57,10 @@ func (m *mockForgeProvider) ListBranches(context.Context, string, string) ([]Bra
 func (m *mockForgeProvider) GetBranch(context.Context, string, string, string) (*Branch, error) {
 	return nil, ErrNotImplemented
 }
+func (m *mockForgeProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockForgeProvider) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, ErrNotImplemented
 }

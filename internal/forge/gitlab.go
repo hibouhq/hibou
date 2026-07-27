@@ -114,6 +114,12 @@ func (g *GitLab) GetBranch(ctx context.Context, owner, repo, branch string) (*Br
 	return &result, nil
 }
 
+// ListTreePaths is not yet implemented for GitLab; source path resolution
+// degrades to exact matches.
+func (g *GitLab) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (g *GitLab) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
 	requestPath := fmt.Sprintf(
 		"/api/v4/projects/%s/repository/files/%s/raw?ref=%s",
