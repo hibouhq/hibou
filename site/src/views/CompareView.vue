@@ -276,9 +276,9 @@
           />
           <span class="compare-display">{{ tab.label }}</span>
           <span
-            v-if="tab.count > 0"
+            v-if="tab.badge"
             class="rounded-full bg-surface-overlay px-2 py-0.5 text-[11px] font-semibold text-gray-300"
-          >{{ tab.count }}</span>
+          >{{ tab.badge }}</span>
         </button>
       </nav>
 
@@ -643,6 +643,10 @@
                     :hunks="file.hunks"
                     :covered-lines="file.covered_line_numbers ?? []"
                     :uncovered-lines="file.uncovered_line_numbers ?? []"
+                    :head-covered-lines="file.head_covered_lines"
+                    :head-uncovered-lines="file.head_uncovered_lines"
+                    :base-covered-lines="file.base_covered_lines"
+                    :base-uncovered-lines="file.base_uncovered_lines"
                   />
                 </div>
               </div>
@@ -687,14 +691,53 @@
           </div>
 
           <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
-            <div class="flex items-center justify-between gap-3 border-b border-surface-border-subtle px-4 py-3">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-surface-border-subtle px-4 py-3">
               <h3 class="text-sm font-semibold text-white">
                 Per-file changes
               </h3>
-              <span class="text-xs text-gray-500">{{ coverageDiff.unchanged_files }} unchanged</span>
+              <div class="flex flex-wrap items-center gap-3">
+                <label class="flex cursor-pointer items-center gap-1.5 text-xs text-gray-400">
+                  <input
+                    v-model="showUnchangedCoverage"
+                    type="checkbox"
+                    class="h-3.5 w-3.5 rounded border-surface-border bg-surface-overlay accent-[--color-accent]"
+                  >
+                  show unchanged files
+                </label>
+                <div class="flex overflow-hidden rounded-lg border border-surface-border">
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 text-xs transition"
+                    :class="coverageFilesView === 'list' ? 'bg-accent/15 text-white' : 'bg-surface-overlay text-gray-400 hover:text-white'"
+                    @click="coverageFilesView = 'list'"
+                  >
+                    List
+                  </button>
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 text-xs transition"
+                    :class="coverageFilesView === 'tree' ? 'bg-accent/15 text-white' : 'bg-surface-overlay text-gray-400 hover:text-white'"
+                    @click="coverageFilesView = 'tree'"
+                  >
+                    Tree
+                  </button>
+                </div>
+                <span class="text-xs text-gray-500">{{ coverageDiff.unchanged_files }} unchanged</span>
+              </div>
+            </div>
+            <CoverageTreeView
+              v-if="coverageFilesView === 'tree' && compareTreeFiles.length > 0"
+              :files="compareTreeFiles"
+              @select-file="openCompareSource"
+            />
+            <div
+              v-else-if="coverageFilesView === 'tree'"
+              class="px-4 py-8 text-sm text-gray-500"
+            >
+              No coverage files to show{{ showUnchangedCoverage ? '' : ' — try "show unchanged files"' }}.
             </div>
             <div
-              v-if="coverageDiff.files.length === 0"
+              v-else-if="coverageDiff.files.length === 0"
               class="px-4 py-8 text-sm text-gray-500"
             >
               No per-file coverage changes between these refs.
@@ -727,7 +770,8 @@
                   <tr
                     v-for="file in coverageDiff.files"
                     :key="`${file.change}-${file.file_path}`"
-                    class="transition hover:bg-white/5"
+                    class="cursor-pointer transition hover:bg-white/5"
+                    @click="openCompareSource(file.file_path)"
                   >
                     <td class="px-4 py-3 align-top">
                       <span :class="coverageChangeBadgeClass(file.change)">{{ file.change }}</span>
@@ -766,6 +810,16 @@
             </div>
           </div>
         </template>
+
+        <CoverageSourceModal
+          v-if="compareSourceFile && headCoverage"
+          :provider="provider"
+          :slug="slug"
+          :repo-slug="repoSlug"
+          :snapshot-id="headCoverage.snapshot_id"
+          :path="compareSourceFile"
+          @close="compareSourceFile = null"
+        />
       </div>
 
       <!-- Tests tab -->
@@ -997,8 +1051,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, FlaskConical, GaugeCircle, GitBranch, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert, Tag } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type EnhancedRef, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
+import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
+import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
 
 type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
@@ -1012,6 +1068,46 @@ const router = useRouter()
 const repo = ref<Repository | null>(null)
 const refs = ref<EnhancedRef[]>([])
 const comparison = ref<CompareResult | null>(null)
+const headCoverage = ref<CoverageReport | null>(null)
+const coverageFilesView = ref<'list' | 'tree'>('list')
+const showUnchangedCoverage = ref(false)
+const compareSourceFile = ref<string | null>(null)
+
+watch(
+  () => comparison.value?.head,
+  async (head) => {
+    headCoverage.value = null
+    showUnchangedCoverage.value = false
+    if (!head?.ref_name) return
+    try {
+      const res = await api.getCoverage(provider.value, slug.value, repoSlug.value, { ref: head.ref_name })
+      headCoverage.value = res.data ?? null
+    } catch {
+      headCoverage.value = null
+    }
+  },
+  { immediate: true },
+)
+
+const compareTreeFiles = computed(() => {
+  const deltas = new Map((comparison.value?.coverage_diff?.files ?? []).map((f) => [f.file_path, f.line_rate_delta]))
+  const files = (headCoverage.value?.files ?? []).map((file) => {
+    const key = file.canonical_path || file.file_path
+    return {
+      path: key,
+      valid: file.lines_valid,
+      covered: file.lines_covered,
+      rate: file.line_rate,
+      delta: deltas.get(key) ?? null,
+    }
+  })
+  if (showUnchangedCoverage.value) return files
+  return files.filter((file) => deltas.has(file.path))
+})
+
+function openCompareSource(path: string) {
+  compareSourceFile.value = path
+}
 const loading = ref(false)
 const loadingRefs = ref(true)
 const error = ref('')
@@ -1194,12 +1290,17 @@ const verdict = computed(() => {
   return { eyebrow: 'Steady', headline: 'No meaningful change', detail, shellClass: 'border-surface-border-subtle bg-surface-overlay/40', orbClass: 'compare-orb-neutral', eyebrowClass: 'text-gray-500' }
 })
 
+const coverageBadge = computed(() => {
+  const rate = coverageDiff.value?.head?.line_rate
+  return typeof rate === 'number' ? `${(rate * 100).toFixed(1)}%` : ''
+})
+
 const tabs = computed(() => [
-  { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard, count: 0 },
-  { id: 'security' as const, label: 'Security', icon: ShieldAlert, count: vulnRows.value.length },
-  { id: 'coverage' as const, label: 'Coverage', icon: GaugeCircle, count: coverageDiff.value?.files.length ?? 0 },
-  { id: 'tests' as const, label: 'Tests', icon: FlaskConical, count: testChangeCount.value },
-  { id: 'components' as const, label: 'Components', icon: Package, count: componentRows.value.length },
+  { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard, badge: '' },
+  { id: 'security' as const, label: 'Security', icon: ShieldAlert, badge: vulnRows.value.length > 0 ? String(vulnRows.value.length) : '' },
+  { id: 'coverage' as const, label: 'Coverage', icon: GaugeCircle, badge: coverageBadge.value },
+  { id: 'tests' as const, label: 'Tests', icon: FlaskConical, badge: testChangeCount.value > 0 ? String(testChangeCount.value) : '' },
+  { id: 'components' as const, label: 'Components', icon: Package, badge: componentRows.value.length > 0 ? String(componentRows.value.length) : '' },
 ])
 
 // ─── URL ↔ State sync ────────────────────────────────────────────────────────

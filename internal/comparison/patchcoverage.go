@@ -42,6 +42,14 @@ type PatchFileCoverage struct {
 	// client renders the annotated diff by tinting each added line against the
 	// covered/uncovered sets above. Empty when the forge supplied no patch.
 	Hunks string `json:"hunks,omitempty"`
+	// Full-file instrumented line numbers by outcome. Head sets use new-side
+	// numbering, base sets old-side; together they let the diff distinguish a
+	// line that is plain covered/uncovered from one whose coverage state the PR
+	// changed (gained or lost).
+	HeadCoveredLines   []int `json:"head_covered_lines,omitempty"`
+	HeadUncoveredLines []int `json:"head_uncovered_lines,omitempty"`
+	BaseCoveredLines   []int `json:"base_covered_lines,omitempty"`
+	BaseUncoveredLines []int `json:"base_uncovered_lines,omitempty"`
 }
 
 // PatchCoverage is the repository-wide patch (diff) coverage: of the lines a
@@ -67,12 +75,13 @@ type PatchCoverage struct {
 // exclude glob are skipped entirely. Returns nil when there is nothing to
 // report (no changes, or none intersect coverage), so the caller can omit the
 // section.
-func BuildPatchCoverage(changes []PatchChange, headLines map[string][]PatchLine, exclude []string, truncated bool) *PatchCoverage {
+func BuildPatchCoverage(changes []PatchChange, headLines, baseLines map[string][]PatchLine, exclude []string, truncated bool) *PatchCoverage {
 	if len(changes) == 0 {
 		return nil
 	}
 
 	index := newCoveragePathIndex(headLines)
+	baseIndex := newCoveragePathIndex(baseLines)
 	result := &PatchCoverage{Truncated: truncated, Files: []PatchFileCoverage{}}
 
 	for _, change := range changes {
@@ -87,6 +96,10 @@ func BuildPatchCoverage(changes []PatchChange, headLines map[string][]PatchLine,
 		if fileCov == nil {
 			continue // no changed line was instrumented in this file
 		}
+		fileCov.HeadCoveredLines, fileCov.HeadUncoveredLines = splitByOutcome(lineHits)
+		if baseHits, ok := baseIndex.lookup(change.FilePath); ok {
+			fileCov.BaseCoveredLines, fileCov.BaseUncoveredLines = splitByOutcome(baseHits)
+		}
 		result.CoveredLines += fileCov.CoveredLines
 		result.UncoveredLines += fileCov.UncoveredLines
 		result.Files = append(result.Files, *fileCov)
@@ -98,6 +111,21 @@ func BuildPatchCoverage(changes []PatchChange, headLines map[string][]PatchLine,
 	result.Rate = ratio(result.CoveredLines, result.UncoveredLines)
 	sortPatchFiles(result.Files)
 	return result
+}
+
+// splitByOutcome partitions a file's instrumented lines into covered and
+// uncovered line-number lists, sorted ascending.
+func splitByOutcome(lineHits map[int]int) (covered, uncovered []int) {
+	for number, hits := range lineHits {
+		if hits > 0 {
+			covered = append(covered, number)
+		} else {
+			uncovered = append(uncovered, number)
+		}
+	}
+	sort.Ints(covered)
+	sort.Ints(uncovered)
+	return covered, uncovered
 }
 
 // patchCoverageForFile classifies a single file's changed lines against its

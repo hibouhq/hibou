@@ -13,7 +13,7 @@ import (
 
 // buildPatchCoverage computes line-level patch (diff) coverage for a pull
 // request comparison: it fetches the forge diff between the base and head
-// commits, loads the head snapshot's per-line hits (primary report), honors
+// commits, loads both snapshots' per-line hits across every report, honors
 // coverage.exclude, and intersects the two. It degrades gracefully to nil —
 // letting the UI fall back to the file-level coverage diff — when the forge
 // has no patch support, the diff/commit info is missing, or an API call fails.
@@ -40,13 +40,18 @@ func (s *Server) buildPatchCoverage(ctx context.Context, repo *store.Repository,
 		return nil
 	}
 
-	headLines, err := s.loadHeadCoverageLines(ctx, headSnapshot.ID)
+	headLines, err := s.loadSnapshotCoverageLines(ctx, headSnapshot.ID)
 	if err != nil {
 		s.log.Warn().Err(err).Str("snapshot_id", headSnapshot.ID.String()).Msg("failed to load per-line coverage for patch coverage")
 		return nil
 	}
 	if len(headLines) == 0 {
 		return nil
+	}
+	baseLines, err := s.loadSnapshotCoverageLines(ctx, baseSnapshot.ID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", baseSnapshot.ID.String()).Msg("failed to load base per-line coverage; gained/lost tinting degrades")
+		baseLines = nil
 	}
 
 	changes := make([]comparison.PatchChange, 0, len(patch.Files))
@@ -58,23 +63,14 @@ func (s *Server) buildPatchCoverage(ctx context.Context, repo *store.Repository,
 		})
 	}
 
-	return comparison.BuildPatchCoverage(changes, headLines, coverageExcludeGlobs(cfg), patch.Truncated)
+	return comparison.BuildPatchCoverage(changes, headLines, baseLines, coverageExcludeGlobs(cfg), patch.Truncated)
 }
 
-// loadHeadCoverageLines returns the head snapshot's per-line hits keyed by file
-// path, taken from the primary coverage report (most valid lines), matching how
-// the file-level coverage diff picks its primary report.
-func (s *Server) loadHeadCoverageLines(ctx context.Context, snapshotID uuid.UUID) (map[string][]comparison.PatchLine, error) {
-	reports, err := s.queries.ListCoverageReportsBySnapshot(ctx, snapshotID)
-	if err != nil {
-		return nil, err
-	}
-	primary := primaryCoverageReport(reports)
-	if primary == nil {
-		return nil, nil
-	}
-
-	lines, err := s.queries.ListCoverageLinesBySnapshotFormat(ctx, snapshotID, primary.Format)
+// loadSnapshotCoverageLines returns a snapshot's per-line hits keyed by file
+// path, across every coverage report so multi-language changes are all
+// measurable (a single "primary" report dropped every other language).
+func (s *Server) loadSnapshotCoverageLines(ctx context.Context, snapshotID uuid.UUID) (map[string][]comparison.PatchLine, error) {
+	lines, err := s.queries.ListCoverageLinesBySnapshot(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}

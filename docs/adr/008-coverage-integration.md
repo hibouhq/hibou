@@ -59,6 +59,15 @@ Snapshot completion and gate evaluation follow three strategies, in priority ord
 
 Within an open snapshot, Hibou deduplicates by content hash: re-uploading the same file replaces the previous artifact entry instead of double-counting it. If CI reruns after the snapshot is completed or the window closes, Hibou creates a new snapshot for the same `ref` and `commit_sha` so historical retries remain auditable.
 
+## Addendum (line-level patch coverage)
+The per-file line-rate delta described above is now complemented by **line-level patch
+coverage**: per-line hits are parsed from every format and stored in `coverage_lines`
+(sparse; instrumented lines only), gated by `HIBOU_COVERAGE_STORE_LINES` (default on).
+The `diff_minimum` gate promised here is implemented, and `min_coverage` / `grace` are
+enforced alongside it. See **ADR-018** for the full model. Posting the coverage delta as a PR
+status check / comment (this ADR's "Coverage UX") remains a follow-up pending the forge-native
+PR-checks work.
+
 ## Consequences
 - The unified upload endpoint handles three artifact families: SBOM, SARIF, coverage
 - Coverage detection adds ~20 lines to `detectArtifactType` with no new dependencies

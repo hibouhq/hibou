@@ -421,6 +421,10 @@ export interface PatchFileCoverage {
   covered_line_numbers: number[] | null
   uncovered_line_numbers: number[] | null
   hunks?: string
+  head_covered_lines?: number[]
+  head_uncovered_lines?: number[]
+  base_covered_lines?: number[]
+  base_uncovered_lines?: number[]
 }
 
 export interface PatchCoverage {

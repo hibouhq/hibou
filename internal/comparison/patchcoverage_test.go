@@ -22,7 +22,7 @@ func TestBuildPatchCoverageBasic(t *testing.T) {
 		"foo.go": {{Number: 10, Hits: 3}, {Number: 11, Hits: 0}, {Number: 12, Hits: 1}},
 	}
 
-	pc := BuildPatchCoverage(changes, head, nil, false)
+	pc := BuildPatchCoverage(changes, head, nil, nil, false)
 	if pc == nil {
 		t.Fatal("expected patch coverage")
 	}
@@ -48,7 +48,7 @@ func TestBuildPatchCoverageNoInstrumentedChangedLines(t *testing.T) {
 	// A docs-only PR: changed lines exist but none are instrumented.
 	changes := []PatchChange{{FilePath: "README.md", AddedLines: []int{1, 2}}}
 	head := map[string][]PatchLine{"foo.go": {{Number: 1, Hits: 1}}}
-	if pc := BuildPatchCoverage(changes, head, nil, false); pc != nil {
+	if pc := BuildPatchCoverage(changes, head, nil, nil, false); pc != nil {
 		t.Fatalf("expected nil patch coverage, got %+v", pc)
 	}
 }
@@ -64,7 +64,7 @@ func TestBuildPatchCoverageExcludeGlobs(t *testing.T) {
 		"foo_test.go":        {{Number: 1, Hits: 1}},
 		"testutil/helper.go": {{Number: 1, Hits: 1}},
 	}
-	pc := BuildPatchCoverage(changes, head, []string{"*_test.go", "testutil/**"}, false)
+	pc := BuildPatchCoverage(changes, head, nil, []string{"*_test.go", "testutil/**"}, false)
 	if pc == nil {
 		t.Fatal("expected patch coverage")
 	}
@@ -88,7 +88,7 @@ func TestBuildPatchCoveragePathNormalizationSuffixMatch(t *testing.T) {
 		// A decoy with the same basename but different dir must NOT match.
 		"github.com/acme/proj/other/foo.go": {{Number: 5, Hits: 0}},
 	}
-	pc := BuildPatchCoverage(changes, head, nil, false)
+	pc := BuildPatchCoverage(changes, head, nil, nil, false)
 	if pc == nil {
 		t.Fatal("expected patch coverage via suffix match")
 	}
@@ -106,7 +106,7 @@ func TestBuildPatchCoverageFilesSortedByUncovered(t *testing.T) {
 		"a.go": {{Number: 1, Hits: 0}},
 		"b.go": {{Number: 1, Hits: 0}, {Number: 2, Hits: 0}, {Number: 3, Hits: 0}},
 	}
-	pc := BuildPatchCoverage(changes, head, nil, false)
+	pc := BuildPatchCoverage(changes, head, nil, nil, false)
 	if pc.Files[0].FilePath != "b.go" {
 		t.Fatalf("expected b.go first (most uncovered), got %s", pc.Files[0].FilePath)
 	}
@@ -116,7 +116,7 @@ func TestBuildPatchCoveragePassesHunksThrough(t *testing.T) {
 	hunk := "@@ -1,1 +1,2 @@\n a\n+b"
 	changes := []PatchChange{{FilePath: "foo.go", AddedLines: []int{2}, Hunks: hunk}}
 	head := map[string][]PatchLine{"foo.go": {{Number: 2, Hits: 0}}}
-	pc := BuildPatchCoverage(changes, head, nil, false)
+	pc := BuildPatchCoverage(changes, head, nil, nil, false)
 	if pc == nil || len(pc.Files) != 1 {
 		t.Fatalf("expected one file, got %+v", pc)
 	}
@@ -125,8 +125,35 @@ func TestBuildPatchCoveragePassesHunksThrough(t *testing.T) {
 	}
 }
 
+func TestBuildPatchCoverageShipsFullLineSets(t *testing.T) {
+	changes := []PatchChange{{FilePath: "foo.go", AddedLines: []int{10}}}
+	head := map[string][]PatchLine{
+		"foo.go": {{Number: 5, Hits: 1}, {Number: 6, Hits: 0}, {Number: 10, Hits: 2}},
+	}
+	base := map[string][]PatchLine{
+		"foo.go": {{Number: 5, Hits: 0}, {Number: 6, Hits: 3}},
+	}
+	pc := BuildPatchCoverage(changes, head, base, nil, false)
+	if pc == nil || len(pc.Files) != 1 {
+		t.Fatalf("expected one file, got %+v", pc)
+	}
+	f := pc.Files[0]
+	if len(f.HeadCoveredLines) != 2 || f.HeadCoveredLines[0] != 5 || f.HeadCoveredLines[1] != 10 {
+		t.Fatalf("head covered = %v, want [5 10]", f.HeadCoveredLines)
+	}
+	if len(f.HeadUncoveredLines) != 1 || f.HeadUncoveredLines[0] != 6 {
+		t.Fatalf("head uncovered = %v, want [6]", f.HeadUncoveredLines)
+	}
+	if len(f.BaseCoveredLines) != 1 || f.BaseCoveredLines[0] != 6 {
+		t.Fatalf("base covered = %v, want [6]", f.BaseCoveredLines)
+	}
+	if len(f.BaseUncoveredLines) != 1 || f.BaseUncoveredLines[0] != 5 {
+		t.Fatalf("base uncovered = %v, want [5]", f.BaseUncoveredLines)
+	}
+}
+
 func TestBuildPatchCoverageEmptyChanges(t *testing.T) {
-	if pc := BuildPatchCoverage(nil, map[string][]PatchLine{}, nil, false); pc != nil {
+	if pc := BuildPatchCoverage(nil, map[string][]PatchLine{}, nil, nil, false); pc != nil {
 		t.Fatalf("expected nil for no changes, got %+v", pc)
 	}
 }

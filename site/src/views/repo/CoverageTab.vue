@@ -369,6 +369,7 @@ import { BarChart3, FileCode2, FolderTree, GitBranch, LayoutGrid, TablePropertie
 import { useRoute } from 'vue-router'
 
 import { api, type CoverageFile, type CoverageReport } from '@/api/client'
+import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreemap from '@/components/CoverageTreemap.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import FilterBar from '@/components/FilterBar.vue'

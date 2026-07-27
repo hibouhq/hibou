@@ -13,6 +13,11 @@ export default [
         parser: tseslint.parser,
       },
     },
+    rules: {
+      // An unimported component renders as an inert unknown element with no
+      // error — a click that does nothing in production. Make it a lint error.
+      'vue/no-undef-components': ['error', { ignorePatterns: ['RouterLink', 'RouterView'] }],
+    },
   },
   {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**'],

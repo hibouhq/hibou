@@ -1211,18 +1211,6 @@ func (s *Server) loadCoverageInput(ctx context.Context, snapshotID uuid.UUID, re
 	return totals, nil
 }
 
-func primaryCoverageReport(reports []store.CoverageReport) *store.CoverageReport {
-	var primary *store.CoverageReport
-	for i := range reports {
-		report := &reports[i]
-		if primary == nil || report.LinesValid > primary.LinesValid ||
-			(report.LinesValid == primary.LinesValid && report.Format < primary.Format) {
-			primary = report
-		}
-	}
-	return primary
-}
-
 // buildSnapshotTestDiff loads each snapshot's test report and cases and diffs
 // them. It returns nil when neither snapshot has test data.
 func (s *Server) buildSnapshotTestDiff(ctx context.Context, baseSnapshotID, headSnapshotID uuid.UUID) (*comparison.TestDiff, error) {

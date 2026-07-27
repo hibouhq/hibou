@@ -219,6 +219,44 @@ func (q *Queries) ListCoverageFilesBySnapshot(ctx context.Context, snapshotID uu
 	return items, nil
 }
 
+const listCoverageLinesBySnapshot = `-- name: ListCoverageLinesBySnapshot :many
+SELECT cf.file_path, cl.line_number, cl.hits
+FROM coverage_lines cl
+JOIN coverage_files cf ON cf.id = cl.coverage_file_id
+JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
+WHERE cr.snapshot_id = $1
+ORDER BY cf.file_path, cl.line_number
+`
+
+type ListCoverageLinesBySnapshotRow struct {
+	FilePath   string `json:"file_path"`
+	LineNumber int32  `json:"line_number"`
+	Hits       int32  `json:"hits"`
+}
+
+func (q *Queries) ListCoverageLinesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]ListCoverageLinesBySnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCoverageLinesBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoverageLinesBySnapshotRow{}
+	for rows.Next() {
+		var i ListCoverageLinesBySnapshotRow
+		if err := rows.Scan(&i.FilePath, &i.LineNumber, &i.Hits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCoverageLinesBySnapshotFormat = `-- name: ListCoverageLinesBySnapshotFormat :many
 SELECT cf.file_path, cl.line_number, cl.hits
 FROM coverage_lines cl
