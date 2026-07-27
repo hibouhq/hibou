@@ -119,6 +119,12 @@ func (f *Forgejo) GetBranch(ctx context.Context, owner, repo, branch string) (*B
 	return &result, nil
 }
 
+// ListTreePaths is not yet implemented for Forgejo; source path resolution
+// degrades to exact matches.
+func (f *Forgejo) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (f *Forgejo) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
 	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
 	request, err := f.newRequest(ctx, http.MethodGet, requestPath, nil)

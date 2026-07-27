@@ -31,6 +31,11 @@ type Provider interface {
 	// GetFileContent fetches a file's raw content from a ref.
 	GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error)
 
+	// ListTreePaths returns every blob path in the repository tree at a ref.
+	// Providers without support return nil, nil; callers must then require
+	// exact paths instead of suffix-resolving tool-emitted ones.
+	ListTreePaths(ctx context.Context, owner, repo, ref string) ([]string, error)
+
 	// CreateOrUpdateFile writes a file on a branch.
 	CreateOrUpdateFile(ctx context.Context, owner, repo, path, branch, message string, content []byte) error
 

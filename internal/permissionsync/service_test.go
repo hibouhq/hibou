@@ -315,6 +315,10 @@ func (f fakeProvider) ListBranches(context.Context, string, string) ([]forge.Bra
 func (f fakeProvider) GetBranch(context.Context, string, string, string) (*forge.Branch, error) {
 	return nil, nil
 }
+func (f fakeProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (f fakeProvider) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, nil
 }

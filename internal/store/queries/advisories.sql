@@ -80,8 +80,8 @@ SELECT * FROM advisory_sources WHERE advisory_id = $1;
 SELECT * FROM advisory_sources WHERE advisory_id = ANY($1::uuid[]);
 
 -- name: CreateAffectedRange :one
-INSERT INTO affected_ranges (advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO affected_ranges (advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, release)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: ListAffectedRangesByAdvisory :many

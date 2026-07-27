@@ -357,3 +357,54 @@ func writeJSON(t *testing.T, w http.ResponseWriter, payload any) {
 		t.Errorf("encode response: %v", err)
 	}
 }
+
+func TestBuildOSGroupsAndPkgSplitting(t *testing.T) {
+	groups := buildOSGroups([]provider.PackageQuery{
+		{Ecosystem: "apk", Name: "busybox", Version: "1.36.1-r5", Distro: "alpine-3.18.4"},
+		{Ecosystem: "apk", Name: "openssl", Version: "3.1.4-r1", Distro: "alpine-3.18.4"},
+		{Ecosystem: "deb", Name: "libssl3", Version: "3.0.11-1~deb12u2", Distro: "debian-12"},
+		{Ecosystem: "rpm", Name: "openssl-libs", Version: "1:3.0.7-27.el9", Distro: "redhat-9.4"},
+		{Ecosystem: "apk", Name: "no-distro", Version: "1.0"},
+		{Ecosystem: "npm", Name: "lodash", Version: "4.17.11"},
+	})
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups, got %d", len(groups))
+	}
+	byFamily := map[string]osGroup{}
+	for _, g := range groups {
+		byFamily[g.family] = g
+	}
+	alpine := byFamily["alpine"]
+	if alpine.version != "3.18.4" || alpine.releaseKey != "3.18" || len(alpine.packages) != 2 {
+		t.Fatalf("alpine group: %+v", alpine)
+	}
+	if deb := byFamily["debian"]; deb.releaseKey != "12" || deb.packages[0].Version != "3.0.11-1~deb12u2" {
+		t.Fatalf("debian group: %+v", deb)
+	}
+	rpmGroup := byFamily["redhat"]
+	if rpmGroup.releaseKey != "9" {
+		t.Fatalf("redhat releaseKey = %q", rpmGroup.releaseKey)
+	}
+	p := rpmGroup.packages[0]
+	if p.Epoch != 1 || p.Version != "3.0.7" || p.Release != "27.el9" || p.SrcName != "openssl-libs" {
+		t.Fatalf("rpm pkg split: %+v", p)
+	}
+}
+
+func TestMapVulnerabilityOSResultCarriesRelease(t *testing.T) {
+	refs := map[string]queryRef{"alpine\x00busybox": {ecosystem: "apk", name: "busybox"}}
+	mapped, ok := mapVulnerability("alpine", trivyVulnerability{
+		VulnerabilityID:  "CVE-2023-42364",
+		PkgName:          "busybox",
+		InstalledVersion: "1.36.1-r5",
+		FixedVersion:     "1.36.1-r6",
+		Severity:         "MEDIUM",
+	}, refs, "3.18")
+	if !ok {
+		t.Fatal("expected mapped result")
+	}
+	rng := mapped.AffectedRanges[0]
+	if rng.Ecosystem != "apk" || rng.Release != "3.18" || rng.Fixed != "1.36.1-r6" {
+		t.Fatalf("unexpected range: %+v", rng)
+	}
+}

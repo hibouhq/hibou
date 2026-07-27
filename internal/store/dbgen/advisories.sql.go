@@ -16,9 +16,9 @@ import (
 )
 
 const createAffectedRange = `-- name: CreateAffectedRange :one
-INSERT INTO affected_ranges (advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at
+INSERT INTO affected_ranges (advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, release)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at, release
 `
 
 type CreateAffectedRangeParams struct {
@@ -29,6 +29,7 @@ type CreateAffectedRangeParams struct {
 	Fixed        string    `json:"fixed"`
 	LastAffected string    `json:"last_affected"`
 	Source       string    `json:"source"`
+	Release      string    `json:"release"`
 }
 
 func (q *Queries) CreateAffectedRange(ctx context.Context, arg CreateAffectedRangeParams) (AffectedRange, error) {
@@ -40,6 +41,7 @@ func (q *Queries) CreateAffectedRange(ctx context.Context, arg CreateAffectedRan
 		arg.Fixed,
 		arg.LastAffected,
 		arg.Source,
+		arg.Release,
 	)
 	var i AffectedRange
 	err := row.Scan(
@@ -52,6 +54,7 @@ func (q *Queries) CreateAffectedRange(ctx context.Context, arg CreateAffectedRan
 		&i.LastAffected,
 		&i.Source,
 		&i.CreatedAt,
+		&i.Release,
 	)
 	return i, err
 }
@@ -313,7 +316,7 @@ func (q *Queries) ListAdvisoriesByPackage(ctx context.Context, arg ListAdvisorie
 }
 
 const listAffectedRangesByAdvisory = `-- name: ListAffectedRangesByAdvisory :many
-SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at FROM affected_ranges WHERE advisory_id = $1
+SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at, release FROM affected_ranges WHERE advisory_id = $1
 `
 
 func (q *Queries) ListAffectedRangesByAdvisory(ctx context.Context, advisoryID uuid.UUID) ([]AffectedRange, error) {
@@ -335,6 +338,7 @@ func (q *Queries) ListAffectedRangesByAdvisory(ctx context.Context, advisoryID u
 			&i.LastAffected,
 			&i.Source,
 			&i.CreatedAt,
+			&i.Release,
 		); err != nil {
 			return nil, err
 		}
@@ -350,7 +354,7 @@ func (q *Queries) ListAffectedRangesByAdvisory(ctx context.Context, advisoryID u
 }
 
 const listAffectedRangesByAdvisoryIDs = `-- name: ListAffectedRangesByAdvisoryIDs :many
-SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at FROM affected_ranges WHERE advisory_id = ANY($1::uuid[])
+SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at, release FROM affected_ranges WHERE advisory_id = ANY($1::uuid[])
 `
 
 func (q *Queries) ListAffectedRangesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]AffectedRange, error) {
@@ -372,6 +376,7 @@ func (q *Queries) ListAffectedRangesByAdvisoryIDs(ctx context.Context, dollar_1 
 			&i.LastAffected,
 			&i.Source,
 			&i.CreatedAt,
+			&i.Release,
 		); err != nil {
 			return nil, err
 		}
@@ -387,7 +392,7 @@ func (q *Queries) ListAffectedRangesByAdvisoryIDs(ctx context.Context, dollar_1 
 }
 
 const listAffectedRangesByPackage = `-- name: ListAffectedRangesByPackage :many
-SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at FROM affected_ranges WHERE ecosystem = $1 AND package_name = $2
+SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at, release FROM affected_ranges WHERE ecosystem = $1 AND package_name = $2
 `
 
 type ListAffectedRangesByPackageParams struct {
@@ -414,6 +419,7 @@ func (q *Queries) ListAffectedRangesByPackage(ctx context.Context, arg ListAffec
 			&i.LastAffected,
 			&i.Source,
 			&i.CreatedAt,
+			&i.Release,
 		); err != nil {
 			return nil, err
 		}

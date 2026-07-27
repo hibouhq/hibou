@@ -894,6 +894,10 @@ func (p *fakeForgeProvider) GetBranch(context.Context, string, string, string) (
 	return nil, forge.ErrNotImplemented
 }
 
+func (p *fakeForgeProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (p *fakeForgeProvider) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

@@ -78,10 +78,21 @@ type componentEntryResponse struct {
 	VulnCount int    `json:"vuln_count"`
 }
 
+type componentUpdateResponse struct {
+	Name          string `json:"name"`
+	Ecosystem     string `json:"ecosystem"`
+	Purl          string `json:"purl"`
+	BaseVersion   string `json:"base_version"`
+	HeadVersion   string `json:"head_version"`
+	BaseVulnCount int    `json:"base_vuln_count"`
+	HeadVulnCount int    `json:"head_vuln_count"`
+}
+
 type componentDiffResponse struct {
-	Added     []componentEntryResponse `json:"added"`
-	Removed   []componentEntryResponse `json:"removed"`
-	Unchanged int                      `json:"unchanged"`
+	Added     []componentEntryResponse  `json:"added"`
+	Removed   []componentEntryResponse  `json:"removed"`
+	Updated   []componentUpdateResponse `json:"updated"`
+	Unchanged int                       `json:"unchanged"`
 }
 
 type compareResultResponse struct {
@@ -1082,27 +1093,23 @@ func reverseSnapshots(snapshots []store.Snapshot) {
 }
 
 func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithVulnsRow) componentDiffResponse {
+	toEntry := func(row store.ListComponentsBySnapshotWithVulnsRow) componentEntryResponse {
+		return componentEntryResponse{
+			Name:      row.Name,
+			Version:   row.Version,
+			Ecosystem: row.Ecosystem,
+			Purl:      row.Purl,
+			VulnCount: int(row.VulnCount),
+		}
+	}
 	baseByKey := make(map[string]componentEntryResponse, len(baseRows))
 	for _, row := range baseRows {
-		entry := componentEntryResponse{
-			Name:      row.Name,
-			Version:   row.Version,
-			Ecosystem: row.Ecosystem,
-			Purl:      row.Purl,
-			VulnCount: int(row.VulnCount),
-		}
+		entry := toEntry(row)
 		baseByKey[componentDiffKey(entry)] = entry
 	}
-
 	headByKey := make(map[string]componentEntryResponse, len(headRows))
 	for _, row := range headRows {
-		entry := componentEntryResponse{
-			Name:      row.Name,
-			Version:   row.Version,
-			Ecosystem: row.Ecosystem,
-			Purl:      row.Purl,
-			VulnCount: int(row.VulnCount),
-		}
+		entry := toEntry(row)
 		headByKey[componentDiffKey(entry)] = entry
 	}
 
@@ -1111,13 +1118,28 @@ func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithV
 	result := componentDiffResponse{
 		Added:   []componentEntryResponse{},
 		Removed: []componentEntryResponse{},
+		Updated: []componentUpdateResponse{},
 	}
-	for key, entry := range headByKey {
-		if _, ok := baseByKey[key]; ok {
+	for key, head := range headByKey {
+		base, ok := baseByKey[key]
+		if !ok {
+			result.Added = append(result.Added, head)
+			continue
+		}
+		if base.Version == head.Version {
 			result.Unchanged++
 			continue
 		}
-		result.Added = append(result.Added, entry)
+		// Same package, different version: an update, not an add+remove pair.
+		result.Updated = append(result.Updated, componentUpdateResponse{
+			Name:          head.Name,
+			Ecosystem:     head.Ecosystem,
+			Purl:          head.Purl,
+			BaseVersion:   base.Version,
+			HeadVersion:   head.Version,
+			BaseVulnCount: base.VulnCount,
+			HeadVulnCount: head.VulnCount,
+		})
 	}
 	for key, entry := range baseByKey {
 		if _, ok := headByKey[key]; ok {
@@ -1132,15 +1154,24 @@ func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithV
 	sort.Slice(result.Removed, func(i, j int) bool {
 		return componentDiffKey(result.Removed[i]) < componentDiffKey(result.Removed[j])
 	})
+	sort.Slice(result.Updated, func(i, j int) bool {
+		u, v := result.Updated[i], result.Updated[j]
+		return u.Ecosystem+":"+u.Name < v.Ecosystem+":"+v.Name
+	})
 
 	return result
 }
 
+// componentDiffKey identifies a package independent of its version, so a
+// version bump pairs into one "updated" row instead of an add+remove.
 func componentDiffKey(entry componentEntryResponse) string {
 	if entry.Purl != "" {
+		if at := strings.LastIndex(entry.Purl, "@"); at > 0 {
+			return entry.Purl[:at]
+		}
 		return entry.Purl
 	}
-	return entry.Ecosystem + ":" + entry.Name + "@" + entry.Version
+	return entry.Ecosystem + ":" + entry.Name
 }
 
 // buildSnapshotCoverageDiff loads the primary coverage report for each snapshot

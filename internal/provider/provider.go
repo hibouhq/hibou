@@ -12,6 +12,10 @@ type PackageQuery struct {
 	Ecosystem string
 	Name      string
 	Version   string
+	// Distro is the purl "distro" qualifier for OS packages ("alpine-3.18.4",
+	// "debian-12"). Empty for language ecosystems. Providers that match distro
+	// advisories need it to stay release-accurate.
+	Distro string
 }
 
 type AdvisoryResult struct {

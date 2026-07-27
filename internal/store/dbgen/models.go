@@ -879,6 +879,7 @@ type AffectedRange struct {
 	LastAffected string    `json:"last_affected"`
 	Source       string    `json:"source"`
 	CreatedAt    time.Time `json:"created_at"`
+	Release      string    `json:"release"`
 }
 
 type ApiKey struct {

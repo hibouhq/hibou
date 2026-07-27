@@ -30,6 +30,38 @@ func Parse(r io.Reader) (*Document, error) {
 	return &doc, nil
 }
 
+// advisoryRuleIDPattern matches rule IDs that are dependency-advisory
+// identifiers (CVE and the OSV/distro advisory namespaces) rather than
+// static-analysis rules. Scanners that also do dependency scanning (Trivy,
+// Grype, …) reuse the advisory ID as the SARIF rule ID, which is what makes
+// these recognizable regardless of tool.
+var advisoryRuleIDPattern = regexp.MustCompile(`^(?i)(` +
+	`CVE-\d{4}-\d+` +
+	`|GHSA(-[23456789cfghjmpqrvwx]{4}){3}` +
+	`|(RUSTSEC|PYSEC|OSV|MAL|GO|GSD|DSA|DLA|ELSA|ALSA|ALBA|USN)-\d{2,6}[\w.:-]*` +
+	`|CGA(-[23456789cfghjmpqrvwx]{4}){3}` +
+	`)$`)
+
+// IsAdvisoryFinding reports whether a SARIF result is a dependency advisory
+// rather than a static-analysis finding: its rule ID sits in an advisory
+// namespace, or the scanner tagged the rule as a vulnerability. Dependency
+// advisories are matched server-side from the SBOM with full component
+// context, so ingesting them as SAST would double-count every one.
+func IsAdvisoryFinding(ruleID string, rule *RuleDescriptor) bool {
+	if advisoryRuleIDPattern.MatchString(strings.TrimSpace(ruleID)) {
+		return true
+	}
+	if rule == nil {
+		return false
+	}
+	for _, tag := range rule.Tags {
+		if strings.EqualFold(strings.TrimSpace(tag), "vulnerability") {
+			return true
+		}
+	}
+	return false
+}
+
 func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 	if doc == nil {
 		return nil, errors.New("document is required")
@@ -37,7 +69,9 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 
 	findings := make([]Finding, 0)
 	for _, run := range doc.Runs {
-		toolName := strings.TrimSpace(run.Tool.Driver.Name)
+		// Lowercased so the same scanner keys identically wherever the name
+		// appears (SARIF driver "Trivy", server-side provider "trivy").
+		toolName := strings.ToLower(strings.TrimSpace(run.Tool.Driver.Name))
 		for _, result := range run.Results {
 			rule := resolveRule(run.Tool.Driver.Rules, result)
 			filePath, startLine, endLine := resultLocation(result)

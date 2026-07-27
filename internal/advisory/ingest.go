@@ -218,6 +218,7 @@ func (ing *Ingester) replaceAffectedRanges(ctx context.Context, queries Ingester
 			Fixed:        affectedRange.Fixed,
 			LastAffected: affectedRange.LastAffected,
 			Source:       providerName,
+			Release:      affectedRange.Release,
 		}); err != nil {
 			return fmt.Errorf("create affected range for %s/%s: %w", providerName, advisoryID, err)
 		}

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -182,6 +183,80 @@ func (s *Server) handleListOrgComponents(w http.ResponseWriter, r *http.Request)
 	})
 
 	api.JSON(w, http.StatusOK, out)
+}
+
+// @Summary      Trigger an org-wide component scan
+// @Description  Runs an advisory rescan against the current snapshot of every enrolled repository in the organization.
+// @Tags         organizations
+// @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
+// @Param        slug      path  string  true  "Organization slug"
+// @Success      200  {object}  api.Response{data=server.orgComponentScanResponse}
+// @Failure      401  {object}  api.Response
+// @Failure      404  {object}  api.Response
+// @Failure      409  {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/components/scan [post]
+func (s *Server) handleTriggerOrgComponentScan(w http.ResponseWriter, r *http.Request) {
+	org, ok := s.loadAuthorizedOrg(r, w)
+	if !ok {
+		return
+	}
+	user := UserFromContext(r.Context())
+
+	if len(s.advisoryProviders) == 0 {
+		api.JSONError(w, http.StatusConflict, "advisory scanning is not enabled: no advisory providers are configured")
+		return
+	}
+
+	pairs, err := s.currentRepoSnapshots(r, org)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository snapshots")
+		return
+	}
+	if len(pairs) == 0 {
+		api.JSONError(w, http.StatusNotFound, "no snapshots available to scan in this organization")
+		return
+	}
+
+	ipAddress, userAgent := audit.RequestContext(r)
+	actorID := user.ID
+	orgID := org.ID
+	actor := audit.Entry{
+		ActorID:      &actorID,
+		ActorType:    audit.ActorUser,
+		ActorDisplay: actorDisplay(user),
+		OrgID:        &orgID,
+		IPAddress:    ipAddress,
+		UserAgent:    userAgent,
+	}
+
+	response := orgComponentScanResponse{Providers: append([]string(nil), s.advisoryProviders...)}
+	for _, pair := range pairs {
+		scanID, err := s.advisoryScanner.TriggerRescan(r.Context(), pair.snapshot.ID, s.advisoryProviders, actor)
+		if err != nil {
+			s.log.Error().Err(err).Str("repo", pair.repo.Slug).Msg("org component scan: repo rescan failed")
+			response.Failed = append(response.Failed, pair.repo.Slug)
+			continue
+		}
+		response.Scans = append(response.Scans, orgRepoScanResult{Repo: pair.repo.Slug, ScanID: scanID})
+	}
+	if len(response.Scans) == 0 {
+		api.JSONError(w, http.StatusInternalServerError, "component scan failed for every repository")
+		return
+	}
+	api.JSON(w, http.StatusOK, response)
+}
+
+type orgRepoScanResult struct {
+	Repo   string    `json:"repo"`
+	ScanID uuid.UUID `json:"scan_id"`
+}
+
+type orgComponentScanResponse struct {
+	Scans     []orgRepoScanResult `json:"scans"`
+	Failed    []string            `json:"failed,omitempty"`
+	Providers []string            `json:"providers"`
 }
 
 func unionAdvisories(existing, incoming []advisoryResponse) []advisoryResponse {

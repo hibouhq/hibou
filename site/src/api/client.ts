@@ -329,6 +329,16 @@ export interface ComponentWithVulns {
   usage_paths?: string[][]
 }
 
+export interface ComponentUpdate {
+  name: string
+  ecosystem: string
+  purl: string
+  base_version: string
+  head_version: string
+  base_vuln_count: number
+  head_vuln_count: number
+}
+
 export interface ComponentEntry {
   name: string
   version: string
@@ -488,6 +498,7 @@ export interface CompareResult {
   component_diff: {
     added: ComponentEntry[]
     removed: ComponentEntry[]
+    updated: ComponentUpdate[]
     unchanged: number
   }
   coverage_diff: CoverageDiff | null
@@ -1212,6 +1223,13 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<ComponentWithVulns[]>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/components${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  triggerOrgComponentScan(provider: string, slug: string) {
+    return this.request<ApiResponse<{ scans: Array<{ repo: string; scan_id: string }>; failed?: string[]; providers: string[] }>>(
+      `/orgs/${provider}/${slug}/components/scan`,
+      { method: 'POST' },
     )
   }
 

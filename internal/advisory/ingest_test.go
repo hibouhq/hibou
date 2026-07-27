@@ -435,3 +435,44 @@ type erroringAliasStore struct {
 func (e erroringAliasStore) GetAdvisoryByAlias(context.Context, string) (dbgen.Advisory, error) {
 	return dbgen.Advisory{}, errAliasLookup
 }
+
+// The exact cross-datasource shape in production: Trivy reports the bare CVE
+// with no aliases, OSV later reports the GHSA whose alias list carries the
+// same CVE. Both must land on one advisory with one source row per provider.
+func TestIngesterReconcilesTrivyAndOSVSources(t *testing.T) {
+	store := newMockIngesterStore()
+	ingester := NewIngester(store, zerolog.Nop())
+
+	trivyIDs, err := ingester.Ingest(context.Background(), "trivy", []IngestResult{{
+		ProviderID: "CVE-2019-10744",
+		Title:      "lodash prototype pollution",
+	}})
+	if err != nil {
+		t.Fatalf("trivy ingest: %v", err)
+	}
+
+	osvIDs, err := ingester.Ingest(context.Background(), "osv", []IngestResult{{
+		ProviderID: "GHSA-jf85-cpcp-j695",
+		Aliases:    []string{"CVE-2019-10744"},
+		Title:      "Prototype Pollution in lodash",
+	}})
+	if err != nil {
+		t.Fatalf("osv ingest: %v", err)
+	}
+
+	trivyID := trivyIDs["CVE-2019-10744"]
+	osvID := osvIDs["GHSA-jf85-cpcp-j695"]
+	if trivyID != osvID {
+		t.Fatalf("expected one advisory, got trivy=%s osv=%s", trivyID, osvID)
+	}
+	if got := store.advisories[trivyID].CanonicalID; got != "CVE-2019-10744" {
+		t.Fatalf("canonical = %q, want the CVE", got)
+	}
+	sources := store.sources[trivyID]
+	if _, ok := sources["trivy"]; !ok {
+		t.Fatal("missing trivy source row")
+	}
+	if _, ok := sources["osv"]; !ok {
+		t.Fatal("missing osv source row")
+	}
+}

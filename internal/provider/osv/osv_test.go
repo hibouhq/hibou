@@ -202,90 +202,52 @@ func TestQueryPackagesBasicMapping(t *testing.T) {
 	assertBasicMappingResult(t, results, gotUserAgent)
 }
 
-func TestQueryPackagesOmitsVersionAndExpandsRPM(t *testing.T) {
-	server := osvTestServer(
-		t,
-		[][]string{{"RHSA-1"}, {"ROCKY-1"}, {}, {}},
-		map[string]vulnerability{
-			"RHSA-1": {
-				ID:      "RHSA-1",
-				Summary: "rhel advisory",
-				Affected: []affectedPackage{{
-					Package: queryPackage{Name: "openssl", Ecosystem: "Red Hat"},
-					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
-				}},
-			},
-			"ROCKY-1": {
-				ID:      "ROCKY-1",
-				Summary: "rocky advisory",
-				Affected: []affectedPackage{{
-					Package: queryPackage{Name: "openssl", Ecosystem: "Rocky Linux"},
-					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.3"}}}},
-				}},
-			},
-		},
-		func(t *testing.T, req queryBatchRequest, _ *http.Request) {
-			if len(req.Queries) != 4 {
-				t.Fatalf("expected 4 expanded rpm queries, got %d", len(req.Queries))
-			}
-
-			gotEcosystems := make([]string, 0, len(req.Queries))
-			for _, query := range req.Queries {
-				if query.Version != "" {
-					t.Fatal("expected version field to be omitted from OSV query")
-				}
-				gotEcosystems = append(gotEcosystems, query.Package.Ecosystem)
-			}
-
-			expected := []string{"Red Hat", "Rocky Linux", "AlmaLinux", "SUSE"}
-			if !reflect.DeepEqual(gotEcosystems, expected) {
-				t.Fatalf("unexpected rpm ecosystem expansion: %#v", gotEcosystems)
-			}
-		},
-		nil,
-	)
-	defer server.Close()
-
-	prov := New(server.URL, zerolog.Nop())
-	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{
-		Ecosystem: "rpm",
-		Name:      "openssl",
-		Version:   "1.0.1",
-	}})
+func TestQueryPackagesSkipsRPMAndUnreleasedDistroQueries(t *testing.T) {
+	// rpm never queries OSV (Red Hat stream qualifiers cannot be release-
+	// matched), and apk/deb without a distro qualifier fail closed. No HTTP
+	// request may be issued for any of these.
+	prov := New("http://127.0.0.1:1", zerolog.Nop())
+	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{
+		{Ecosystem: "rpm", Name: "openssl", Version: "1.0.1", Distro: "redhat-9.4"},
+		{Ecosystem: "apk", Name: "busybox", Version: "1.36.1-r5"},
+		{Ecosystem: "deb", Name: "libssl3", Version: "3.0.11"},
+	})
 	if err != nil {
 		t.Fatalf("QueryPackages() error = %v", err)
 	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 rpm results, got %d", len(results))
-	}
-	if results[0].AffectedRanges[0].Ecosystem != "rpm" || results[1].AffectedRanges[0].Ecosystem != "rpm" {
-		t.Fatalf("expected rpm normalization, got %#v", results)
+	if len(results) != 0 {
+		t.Fatalf("expected no results, got %d", len(results))
 	}
 }
 
-func TestQueryPackagesSkipsUnknownEcosystem(t *testing.T) {
+func TestQueryPackagesReleaseQualifiedDistro(t *testing.T) {
 	server := osvTestServer(
 		t,
-		[][]string{{"GHSA-skip-unknown"}},
+		[][]string{{"CVE-2024-1"}},
 		map[string]vulnerability{
-			"GHSA-skip-unknown": {
-				ID:      "GHSA-skip-unknown",
-				Summary: "lodash issue",
-				Affected: []affectedPackage{{
-					Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
-					Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}}}},
-				}},
+			"CVE-2024-1": {
+				ID:      "CVE-2024-1",
+				Summary: "alpine advisory",
+				Affected: []affectedPackage{
+					{
+						Package: queryPackage{Name: "busybox", Ecosystem: "Alpine:v3.18"},
+						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.36.1-r6"}}}},
+					},
+					{
+						// Same record, other release: must be scoped to 3.19, and the
+						// open-ended entry (no fixed yet) must be dropped entirely.
+						Package: queryPackage{Name: "busybox", Ecosystem: "Alpine:v3.19"},
+						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}}}},
+					},
+				},
 			},
 		},
 		func(t *testing.T, req queryBatchRequest, _ *http.Request) {
 			if len(req.Queries) != 1 {
-				t.Fatalf("expected 1 supported query, got %d", len(req.Queries))
+				t.Fatalf("expected 1 query, got %d", len(req.Queries))
 			}
-			if req.Queries[0].Package.Name != "lodash" {
-				t.Fatalf("expected lodash query, got %s", req.Queries[0].Package.Name)
-			}
-			if req.Queries[0].Package.Ecosystem != "npm" {
-				t.Fatalf("expected npm ecosystem, got %s", req.Queries[0].Package.Ecosystem)
+			if req.Queries[0].Package.Ecosystem != "Alpine:v3.18" {
+				t.Fatalf("expected release-qualified ecosystem, got %q", req.Queries[0].Package.Ecosystem)
 			}
 		},
 		nil,
@@ -294,13 +256,10 @@ func TestQueryPackagesSkipsUnknownEcosystem(t *testing.T) {
 
 	prov := New(server.URL, zerolog.Nop())
 	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{
-		Ecosystem: "npm",
-		Name:      "lodash",
-		Version:   "4.17.20",
-	}, {
-		Ecosystem: "",
-		Name:      "mystery",
-		Version:   "1.0.0",
+		Ecosystem: "apk",
+		Name:      "busybox",
+		Version:   "1.36.1-r5",
+		Distro:    "alpine-3.18.4",
 	}})
 	if err != nil {
 		t.Fatalf("QueryPackages() error = %v", err)
@@ -308,57 +267,12 @@ func TestQueryPackagesSkipsUnknownEcosystem(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].ProviderID != "GHSA-skip-unknown" {
-		t.Fatalf("unexpected provider id: %s", results[0].ProviderID)
+	ranges := results[0].AffectedRanges
+	if len(ranges) != 1 {
+		t.Fatalf("expected the open-ended 3.19 range to be dropped, got %#v", ranges)
 	}
-	if len(results[0].AffectedRanges) != 1 || results[0].AffectedRanges[0].Ecosystem != "npm" {
-		t.Fatalf("expected npm advisory mapping, got %#v", results[0].AffectedRanges)
-	}
-}
-
-func TestQueryPackagesDedupesRPMAdvisoriesByProviderID(t *testing.T) {
-	server := osvTestServer(
-		t,
-		[][]string{{"CVE-2024-1234"}, {"CVE-2024-1234"}, {}, {}},
-		map[string]vulnerability{
-			"CVE-2024-1234": {
-				ID:      "CVE-2024-1234",
-				Aliases: []string{"GHSA-dup-1"},
-				Summary: "red hat advisory",
-				Affected: []affectedPackage{
-					{
-						Package: queryPackage{Name: "openssl", Ecosystem: "Red Hat"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
-					},
-					{
-						Package: queryPackage{Name: "openssl", Ecosystem: "Rocky Linux"},
-						Ranges:  []affectedRange{{Type: "ECOSYSTEM", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.0.2"}}}},
-					},
-				},
-			},
-		},
-		nil,
-		nil,
-	)
-	defer server.Close()
-
-	prov := New(server.URL, zerolog.Nop())
-	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{
-		Ecosystem: "rpm",
-		Name:      "openssl",
-		Version:   "1.0.1",
-	}})
-	if err != nil {
-		t.Fatalf("QueryPackages() error = %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 deduped rpm result, got %d", len(results))
-	}
-	if results[0].ProviderID != "CVE-2024-1234" {
-		t.Fatalf("unexpected provider id: %s", results[0].ProviderID)
-	}
-	if results[0].AffectedRanges[0].Ecosystem != "rpm" {
-		t.Fatalf("expected rpm normalization, got %#v", results[0].AffectedRanges)
+	if ranges[0].Ecosystem != "apk" || ranges[0].Release != "3.18" || ranges[0].Fixed != "1.36.1-r6" {
+		t.Fatalf("unexpected range: %#v", ranges[0])
 	}
 }
 
@@ -470,7 +384,7 @@ func TestQueryPackagesCVSSFallbackAndRanges(t *testing.T) {
 					Score: "5.0",
 				}},
 				Affected: []affectedPackage{{
-					Package: queryPackage{Name: "pkg", Ecosystem: "Debian"},
+					Package: queryPackage{Name: "pkg", Ecosystem: "Debian:12"},
 					Ranges: []affectedRange{{
 						Type:   "ECOSYSTEM",
 						Events: []rangeEvent{{Introduced: "0"}, {Fixed: "1.2.0"}, {Introduced: "1.3.0"}, {LastAffected: "1.3.5"}},
@@ -484,7 +398,7 @@ func TestQueryPackagesCVSSFallbackAndRanges(t *testing.T) {
 	defer server.Close()
 
 	prov := New(server.URL, zerolog.Nop())
-	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{Ecosystem: "deb", Name: "pkg"}})
+	results, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{Ecosystem: "deb", Name: "pkg", Distro: "debian-12"}})
 	if err != nil {
 		t.Fatalf("QueryPackages() error = %v", err)
 	}
@@ -615,5 +529,24 @@ func TestQueryPackagesInvalidJSON(t *testing.T) {
 	_, err := prov.QueryPackages(context.Background(), []provider.PackageQuery{{Ecosystem: "npm", Name: "pkg"}})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestMapAffectedPackageRangesAcceptsSemver(t *testing.T) {
+	// GHSA publishes SEMVER ranges for npm/Go/cargo; only accepting ECOSYSTEM
+	// dropped nearly every advisory in those ecosystems.
+	pkg := affectedPackage{
+		Package: queryPackage{Name: "lodash", Ecosystem: "npm"},
+		Ranges: []affectedRange{
+			{Type: "SEMVER", Events: []rangeEvent{{Introduced: "0"}, {Fixed: "4.17.21"}}},
+			{Type: "GIT", Events: []rangeEvent{{Introduced: "abc123"}}},
+		},
+	}
+	ranges := mapAffectedPackageRanges(pkg)
+	if len(ranges) != 1 {
+		t.Fatalf("expected 1 range (SEMVER kept, GIT dropped), got %d", len(ranges))
+	}
+	if ranges[0].Fixed != "4.17.21" || ranges[0].Ecosystem != "npm" {
+		t.Fatalf("unexpected range: %+v", ranges[0])
 	}
 }

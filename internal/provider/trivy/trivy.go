@@ -16,12 +16,14 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/distro"
 	"github.com/hibouhq/hibou/internal/provider"
 	"github.com/hibouhq/hibou/internal/version"
 	"github.com/hibouhq/hibou/internal/versioncmp"
@@ -81,6 +83,29 @@ var trivyTypeToEcosystem = map[string]string{
 	"composer":   "packagist",
 }
 
+// osFamilyToEcosystem maps Trivy OS result types / purl distro families to the
+// internal distro ecosystem.
+var osFamilyToEcosystem = map[string]string{
+	"alpine":      "apk",
+	"debian":      "deb",
+	"ubuntu":      "deb",
+	"redhat":      "rpm",
+	"rhel":        "rpm",
+	"centos":      "rpm",
+	"rocky":       "rpm",
+	"alma":        "rpm",
+	"almalinux":   "rpm",
+	"fedora":      "rpm",
+	"oracle":      "rpm",
+	"ol":          "rpm",
+	"amazon":      "rpm",
+	"suse":        "rpm",
+	"opensuse":    "rpm",
+	"photon":      "rpm",
+	"azurelinux":  "rpm",
+	"cbl-mariner": "rpm",
+}
+
 // resultTypeToUploadType normalizes the result types Trivy may report (including
 // aliases such as python-pkg/jar/gemspec/gobinary) back to the application type
 // we uploaded under, so query reattribution keyed on the upload type still hits.
@@ -124,7 +149,7 @@ func (p *Provider) Name() string { return "trivy" }
 func (p *Provider) BatchSize() int { return batchSize }
 
 func (p *Provider) SupportedEcosystems() []string {
-	return []string{"npm", "pypi", "maven", "cargo", "nuget", "rubygems", "go", "packagist"}
+	return []string{"npm", "pypi", "maven", "cargo", "nuget", "rubygems", "go", "packagist", "apk", "deb", "rpm"}
 }
 
 // QueryPackages uploads the queried packages to the Trivy server and returns the
@@ -134,12 +159,38 @@ func (p *Provider) QueryPackages(ctx context.Context, queries []provider.Package
 		return nil, nil
 	}
 
+	var results []provider.AdvisoryResult
+
 	applications, queryRefs := buildApplications(queries)
-	if len(applications) == 0 {
-		return nil, nil
+	if len(applications) > 0 {
+		blob := blobInfo{SchemaVersion: blobSchemaVersion, Applications: applications}
+		resp, err := p.scanBlob(ctx, blob, []string{"library"})
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, mapScanResponse(resp, queryRefs, "")...)
 	}
 
-	blob := blobInfo{SchemaVersion: blobSchemaVersion, Applications: applications}
+	// OS packages: one artifact per distro release, because a blob carries a
+	// single os identity and the server's detectors are release-aware.
+	for _, group := range buildOSGroups(queries) {
+		blob := blobInfo{
+			SchemaVersion: blobSchemaVersion,
+			OS:            &osInfo{Family: group.family, Name: group.version},
+			PackageInfos:  []packageInfo{{Packages: group.packages}},
+		}
+		resp, err := p.scanBlob(ctx, blob, []string{"os"})
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, mapScanResponse(resp, group.refs, group.releaseKey)...)
+	}
+
+	return results, nil
+}
+
+// scanBlob uploads a synthesized blob and scans it for vulnerabilities.
+func (p *Provider) scanBlob(ctx context.Context, blob blobInfo, pkgTypes []string) (*scanResponse, error) {
 	blobPayload, err := json.Marshal(blob)
 	if err != nil {
 		return nil, fmt.Errorf("trivy: marshal blob: %w", err)
@@ -153,11 +204,96 @@ func (p *Provider) QueryPackages(ctx context.Context, queries []provider.Package
 	if err := p.putBlob(ctx, diffID, blob); err != nil {
 		return nil, err
 	}
-	resp, err := p.scan(ctx, artifactID, diffID)
-	if err != nil {
-		return nil, err
+	return p.scan(ctx, artifactID, diffID, pkgTypes)
+}
+
+// osGroup is one distro release's worth of OS package queries.
+type osGroup struct {
+	family     string
+	version    string
+	releaseKey string
+	packages   []osPkg
+	refs       map[string]queryRef
+}
+
+// buildOSGroups partitions distro-ecosystem queries by (family, release).
+// Queries whose purl carried no distro qualifier are skipped: without the
+// release the scan result cannot be scoped and would risk false positives.
+func buildOSGroups(queries []provider.PackageQuery) []osGroup {
+	groups := make(map[string]*osGroup)
+	order := make([]string, 0)
+	for _, query := range queries {
+		ecosystem := strings.ToLower(strings.TrimSpace(query.Ecosystem))
+		if _, ok := osFamilyToEcosystem[familyOf(query.Distro)]; !ok || !distro.IsDistroEcosystem(ecosystem) {
+			continue
+		}
+		family, version := splitDistroQualifier(query.Distro)
+		if family == "" || version == "" || strings.TrimSpace(query.Name) == "" {
+			continue
+		}
+		key := family + "\x00" + version
+		group, ok := groups[key]
+		if !ok {
+			group = &osGroup{
+				family:     family,
+				version:    version,
+				releaseKey: distro.ReleaseKey(ecosystem, version),
+				refs:       make(map[string]queryRef),
+			}
+			groups[key] = group
+			order = append(order, key)
+		}
+		group.packages = append(group.packages, buildOSPkg(ecosystem, query.Name, query.Version))
+		group.refs[family+"\x00"+strings.ToLower(query.Name)] = queryRef{ecosystem: ecosystem, name: query.Name}
 	}
-	return mapScanResponse(resp, queryRefs), nil
+	sort.Strings(order)
+	out := make([]osGroup, 0, len(order))
+	for _, key := range order {
+		out = append(out, *groups[key])
+	}
+	return out
+}
+
+func familyOf(distroQualifier string) string {
+	family, _ := splitDistroQualifier(distroQualifier)
+	return family
+}
+
+// splitDistroQualifier parses "alpine-3.18.4" into ("alpine", "3.18.4").
+func splitDistroQualifier(value string) (string, string) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for i := 0; i < len(value); i++ {
+		if value[i] >= '0' && value[i] <= '9' && i > 0 && value[i-1] == '-' {
+			return value[:i-1], value[i:]
+		}
+	}
+	return "", ""
+}
+
+// buildOSPkg shapes one OS package for the blob. RPM versions carry
+// epoch:version-release split into fields; apk and dpkg detectors take the
+// full version string as-is. Source fields mirror the binary package so
+// src-keyed detectors (Alpine secdb) still match.
+func buildOSPkg(ecosystem, name, version string) osPkg {
+	out := osPkg{Name: name, Version: version, SrcName: name, SrcVersion: version}
+	if ecosystem != "rpm" {
+		return out
+	}
+	rest := version
+	if epochStr, tail, ok := strings.Cut(rest, ":"); ok {
+		if epoch, err := strconv.Atoi(epochStr); err == nil {
+			out.Epoch = epoch
+			out.SrcEpoch = epoch
+			rest = tail
+		}
+	}
+	if idx := strings.LastIndex(rest, "-"); idx > 0 {
+		out.Version, out.Release = rest[:idx], rest[idx+1:]
+		out.SrcVersion, out.SrcRelease = out.Version, out.Release
+	} else {
+		out.Version, out.SrcVersion = rest, rest
+	}
+	return out
 }
 
 // queryRef records the originating query's internal ecosystem and exact package
@@ -212,12 +348,12 @@ func (p *Provider) putBlob(ctx context.Context, diffID string, blob blobInfo) er
 	return p.callTwirp(ctx, "trivy.cache.v1.Cache", "PutBlob", req, nil)
 }
 
-func (p *Provider) scan(ctx context.Context, artifactID, diffID string) (*scanResponse, error) {
+func (p *Provider) scan(ctx context.Context, artifactID, diffID string, pkgTypes []string) (*scanResponse, error) {
 	req := scanRequest{
 		Target:     scanTarget,
 		ArtifactID: artifactID,
 		BlobIDs:    []string{diffID},
-		Options:    scanOptions{PkgTypes: []string{"library"}, Scanners: []string{"vuln"}},
+		Options:    scanOptions{PkgTypes: pkgTypes, Scanners: []string{"vuln"}},
 	}
 	var resp scanResponse
 	if err := p.callTwirp(ctx, "trivy.scanner.v1.Scanner", "Scan", req, &resp); err != nil {
@@ -262,14 +398,14 @@ func (p *Provider) callTwirp(ctx context.Context, service, method string, in, ou
 	return nil
 }
 
-func mapScanResponse(resp *scanResponse, queryRefs map[string]queryRef) []provider.AdvisoryResult {
+func mapScanResponse(resp *scanResponse, queryRefs map[string]queryRef, release string) []provider.AdvisoryResult {
 	if resp == nil {
 		return nil
 	}
 	results := make([]provider.AdvisoryResult, 0)
 	for _, result := range resp.Results {
 		for _, vuln := range result.Vulnerabilities {
-			mapped, ok := mapVulnerability(result.Type, vuln, queryRefs)
+			mapped, ok := mapVulnerability(result.Type, vuln, queryRefs, release)
 			if !ok {
 				continue
 			}
@@ -279,7 +415,7 @@ func mapScanResponse(resp *scanResponse, queryRefs map[string]queryRef) []provid
 	return results
 }
 
-func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[string]queryRef) (provider.AdvisoryResult, bool) {
+func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[string]queryRef, release string) (provider.AdvisoryResult, bool) {
 	if strings.TrimSpace(vuln.VulnerabilityID) == "" || strings.TrimSpace(vuln.PkgName) == "" {
 		return provider.AdvisoryResult{}, false
 	}
@@ -295,8 +431,10 @@ func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[
 	if ref, ok := queryRefs[uploadType+"\x00"+strings.ToLower(vuln.PkgName)]; ok {
 		ecosystem = ref.ecosystem
 		packageName = ref.name
+	} else if eco, ok := trivyTypeToEcosystem[resultType]; ok {
+		ecosystem = eco
 	} else {
-		ecosystem = trivyTypeToEcosystem[resultType]
+		ecosystem = osFamilyToEcosystem[strings.ToLower(resultType)]
 	}
 	if ecosystem == "" {
 		return provider.AdvisoryResult{}, false
@@ -315,7 +453,7 @@ func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[
 		CVSSVersion:    cvssVersion,
 		CVSSVector:     cvssVector,
 		CWEIDs:         append([]string(nil), vuln.CweIDs...),
-		AffectedRanges: []advisory.AffectedRange{buildAffectedRange(ecosystem, packageName, vuln)},
+		AffectedRanges: []advisory.AffectedRange{buildAffectedRange(ecosystem, packageName, release, vuln)},
 		RawData:        rawData,
 	}
 	if publishedAt, ok := parseTimestamp(vuln.PublishedDate); ok {
@@ -329,12 +467,13 @@ func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[
 // smallest fix strictly greater than the installed version (the correct upper
 // bound for the installed version's release branch); otherwise we bound the
 // range to the installed version so only that exact version is matched.
-func buildAffectedRange(ecosystem, packageName string, vuln trivyVulnerability) advisory.AffectedRange {
+func buildAffectedRange(ecosystem, packageName, release string, vuln trivyVulnerability) advisory.AffectedRange {
 	rng := advisory.AffectedRange{
 		Ecosystem:   ecosystem,
 		PackageName: packageName,
 		Introduced:  "0",
 		Source:      "trivy",
+		Release:     release,
 	}
 	if fixed := selectFixedVersion(ecosystem, vuln.InstalledVersion, vuln.FixedVersion); fixed != "" {
 		rng.Fixed = fixed

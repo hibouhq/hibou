@@ -14,9 +14,32 @@ type application struct {
 	Packages []pkg  `json:"packages"`
 }
 
+type osInfo struct {
+	Family string `json:"family"`
+	Name   string `json:"name"`
+}
+
+type osPkg struct {
+	Name       string `json:"name"`
+	Version    string `json:"version"`
+	Release    string `json:"release,omitempty"`
+	Epoch      int    `json:"epoch,omitempty"`
+	SrcName    string `json:"src_name,omitempty"`
+	SrcVersion string `json:"src_version,omitempty"`
+	SrcRelease string `json:"src_release,omitempty"`
+	SrcEpoch   int    `json:"src_epoch,omitempty"`
+}
+
+type packageInfo struct {
+	FilePath string  `json:"file_path,omitempty"`
+	Packages []osPkg `json:"packages"`
+}
+
 type blobInfo struct {
 	SchemaVersion int           `json:"schema_version"`
-	Applications  []application `json:"applications"`
+	OS            *osInfo       `json:"os,omitempty"`
+	PackageInfos  []packageInfo `json:"package_infos,omitempty"`
+	Applications  []application `json:"applications,omitempty"`
 }
 
 type putBlobRequest struct {

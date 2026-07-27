@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/distro"
 	"github.com/hibouhq/hibou/internal/provider"
 	"github.com/hibouhq/hibou/internal/version"
 )
@@ -35,11 +36,7 @@ var internalToOSVEcosystem = map[string]string{
 	"nuget":     "NuGet",
 	"rubygems":  "RubyGems",
 	"packagist": "Packagist",
-	"deb":       "Debian",
-	"apk":       "Alpine",
 }
-
-var rpmOSVEcosystems = []string{"Red Hat", "Rocky Linux", "AlmaLinux", "SUSE"}
 
 var osvToInternalEcosystem = map[string]string{
 	"Go":          "go",
@@ -146,7 +143,11 @@ func (p *Provider) Name() string {
 }
 
 func (p *Provider) SupportedEcosystems() []string {
-	return []string{"go", "npm", "pypi", "maven", "cargo", "nuget", "rubygems", "packagist", "deb", "apk", "rpm"}
+	// rpm is deliberately absent: OSV's Red Hat-family data carries stream
+	// qualifiers that cannot be matched to purl distro releases; the Trivy
+	// provider owns rpm. apk/deb are queried release-qualified via the distro
+	// package and require the component's distro qualifier.
+	return []string{"go", "npm", "pypi", "maven", "cargo", "nuget", "rubygems", "packagist", "deb", "apk"}
 }
 
 func (p *Provider) BatchSize() int {
@@ -200,13 +201,28 @@ func buildOSVBatchRequest(queries []provider.PackageQuery) (queryBatchRequest, [
 	reqBody := queryBatchRequest{Queries: make([]osvQuery, 0, len(queries))}
 	expandedQueries := make([]provider.PackageQuery, 0, len(queries))
 	for _, query := range queries {
-		osvEcosystems, ok := toOSVEcosystems(query.Ecosystem)
-		if !ok {
+		var osvEcosystems []string
+		if distro.IsDistroEcosystem(query.Ecosystem) {
+			// Distro advisories are release-scoped; without the component's
+			// release a bare-ecosystem query returns ranges from every release
+			// and guarantees false positives. Fail closed instead.
+			qualified, ok := distro.OSVEcosystemFor(query.Ecosystem, query.Distro)
+			if !ok {
+				continue
+			}
+			osvEcosystems = []string{qualified}
+		} else if mapped, ok := toOSVEcosystems(query.Ecosystem); ok {
+			osvEcosystems = mapped
+		} else {
 			// Unknown/unsupported ecosystem: skip this package entirely instead of
 			// failing the whole batch. It simply yields no advisories.
 			continue
 		}
 		for _, osvEcosystem := range osvEcosystems {
+			// Version deliberately omitted: all of the package's advisories are
+			// fetched and their ranges stored, and the vulnerability matcher does
+			// the version comparison. OSV's server-side matching would also choke
+			// on RPM epoch formats.
 			reqBody.Queries = append(reqBody.Queries, osvQuery{Package: queryPackage{Name: query.Name, Ecosystem: osvEcosystem}})
 			expandedQueries = append(expandedQueries, provider.PackageQuery{
 				Ecosystem: strings.ToLower(strings.TrimSpace(query.Ecosystem)),
@@ -371,9 +387,6 @@ func collectQueryResultMatches(result queryResult, query provider.PackageQuery, 
 
 func toOSVEcosystems(ecosystem string) ([]string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(ecosystem))
-	if normalized == "rpm" {
-		return rpmOSVEcosystems, true
-	}
 	mapped, ok := internalToOSVEcosystem[normalized]
 	if !ok {
 		return nil, false
@@ -512,12 +525,37 @@ func mapAffectedRanges(affected []affectedPackage) []advisory.AffectedRange {
 
 func mapAffectedPackageRanges(pkg affectedPackage) []advisory.AffectedRange {
 	ecosystem := normalizeOSVEcosystem(pkg.Package.Ecosystem)
+	release := ""
+	if internalEco, rel, ok := distro.ParseOSVEcosystem(pkg.Package.Ecosystem); ok {
+		ecosystem, release = internalEco, rel
+	} else if distro.IsDistroEcosystem(ecosystem) {
+		// Bare or stream-qualified distro ecosystem: no release to scope by, so
+		// the range cannot be matched safely. Drop it (see google/osv.dev#5199 —
+		// distro records also ship introduced:0, which turns an unscoped range
+		// into a match for every version).
+		return nil
+	}
 	ranges := make([]advisory.AffectedRange, 0)
 	for _, osvRange := range pkg.Ranges {
-		if !strings.EqualFold(osvRange.Type, "ECOSYSTEM") {
+		// ECOSYSTEM and SEMVER both carry introduced/fixed version events; GHSA
+		// uses SEMVER for npm/Go/cargo, so accepting only ECOSYSTEM silently
+		// dropped nearly every advisory in those ecosystems. GIT ranges are
+		// commit hashes, not versions, and stay excluded.
+		if !strings.EqualFold(osvRange.Type, "ECOSYSTEM") && !strings.EqualFold(osvRange.Type, "SEMVER") {
 			continue
 		}
-		ranges = append(ranges, mapAffectedRangeEvents(pkg.Package.Name, ecosystem, osvRange.Events)...)
+		for _, mapped := range mapAffectedRangeEvents(pkg.Package.Name, ecosystem, osvRange.Events) {
+			// Distro records pair introduced:0 with a per-release fixed event; an
+			// entry with no upper bound would match every version of the package
+			// in that release forever. Language ecosystems legitimately use
+			// open-ended ranges (unfixed advisories), so only distro ranges are
+			// held to this.
+			if release != "" && mapped.Fixed == "" && mapped.LastAffected == "" {
+				continue
+			}
+			mapped.Release = release
+			ranges = append(ranges, mapped)
+		}
 	}
 	return ranges
 }

@@ -149,6 +149,10 @@ func (p *discoveryTestForgeProvider) GetBranch(context.Context, string, string, 
 	return nil, forge.ErrNotImplemented
 }
 
+func (p *discoveryTestForgeProvider) ListTreePaths(context.Context, string, string, string) ([]string, error) {
+	return nil, nil
+}
+
 func (p *discoveryTestForgeProvider) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, forge.ErrNotImplemented
 }

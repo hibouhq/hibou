@@ -407,6 +407,28 @@ definitions:
       uptime_seconds:
         type: number
     type: object
+  server.orgComponentScanResponse:
+    properties:
+      failed:
+        items:
+          type: string
+        type: array
+      providers:
+        items:
+          type: string
+        type: array
+      scans:
+        items:
+          $ref: '#/definitions/server.orgRepoScanResult'
+        type: array
+    type: object
+  server.orgRepoScanResult:
+    properties:
+      repo:
+        type: string
+      scan_id:
+        type: string
+    type: object
   server.orgResponse:
     properties:
       created_at:
@@ -1906,6 +1928,50 @@ paths:
       summary: Get client impact
       tags:
       - clients
+  /orgs/{provider}/{slug}/components/scan:
+    post:
+      description: Runs an advisory rescan against the current snapshot of every enrolled
+        repository in the organization.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.orgComponentScanResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Trigger an org-wide component scan
+      tags:
+      - organizations
   /orgs/{provider}/{slug}/integrations:
     get:
       description: List integrations in an organization visible to organization members

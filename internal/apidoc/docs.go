@@ -1431,6 +1431,77 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/components/scan": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Runs an advisory rescan against the current snapshot of every enrolled repository in the organization.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Trigger an org-wide component scan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.orgComponentScanResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/integrations": {
             "get": {
                 "security": [
@@ -5290,6 +5361,40 @@ const docTemplate = `{
                 },
                 "uptime_seconds": {
                     "type": "number"
+                }
+            }
+        },
+        "server.orgComponentScanResponse": {
+            "type": "object",
+            "properties": {
+                "failed": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "providers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "scans": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgRepoScanResult"
+                    }
+                }
+            }
+        },
+        "server.orgRepoScanResult": {
+            "type": "object",
+            "properties": {
+                "repo": {
+                    "type": "string"
+                },
+                "scan_id": {
+                    "type": "string"
                 }
             }
         },

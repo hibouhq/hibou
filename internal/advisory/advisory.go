@@ -70,6 +70,10 @@ type AffectedRange struct {
 	Fixed        string
 	LastAffected string
 	Source       string
+	// Release scopes distro ranges (apk/deb/rpm) to one distribution release
+	// ("3.18" for Alpine 3.18, "12" for Debian bookworm). Empty for language
+	// ecosystems, whose versions are release-independent.
+	Release string
 }
 
 func NormalizeSeverity(score float64) Severity {

@@ -231,6 +231,43 @@ func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref 
 	return decoded, nil
 }
 
+// ListTreePaths returns every blob path at a ref via the git trees API. A
+// truncated tree (GitHub caps ~100k entries) returns what was received —
+// resolution then degrades to exact-path matches for anything missing.
+func (g *GitHub) ListTreePaths(ctx context.Context, owner, repo, ref string) ([]string, error) {
+	requestPath := fmt.Sprintf(
+		"/repos/%s/%s/git/trees/%s?recursive=1",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref),
+	)
+	request, err := g.newRequest(ctx, http.MethodGet, requestPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		Tree []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"tree"`
+		Truncated bool `json:"truncated"`
+	}
+	status, err := g.doWithStatus(request, &payload)
+	if status == http.StatusNotFound {
+		return nil, ErrFileNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0, len(payload.Tree))
+	for _, entry := range payload.Tree {
+		if entry.Type == "blob" {
+			paths = append(paths, entry.Path)
+		}
+	}
+	return paths, nil
+}
+
 func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {
 	sha, err := g.lookupContentSHA(ctx, owner, repo, filePath, branch)
 	if err != nil {

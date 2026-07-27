@@ -19,6 +19,7 @@ import (
 	"github.com/hibouhq/hibou/internal/advisory"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/cache"
+	"github.com/hibouhq/hibou/internal/distro"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/provider"
 	"github.com/hibouhq/hibou/internal/store"
@@ -384,6 +385,9 @@ func (s *Service) loadAffectedRangesForComponent(ctx context.Context, component 
 }
 
 func (s *Service) componentMatchesAffectedRange(component dbgen.Component, affectedRange dbgen.AffectedRange) bool {
+	if !distroRangeApplies(component, affectedRange) {
+		return false
+	}
 	affected, err := versioncmp.InRange(component.Ecosystem, component.Version, affectedRange.Introduced, affectedRange.Fixed, affectedRange.LastAffected)
 	if err != nil {
 		s.log.Warn().
@@ -537,13 +541,37 @@ func buildPackageQueries(components []dbgen.Component) []provider.PackageQuery {
 			continue
 		}
 		seen[key] = struct{}{}
+		distroQualifier := ""
+		if family, release := distro.FromPurl(component.Purl); release != "" {
+			distroQualifier = strings.TrimPrefix(family+"-"+release, "-")
+		}
 		queries = append(queries, provider.PackageQuery{
 			Ecosystem: component.Ecosystem,
 			Name:      component.Name,
 			Version:   component.Version,
+			Distro:    distroQualifier,
 		})
 	}
 	return queries
+}
+
+// distroRangeApplies enforces release scoping for OS packages: a distro range
+// is only comparable to a component from the same distribution release (Alpine
+// 3.18's fix version says nothing about 3.19). Fails closed when either side's
+// release is unknown; language ecosystems are unaffected.
+func distroRangeApplies(component dbgen.Component, affectedRange dbgen.AffectedRange) bool {
+	if !distro.IsDistroEcosystem(component.Ecosystem) {
+		return true
+	}
+	if affectedRange.Release == "" {
+		// Trivy-sourced ranges are synthesized against the component's own
+		// installed version and carry the release the component was scanned
+		// with, so an empty release only appears on data that cannot be scoped —
+		// which must not match.
+		return false
+	}
+	_, release := distro.FromPurl(component.Purl)
+	return distro.ReleaseKey(component.Ecosystem, release) == affectedRange.Release
 }
 
 func packageKey(ecosystem, name string) string {
