@@ -393,6 +393,17 @@ definitions:
       team_id:
         type: string
     type: object
+  server.findingAcceptanceRequest:
+    properties:
+      expires_at:
+        type: string
+      reason:
+        type: string
+      status:
+        description: 'Status: "accepted" | "false_positive" to suppress, "open" to
+          unaccept.'
+        type: string
+    type: object
   server.healthResponse:
     properties:
       status:
@@ -818,6 +829,25 @@ definitions:
     - DeploymentStatusActive
     - DeploymentStatusRolledBack
     - DeploymentStatusSuperseded
+  store.FindingAcceptance:
+    properties:
+      accepted_by:
+        type: string
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      fingerprint:
+        type: string
+      id:
+        type: string
+      reason:
+        type: string
+      repo_id:
+        type: string
+      status:
+        type: string
+    type: object
   store.Integration:
     properties:
       config:
@@ -3064,6 +3094,43 @@ paths:
       summary: Update repository
       tags:
       - repositories
+  /orgs/{provider}/{slug}/repos/{repoSlug}/finding-acceptances:
+    get:
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.FindingAcceptance'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: List active finding acceptances
+      tags:
+      - vulnerabilities
   /orgs/{provider}/{slug}/repos/{repoSlug}/refs:
     get:
       description: List refs for a repository when the caller belongs to the organization
@@ -3341,6 +3408,73 @@ paths:
       summary: Get test results
       tags:
       - analysis
+  /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/acceptance:
+    put:
+      consumes:
+      - application/json
+      description: Accepts a finding (with a required reason) or reopens it. Decisions
+        are fingerprint-scoped so they survive new snapshots, and the PR gate re-evaluates
+        immediately.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Vulnerability ID
+        in: path
+        name: vulnID
+        required: true
+        type: string
+      - description: Acceptance
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.findingAcceptanceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.FindingAcceptance'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Accept or reopen a finding
+      tags:
+      - vulnerabilities
   /orgs/{provider}/{slug}/repos/sync:
     post:
       description: Reconcile the forge repository inventory for an organization
