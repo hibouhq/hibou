@@ -169,3 +169,106 @@ func TestParseJaCoCoLines(t *testing.T) {
 		t.Fatalf("expected line 11 instrumented-uncovered, got %+v", hits)
 	}
 }
+
+// Partial coverage: the line ran, but a condition never took both outcomes.
+func TestParseJaCoCoPartialBranches(t *testing.T) {
+	content := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<report name="demo">
+  <package name="pkg">
+    <sourcefile name="Foo.java">
+      <line nr="5" mi="0" ci="4" mb="1" cb="1"/>
+      <line nr="6" mi="0" ci="2" mb="0" cb="2"/>
+      <line nr="7" mi="0" ci="1" mb="0" cb="0"/>
+      <counter type="LINE" missed="0" covered="3"/>
+      <counter type="BRANCH" missed="1" covered="3"/>
+    </sourcefile>
+  </package>
+</report>`)
+
+	report, err := Parse(content, "jacoco")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	lines := lineByNumber(t, report, "pkg/Foo.java")
+	partial := lines[5]
+	if partial.BranchesCovered != 1 || partial.BranchesValid != 2 {
+		t.Fatalf("line 5 branches = %d/%d, want 1/2 (partial)", partial.BranchesCovered, partial.BranchesValid)
+	}
+	full := lines[6]
+	if full.BranchesCovered != 2 || full.BranchesValid != 2 {
+		t.Fatalf("line 6 branches = %d/%d, want 2/2", full.BranchesCovered, full.BranchesValid)
+	}
+	if plain := lines[7]; plain.BranchesValid != 0 {
+		t.Fatalf("line 7 branches_valid = %d, want 0 (no branch on line)", plain.BranchesValid)
+	}
+}
+
+func TestParseLCOVPartialBranches(t *testing.T) {
+	content := []byte(`SF:src/util.js
+DA:5,3
+DA:6,1
+BRDA:5,0,0,3
+BRDA:5,0,1,0
+BRDA:5,1,0,-
+end_of_record`)
+
+	report, err := Parse(content, "lcov")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	lines := lineByNumber(t, report, "src/util.js")
+	partial := lines[5]
+	// Three branch records on line 5, one taken: 1/3 — covered line, partial.
+	if partial.Hits != 3 || partial.BranchesCovered != 1 || partial.BranchesValid != 3 {
+		t.Fatalf("line 5 = hits %d branches %d/%d, want 3 and 1/3", partial.Hits, partial.BranchesCovered, partial.BranchesValid)
+	}
+	if plain := lines[6]; plain.BranchesValid != 0 {
+		t.Fatalf("line 6 branches_valid = %d, want 0", plain.BranchesValid)
+	}
+}
+
+func TestParseCoberturaPartialBranches(t *testing.T) {
+	content := []byte(`<?xml version="1.0"?>
+<coverage line-rate="1" branch-rate="0.5">
+  <packages>
+    <package name="app">
+      <classes>
+        <class filename="app/logic.py">
+          <lines>
+            <line number="8" hits="4" branch="true" condition-coverage="50% (1/2)"/>
+            <line number="9" hits="2" branch="false"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>`)
+
+	report, err := Parse(content, "cobertura")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	lines := lineByNumber(t, report, "app/logic.py")
+	partial := lines[8]
+	if partial.BranchesCovered != 1 || partial.BranchesValid != 2 {
+		t.Fatalf("line 8 branches = %d/%d, want 1/2", partial.BranchesCovered, partial.BranchesValid)
+	}
+	if plain := lines[9]; plain.BranchesValid != 0 {
+		t.Fatalf("line 9 branches_valid = %d, want 0", plain.BranchesValid)
+	}
+}
+
+func lineByNumber(t *testing.T, report *Report, path string) map[int]LineCoverage {
+	t.Helper()
+	for _, file := range report.Files {
+		if file.Path == path {
+			result := make(map[int]LineCoverage, len(file.Lines))
+			for _, line := range file.Lines {
+				result[line.Number] = line
+			}
+			return result
+		}
+	}
+	t.Fatalf("file %s not found in report (files: %+v)", path, report.Files)
+	return nil
+}

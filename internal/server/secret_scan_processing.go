@@ -59,6 +59,13 @@ func buildSecretScanProviders(cfg config.Config, log zerolog.Logger) []secretsca
 				continue
 			}
 			providers = append(providers, provider)
+		case "betterleaks":
+			provider, err := secretscan.NewBetterleaksProvider(log)
+			if err != nil {
+				log.Warn().Err(err).Msg("secret scan provider betterleaks unavailable, skipping")
+				continue
+			}
+			providers = append(providers, provider)
 		default:
 			log.Warn().Str("provider", name).Msg("unknown secret scan provider, skipping")
 		}
@@ -474,6 +481,22 @@ func (s *Server) handleTriggerSecretScan(w http.ResponseWriter, r *http.Request)
 		Mode   string    `json:"mode"`
 		Status string    `json:"status"`
 	}{JobID: job.ID, Ref: refName, Mode: job.Mode, Status: job.Status})
+}
+
+// handleListSecretScanJobs surfaces recent jobs so a queued-but-failing scan
+// is visible (binary missing, clone auth, oversized repo) instead of silently
+// producing no findings.
+func (s *Server) handleListSecretScanJobs(w http.ResponseWriter, r *http.Request) {
+	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+	jobs, err := s.queries.ListSecretScanJobsByRepo(r.Context(), repo.ID, 20)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list secret scan jobs")
+		return
+	}
+	api.JSON(w, http.StatusOK, jobs)
 }
 
 const maxSecretCheckPatchBytes = 1 << 20

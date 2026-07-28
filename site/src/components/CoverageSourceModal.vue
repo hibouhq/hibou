@@ -29,6 +29,10 @@
           <div class="flex items-center gap-3">
             <span class="flex items-center gap-1.5 text-[11px] text-gray-500">
               <span class="h-2.5 w-2.5 rounded-sm bg-emerald-500/60" /> covered
+              <span
+                class="partial-coverage-swatch ml-2 h-2.5 w-2.5 rounded-sm"
+                title="Line ran, but some branches never took both outcomes"
+              /> partial
               <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-red-500/60" /> uncovered
             </span>
             <a
@@ -75,15 +79,21 @@
                 v-for="row in rows"
                 :key="row.number"
                 :class="rowClass(row)"
+                :title="rowTitle(row)"
               >
                 <td class="w-12 select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
                   {{ row.number }}
                 </td>
                 <td
-                  class="w-12 select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] tabular-nums"
+                  class="w-16 select-none whitespace-nowrap border-r border-surface-border-subtle px-2 text-right align-top text-[11px] tabular-nums"
                   :class="hitsClass(row)"
                 >
-                  {{ row.hits === null ? '' : `${row.hits}×` }}
+                  <template v-if="row.hits !== null">
+                    {{ row.hits }}×<span
+                      v-if="isPartial(row)"
+                      class="ml-1 text-amber-300/90"
+                    >{{ row.branchesCovered }}/{{ row.branchesValid }}</span>
+                  </template>
                 </td>
                 <td class="whitespace-pre px-3 align-top text-gray-200">
                   {{ row.text || ' ' }}
@@ -108,6 +118,12 @@ interface SourceRow {
   number: number
   text: string
   hits: number | null
+  branchesCovered: number
+  branchesValid: number
+}
+
+function isPartial(row: SourceRow): boolean {
+  return row.hits !== null && row.hits > 0 && row.branchesValid > 0 && row.branchesCovered < row.branchesValid
 }
 
 const props = defineProps<{
@@ -127,12 +143,17 @@ const source = ref<CoverageSource | null>(null)
 
 const rows = computed<SourceRow[]>(() => {
   if (!source.value) return []
-  const hits = new Map(source.value.lines.map((line) => [line.number, line.hits]))
-  return source.value.content.split('\n').map((text, index) => ({
-    number: index + 1,
-    text,
-    hits: hits.get(index + 1) ?? null,
-  }))
+  const byNumber = new Map(source.value.lines.map((line) => [line.number, line]))
+  return source.value.content.split('\n').map((text, index) => {
+    const line = byNumber.get(index + 1)
+    return {
+      number: index + 1,
+      text,
+      hits: line ? line.hits : null,
+      branchesCovered: line?.branches_covered ?? 0,
+      branchesValid: line?.branches_valid ?? 0,
+    }
+  })
 })
 
 const coveredCount = computed(() => (source.value?.lines ?? []).filter((line) => line.hits > 0).length)
@@ -160,13 +181,21 @@ async function load() {
 
 function rowClass(row: SourceRow): string {
   if (row.hits === null) return ''
+  if (isPartial(row)) return 'partial-coverage-row shadow-[inset_3px_0_0_0_theme(colors.amber.400)]'
   if (row.hits > 0) return 'bg-emerald-500/15 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
   return 'bg-red-500/15 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
 }
 
 function hitsClass(row: SourceRow): string {
   if (row.hits === null) return 'text-gray-700'
+  if (isPartial(row)) return 'text-amber-300'
   return row.hits > 0 ? 'text-emerald-300' : 'text-red-300'
+}
+
+// Explanation for a partially covered line: the line ran, but a condition never took both outcomes.
+function rowTitle(row: SourceRow): string {
+  if (!isPartial(row)) return ''
+  return `Partially covered: ${row.branchesCovered} of ${row.branchesValid} branches taken`
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -175,3 +204,27 @@ function onKeydown(event: KeyboardEvent) {
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </script>
+
+<style scoped>
+/* Partial coverage: the covered tint striped with the warning tint so the
+   line reads "covered, but not fully". */
+.partial-coverage-row {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgb(16 185 129 / 0.16) 0px,
+    rgb(16 185 129 / 0.16) 8px,
+    rgb(245 158 11 / 0.10) 8px,
+    rgb(245 158 11 / 0.10) 16px
+  );
+}
+
+.partial-coverage-swatch {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgb(16 185 129 / 0.6) 0px,
+    rgb(16 185 129 / 0.6) 3px,
+    rgb(245 158 11 / 0.55) 3px,
+    rgb(245 158 11 / 0.55) 6px
+  );
+}
+</style>

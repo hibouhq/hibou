@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -35,6 +36,18 @@ type GitHub struct {
 	webhookSecret string
 	appID         int64
 	privateKey    []byte
+
+	// ownerTokens caches installation tokens per account so repo-level REST
+	// calls authenticate. Without this every contents/tree/compare call ran
+	// anonymously — 60 requests/hour per IP, which is why source browsing
+	// intermittently returned rate-limit errors.
+	tokenMu     sync.Mutex
+	ownerTokens map[string]ownerToken
+}
+
+type ownerToken struct {
+	value     string
+	expiresAt time.Time
 }
 
 type GitHubOption func(*GitHub)
@@ -67,6 +80,7 @@ func NewGitHub(clientID, clientSecret, webhookSecret string, opts ...GitHubOptio
 		clientID:      clientID,
 		clientSecret:  clientSecret,
 		webhookSecret: webhookSecret,
+		ownerTokens:   make(map[string]ownerToken),
 	}
 
 	for _, opt := range opts {
@@ -169,7 +183,7 @@ func appendUniqueRepositories(target []Repository, repositories []Repository, se
 func (g *GitHub) GetRepository(ctx context.Context, owner, name string) (*Repository, error) {
 	var payload githubRepository
 	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))
-	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+	if err := g.doJSONOwner(ctx, owner, http.MethodGet, path, nil, &payload); err != nil {
 		return nil, err
 	}
 
@@ -180,7 +194,7 @@ func (g *GitHub) GetRepository(ctx context.Context, owner, name string) (*Reposi
 func (g *GitHub) ListBranches(ctx context.Context, owner, repo string) ([]Branch, error) {
 	var payload []githubBranch
 	path := fmt.Sprintf("/repos/%s/%s/branches", url.PathEscape(owner), url.PathEscape(repo))
-	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+	if err := g.doJSONOwner(ctx, owner, http.MethodGet, path, nil, &payload); err != nil {
 		return nil, err
 	}
 
@@ -200,7 +214,7 @@ func (g *GitHub) GetBranch(ctx context.Context, owner, repo, branch string) (*Br
 		url.PathEscape(repo),
 		url.PathEscape(branch),
 	)
-	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+	if err := g.doJSONOwner(ctx, owner, http.MethodGet, path, nil, &payload); err != nil {
 		return nil, err
 	}
 
@@ -214,6 +228,7 @@ func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref 
 	if err != nil {
 		return nil, err
 	}
+	g.authorizeForOwner(ctx, request, owner)
 
 	var payload githubContentFile
 	status, err := g.doWithStatus(request, &payload)
@@ -243,6 +258,7 @@ func (g *GitHub) ListTreePaths(ctx context.Context, owner, repo, ref string) ([]
 	if err != nil {
 		return nil, err
 	}
+	g.authorizeForOwner(ctx, request, owner)
 
 	var payload struct {
 		Tree []struct {
@@ -284,12 +300,12 @@ func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, 
 	}
 
 	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath))
-	return g.doJSON(ctx, http.MethodPut, requestPath, payload, nil)
+	return g.doJSONOwner(ctx, owner, http.MethodPut, requestPath, payload, nil)
 }
 
 func (g *GitHub) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error {
 	requestPath := fmt.Sprintf("/repos/%s/%s/git/refs", url.PathEscape(owner), url.PathEscape(repo))
-	return g.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
+	return g.doJSONOwner(ctx, owner, http.MethodPost, requestPath, map[string]string{
 		"ref": "refs/heads/" + branch,
 		"sha": fromSHA,
 	}, nil)
@@ -298,7 +314,7 @@ func (g *GitHub) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA 
 func (g *GitHub) CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error) {
 	requestPath := fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
 	var payload githubPullRequestResource
-	if err := g.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
+	if err := g.doJSONOwner(ctx, owner, http.MethodPost, requestPath, map[string]string{
 		"title": opts.Title,
 		"body":  opts.Body,
 		"head":  opts.Head,
@@ -324,7 +340,7 @@ func (g *GitHub) CreateCommitStatus(ctx context.Context, owner, repo, sha string
 		url.PathEscape(sha),
 	)
 
-	return g.doJSON(ctx, http.MethodPost, path, payload, nil)
+	return g.doJSONOwner(ctx, owner, http.MethodPost, path, payload, nil)
 }
 
 // githubCompareResponse is the subset of GitHub's compare API we consume.
@@ -354,7 +370,7 @@ func (g *GitHub) ComparePatch(ctx context.Context, owner, repo, base, head strin
 	)
 
 	var payload githubCompareResponse
-	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+	if err := g.doJSONOwner(ctx, owner, http.MethodGet, path, nil, &payload); err != nil {
 		return nil, err
 	}
 
@@ -900,6 +916,18 @@ func (g *GitHub) doJSON(ctx context.Context, method, path string, body any, out 
 	return g.do(request, out)
 }
 
+// doJSONOwner is doJSON with the owner's installation token attached (App
+// mode). Repo-level REST calls must use this: anonymous calls are capped at 60
+// requests/hour per IP and cannot see private repositories.
+func (g *GitHub) doJSONOwner(ctx context.Context, owner, method, path string, body any, out any) error {
+	request, err := g.newRequest(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	g.authorizeForOwner(ctx, request, owner)
+	return g.do(request, out)
+}
+
 func (g *GitHub) do(request *http.Request, out any) error {
 	_, err := g.doWithStatus(request, out)
 	return err
@@ -1002,6 +1030,7 @@ func (g *GitHub) lookupContentSHA(ctx context.Context, owner, repo, filePath, re
 	if err != nil {
 		return "", err
 	}
+	g.authorizeForOwner(ctx, request, owner)
 
 	var payload githubContentFile
 	status, err := g.doWithStatus(request, &payload)

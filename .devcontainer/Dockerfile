@@ -26,6 +26,8 @@ ARG TRIVY_VERSION='0.72.0'
 ARG GITLEAKS_VERSION='8.30.1'
 # renovate: datasource=github-releases depName=trufflesecurity/trufflehog extractVersion=^v(?<version>.+)$
 ARG TRUFFLEHOG_VERSION='3.96.0'
+# renovate: datasource=github-releases depName=betterleaks/betterleaks extractVersion=^v(?<version>.+)$
+ARG BETTERLEAKS_VERSION='1.7.1'
 # renovate: datasource=node-version packageName=node
 ARG NODE_MAJOR='26'
 # renovate: datasource=github-releases packageName=opentofu/opentofu
@@ -45,7 +47,7 @@ ARG DIND_FEATURE_VERSION='3.0.1'
 FROM mcr.microsoft.com/devcontainers/base:noble AS base
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
-ARG GH_CLI_VERSION GITLEAKS_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION GOTESTSUM_VERSION NODE_MAJOR RTK_VERSION SQLC_VERSION SWAG_VERSION TRIVY_VERSION TRUFFLEHOG_VERSION
+ARG BETTERLEAKS_VERSION GH_CLI_VERSION GITLEAKS_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION GOTESTSUM_VERSION NODE_MAJOR RTK_VERSION SQLC_VERSION SWAG_VERSION TRIVY_VERSION TRUFFLEHOG_VERSION
 
 RUN <<EOF
     packages=(
@@ -128,6 +130,11 @@ RUN <<EOF
     curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TARGETARCH}.tar.gz" \
         | tar -xzf - -C /usr/local/bin trufflehog
     trufflehog --version
+
+    betterleaks_arch="$(echo "${TARGETARCH}" | sed 's/amd64/x64/')"
+    curl -fsSL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_${betterleaks_arch}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin betterleaks
+    betterleaks version
 
     rtk_target='unknown-linux-gnu'
     if [ "${TARGETARCH}" = 'amd64' ]; then

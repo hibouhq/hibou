@@ -34,10 +34,18 @@ type FileCoverage struct {
 	Lines []LineCoverage
 }
 
-// LineCoverage is the hit count for a single instrumented source line.
+// LineCoverage is the hit count for a single instrumented source line, plus
+// branch counters when the format reports them (JaCoCo mb/cb, LCOV BRDA,
+// Cobertura condition-coverage). BranchesValid == 0 means the line has no
+// branch — not that branches are unknown; formats without branch data
+// (gocover) simply never set them. A line with Hits > 0 and
+// BranchesCovered < BranchesValid is PARTIALLY covered: executed, but some
+// conditions never took both outcomes.
 type LineCoverage struct {
-	Number int
-	Hits   int
+	Number          int
+	Hits            int
+	BranchesCovered int
+	BranchesValid   int
 }
 
 func Parse(content []byte, format string) (*Report, error) {
@@ -88,29 +96,42 @@ func sortFiles(files []FileCoverage) {
 }
 
 // finalizeLines dedupes per-line records by line number (keeping the maximum
-// hit count seen, so a line executed by any block/report counts as covered)
-// and returns them sorted by line number. Parsers accumulate raw line records
-// — possibly with duplicates across merged classes, records, or blocks — and
-// call this once per file before emitting the report.
+// hit count seen, so a line executed by any block/report counts as covered;
+// branch counters take the record with the most branches known, preferring
+// higher coverage at equal width) and returns them sorted by line number.
+// Parsers accumulate raw line records — possibly with duplicates across merged
+// classes, records, or blocks — and call this once per file before emitting
+// the report.
 func finalizeLines(lines []LineCoverage) []LineCoverage {
 	if len(lines) == 0 {
 		return nil
 	}
-	maxHits := make(map[int]int, len(lines))
+	merged := make(map[int]LineCoverage, len(lines))
 	for _, line := range lines {
 		if line.Number <= 0 {
 			continue
 		}
-		if existing, ok := maxHits[line.Number]; !ok || line.Hits > existing {
-			maxHits[line.Number] = line.Hits
+		existing, ok := merged[line.Number]
+		if !ok {
+			merged[line.Number] = line
+			continue
 		}
+		if line.Hits > existing.Hits {
+			existing.Hits = line.Hits
+		}
+		if line.BranchesValid > existing.BranchesValid ||
+			(line.BranchesValid == existing.BranchesValid && line.BranchesCovered > existing.BranchesCovered) {
+			existing.BranchesValid = line.BranchesValid
+			existing.BranchesCovered = line.BranchesCovered
+		}
+		merged[line.Number] = existing
 	}
-	if len(maxHits) == 0 {
+	if len(merged) == 0 {
 		return nil
 	}
-	result := make([]LineCoverage, 0, len(maxHits))
-	for number, hits := range maxHits {
-		result = append(result, LineCoverage{Number: number, Hits: hits})
+	result := make([]LineCoverage, 0, len(merged))
+	for _, line := range merged {
+		result = append(result, line)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Number < result[j].Number

@@ -132,10 +132,15 @@ func applyCoberturaLine(file *FileCoverage, line coberturaLine) {
 	if line.Hits > 0 {
 		file.LinesCovered++
 	}
-	if line.Number > 0 {
-		file.Lines = append(file.Lines, LineCoverage{Number: line.Number, Hits: line.Hits})
-	}
 	covered, valid := parseBranchCoverage(line)
+	if line.Number > 0 {
+		file.Lines = append(file.Lines, LineCoverage{
+			Number:          line.Number,
+			Hits:            line.Hits,
+			BranchesCovered: covered,
+			BranchesValid:   valid,
+		})
+	}
 	file.BranchesCovered += covered
 	file.BranchesValid += valid
 }

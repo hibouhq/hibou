@@ -33,6 +33,11 @@
         v-if="secretScanError"
         class="text-xs text-danger"
       >{{ secretScanError }}</span>
+      <span
+        v-if="secretScanStatusLine"
+        class="text-xs"
+        :class="lastSecretScanJob?.status === 'failed' ? 'text-danger' : 'text-gray-500'"
+      >{{ secretScanStatusLine }}</span>
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
@@ -190,7 +195,7 @@ import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
 import { KeyRound } from 'lucide-vue-next'
 
-import { api, type FindingAcceptance, type ScanRule, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { api, type FindingAcceptance, type ScanRule, type SecretScanJob, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import LinkedText from '@/components/LinkedText.vue'
 
@@ -207,6 +212,34 @@ const acceptances = ref<Map<string, FindingAcceptance>>(new Map())
 const secretScanRunning = ref(false)
 const secretScanMessage = ref('')
 const secretScanError = ref('')
+const lastSecretScanJob = ref<SecretScanJob | null>(null)
+
+async function refreshSecretScanStatus() {
+  try {
+    const response = await api.listSecretScanJobs(provider.value, slug.value, repoSlug.value)
+    lastSecretScanJob.value = response.data?.[0] ?? null
+  } catch {
+    // Status is best-effort decoration; the findings table is the source of truth.
+  }
+}
+
+const secretScanStatusLine = computed(() => {
+  const job = lastSecretScanJob.value
+  if (!job) return ''
+  const when = new Date(job.finished_at ?? job.started_at ?? job.created_at).toLocaleString()
+  switch (job.status) {
+    case 'pending':
+      return `Secret scan queued (${job.ref_name}) — waiting for a worker. If this never starts, no pod runs the scan loop.`
+    case 'processing':
+      return `Secret scan running on ${job.ref_name} (attempt ${job.attempts})…`
+    case 'failed':
+      return `Secret scan failed on ${job.ref_name}: ${job.last_error || 'unknown error'} (attempt ${job.attempts}, ${when})`
+    default:
+      return `Last secret scan: ${job.status} on ${job.ref_name} (${when})`
+  }
+})
+
+watch([provider, slug, repoSlug], () => { void refreshSecretScanStatus() }, { immediate: true })
 
 async function runSecretScan() {
   if (secretScanRunning.value) return
@@ -216,7 +249,8 @@ async function runSecretScan() {
   try {
     const refParam = route.query.ref as string | undefined
     const response = await api.triggerSecretScan(provider.value, slug.value, repoSlug.value, { ref: refParam })
-    secretScanMessage.value = `Secret scan queued for ${response.data.ref}; findings appear once a worker completes it.`
+    secretScanMessage.value = `Secret scan queued for ${response.data.ref}.`
+    await refreshSecretScanStatus()
   } catch (error) {
     secretScanError.value = error instanceof Error ? error.message : 'Failed to queue secret scan'
   } finally {

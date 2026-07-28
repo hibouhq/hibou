@@ -18,6 +18,14 @@ type lcovRecord struct {
 	derivedLinesCovered    int
 	derivedBranchesValid   int
 	derivedBranchesCovered int
+	// branchesByLine accumulates BRDA records so per-line branch counters can
+	// be joined onto the DA lines at flush — that's what marks a line partial.
+	branchesByLine map[int]*lineBranches
+}
+
+type lineBranches struct {
+	covered int
+	valid   int
 }
 
 func parseLCOV(content []byte) (*Report, error) {
@@ -137,8 +145,23 @@ func processLCOVBRDALine(line string, current *lcovRecord) error {
 		return fmt.Errorf("invalid BRDA line: %s", line)
 	}
 	current.derivedBranchesValid++
+
+	perLine := (*lineBranches)(nil)
+	if number, ok := parseOptionalInt(parts[0]); ok && number > 0 {
+		if current.branchesByLine == nil {
+			current.branchesByLine = make(map[int]*lineBranches)
+		}
+		perLine = current.branchesByLine[number]
+		if perLine == nil {
+			perLine = &lineBranches{}
+			current.branchesByLine[number] = perLine
+		}
+		perLine.valid++
+	}
+
 	taken := strings.TrimSpace(parts[3])
 	if taken == "-" {
+		// Branch never evaluated: valid but not covered.
 		return nil
 	}
 	count, ok := parseOptionalInt(taken)
@@ -147,6 +170,9 @@ func processLCOVBRDALine(line string, current *lcovRecord) error {
 	}
 	if count > 0 {
 		current.derivedBranchesCovered++
+		if perLine != nil {
+			perLine.covered++
+		}
 	}
 	return nil
 }
@@ -178,5 +204,11 @@ func flushLCOVRecord(filesByPath map[string]*FileCoverage, current *lcovRecord) 
 	target.LinesCovered += current.file.LinesCovered
 	target.BranchesValid += current.file.BranchesValid
 	target.BranchesCovered += current.file.BranchesCovered
+	for index := range current.file.Lines {
+		if branches := current.branchesByLine[current.file.Lines[index].Number]; branches != nil {
+			current.file.Lines[index].BranchesCovered = branches.covered
+			current.file.Lines[index].BranchesValid = branches.valid
+		}
+	}
 	target.Lines = append(target.Lines, current.file.Lines...)
 }

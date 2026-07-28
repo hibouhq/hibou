@@ -220,7 +220,7 @@ func (q *Queries) ListCoverageFilesBySnapshot(ctx context.Context, snapshotID uu
 }
 
 const listCoverageLinesBySnapshot = `-- name: ListCoverageLinesBySnapshot :many
-SELECT cf.file_path, cl.line_number, cl.hits
+SELECT cf.file_path, cl.line_number, cl.hits, cl.branches_covered, cl.branches_valid
 FROM coverage_lines cl
 JOIN coverage_files cf ON cf.id = cl.coverage_file_id
 JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
@@ -229,9 +229,11 @@ ORDER BY cf.file_path, cl.line_number
 `
 
 type ListCoverageLinesBySnapshotRow struct {
-	FilePath   string `json:"file_path"`
-	LineNumber int32  `json:"line_number"`
-	Hits       int32  `json:"hits"`
+	FilePath        string `json:"file_path"`
+	LineNumber      int32  `json:"line_number"`
+	Hits            int32  `json:"hits"`
+	BranchesCovered int32  `json:"branches_covered"`
+	BranchesValid   int32  `json:"branches_valid"`
 }
 
 func (q *Queries) ListCoverageLinesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]ListCoverageLinesBySnapshotRow, error) {
@@ -243,7 +245,13 @@ func (q *Queries) ListCoverageLinesBySnapshot(ctx context.Context, snapshotID uu
 	items := []ListCoverageLinesBySnapshotRow{}
 	for rows.Next() {
 		var i ListCoverageLinesBySnapshotRow
-		if err := rows.Scan(&i.FilePath, &i.LineNumber, &i.Hits); err != nil {
+		if err := rows.Scan(
+			&i.FilePath,
+			&i.LineNumber,
+			&i.Hits,
+			&i.BranchesCovered,
+			&i.BranchesValid,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -258,7 +266,7 @@ func (q *Queries) ListCoverageLinesBySnapshot(ctx context.Context, snapshotID uu
 }
 
 const listCoverageLinesBySnapshotFormat = `-- name: ListCoverageLinesBySnapshotFormat :many
-SELECT cf.file_path, cl.line_number, cl.hits
+SELECT cf.file_path, cl.line_number, cl.hits, cl.branches_covered, cl.branches_valid
 FROM coverage_lines cl
 JOIN coverage_files cf ON cf.id = cl.coverage_file_id
 JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
@@ -272,9 +280,11 @@ type ListCoverageLinesBySnapshotFormatParams struct {
 }
 
 type ListCoverageLinesBySnapshotFormatRow struct {
-	FilePath   string `json:"file_path"`
-	LineNumber int32  `json:"line_number"`
-	Hits       int32  `json:"hits"`
+	FilePath        string `json:"file_path"`
+	LineNumber      int32  `json:"line_number"`
+	Hits            int32  `json:"hits"`
+	BranchesCovered int32  `json:"branches_covered"`
+	BranchesValid   int32  `json:"branches_valid"`
 }
 
 func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, arg ListCoverageLinesBySnapshotFormatParams) ([]ListCoverageLinesBySnapshotFormatRow, error) {
@@ -286,7 +296,13 @@ func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, arg Lis
 	items := []ListCoverageLinesBySnapshotFormatRow{}
 	for rows.Next() {
 		var i ListCoverageLinesBySnapshotFormatRow
-		if err := rows.Scan(&i.FilePath, &i.LineNumber, &i.Hits); err != nil {
+		if err := rows.Scan(
+			&i.FilePath,
+			&i.LineNumber,
+			&i.Hits,
+			&i.BranchesCovered,
+			&i.BranchesValid,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -301,7 +317,7 @@ func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, arg Lis
 }
 
 const listCoverageLinesBySnapshotPath = `-- name: ListCoverageLinesBySnapshotPath :many
-SELECT cf.file_path, cl.line_number, cl.hits
+SELECT cf.file_path, cl.line_number, cl.hits, cl.branches_covered, cl.branches_valid
 FROM coverage_lines cl
 JOIN coverage_files cf ON cf.id = cl.coverage_file_id
 JOIN coverage_reports cr ON cr.id = cf.coverage_report_id
@@ -316,9 +332,11 @@ type ListCoverageLinesBySnapshotPathParams struct {
 }
 
 type ListCoverageLinesBySnapshotPathRow struct {
-	FilePath   string `json:"file_path"`
-	LineNumber int32  `json:"line_number"`
-	Hits       int32  `json:"hits"`
+	FilePath        string `json:"file_path"`
+	LineNumber      int32  `json:"line_number"`
+	Hits            int32  `json:"hits"`
+	BranchesCovered int32  `json:"branches_covered"`
+	BranchesValid   int32  `json:"branches_valid"`
 }
 
 // Suffix match narrows to candidate rows (tool prefixes like Go module paths);
@@ -332,7 +350,13 @@ func (q *Queries) ListCoverageLinesBySnapshotPath(ctx context.Context, arg ListC
 	items := []ListCoverageLinesBySnapshotPathRow{}
 	for rows.Next() {
 		var i ListCoverageLinesBySnapshotPathRow
-		if err := rows.Scan(&i.FilePath, &i.LineNumber, &i.Hits); err != nil {
+		if err := rows.Scan(
+			&i.FilePath,
+			&i.LineNumber,
+			&i.Hits,
+			&i.BranchesCovered,
+			&i.BranchesValid,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -291,14 +291,18 @@ func (s *Server) persistCoverageLines(ctx context.Context, tx *sql.Tx, fileID uu
 	}
 	numbers := make([]int32, len(lines))
 	hits := make([]int32, len(lines))
+	branchesCovered := make([]int32, len(lines))
+	branchesValid := make([]int32, len(lines))
 	for i, line := range lines {
-		numbers[i] = int32(line.Number) //nolint:gosec // G115: source line numbers are bounded by file size
-		hits[i] = int32(line.Hits)      //nolint:gosec // G115: hit counts are bounded by test executions
+		numbers[i] = int32(line.Number)                  //nolint:gosec // G115: source line numbers are bounded by file size
+		hits[i] = int32(line.Hits)                       //nolint:gosec // G115: hit counts are bounded by test executions
+		branchesCovered[i] = int32(line.BranchesCovered) //nolint:gosec // G115: branch counts are bounded by line width
+		branchesValid[i] = int32(line.BranchesValid)     //nolint:gosec // G115: branch counts are bounded by line width
 	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO coverage_lines (coverage_file_id, line_number, hits)
-		SELECT $1, unnest($2::int[]), unnest($3::int[])
-	`, fileID, pq.Array(numbers), pq.Array(hits))
+		INSERT INTO coverage_lines (coverage_file_id, line_number, hits, branches_covered, branches_valid)
+		SELECT $1, unnest($2::int[]), unnest($3::int[]), unnest($4::int[]), unnest($5::int[])
+	`, fileID, pq.Array(numbers), pq.Array(hits), pq.Array(branchesCovered), pq.Array(branchesValid))
 	return err
 }
 

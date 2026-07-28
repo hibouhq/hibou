@@ -543,6 +543,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
 						r.Post("/{repoSlug}/secrets/scan", s.handleTriggerSecretScan)
+						r.Get("/{repoSlug}/secrets/jobs", s.handleListSecretScanJobs)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)

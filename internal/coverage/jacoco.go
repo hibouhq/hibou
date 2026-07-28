@@ -28,6 +28,8 @@ type jaCoCoLine struct {
 	Nr int `xml:"nr,attr"` // source line number
 	Mi int `xml:"mi,attr"` // missed instructions
 	Ci int `xml:"ci,attr"` // covered instructions
+	Mb int `xml:"mb,attr"` // missed branches
+	Cb int `xml:"cb,attr"` // covered branches
 }
 
 type jaCoCoCounter struct {
@@ -100,7 +102,8 @@ func newJaCoCoFileCoverage(pkgName string, sourceFile jaCoCoSourceFile) (FileCov
 // per-line hit records. JaCoCo reports covered (ci) and missed (mi)
 // instructions rather than raw hit counts, so a line is treated as covered
 // (Hits = 1) when it has any covered instructions, uncovered (Hits = 0)
-// otherwise.
+// otherwise. Branch counters (mb/cb) carry through so a line whose condition
+// never took both outcomes renders as partially covered.
 func jaCoCoLineCoverage(lines []jaCoCoLine) []LineCoverage {
 	if len(lines) == 0 {
 		return nil
@@ -114,7 +117,12 @@ func jaCoCoLineCoverage(lines []jaCoCoLine) []LineCoverage {
 		if line.Ci > 0 {
 			hits = 1
 		}
-		result = append(result, LineCoverage{Number: line.Nr, Hits: hits})
+		result = append(result, LineCoverage{
+			Number:          line.Nr,
+			Hits:            hits,
+			BranchesCovered: line.Cb,
+			BranchesValid:   line.Mb + line.Cb,
+		})
 	}
 	return finalizeLines(result)
 }

@@ -22,10 +22,11 @@ hibou:
   secretScan:
     enabled: false
     onPush: true
-    # -- Detection engines, executed in order; duplicate findings dedup by fingerprint. trufflehog adds live credential verification (Verified findings authenticated against the real service).
+    # -- Detection engines, executed in order; duplicate findings dedup by fingerprint. trufflehog and betterleaks add live credential verification — betterleaks can also prove a credential dead (invalid/revoked), which demotes its severity.
     providers:
       - gitleaks
       - trufflehog
+      - betterleaks
     # -- Skip and warn above this repository size. Empty uses the app default (2048).
     maxRepoMB: ""
     # -- Per-job scan timeout. Empty uses the app default (5m).

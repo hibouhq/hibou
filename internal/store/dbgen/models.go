@@ -965,9 +965,11 @@ type CoverageFile struct {
 }
 
 type CoverageLine struct {
-	CoverageFileID uuid.UUID `json:"coverage_file_id"`
-	LineNumber     int32     `json:"line_number"`
-	Hits           int32     `json:"hits"`
+	CoverageFileID  uuid.UUID `json:"coverage_file_id"`
+	LineNumber      int32     `json:"line_number"`
+	Hits            int32     `json:"hits"`
+	BranchesCovered int32     `json:"branches_covered"`
+	BranchesValid   int32     `json:"branches_valid"`
 }
 
 type CoverageReport struct {

@@ -18,6 +18,10 @@ import (
 type coverageSourceLine struct {
 	Number int `json:"number"`
 	Hits   int `json:"hits"`
+	// branches_valid == 0 means no branch on the line. A hit line with
+	// branches_covered < branches_valid renders as partially covered.
+	BranchesCovered int `json:"branches_covered"`
+	BranchesValid   int `json:"branches_valid"`
 }
 
 type coverageSourceResponse struct {
@@ -194,18 +198,36 @@ func (s *Server) coverageLinesForPath(r *http.Request, repoSlug string, snapshot
 	if err != nil {
 		return nil, err
 	}
-	best := map[int]int{}
+	best := map[int]coverageSourceLine{}
 	for _, line := range stored {
 		if canonicalCoveragePath(line.FilePath, repoSlug) != canonical && line.FilePath != canonical {
 			continue
 		}
-		if hits, seen := best[line.LineNumber]; !seen || line.Hits > hits {
-			best[line.LineNumber] = line.Hits
+		existing, seen := best[line.LineNumber]
+		if !seen {
+			best[line.LineNumber] = coverageSourceLine{
+				Number:          line.LineNumber,
+				Hits:            line.Hits,
+				BranchesCovered: line.BranchesCovered,
+				BranchesValid:   line.BranchesValid,
+			}
+			continue
 		}
+		if line.Hits > existing.Hits {
+			existing.Hits = line.Hits
+		}
+		// Widest branch knowledge wins; at equal width prefer higher coverage —
+		// same rule as the parser-level merge.
+		if line.BranchesValid > existing.BranchesValid ||
+			(line.BranchesValid == existing.BranchesValid && line.BranchesCovered > existing.BranchesCovered) {
+			existing.BranchesValid = line.BranchesValid
+			existing.BranchesCovered = line.BranchesCovered
+		}
+		best[line.LineNumber] = existing
 	}
 	lines := make([]coverageSourceLine, 0, len(best))
-	for number, hits := range best {
-		lines = append(lines, coverageSourceLine{Number: number, Hits: hits})
+	for _, line := range best {
+		lines = append(lines, line)
 	}
 	sort.Slice(lines, func(i, j int) bool { return lines[i].Number < lines[j].Number })
 	return lines, nil

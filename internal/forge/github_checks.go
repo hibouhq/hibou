@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // SupportsCheckRuns reports whether this provider can publish a native GitHub
@@ -156,7 +157,48 @@ func (g *GitHub) CloneToken(ctx context.Context, owner string) (string, error) {
 	if !g.isAppMode() {
 		return "", nil
 	}
-	return g.installationTokenForOwner(ctx, owner)
+	return g.cachedInstallationToken(ctx, owner)
+}
+
+// cachedInstallationToken returns the owner's installation token, minting one
+// only when the cached token is absent or near expiry (they live one hour).
+// installationTokenForOwner lists every installation per call, so caching is
+// what keeps repo-level REST traffic from hammering the App API.
+func (g *GitHub) cachedInstallationToken(ctx context.Context, owner string) (string, error) {
+	key := strings.ToLower(strings.TrimSpace(owner))
+	if key == "" {
+		return "", errors.New("owner is required for an installation token")
+	}
+
+	g.tokenMu.Lock()
+	cached, ok := g.ownerTokens[key]
+	g.tokenMu.Unlock()
+	if ok && time.Until(cached.expiresAt) > 2*time.Minute {
+		return cached.value, nil
+	}
+
+	value, err := g.installationTokenForOwner(ctx, owner)
+	if err != nil {
+		return "", err
+	}
+	g.tokenMu.Lock()
+	g.ownerTokens[key] = ownerToken{value: value, expiresAt: time.Now().Add(55 * time.Minute)}
+	g.tokenMu.Unlock()
+	return value, nil
+}
+
+// authorizeForOwner attaches the owner's installation token when running in
+// App mode. Minting failures fall back to anonymous rather than erroring —
+// public repositories still work, just rate-limited.
+func (g *GitHub) authorizeForOwner(ctx context.Context, request *http.Request, owner string) {
+	if !g.isAppMode() || request == nil {
+		return
+	}
+	token, err := g.cachedInstallationToken(ctx, owner)
+	if err != nil || token == "" {
+		return
+	}
+	request.Header.Set("Authorization", githubBearerPrefix+token)
 }
 
 // installationTokenForOwner mints an installation access token for the App

@@ -10,12 +10,31 @@ ARG SOURCE_DATE_EPOCH=0
 ARG TARGETARCH
 ARG BASE_IMAGE=hibou-base:latest
 ARG INCLUDE_EXTRA_CLI_BINARIES=false
+# renovate: datasource=github-releases depName=betterleaks/betterleaks extractVersion=^v(?<version>.+)$
+ARG BETTERLEAKS_VERSION=1.7.1
 
 # --- Runtime (Wolfi-based, reproducible, 0 CVE) ---
 # Built from apko.yaml. CI publishes a multi-arch base image and passes BASE_IMAGE.
 # Lock file (apko.lock.json) pins exact package versions for reproducibility.
 # To update: apko lock apko.yaml.
 FROM ${BASE_IMAGE} AS runtime
+
+# betterleaks is not packaged in wolfi (unlike gitleaks/trufflehog, which come
+# from apko.yaml), so it ships from its GitHub release, verified against the
+# release's checksums.txt. Checksum-verified content keeps the layer stable
+# across rebuilds despite the network fetch.
+FROM alpine:3 AS betterleaks
+ARG TARGETARCH
+ARG BETTERLEAKS_VERSION
+RUN set -eux; \
+	apk add --no-cache curl; \
+	arch="$(echo "${TARGETARCH}" | sed 's/amd64/x64/')"; \
+	asset="betterleaks_${BETTERLEAKS_VERSION}_linux_${arch}.tar.gz"; \
+	curl -fsSLO "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${asset}"; \
+	curl -fsSL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/checksums.txt" \
+		| grep " ${asset}\$" | sha256sum -c -; \
+	tar -xzf "${asset}" -C /usr/local/bin betterleaks; \
+	/usr/local/bin/betterleaks version
 
 FROM busybox:stable AS prep
 ARG TARGETARCH
@@ -42,6 +61,7 @@ RUN set -eux; \
 FROM runtime
 
 COPY --from=prep /out/ /usr/local/bin/
+COPY --from=betterleaks /usr/local/bin/betterleaks /usr/local/bin/betterleaks
 
 USER nonroot:nonroot
 EXPOSE 8080

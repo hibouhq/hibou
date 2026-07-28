@@ -133,6 +133,10 @@ type CoverageLine struct {
 	FilePath   string `json:"file_path"`
 	LineNumber int    `json:"line_number"`
 	Hits       int    `json:"hits"`
+	// BranchesValid == 0 means no branch on the line; a covered line with
+	// BranchesCovered < BranchesValid is partially covered.
+	BranchesCovered int `json:"branches_covered"`
+	BranchesValid   int `json:"branches_valid"`
 }
 
 // ListCoverageLinesBySnapshotFormat returns every stored per-line hit for the
@@ -149,9 +153,11 @@ func (q *Queries) ListCoverageLinesBySnapshotFormat(ctx context.Context, snapsho
 	lines := make([]CoverageLine, len(rows))
 	for i, row := range rows {
 		lines[i] = CoverageLine{
-			FilePath:   row.FilePath,
-			LineNumber: int(row.LineNumber),
-			Hits:       int(row.Hits),
+			FilePath:        row.FilePath,
+			LineNumber:      int(row.LineNumber),
+			Hits:            int(row.Hits),
+			BranchesCovered: int(row.BranchesCovered),
+			BranchesValid:   int(row.BranchesValid),
 		}
 	}
 	return lines, nil
@@ -167,9 +173,11 @@ func (q *Queries) ListCoverageLinesBySnapshot(ctx context.Context, snapshotID uu
 	lines := make([]CoverageLine, len(rows))
 	for i, row := range rows {
 		lines[i] = CoverageLine{
-			FilePath:   row.FilePath,
-			LineNumber: int(row.LineNumber),
-			Hits:       int(row.Hits),
+			FilePath:        row.FilePath,
+			LineNumber:      int(row.LineNumber),
+			Hits:            int(row.Hits),
+			BranchesCovered: int(row.BranchesCovered),
+			BranchesValid:   int(row.BranchesValid),
 		}
 	}
 	return lines, nil
@@ -188,9 +196,11 @@ func (q *Queries) ListCoverageLinesBySnapshotPath(ctx context.Context, snapshotI
 	lines := make([]CoverageLine, len(rows))
 	for i, row := range rows {
 		lines[i] = CoverageLine{
-			FilePath:   row.FilePath,
-			LineNumber: int(row.LineNumber),
-			Hits:       int(row.Hits),
+			FilePath:        row.FilePath,
+			LineNumber:      int(row.LineNumber),
+			Hits:            int(row.Hits),
+			BranchesCovered: int(row.BranchesCovered),
+			BranchesValid:   int(row.BranchesValid),
 		}
 	}
 	return lines, nil

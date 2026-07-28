@@ -592,11 +592,24 @@ export interface CoverageFormatReport {
   files: CoverageFile[]
 }
 
+export interface SecretScanJob {
+  id: string
+  repo_id: string
+  ref_name: string
+  mode: string
+  status: string
+  attempts: number
+  last_error?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+}
+
 export interface CoverageSource {
   path: string
   commit_sha: string
   content: string
-  lines: Array<{ number: number; hits: number }>
+  lines: Array<{ number: number; hits: number; branches_covered: number; branches_valid: number }>
 }
 
 export interface CoverageFile {
@@ -1270,6 +1283,12 @@ class ApiClient {
     return this.request<ApiResponse<{ job_id: string; ref: string; mode: string; status: string }>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/secrets/scan${qs ? `?${qs}` : ''}`,
       { method: 'POST' },
+    )
+  }
+
+  listSecretScanJobs(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<SecretScanJob[]>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/secrets/jobs`,
     )
   }
 
