@@ -58,6 +58,10 @@ type BackgroundConfig struct {
 	RetentionEnabled          bool
 	StaleScanEnabled          bool
 	StalePendingEnabled       bool
+	// SecretScanEnabled defaults to false, unlike its siblings: the loop clones
+	// repositories, so a single-replica install must opt in knowingly rather
+	// than discover clone load on its API pod after an upgrade.
+	SecretScanEnabled bool
 }
 
 type AdvisoryScanConfig struct {
@@ -85,6 +89,19 @@ type SecretScanConfig struct {
 	Providers []string
 	TempDir   string
 	OnPush    bool
+
+	// Guardrails for a scanner that clones. Concurrency is per replica: scale by
+	// adding workers, not goroutines, so disk and CPU stay bounded per pod.
+	MaxConcurrency int
+	// Timeout bounds a hung-but-alive gitleaks; the lease + heartbeat covers a
+	// dead worker. Independent mechanisms, so Timeout may exceed LeaseDuration —
+	// the heartbeat keeps extending the claim while work is genuinely running.
+	Timeout     time.Duration
+	MaxRepoMB   int
+	MaxAttempts int
+	// PollInterval is the idle backoff; a claimed job is followed immediately by
+	// the next claim attempt.
+	PollInterval time.Duration
 }
 
 // ForgeConfig holds configuration for a single forge instance.
@@ -197,10 +214,16 @@ func Load() (Config, error) {
 	v.SetDefault("worker.heartbeat.interval", "100s")
 	v.SetDefault("retention.preset", "envelope")
 	v.SetDefault("retention.auto_purge", false)
+	v.SetDefault("background.secret_scan.enabled", false)
 	v.SetDefault("secret_scan.enabled", false)
 	v.SetDefault("secret_scan.providers", []string{})
 	v.SetDefault("secret_scan.temp_dir", "")
 	v.SetDefault("secret_scan.on_push", false)
+	v.SetDefault("secret_scan.max_concurrency", 1)
+	v.SetDefault("secret_scan.timeout", "5m")
+	v.SetDefault("secret_scan.max_repo_mb", 2048)
+	v.SetDefault("secret_scan.max_attempts", 3)
+	v.SetDefault("secret_scan.poll_interval", "15s")
 
 	v.SetConfigName("hibou-server")
 	v.SetConfigType("yaml")
@@ -254,6 +277,28 @@ func Load() (Config, error) {
 	if advisoryScanInterval <= 0 {
 		return Config{}, errors.New("parsing advisory_scan.interval: duration must be greater than zero")
 	}
+	secretScanTimeout, err := time.ParseDuration(v.GetString("secret_scan.timeout"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing secret_scan.timeout: %w", err)
+	}
+	if secretScanTimeout <= 0 {
+		return Config{}, errors.New("parsing secret_scan.timeout: duration must be greater than zero")
+	}
+	secretScanPollInterval, err := time.ParseDuration(v.GetString("secret_scan.poll_interval"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing secret_scan.poll_interval: %w", err)
+	}
+	if secretScanPollInterval <= 0 {
+		return Config{}, errors.New("parsing secret_scan.poll_interval: duration must be greater than zero")
+	}
+	secretScanMaxConcurrency := v.GetInt("secret_scan.max_concurrency")
+	if secretScanMaxConcurrency < 1 {
+		return Config{}, errors.New("parsing secret_scan.max_concurrency: must be at least 1")
+	}
+	secretScanMaxAttempts := v.GetInt("secret_scan.max_attempts")
+	if secretScanMaxAttempts < 1 || secretScanMaxAttempts > 100 {
+		return Config{}, errors.New("parsing secret_scan.max_attempts: must be between 1 and 100")
+	}
 	retentionPolicy, err := loadRetentionPolicy(v)
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing retention policy: %w", err)
@@ -295,6 +340,7 @@ func Load() (Config, error) {
 			RetentionEnabled:          v.GetBool("background.retention.enabled"),
 			StaleScanEnabled:          v.GetBool("background.stale_scan.enabled"),
 			StalePendingEnabled:       v.GetBool("background.stale_pending.enabled"),
+			SecretScanEnabled:         v.GetBool("background.secret_scan.enabled"),
 		},
 		AdvisoryScan: AdvisoryScanConfig{
 			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),
@@ -305,10 +351,15 @@ func Load() (Config, error) {
 			HeartbeatInterval: workerHeartbeatInterval,
 		},
 		SecretScan: SecretScanConfig{
-			Enabled:   v.GetBool("secret_scan.enabled"),
-			Providers: normalizeList(v.GetStringSlice("secret_scan.providers")),
-			TempDir:   strings.TrimSpace(v.GetString("secret_scan.temp_dir")),
-			OnPush:    v.GetBool("secret_scan.on_push"),
+			Enabled:        v.GetBool("secret_scan.enabled"),
+			Providers:      normalizeList(v.GetStringSlice("secret_scan.providers")),
+			TempDir:        strings.TrimSpace(v.GetString("secret_scan.temp_dir")),
+			OnPush:         v.GetBool("secret_scan.on_push"),
+			MaxConcurrency: secretScanMaxConcurrency,
+			Timeout:        secretScanTimeout,
+			MaxRepoMB:      v.GetInt("secret_scan.max_repo_mb"),
+			MaxAttempts:    secretScanMaxAttempts,
+			PollInterval:   secretScanPollInterval,
 		},
 	}
 

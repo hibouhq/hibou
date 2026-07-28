@@ -24,6 +24,34 @@ quality_gates:
 	}
 }
 
+func TestParseConfigWithSecretsThreshold(t *testing.T) {
+	cfg, err := Parse([]byte(`version: 1
+quality_gates:
+  - branches: ["main"]
+    secrets:
+      max_new: 0
+`))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	secrets := cfg.QualityGates[0].Secrets
+	if secrets == nil || secrets.MaxNew == nil || *secrets.MaxNew != 0 {
+		t.Fatalf("expected secrets max_new 0, got %#v", secrets)
+	}
+}
+
+func TestParseRejectsNegativeSecretsThreshold(t *testing.T) {
+	_, err := Parse([]byte(`version: 1
+quality_gates:
+  - branches: ["main"]
+    secrets:
+      max_new: -1
+`))
+	if err == nil {
+		t.Fatal("expected negative secrets.max_new to be rejected")
+	}
+}
+
 func TestParseMinimalConfig(t *testing.T) {
 	cfg, err := Parse([]byte("version: 1\n"))
 	if err != nil {

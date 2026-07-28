@@ -1059,6 +1059,7 @@ type githubRepository struct {
 	CloneURL      string `json:"clone_url"`
 	HTMLURL       string `json:"html_url"`
 	DefaultBranch string `json:"default_branch"`
+	Size          int64  `json:"size"`
 	Owner         struct {
 		Login string `json:"login"`
 	} `json:"owner"`
@@ -1122,6 +1123,7 @@ func (r githubRepository) toRepository() Repository {
 		Private:        r.Private,
 		CloneURL:       r.CloneURL,
 		HTMLURL:        r.HTMLURL,
+		SizeKB:         r.Size,
 	}
 }
 

@@ -15,6 +15,10 @@ type ScanRepoOptions struct {
 	Branch    string
 	AuthToken string
 	TempDir   string
+	// AllBranches clones every ref so history-walking scanners (both gitleaks
+	// and trufflehog walk --all) cover branch-only commits. Baseline scans set
+	// it; a new-branch push stays scoped to its branch.
+	AllBranches bool
 }
 
 type ScanDiffOptions struct {

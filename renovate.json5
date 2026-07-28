@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "github>hibouhq/hibou//renovate-presets/commons.json5"
+  ],
+  "ignorePaths": [
+    "**/testdata/**",
+    "**/fixtures/**"
+  ],
+  "customManagers": [
+    {
+      // no support yet for apko: https://github.com/renovatebot/renovate/pull/38142
+      "customType": "regex",
+      "description": "Update =~ package pins in apko.yaml via '# renovate:' comments; the wolfi -rX suffix floats through apk fuzzy matching.",
+      "fileMatch": ["(^|/)apko\\.yaml$"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\s*\\n\\s*- [a-z0-9-]+=~(?<currentValue>\\S+)"
+      ]
+    }
+  ],
+  "packageRules": [
+  ]
+}

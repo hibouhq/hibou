@@ -76,6 +76,16 @@ spec:
               value: {{ .Values.hibou.worker.background.staleScan | quote }}
             - name: HIBOU_BACKGROUND_STALE_PENDING_ENABLED
               value: {{ .Values.hibou.worker.background.stalePending | quote }}
+            - name: HIBOU_BACKGROUND_SECRET_SCAN_ENABLED
+              value: {{ .Values.hibou.worker.background.secretScan | quote }}
+            {{- /* Always set, so a configmap value meant for the API pod cannot point the worker at a path that is not mounted here. */}}
+            - name: HIBOU_SECRET_SCAN_TEMP_DIR
+              value: {{ if .Values.hibou.worker.scratch.enabled }}{{ .Values.hibou.worker.scratch.mountPath | quote }}{{ else }}""{{ end }}
+            {{- if .Values.hibou.worker.scratch.enabled }}
+            {{- /* Read-only rootfs: /tmp is not writable; git, gitleaks and trufflehog all honor TMPDIR. */}}
+            - name: TMPDIR
+              value: {{ .Values.hibou.worker.scratch.mountPath | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.hibou.probes.liveness.path | quote }}
@@ -103,15 +113,28 @@ spec:
             capabilities:
               drop:
                 - ALL
-          {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+          {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.worker.scratch.enabled }}
           volumeMounts:
+            {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
             - name: artifact-filesystem
               mountPath: {{ include "hibou.artifactFilesystemPath" . | quote }}
+            {{- end }}
+            {{- if .Values.hibou.worker.scratch.enabled }}
+            - name: scratch
+              mountPath: {{ .Values.hibou.worker.scratch.mountPath | quote }}
+            {{- end }}
           {{- end }}
-      {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+      {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.worker.scratch.enabled }}
       volumes:
+        {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
         - name: artifact-filesystem
           persistentVolumeClaim:
             claimName: {{ include "hibou.artifactFilesystemPVCName" . }}
+        {{- end }}
+        {{- if .Values.hibou.worker.scratch.enabled }}
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ .Values.hibou.worker.scratch.sizeLimit }}
+        {{- end }}
       {{- end }}
 {{- end }}

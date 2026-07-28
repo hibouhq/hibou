@@ -69,6 +69,26 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.Background.ArtifactProcessingEnabled || !cfg.Background.RetentionEnabled || !cfg.Background.StaleScanEnabled || !cfg.Background.StalePendingEnabled {
 		t.Fatalf("expected background loops enabled by default, got %#v", cfg.Background)
 	}
+	// Unlike its siblings this one is off by default: it clones repositories, so
+	// an upgrade must not start putting clone load on a single API pod.
+	if cfg.Background.SecretScanEnabled {
+		t.Fatal("expected the secret scan worker loop disabled by default")
+	}
+	if cfg.SecretScan.MaxConcurrency != 1 {
+		t.Errorf("expected default secret scan concurrency 1, got %d", cfg.SecretScan.MaxConcurrency)
+	}
+	if cfg.SecretScan.Timeout != 5*time.Minute {
+		t.Errorf("expected default secret scan timeout 5m, got %s", cfg.SecretScan.Timeout)
+	}
+	if cfg.SecretScan.PollInterval != 15*time.Second {
+		t.Errorf("expected default secret scan poll interval 15s, got %s", cfg.SecretScan.PollInterval)
+	}
+	if cfg.SecretScan.MaxRepoMB != 2048 {
+		t.Errorf("expected default secret scan max repo size 2048MB, got %d", cfg.SecretScan.MaxRepoMB)
+	}
+	if cfg.SecretScan.MaxAttempts != 3 {
+		t.Errorf("expected default secret scan max attempts 3, got %d", cfg.SecretScan.MaxAttempts)
+	}
 	if cfg.RetentionPolicy.Storage.Budget == 0 {
 		t.Fatal("expected default retention budget from envelope preset")
 	}
@@ -102,6 +122,12 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("HIBOU_SECRET_SCAN_PROVIDERS", "gitleaks,github")
 	t.Setenv("HIBOU_SECRET_SCAN_TEMP_DIR", "/tmp/hibou-secrets")
 	t.Setenv("HIBOU_SECRET_SCAN_ON_PUSH", "true")
+	t.Setenv("HIBOU_SECRET_SCAN_MAX_CONCURRENCY", "2")
+	t.Setenv("HIBOU_SECRET_SCAN_TIMEOUT", "12m")
+	t.Setenv("HIBOU_SECRET_SCAN_MAX_REPO_MB", "512")
+	t.Setenv("HIBOU_SECRET_SCAN_MAX_ATTEMPTS", "5")
+	t.Setenv("HIBOU_SECRET_SCAN_POLL_INTERVAL", "45s")
+	t.Setenv("HIBOU_BACKGROUND_SECRET_SCAN_ENABLED", "true")
 	t.Setenv("HIBOU_BACKGROUND_ARTIFACT_PROCESSING_ENABLED", "false")
 	t.Setenv("HIBOU_BACKGROUND_RETENTION_ENABLED", "false")
 	t.Setenv("HIBOU_BACKGROUND_STALE_SCAN_ENABLED", "false")
@@ -196,6 +222,26 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if !cfg.SecretScan.OnPush {
 		t.Fatal("expected secret scan on_push enabled")
+	}
+	if !cfg.Background.SecretScanEnabled {
+		t.Fatal("expected the secret scan worker loop enabled from env")
+	}
+	if cfg.SecretScan.MaxConcurrency != 2 {
+		t.Fatalf("expected secret scan concurrency override 2, got %d", cfg.SecretScan.MaxConcurrency)
+	}
+	// Deliberately longer than the 9m lease: the heartbeat extends the claim
+	// while work runs, so a long scan is legal and must not be rejected.
+	if cfg.SecretScan.Timeout != 12*time.Minute {
+		t.Fatalf("expected secret scan timeout override 12m, got %s", cfg.SecretScan.Timeout)
+	}
+	if cfg.SecretScan.MaxRepoMB != 512 {
+		t.Fatalf("expected secret scan max repo size override 512, got %d", cfg.SecretScan.MaxRepoMB)
+	}
+	if cfg.SecretScan.MaxAttempts != 5 {
+		t.Fatalf("expected secret scan max attempts override 5, got %d", cfg.SecretScan.MaxAttempts)
+	}
+	if cfg.SecretScan.PollInterval != 45*time.Second {
+		t.Fatalf("expected secret scan poll interval override 45s, got %s", cfg.SecretScan.PollInterval)
 	}
 	if cfg.Background.ArtifactProcessingEnabled {
 		t.Fatal("expected artifact processing loop disabled from env")

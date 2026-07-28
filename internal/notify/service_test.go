@@ -142,3 +142,35 @@ func TestHandleVulnDiscoveredCreatesCriticalNotification(t *testing.T) {
 		t.Fatalf("expected vuln discovered type, got %q", store.notifications[0].Type)
 	}
 }
+
+// Regression: notifications used to render the internal advisory UUID and link
+// to ?search=<uuid>, which matched nothing. Body and link must both carry the
+// human identifier.
+func TestVulnerabilityNotificationUsesIdentifierNotUUID(t *testing.T) {
+	payload := map[string]any{
+		"advisory_id": uuid.NewString(),
+		"id":          uuid.NewString(),
+		"identifier":  "CVE-2019-10744",
+		"component":   "lodash@4.17.11",
+		"severity":    "high",
+	}
+	if got := vulnerabilityLabel(payload); got != "CVE-2019-10744 in lodash@4.17.11" {
+		t.Fatalf("label = %q", got)
+	}
+	if got := vulnSearchQuery(payload); got != "search=CVE-2019-10744" {
+		t.Fatalf("query = %q", got)
+	}
+
+	// No identifier: never fall back to a UUID in either place.
+	bare := map[string]any{"advisory_id": uuid.NewString()}
+	if got := vulnerabilityLabel(bare); got != "unknown" {
+		t.Fatalf("label without identifier = %q", got)
+	}
+	if got := vulnSearchQuery(bare); got != "" {
+		t.Fatalf("query without identifier = %q, want empty", got)
+	}
+	// A UUID handed in as the identifier must still be rejected for the link.
+	if got := vulnSearchQuery(map[string]any{"identifier": uuid.NewString()}); got != "" {
+		t.Fatalf("uuid identifier leaked into link: %q", got)
+	}
+}

@@ -1261,6 +1261,18 @@ class ApiClient {
     )
   }
 
+  triggerSecretScan(provider: string, slug: string, repoSlug: string, params?: { ref?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) {
+      query.set('ref', params.ref)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<{ job_id: string; ref: string; mode: string; status: string }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/secrets/scan${qs ? `?${qs}` : ''}`,
+      { method: 'POST' },
+    )
+  }
+
   triggerComponentScan(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
     const query = new URLSearchParams()
     if (params?.ref) {

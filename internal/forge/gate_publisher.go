@@ -97,6 +97,11 @@ func (a *GatePublisher) Subscribe() {
 	a.bus.Subscribe(events.ScanCompleted, func(ctx context.Context, event events.Event) {
 		a.handleScanCompleted(ctx, event.Payload)
 	})
+	// A secret scan lands findings after upload analysis, so an already-posted
+	// gate check would otherwise go stale the moment a leak is found.
+	a.bus.Subscribe(events.SecretScanCompleted, func(ctx context.Context, event events.Event) {
+		a.handleScanCompleted(ctx, event.Payload)
+	})
 	a.bus.Subscribe(events.GateRecomputeRequested, func(ctx context.Context, event events.Event) {
 		a.handleRecomputeRequested(ctx, event.Payload)
 	})

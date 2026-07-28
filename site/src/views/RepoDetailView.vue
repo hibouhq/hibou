@@ -66,6 +66,8 @@
                       :refs="refs"
                       :selected-ref-name="compareBaseRefName"
                       :default-branch="repo.default_branch"
+                      :repo-html-url="repo.html_url"
+                      :provider="repo.provider"
                       compact
                       block
                       @select="selectCompareBase"
@@ -86,6 +88,8 @@
                       :refs="compareTargetOptions"
                       :selected-ref-name="compareTargetRefName"
                       :default-branch="repo.default_branch"
+                      :repo-html-url="repo.html_url"
+                      :provider="repo.provider"
                       compact
                       block
                       @select="selectCompareTarget"
@@ -169,6 +173,8 @@
           :selected-ref-name="selectedRefName"
           :default-branch="repo.default_branch"
           :loading="loading"
+          :repo-html-url="repo.html_url"
+          :provider="repo.provider"
           @select="selectRef"
         />
       </div>

@@ -6,7 +6,7 @@
   >
     <button
       class="inline-flex items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-200 transition hover:border-accent/50 hover:text-white"
-      :class="block ? 'w-full justify-between' : ''"
+      :class="block ? 'min-w-0 flex-1 justify-between' : ''"
       type="button"
       @click.stop="isOpen = !isOpen"
     >
@@ -20,6 +20,20 @@
       >{{ selectedLabel }}</span>
       <ChevronDown class="h-3.5 w-3.5 shrink-0 text-gray-400" />
     </button>
+
+    <a
+      v-if="selectedForgeUrl"
+      :href="selectedForgeUrl"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="inline-flex items-center gap-1 rounded-md border border-surface-border bg-surface-overlay px-2 py-1.5 text-xs text-gray-400 transition hover:border-accent/50 hover:text-white"
+      :title="`Open ${selectedLabel} on ${forgeName}`"
+      :aria-label="`Open ${selectedLabel} on ${forgeName}`"
+      @click.stop
+    >
+      <ExternalLink class="h-3.5 w-3.5" />
+      <span class="hidden sm:inline">{{ forgeName }}</span>
+    </a>
 
     <div
       v-if="!compact"
@@ -112,83 +126,100 @@
         >
           No refs match the current search.
         </div>
-        <button
+        <div
           v-for="refItem in filteredRefs"
           :key="refItem.id"
-          class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition hover:bg-surface-raised"
+          class="group flex w-full items-center rounded-md transition hover:bg-surface-raised"
           :class="[
             isSelected(refItem) ? 'bg-accent-muted/40' : '',
             lifecycleRowClass(refItem),
           ]"
-          type="button"
-          @click="selectRef(refItem.name)"
         >
-          <Check
-            v-if="isSelected(refItem)"
-            class="h-4 w-4 shrink-0 text-accent"
-          />
-          <span
-            v-else
-            class="h-4 w-4 shrink-0"
-          />
-          <Star
-            v-if="refItem.name === defaultBranch"
-            class="h-3 w-3 shrink-0 text-warning"
-          />
-          <component
-            :is="refIcon(refItem)"
-            class="h-4 w-4 shrink-0 text-gray-400"
-          />
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <span
-                class="min-w-0 truncate text-gray-100"
-                :class="titleClass(refItem)"
-              >{{ refPrimaryLabel(refItem) }}</span>
-              <span
-                v-if="refItem.name === defaultBranch"
-                class="rounded border border-surface-border px-1.5 py-0.5 text-[10px] text-gray-400"
-              >
-                default
-              </span>
-              <span
-                v-if="refItem.pr_state"
-                :class="stateBadgeClass(refItem.pr_state)"
-              >
-                {{ refItem.pr_state }}
-              </span>
-            </div>
-            <p
-              v-if="refSecondaryLabel(refItem)"
-              class="mt-0.5 truncate text-[11px] text-gray-500"
-            >
-              {{ refSecondaryLabel(refItem) }}
-            </p>
-          </div>
-          <span class="ml-auto flex items-center gap-1.5">
+          <button
+            class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-3 py-2 text-left text-sm"
+            type="button"
+            @click="selectRef(refItem.name)"
+          >
+            <Check
+              v-if="isSelected(refItem)"
+              class="h-4 w-4 shrink-0 text-accent"
+            />
             <span
-              v-if="refItem.latest_snapshot_status"
-              :class="compactStatusClass(refItem.latest_snapshot_status)"
-              class="flex items-center gap-1 text-[11px]"
-            >
+              v-else
+              class="h-4 w-4 shrink-0"
+            />
+            <Star
+              v-if="refItem.name === defaultBranch"
+              class="h-3 w-3 shrink-0 text-warning"
+            />
+            <component
+              :is="refIcon(refItem)"
+              class="h-4 w-4 shrink-0 text-gray-400"
+            />
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span
+                  class="min-w-0 truncate text-gray-100"
+                  :class="titleClass(refItem)"
+                >{{ refPrimaryLabel(refItem) }}</span>
+                <span
+                  v-if="refItem.name === defaultBranch"
+                  class="rounded border border-surface-border px-1.5 py-0.5 text-[10px] text-gray-400"
+                >
+                  default
+                </span>
+                <span
+                  v-if="refItem.pr_state"
+                  :class="stateBadgeClass(refItem.pr_state)"
+                >
+                  {{ refItem.pr_state }}
+                </span>
+              </div>
+              <p
+                v-if="refSecondaryLabel(refItem)"
+                class="mt-0.5 truncate text-[11px] text-gray-500"
+              >
+                {{ refSecondaryLabel(refItem) }}
+              </p>
+            </div>
+            <span class="ml-auto flex items-center gap-1.5">
               <span
-                class="h-2 w-2 rounded-full"
-                :class="statusDotClass(refItem.latest_snapshot_status)"
-              />
-              {{ capitalizeStatus(refItem.latest_snapshot_status) }}
+                v-if="refItem.latest_snapshot_status"
+                :class="compactStatusClass(refItem.latest_snapshot_status)"
+                class="flex items-center gap-1 text-[11px]"
+              >
+                <span
+                  class="h-2 w-2 rounded-full"
+                  :class="statusDotClass(refItem.latest_snapshot_status)"
+                />
+                {{ capitalizeStatus(refItem.latest_snapshot_status) }}
+              </span>
             </span>
-          </span>
-        </button>
+          </button>
+          <a
+            v-if="refForgeUrl(refItem)"
+            :href="refForgeUrl(refItem)!"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mr-2 shrink-0 rounded p-1 text-gray-500 opacity-0 transition hover:text-white focus:opacity-100 group-hover:opacity-100"
+            :title="`Open ${refPrimaryLabel(refItem)} on ${forgeName}`"
+            :aria-label="`Open ${refPrimaryLabel(refItem)} on ${forgeName}`"
+            @click.stop
+          >
+            <ExternalLink class="h-3.5 w-3.5" />
+          </a>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Check, ChevronDown, GitBranch, GitPullRequest, Search, Star, Tag, X } from 'lucide-vue-next'
+import { Check, ChevronDown, ExternalLink, GitBranch, GitPullRequest, Search, Star, Tag, X } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import type { EnhancedRef } from '@/api/client'
+import { forgeLabel, forgeRefUrl } from '@/lib/forgeLinks'
 
 const props = defineProps<{
   refs: EnhancedRef[]
@@ -198,6 +229,8 @@ const props = defineProps<{
   compact?: boolean
   align?: 'left' | 'right'
   block?: boolean
+  repoHtmlUrl?: string
+  provider?: string
 }>()
 
 const emit = defineEmits<{
@@ -223,6 +256,20 @@ const branchCount = computed(() => props.refs.filter((item) => item.ref_type ===
 const tagCount = computed(() => props.refs.filter((item) => item.ref_type === 'tag').length)
 
 const prCount = computed(() => props.refs.filter((item) => item.ref_type === 'pull_request').length)
+
+const forgeName = computed(() => forgeLabel(props.provider ?? 'github'))
+
+function refForgeUrl(refItem: EnhancedRef): string | null {
+  return forgeRefUrl(props.repoHtmlUrl, props.provider ?? 'github', refItem.name, refItem.ref_type)
+}
+
+const selectedForgeUrl = computed(() => {
+  if (selectedRef.value) {
+    return refForgeUrl(selectedRef.value)
+  }
+  // Deep-linked refs may not be in the loaded list yet; the name alone is enough.
+  return forgeRefUrl(props.repoHtmlUrl, props.provider ?? 'github', props.selectedRefName)
+})
 
 const filteredRefs = computed(() => {
   const query = search.value.trim().toLowerCase()

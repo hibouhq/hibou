@@ -52,6 +52,18 @@
           "$ref": "#/$defs/weaknessThresholds",
           "description": "Optional weakness gate thresholds for matching branches. If omitted, Hibou falls back to platform-managed weakness gates."
         },
+        "vulnerabilities": {
+          "$ref": "#/$defs/vulnerabilityThresholds",
+          "description": "Optional caps on NEW dependency vulnerabilities introduced by a PR (evaluated against the delta, not the whole snapshot)."
+        },
+        "licenses": {
+          "$ref": "#/$defs/licensePolicy",
+          "description": "Optional license policy for matching branches: deny categories and/or SPDX id globs; explicit allow entries override everything."
+        },
+        "secrets": {
+          "$ref": "#/$defs/secretThresholds",
+          "description": "Optional cap on NEW secret findings introduced by a PR. max_new: 0 fails the gate on any newly detected secret."
+        },
         "coverage": {
           "$ref": "#/$defs/coverageThresholds",
           "description": "Optional coverage gate thresholds for matching branches."
@@ -139,6 +151,74 @@
         }
       },
       "description": "Thresholds for weakness findings on matching branches."
+    },
+    "vulnerabilityThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_critical": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new critical-severity dependency vulnerabilities allowed. Omit for no limit."
+        },
+        "max_high": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new high-severity dependency vulnerabilities allowed. Omit for no limit."
+        },
+        "max_medium": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new medium-severity dependency vulnerabilities allowed. Omit for no limit."
+        },
+        "max_new_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new dependency vulnerabilities of any severity. Omit for no limit."
+        }
+      },
+      "description": "Caps on NEW dependency vulnerabilities introduced by a PR."
+    },
+    "licensePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deny_categories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["permissive", "weak-copyleft", "copyleft", "network-copyleft", "source-available", "public-domain", "unknown"]
+          },
+          "description": "License categories to deny wholesale."
+        },
+        "deny": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "SPDX license ids or globs to deny (e.g. GPL-3.0-only, LGPL-*)."
+        },
+        "allow": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "SPDX license ids or globs allowed even when a deny rule matches. Allow always wins."
+        },
+        "deny_unknown": {
+          "type": "boolean",
+          "description": "Whether components with unknown or missing license metadata fail the gate. Defaults to true — an unreviewed license is a legal risk until someone looks at it."
+        }
+      },
+      "description": "License policy evaluated against every component of the head snapshot."
+    },
+    "secretThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_new": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new secret findings allowed. 0 (recommended) fails the gate on any newly detected secret."
+        }
+      },
+      "description": "Cap on NEW secret findings introduced by a PR."
     }
   }
 }

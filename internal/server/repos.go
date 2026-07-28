@@ -178,6 +178,9 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 		"slug": repo.Slug,
 	})
 
+	// Baseline the whole history once at enrolment; pushes only scan their range.
+	s.enqueueEnrollmentSecretScan(r.Context(), repo)
+
 	api.JSON(w, http.StatusCreated, repo)
 }
 

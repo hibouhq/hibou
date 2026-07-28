@@ -186,8 +186,12 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 
 	refType := refTypeFromName(event.Ref)
 	refName := normalizeStoredRefName(event.Ref)
-	_, err = s.queries.UpsertRef(r.Context(), repo.ID, refName, refType, store.UpsertRefOptions{LatestCommitSHA: stringPtr(event.After)})
-	return err
+	if _, err := s.queries.UpsertRef(r.Context(), repo.ID, refName, refType, store.UpsertRefOptions{LatestCommitSHA: stringPtr(event.After)}); err != nil {
+		return err
+	}
+
+	s.maybeEnqueueSecretScan(r.Context(), repo, refType, refName, event)
+	return nil
 }
 
 func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forgeType string, event forge.PullRequestEvent) error {

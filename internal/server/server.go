@@ -49,6 +49,7 @@ import (
 	"github.com/hibouhq/hibou/internal/repoinventory"
 	"github.com/hibouhq/hibou/internal/retention"
 	"github.com/hibouhq/hibou/internal/scanner"
+	"github.com/hibouhq/hibou/internal/secretscan"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/toolcatalog"
 	"github.com/hibouhq/hibou/internal/updatecheck"
@@ -80,6 +81,9 @@ type Server struct {
 	toolCatalogSvc     *toolcatalog.Service
 	advisoryScanner    advisoryScanner
 	advisoryProviders  []string
+	secretScanner      *secretscan.Scanner
+	secretScanSlots    chan struct{}
+	secretCheckSlots   chan struct{}
 	retentionWorker    *retention.Worker
 	dispatcher         *notify.Dispatcher
 	staleScanChecker   backgroundStarter
@@ -115,6 +119,9 @@ type readyResponse struct {
 type metricsResponse struct {
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	GoVersion     string  `json:"go_version"`
+	// SecretScanQueueDepth counts pending + in-flight jobs — the worker
+	// autoscaling signal. Omitted when secret scanning is disabled.
+	SecretScanQueueDepth *int64 `json:"secret_scan_queue_depth,omitempty"`
 }
 
 type backgroundStarter interface {
@@ -225,6 +232,18 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 				s.log.Error().Err(err).Str("user_id", user.ID.String()).Str("provider", providerID).Msg("failed to sync forge permissions after login")
 			}
 		})
+	}
+	if cfg.SecretScan.Enabled {
+		secretProviders := buildSecretScanProviders(cfg, log)
+		if len(secretProviders) > 0 {
+			s.secretScanner = secretscan.NewScanner(secretProviders, s.queries, s.bus, log, cfg.SecretScan.TempDir)
+			s.secretScanSlots = make(chan struct{}, cfg.SecretScan.MaxConcurrency)
+			// The synchronous push-check path blocks a caller's push, so it gets
+			// its own small limiter rather than competing for worker slots.
+			s.secretCheckSlots = make(chan struct{}, 2)
+		} else {
+			log.Info().Strs("configured_providers", append([]string(nil), cfg.SecretScan.Providers...)).Msg("secret scanning enabled but no providers are usable on this pod")
+		}
 	}
 	s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, s.queries, s.bus, log, cfg.RetentionPolicy, cfg.UploadWindow)
 	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, cfg.BaseURL, log,
@@ -523,6 +542,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/finding-acceptances", s.handleListFindingAcceptances)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
+						r.Post("/{repoSlug}/secrets/scan", s.handleTriggerSecretScan)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
@@ -545,6 +565,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					})
 				})
 			})
+			r.Post("/secret-scan/check", s.handleSecretScanCheck)
 			r.Post("/upload", s.handleUploadAuto)
 			r.Get("/uploads/{id}/status", s.handleGetUploadStatus)
 		})
@@ -600,6 +621,9 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	}
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		go s.staleScanChecker.Start(runtimeCtx)
+	}
+	if s.secretScanner != nil && s.cfg.Background.SecretScanEnabled {
+		go s.runSecretScanLoop(runtimeCtx)
 	}
 	if s.gatePublisher != nil {
 		go s.gatePublisher.StartReconcileLoop(runtimeCtx, 5*time.Minute)
@@ -670,7 +694,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), s.claimReleaseTimeout())
 	defer releaseCancel()
-	releaseErr := s.releaseArtifactClaims(releaseCtx)
+	releaseErr := errors.Join(s.releaseArtifactClaims(releaseCtx), s.releaseSecretScanClaims(releaseCtx))
 	wsErr := s.wsHubWaitForDrain(ctx)
 	if errors.Is(wsErr, context.DeadlineExceeded) || errors.Is(wsErr, context.Canceled) {
 		s.closeWebsockets()
@@ -996,8 +1020,14 @@ func (s *Server) shutdownMiddleware(next http.Handler) http.Handler {
 // @Success      200  {object}  api.Response{data=server.metricsResponse}
 // @Router       /metrics [get]
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	api.JSON(w, http.StatusOK, metricsResponse{
+	response := metricsResponse{
 		UptimeSeconds: time.Since(s.startedAt).Seconds(),
 		GoVersion:     runtime.Version(),
-	})
+	}
+	if s.cfg.SecretScan.Enabled && s.queries != nil {
+		if depth, err := s.queries.CountPendingSecretScanJobs(r.Context()); err == nil {
+			response.SecretScanQueueDepth = &depth
+		}
+	}
+	api.JSON(w, http.StatusOK, response)
 }

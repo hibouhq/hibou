@@ -13,7 +13,16 @@
             </div>
             <div class="mt-0.5 text-xs text-gray-500">
               <template v-if="source">
-                {{ coveredCount }}/{{ source.lines.length }} instrumented lines covered · {{ shortSha }}
+                {{ coveredCount }}/{{ source.lines.length }} instrumented lines covered ·
+                <a
+                  v-if="commitUrl"
+                  :href="commitUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="font-mono transition hover:text-white hover:underline"
+                  :title="`Open commit on ${forgeName}`"
+                >{{ shortSha }}</a>
+                <span v-else>{{ shortSha }}</span>
               </template>
             </div>
           </div>
@@ -22,6 +31,17 @@
               <span class="h-2.5 w-2.5 rounded-sm bg-emerald-500/60" /> covered
               <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-red-500/60" /> uncovered
             </span>
+            <a
+              v-if="blobUrl"
+              :href="blobUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 rounded-md border border-surface-border px-2 py-1.5 text-xs text-gray-400 transition hover:text-white"
+              :title="`Open ${path} on ${forgeName}`"
+            >
+              <ExternalLink class="h-3.5 w-3.5" />
+              <span class="hidden sm:inline">{{ forgeName }}</span>
+            </a>
             <button
               type="button"
               class="rounded-md border border-surface-border p-1.5 text-gray-400 transition hover:text-white"
@@ -79,9 +99,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { X } from 'lucide-vue-next'
+import { ExternalLink, X } from 'lucide-vue-next'
 
 import { api, type CoverageSource } from '@/api/client'
+import { forgeBlobAtCommitUrl, forgeCommitUrl, forgeLabel } from '@/lib/forgeLinks'
 
 interface SourceRow {
   number: number
@@ -95,6 +116,7 @@ const props = defineProps<{
   repoSlug: string
   snapshotId: string
   path: string
+  repoHtmlUrl?: string
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -115,6 +137,9 @@ const rows = computed<SourceRow[]>(() => {
 
 const coveredCount = computed(() => (source.value?.lines ?? []).filter((line) => line.hits > 0).length)
 const shortSha = computed(() => source.value?.commit_sha.slice(0, 7) ?? '')
+const forgeName = computed(() => forgeLabel(props.provider))
+const commitUrl = computed(() => forgeCommitUrl(props.repoHtmlUrl, props.provider, source.value?.commit_sha ?? ''))
+const blobUrl = computed(() => forgeBlobAtCommitUrl(props.repoHtmlUrl, props.provider, source.value?.commit_sha ?? '', props.path))
 
 watch(() => [props.snapshotId, props.path], load, { immediate: true })
 

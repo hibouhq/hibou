@@ -82,6 +82,17 @@ type Repository struct {
 	Private        bool
 	CloneURL       string
 	HTMLURL        string
+	// SizeKB is the forge-reported repository size. Zero means the provider does
+	// not report it; callers must treat zero as unknown, not empty.
+	SizeKB int64
+}
+
+// CloneAuthProvider is implemented by providers that can mint short-lived
+// credentials for git-over-HTTPS clones. An empty token with a nil error means
+// no credential is available (e.g. not running in App mode) — public
+// repositories still clone without one.
+type CloneAuthProvider interface {
+	CloneToken(ctx context.Context, owner string) (string, error)
 }
 
 type Installation struct {

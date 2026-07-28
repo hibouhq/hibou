@@ -7,6 +7,19 @@ contents:
     - ca-certificates-bundle
     - tzdata
     - wolfi-baselayout
+    # Secret scanning: gitleaks + trufflehog scan, git clones (providers exec
+    # all three). TruffleHog is AGPL-3.0: shipped as a separate binary in the
+    # image (mere aggregation), never linked or embedded.
+    #
+    # Scanner pins use =~ (apk fuzzy match): renovate tracks the upstream
+    # release, while the wolfi -rX rebuild suffix floats — no renovate
+    # datasource can see it. A bump wolfi hasn't packaged yet fails `apko
+    # lock`/build loudly on the renovate PR instead of drifting silently.
+    - git
+    # renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v(?<version>.+)$
+    - gitleaks=~8.30.1
+    # renovate: datasource=github-releases depName=trufflesecurity/trufflehog extractVersion=^v(?<version>.+)$
+    - trufflehog=~3.95.5
 
 accounts:
   groups:

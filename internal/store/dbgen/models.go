@@ -1086,6 +1086,12 @@ type Notification struct {
 	CreatedAt time.Time         `json:"created_at"`
 }
 
+type NotificationDedup struct {
+	EventType  string    `json:"event_type"`
+	RepoID     uuid.UUID `json:"repo_id"`
+	NotifiedAt time.Time `json:"notified_at"`
+}
+
 type NotificationRule struct {
 	ID                uuid.UUID                   `json:"id"`
 	OrgID             uuid.UUID                   `json:"org_id"`
@@ -1252,6 +1258,24 @@ type ScanRule struct {
 	Properties       json.RawMessage `json:"properties"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+type SecretScanJob struct {
+	ID             uuid.UUID      `json:"id"`
+	RepoID         uuid.UUID      `json:"repo_id"`
+	RefName        string         `json:"ref_name"`
+	Mode           string         `json:"mode"`
+	FromCommit     string         `json:"from_commit"`
+	ToCommit       string         `json:"to_commit"`
+	SnapshotID     uuid.NullUUID  `json:"snapshot_id"`
+	Status         string         `json:"status"`
+	ClaimedBy      sql.NullString `json:"claimed_by"`
+	ClaimExpiresAt sql.NullTime   `json:"claim_expires_at"`
+	Attempts       int32          `json:"attempts"`
+	LastError      string         `json:"last_error"`
+	CreatedAt      time.Time      `json:"created_at"`
+	StartedAt      sql.NullTime   `json:"started_at"`
+	FinishedAt     sql.NullTime   `json:"finished_at"`
 }
 
 type Snapshot struct {

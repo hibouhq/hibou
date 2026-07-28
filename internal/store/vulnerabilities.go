@@ -207,7 +207,9 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 	}
 	if search := escapeLikeFragment(opts.Search); search != "" {
 		idx := addArg("%" + search + "%")
-		conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\')`, idx, idx, idx))
+		// primary_identifier_value is included so searching a CVE/GHSA/rule id
+		// finds the finding — it is the identifier users actually paste.
+		conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\' OR primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
 	}
 
 	where := strings.Join(conds, " AND ")
@@ -357,7 +359,9 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 		}
 		if search != "" {
 			idx := add("%" + search + "%")
-			conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\')`, idx, idx, idx))
+			// primary_identifier_value is included so searching a CVE/GHSA/rule id
+			// finds the finding — it is the identifier users actually paste.
+			conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\' OR primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
 		}
 		return strings.Join(conds, " AND "), args
 	}

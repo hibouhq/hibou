@@ -33,6 +33,18 @@ hibou:
       id: github
       existingSecret: hibou-forge-github
 
+  # Secret scanning on the single combined pod: dogfood has no dedicated
+  # worker, so opt in explicitly — scratch gives the read-only-rootfs pod a
+  # bounded place to clone, background.secretScan runs the loop here.
+  secretScan:
+    enabled: true
+    onPush: true
+  background:
+    secretScan: true
+  scratch:
+    enabled: true
+    sizeLimit: 5Gi
+
 artifact:
   backend: s3
 
@@ -70,19 +82,13 @@ postgresql:
 
 trivy:
   enabled: true
-  cache:
-    # Dogfood runs on a single small node whose disk is shared with the
-    # local-path PVCs, so keep the DB cache well under the free space.
-    sizeLimit: 2Gi
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
-      ephemeral-storage: 2Gi
     limits:
       cpu: 500m
       memory: 512Mi
-      ephemeral-storage: 3Gi
 
 ingress:
   enabled: true

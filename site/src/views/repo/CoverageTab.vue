@@ -350,6 +350,7 @@
         :repo-slug="repoSlug"
         :snapshot-id="report.snapshot_id"
         :path="sourceFile"
+        :repo-html-url="repo?.html_url"
         @close="sourceFile = null"
       />
     </template>
@@ -364,11 +365,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, inject, ref, watch, type Ref } from 'vue'
 import { BarChart3, FileCode2, FolderTree, GitBranch, LayoutGrid, TableProperties, Upload } from 'lucide-vue-next'
 import { useRoute } from 'vue-router'
 
-import { api, type CoverageFile, type CoverageReport } from '@/api/client'
+import { api, type CoverageFile, type CoverageReport, type Repository } from '@/api/client'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreemap from '@/components/CoverageTreemap.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
@@ -376,6 +377,8 @@ import FilterBar from '@/components/FilterBar.vue'
 import { useTableSort } from '@/composables/useTableSort'
 
 const route = useRoute()
+
+const repo = inject<Ref<Repository | null>>('repo', ref(null))
 
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)

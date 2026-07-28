@@ -101,9 +101,11 @@ func ParseGitleaksReport(content []byte) ([]SecretFinding, error) {
 		if err := json.Unmarshal(encoded, &row); err != nil {
 			return nil, fmt.Errorf("decode gitleaks finding: %w", err)
 		}
-		match := strings.TrimSpace(row.Match)
+		// Hash the bare secret, not the surrounding match text: every provider
+		// must hash the same bytes or cross-tool fingerprint dedup can't work.
+		match := strings.TrimSpace(row.Secret)
 		if match == "" {
-			match = strings.TrimSpace(row.Secret)
+			match = strings.TrimSpace(row.Match)
 		}
 		if match == "" {
 			continue
@@ -114,6 +116,11 @@ func ParseGitleaksReport(content []byte) ([]SecretFinding, error) {
 		}
 		severity := severityFromTags(row.Tags)
 		secretHash := HashSecret(match)
+		// ADR-010: never store the raw secret. The row carries it twice —
+		// Match (the matched text) and Secret (the extracted value) — and
+		// Metadata is persisted verbatim into the finding.
+		delete(raw, "Match")
+		delete(raw, "Secret")
 		finding := SecretFinding{
 			Tool:        "gitleaks",
 			RuleID:      strings.TrimSpace(row.RuleID),
@@ -162,7 +169,9 @@ func parseTruffleHogJSONL(content []byte) ([]SecretFinding, error) {
 	rows := make([]map[string]any, 0)
 	for _, line := range bytes.Split(content, []byte("\n")) {
 		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
+		// trufflehog interleaves human-readable log lines on stdout; only
+		// object lines are findings.
+		if len(line) == 0 || line[0] != '{' {
 			continue
 		}
 		var raw map[string]any
@@ -204,6 +213,10 @@ func decodeTruffleHogRow(raw map[string]any) (SecretFinding, bool, error) {
 	ruleID := trufflehogRuleID(row)
 	startLine := trufflehogStartLine(row)
 	secretHash := HashSecret(match)
+	// ADR-010: never store the raw secret. The row carries it in Raw/RawV2 and
+	// Metadata is persisted verbatim into the finding.
+	delete(raw, "Raw")
+	delete(raw, "RawV2")
 	finding := SecretFinding{
 		Tool:        "trufflehog",
 		RuleID:      ruleID,

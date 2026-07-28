@@ -5539,6 +5539,10 @@ const docTemplate = `{
                 "go_version": {
                     "type": "string"
                 },
+                "secret_scan_queue_depth": {
+                    "description": "SecretScanQueueDepth counts pending + in-flight jobs — the worker\nautoscaling signal. Omitted when secret scanning is disabled.",
+                    "type": "integer"
+                },
                 "uptime_seconds": {
                     "type": "number"
                 }

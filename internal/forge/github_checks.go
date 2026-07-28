@@ -149,6 +149,16 @@ func (g *GitHub) findCheckRunID(ctx context.Context, token, owner, repo, sha, na
 	return 0, nil
 }
 
+// CloneToken implements CloneAuthProvider: a short-lived installation token
+// usable as the password in an HTTPS clone URL. Empty outside App mode, so
+// public repositories still clone unauthenticated.
+func (g *GitHub) CloneToken(ctx context.Context, owner string) (string, error) {
+	if !g.isAppMode() {
+		return "", nil
+	}
+	return g.installationTokenForOwner(ctx, owner)
+}
+
 // installationTokenForOwner mints an installation access token for the App
 // installation on the given account (owner).
 func (g *GitHub) installationTokenForOwner(ctx context.Context, owner string) (string, error) {

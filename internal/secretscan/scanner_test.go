@@ -76,7 +76,7 @@ func TestRunFullScanPersistsFindings(t *testing.T) {
 	}
 
 	scanner := NewScanner([]SecretScanProvider{provider}, storeStub, bus, zerolog.Nop(), "")
-	created, err := scanner.RunFullScan(context.Background(), uuid.New(), uuid.New(), "https://github.com/acme/repo.git", "main", "")
+	created, err := scanner.RunFullScan(context.Background(), uuid.New(), uuid.New(), "https://github.com/acme/repo.git", "main", "", false)
 	if err != nil {
 		t.Fatalf("RunFullScan returned error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestRunFullScanPublishesFailureOnProviderError(t *testing.T) {
 	}
 
 	scanner := NewScanner([]SecretScanProvider{provider}, storeStub, bus, zerolog.Nop(), "")
-	_, err := scanner.RunFullScan(context.Background(), uuid.New(), uuid.New(), "https://github.com/acme/repo.git", "main", "")
+	_, err := scanner.RunFullScan(context.Background(), uuid.New(), uuid.New(), "https://github.com/acme/repo.git", "main", "", false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

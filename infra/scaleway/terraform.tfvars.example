@@ -7,6 +7,7 @@ scw_project_id = ""
 
 # server_name   = "hibou"
 # instance_type = "DEV1-M"  # 3 vCPU, 4 GiB RAM. €14.74/mo.
+# root_volume_size_gb = 30
 # zone          = "fr-par-1"  # Paris. Alternatives: fr-par-2, fr-par-3, nl-ams-1, nl-ams-2, nl-ams-3, pl-waw-1, pl-waw-2, pl-waw-3
 # ssh_public_key_path = "~/.ssh/id_ed25519.pub"
 

@@ -197,6 +197,11 @@ func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.G
 			DenyUnknown:    gate.Licenses.DenyUnknownValue(),
 		}
 	}
+	if gate.Secrets != nil {
+		out.Secrets = &delta.SecretsGate{
+			MaxNew: gate.Secrets.MaxNew,
+		}
+	}
 	if !out.Configured() {
 		return nil
 	}

@@ -22,6 +22,10 @@ ARG HELM_VERSION='4.2.0'
 ARG ORAS_VERSION='1.3.0'
 # renovate: datasource=github-releases depName=aquasecurity/trivy extractVersion=^v(?<version>.+)$
 ARG TRIVY_VERSION='0.72.0'
+# renovate: datasource=github-releases depName=gitleaks/gitleaks extractVersion=^v(?<version>.+)$
+ARG GITLEAKS_VERSION='8.30.1'
+# renovate: datasource=github-releases depName=trufflesecurity/trufflehog extractVersion=^v(?<version>.+)$
+ARG TRUFFLEHOG_VERSION='3.96.0'
 # renovate: datasource=node-version packageName=node
 ARG NODE_MAJOR='26'
 # renovate: datasource=github-releases packageName=opentofu/opentofu
@@ -41,7 +45,7 @@ ARG DIND_FEATURE_VERSION='3.0.1'
 FROM mcr.microsoft.com/devcontainers/base:noble AS base
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
-ARG GH_CLI_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION GOTESTSUM_VERSION NODE_MAJOR RTK_VERSION SQLC_VERSION SWAG_VERSION TRIVY_VERSION
+ARG GH_CLI_VERSION GITLEAKS_VERSION GO_VERSION GOLANGCI_LINT_VERSION GOSEC_VERSION GOTESTSUM_VERSION NODE_MAJOR RTK_VERSION SQLC_VERSION SWAG_VERSION TRIVY_VERSION TRUFFLEHOG_VERSION
 
 RUN <<EOF
     packages=(
@@ -115,6 +119,15 @@ RUN <<EOF
     curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${trivy_arch}.tar.gz" \
         | tar -xzf - -C /usr/local/bin trivy
     trivy --version
+
+    gitleaks_arch="$(echo "${TARGETARCH}" | sed 's/amd64/x64/')"
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${gitleaks_arch}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin gitleaks
+    gitleaks version
+
+    curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TARGETARCH}.tar.gz" \
+        | tar -xzf - -C /usr/local/bin trufflehog
+    trufflehog --version
 
     rtk_target='unknown-linux-gnu'
     if [ "${TARGETARCH}" = 'amd64' ]; then

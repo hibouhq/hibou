@@ -1,0 +1,9 @@
+#!/bin/sh
+# Reference pre-commit hook: blocks a commit when the staged changes contain
+# secrets. Install by copying (or symlinking) into .git/hooks/pre-commit.
+#
+# Requires the hibou CLI, logged in (hibou login) or HIBOU_SERVER/HIBOU_TOKEN.
+# Bypassable with git commit --no-verify — this is defense in depth, the
+# server-side scan is the enforcement layer.
+
+exec hibou secret-scan --staged --fail-open

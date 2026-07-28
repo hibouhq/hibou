@@ -137,13 +137,13 @@ func (s *Service) handleVulnDiscovered(ctx context.Context, payload any) {
 	if severity != "critical" {
 		severityLevel = dbgen.SeverityLevelHigh
 	}
-	vulnID := stringValue(data, "cve", stringValue(data, "advisory_id", "unknown"))
+	vulnID := vulnerabilityLabel(data)
 	body := fmt.Sprintf("New %s vulnerability %s found in repo %s", severity, vulnID, repoName)
 	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
 		Type:     string(events.VulnDiscovered),
 		Title:    "New vulnerability discovered",
 		Body:     body,
-		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(vulnID)),
+		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(data)),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
 	})
 }
@@ -160,13 +160,13 @@ func (s *Service) handleVulnerabilityCreated(ctx context.Context, payload any) {
 	if severity != "critical" {
 		severityLevel = dbgen.SeverityLevelHigh
 	}
-	vulnID := stringValue(data, "advisory_id", stringValue(data, "id", "unknown"))
+	vulnID := vulnerabilityLabel(data)
 	body := fmt.Sprintf("New %s vulnerability %s found in repo %s", severity, vulnID, repoName)
 	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
 		Type:     string(events.VulnerabilityCreated),
 		Title:    "New vulnerability created",
 		Body:     body,
-		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(vulnID)),
+		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(data)),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
 	})
 }
@@ -341,14 +341,37 @@ func (s *Service) repoTabLink(ctx context.Context, repoID uuid.UUID, tab, rawQue
 	return link
 }
 
-// vulnSearchQuery pre-fills the vulnerabilities tab's free-text search with the
-// advisory identifier; the tab reads managed filters from the route query.
-func vulnSearchQuery(vulnID string) string {
-	vulnID = strings.TrimSpace(vulnID)
-	if vulnID == "" || vulnID == "unknown" {
+// vulnerabilityLabel picks the human-facing identifier for a notification:
+// the advisory/rule id (CVE-…, GHSA-…, G101) plus the affected component.
+// advisory_id and id are internal UUIDs and are deliberately NOT used — they
+// mean nothing to a reader and match nothing when searched.
+func vulnerabilityLabel(data map[string]any) string {
+	label := stringValue(data, "identifier", stringValue(data, "cve", ""))
+	if label == "" {
+		return "unknown"
+	}
+	if component := stringValue(data, "component", ""); component != "" {
+		return label + " in " + component
+	}
+	return label
+}
+
+// vulnSearchQuery pre-fills the vulnerabilities tab's free-text search. Only a
+// real identifier is linkable: a UUID would return an empty list, which is
+// worse than landing on the unfiltered tab.
+func vulnSearchQuery(data map[string]any) string {
+	identifier := strings.TrimSpace(stringValue(data, "identifier", stringValue(data, "cve", "")))
+	if identifier == "" || isUUIDLike(identifier) {
 		return ""
 	}
-	return "search=" + url.QueryEscape(vulnID)
+	return "search=" + url.QueryEscape(identifier)
+}
+
+// isUUIDLike guards against regressions that put an internal id back into a
+// user-facing search link.
+func isUUIDLike(value string) bool {
+	_, err := uuid.Parse(strings.TrimSpace(value))
+	return err == nil
 }
 
 func stringValue(data map[string]any, key, fallback string) string {

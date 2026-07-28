@@ -425,46 +425,49 @@ func TestReleaseArtifactProcessingClaimsReleasesOnlyMatchingWorkerActiveClaims(t
 
 	queries := NewQueries(db)
 	ctx := context.Background()
-	if err := resetArtifactProcessingClaimsForTest(ctx, db); err != nil {
-		t.Fatalf("reset artifact processing claims: %v", err)
-	}
 	releasedID := createSnapshotForArtifactTest(t, ctx, queries)
 	otherWorkerID := createSnapshotForArtifactTest(t, ctx, queries)
 	finishedID := createSnapshotForArtifactTest(t, ctx, queries)
 
+	// Release is scoped by worker id, not by row, so literal "worker-a" would
+	// also release rows seeded by other packages running against this same
+	// database — and theirs would release ours. Unique ids per run instead.
+	workerA := "worker-a-" + uuid.NewString()[:8]
+	workerB := "worker-b-" + uuid.NewString()[:8]
+
 	claimExpiry := time.Now().Add(5 * time.Minute)
 	if _, err := db.ExecContext(ctx, `
 		UPDATE snapshots
-		SET artifact_processing_claimed_by = 'worker-a',
+		SET artifact_processing_claimed_by = $3,
 			artifact_processing_claim_expires_at = $2,
 			artifact_processing_finished_at = NULL,
 			status = 'complete'
 		WHERE id = $1
-	`, releasedID, claimExpiry); err != nil {
+	`, releasedID, claimExpiry, workerA); err != nil {
 		t.Fatalf("seed released claim: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
 		UPDATE snapshots
-		SET artifact_processing_claimed_by = 'worker-b',
+		SET artifact_processing_claimed_by = $3,
 			artifact_processing_claim_expires_at = $2,
 			artifact_processing_finished_at = NULL,
 			status = 'complete'
 		WHERE id = $1
-	`, otherWorkerID, claimExpiry); err != nil {
+	`, otherWorkerID, claimExpiry, workerB); err != nil {
 		t.Fatalf("seed other worker claim: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
 		UPDATE snapshots
-		SET artifact_processing_claimed_by = 'worker-a',
+		SET artifact_processing_claimed_by = $3,
 			artifact_processing_claim_expires_at = $2,
 			artifact_processing_finished_at = NOW(),
 			status = 'failed'
 		WHERE id = $1
-	`, finishedID, claimExpiry); err != nil {
+	`, finishedID, claimExpiry, workerA); err != nil {
 		t.Fatalf("seed finished claim: %v", err)
 	}
 
-	released, err := queries.ReleaseArtifactProcessingClaims(ctx, "worker-a")
+	released, err := queries.ReleaseArtifactProcessingClaims(ctx, workerA)
 	if err != nil {
 		t.Fatalf("ReleaseArtifactProcessingClaims() error = %v", err)
 	}
@@ -484,16 +487,16 @@ func TestReleaseArtifactProcessingClaimsReleasesOnlyMatchingWorkerActiveClaims(t
 	if err != nil {
 		t.Fatalf("GetSnapshotByID(other): %v", err)
 	}
-	if otherSnapshot.ArtifactProcessingClaimedBy == nil || *otherSnapshot.ArtifactProcessingClaimedBy != "worker-b" {
-		t.Fatalf("other worker claim = %#v, want worker-b", otherSnapshot.ArtifactProcessingClaimedBy)
+	if otherSnapshot.ArtifactProcessingClaimedBy == nil || *otherSnapshot.ArtifactProcessingClaimedBy != workerB {
+		t.Fatalf("other worker claim = %#v, want %s", otherSnapshot.ArtifactProcessingClaimedBy, workerB)
 	}
 
 	finishedSnapshot, err := queries.GetSnapshotByID(ctx, finishedID)
 	if err != nil {
 		t.Fatalf("GetSnapshotByID(finished): %v", err)
 	}
-	if finishedSnapshot.ArtifactProcessingClaimedBy == nil || *finishedSnapshot.ArtifactProcessingClaimedBy != "worker-a" {
-		t.Fatalf("finished claim = %#v, want preserved worker-a", finishedSnapshot.ArtifactProcessingClaimedBy)
+	if finishedSnapshot.ArtifactProcessingClaimedBy == nil || *finishedSnapshot.ArtifactProcessingClaimedBy != workerA {
+		t.Fatalf("finished claim = %#v, want preserved %s", finishedSnapshot.ArtifactProcessingClaimedBy, workerA)
 	}
 }
 
@@ -708,15 +711,5 @@ func finishOtherSnapshotsForArtifactProcessingTest(ctx context.Context, db *sql.
 			artifact_processing_claim_expires_at = NULL
 		WHERE id <> $1
 	`, keepSnapshotID)
-	return err
-}
-
-func resetArtifactProcessingClaimsForTest(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, `
-		UPDATE snapshots
-		SET artifact_processing_claimed_by = NULL,
-			artifact_processing_claim_expires_at = NULL
-		WHERE artifact_processing_claimed_by IS NOT NULL
-	`)
 	return err
 }

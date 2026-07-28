@@ -11,6 +11,25 @@ hibou:
     retention: true
     staleScan: true
     stalePending: true
+    # -- Secret scanning loop on the request-serving pod. Off by default: it clones repositories, which competes with request handling. Prefer worker.enabled with worker.background.secretScan. Enabling it here also requires scratch.enabled, since the root filesystem is read-only.
+    secretScan: false
+  # -- Writable scratch volume for the request-serving pod. Only needed if you run clone-heavy loops here instead of on a worker.
+  scratch:
+    enabled: false
+    mountPath: /var/tmp/hibou
+    sizeLimit: 10Gi
+  # -- Secret scanning feature config (shared by API and worker pods via the configmap). enabled gates enqueue + the feature as a whole; the loop that clones is gated separately by background.secretScan (API pod) / worker.background.secretScan (worker pod).
+  secretScan:
+    enabled: false
+    onPush: true
+    # -- Detection engines, executed in order; duplicate findings dedup by fingerprint. trufflehog adds live credential verification (Verified findings authenticated against the real service).
+    providers:
+      - gitleaks
+      - trufflehog
+    # -- Skip and warn above this repository size. Empty uses the app default (2048).
+    maxRepoMB: ""
+    # -- Per-job scan timeout. Empty uses the app default (5m).
+    timeout: ""
   resources:
     requests:
       cpu: 100m
@@ -102,13 +121,24 @@ hibou:
       retention: true
       staleScan: true
       stalePending: true
+      # -- Secret scanning worker loop. Off by default even on workers: it clones repositories, so enable it deliberately alongside worker.scratch and an ephemeral-storage limit.
+      secretScan: false
+    # -- Writable scratch volume. The root filesystem is read-only, so any work that clones or unpacks to disk needs this. sizeLimit is what stops a runaway clone from filling the node — the omission that caused the Trivy-DB DiskPressure eviction storm.
+    scratch:
+      enabled: true
+      mountPath: /var/tmp/hibou
+      sizeLimit: 10Gi
     resources:
       requests:
         cpu: 100m
         memory: 128Mi
+        # -- Scheduler needs this to place the pod on a node with room for clones. Keep at or above scratch.sizeLimit.
+        ephemeral-storage: 2Gi
       limits:
         cpu: 500m
         memory: 512Mi
+        # -- Hard cap: the kubelet evicts this pod rather than the whole node when a clone runs away.
+        ephemeral-storage: 12Gi
 
 artifact:
   # -- Artifact storage backend. Leave empty to default to bundled SeaweedFS when enabled, otherwise filesystem.

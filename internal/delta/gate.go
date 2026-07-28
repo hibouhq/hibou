@@ -33,12 +33,20 @@ type GateConfig struct {
 	Weakness        *WeaknessGate
 	Vulnerabilities *VulnerabilityGate
 	Licenses        *LicenseGate
+	Secrets         *SecretsGate
 	HeadSnapshotID  uuid.UUID
 }
 
 // Configured reports whether any file-managed section carries thresholds.
 func (c *GateConfig) Configured() bool {
-	return c != nil && (c.Weakness != nil || c.Vulnerabilities != nil || c.Licenses != nil)
+	return c != nil && (c.Weakness != nil || c.Vulnerabilities != nil || c.Licenses != nil || c.Secrets != nil)
+}
+
+// SecretsGate caps NEW secret findings introduced by the PR. Accepted findings
+// are already filtered out of the delta, so a waived rotated key does not fail
+// the gate.
+type SecretsGate struct {
+	MaxNew *int
 }
 
 // VulnerabilityGate caps NEW dependency vulnerabilities introduced by the PR.
@@ -91,6 +99,9 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	if cfg != nil && cfg.Vulnerabilities != nil {
 		reasons = append(reasons, evaluateNewVulnerabilityGate(delta.New, cfg.Vulnerabilities)...)
 	}
+	if cfg != nil && cfg.Secrets != nil {
+		reasons = append(reasons, evaluateNewSecretsGate(delta.New, cfg.Secrets)...)
+	}
 	if cfg != nil && cfg.Licenses != nil {
 		licenseReasons, licenseErr := s.evaluateLicenseGate(ctx, cfg.HeadSnapshotID, cfg.Licenses)
 		if licenseErr != nil {
@@ -130,6 +141,38 @@ func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *Vulnerab
 		reasons = append(reasons, fmt.Sprintf("%d new dependency vulnerabilities exceed the maximum %d", total, *gate.MaxNewTotal))
 	}
 	return reasons
+}
+
+// evaluateNewSecretsGate caps the secret findings a PR introduces. Only rows of
+// type "secret" count; the message names files, never values — only
+// secret_hash is ever stored.
+func evaluateNewSecretsGate(newVulns []store.Vulnerability, gate *SecretsGate) []string {
+	if gate == nil || gate.MaxNew == nil {
+		return nil
+	}
+	count := 0
+	files := make([]string, 0, 5)
+	for _, vuln := range newVulns {
+		if !strings.EqualFold(strings.TrimSpace(vuln.Type), "secret") {
+			continue
+		}
+		count++
+		if len(files) < 5 && vuln.FilePath != nil && *vuln.FilePath != "" {
+			files = append(files, *vuln.FilePath)
+		}
+	}
+	if count <= *gate.MaxNew {
+		return nil
+	}
+	reason := fmt.Sprintf("%d new secret findings exceed the maximum %d", count, *gate.MaxNew)
+	if len(files) > 0 {
+		reason += " (in " + strings.Join(files, ", ")
+		if count > len(files) {
+			reason += ", …"
+		}
+		reason += ")"
+	}
+	return []string{reason}
 }
 
 // componentLister is satisfied by the store when license gating is available.

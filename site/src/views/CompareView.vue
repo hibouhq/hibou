@@ -11,7 +11,21 @@
             :is="headRefIcon"
             class="h-5 w-5 shrink-0 text-gray-400"
           />
-          <span class="compare-ref min-w-0 truncate">{{ headLabel }}</span>
+          <a
+            v-if="headForgeUrl"
+            :href="headForgeUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="compare-ref inline-flex min-w-0 items-center gap-1.5 truncate transition hover:text-accent"
+            :title="`Open ${headLabel} on ${forgeName}`"
+          >
+            <span class="min-w-0 truncate">{{ headLabel }}</span>
+            <ExternalLink class="h-3.5 w-3.5 shrink-0 text-gray-500" />
+          </a>
+          <span
+            v-else
+            class="compare-ref min-w-0 truncate"
+          >{{ headLabel }}</span>
         </span>
         <span class="compare-arrow flex h-10 w-10 items-center justify-center text-2xl">→</span>
         <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
@@ -19,7 +33,21 @@
             :is="baseRefIcon"
             class="h-5 w-5 shrink-0 text-gray-400"
           />
-          <span class="compare-ref compare-ref-head min-w-0 truncate">{{ baseLabel }}</span>
+          <a
+            v-if="baseForgeUrl"
+            :href="baseForgeUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="compare-ref compare-ref-head inline-flex min-w-0 items-center gap-1.5 truncate transition hover:text-accent"
+            :title="`Open ${baseLabel} on ${forgeName}`"
+          >
+            <span class="min-w-0 truncate">{{ baseLabel }}</span>
+            <ExternalLink class="h-3.5 w-3.5 shrink-0 text-gray-500" />
+          </a>
+          <span
+            v-else
+            class="compare-ref compare-ref-head min-w-0 truncate"
+          >{{ baseLabel }}</span>
         </span>
       </div>
       <span
@@ -49,6 +77,8 @@
             :selected-ref-name="headRef"
             :default-branch="repo?.default_branch"
             :loading="loadingRefs"
+            :repo-html-url="repo?.html_url"
+            :provider="repo?.provider"
             compact
             block
             @select="selectHead"
@@ -148,6 +178,8 @@
             :selected-ref-name="baseRef"
             :default-branch="repo?.default_branch"
             :loading="loadingRefs"
+            :repo-html-url="repo?.html_url"
+            :provider="repo?.provider"
             compact
             block
             align="right"
@@ -617,11 +649,24 @@
                     v-else
                     class="truncate font-mono text-xs text-gray-200"
                   >{{ file.file_path }}</span>
-                  <span
-                    class="shrink-0 text-xs font-medium"
-                    :style="{ color: rateColor(file.rate) }"
-                  >
-                    {{ formatRate(file.rate) }} · {{ file.covered_lines }}/{{ patchTotalLines(file) }}
+                  <span class="flex shrink-0 items-center gap-2">
+                    <span
+                      class="text-xs font-medium"
+                      :style="{ color: rateColor(file.rate) }"
+                    >
+                      {{ formatRate(file.rate) }} · {{ file.covered_lines }}/{{ patchTotalLines(file) }}
+                    </span>
+                    <a
+                      v-if="forgeFileLink(file.file_path)"
+                      :href="forgeFileLink(file.file_path)!"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="rounded p-0.5 text-gray-500 transition hover:text-white"
+                      :title="`Open ${file.file_path} on ${forgeName}`"
+                      :aria-label="`Open ${file.file_path} on ${forgeName}`"
+                    >
+                      <ExternalLink class="h-3.5 w-3.5" />
+                    </a>
                   </span>
                 </div>
                 <div
@@ -840,6 +885,7 @@
           :repo-slug="repoSlug"
           :snapshot-id="headCoverage.snapshot_id"
           :path="compareSourceFile"
+          :repo-html-url="repo?.html_url"
           @close="compareSourceFile = null"
         />
       </div>
@@ -1170,7 +1216,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, FlaskConical, GaugeCircle, GitBranch, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert, Tag } from 'lucide-vue-next'
+import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitBranch, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert, Tag } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
@@ -1178,6 +1224,7 @@ import BranchPRSelector from '@/components/BranchPRSelector.vue'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
+import { forgeFileUrl, forgeLabel, forgeRefUrl } from '@/lib/forgeLinks'
 
 type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
 type ComponentRow = Omit<ComponentEntry, 'version'> & {
@@ -1333,6 +1380,14 @@ const headLabel = computed(() => refLabel(headRefObj.value, headRef.value) || 'H
 const baseLabel = computed(() => refLabel(baseRefObj.value, baseRef.value) || 'Base')
 const headRefIcon = computed(() => refIconFor(headRefObj.value))
 const baseRefIcon = computed(() => refIconFor(baseRefObj.value))
+const forgeProvider = computed(() => repo.value?.provider || provider.value)
+const forgeName = computed(() => forgeLabel(forgeProvider.value))
+const headForgeUrl = computed(() => forgeRefUrl(repo.value?.html_url, forgeProvider.value, headRef.value, headRefObj.value?.ref_type))
+const baseForgeUrl = computed(() => forgeRefUrl(repo.value?.html_url, forgeProvider.value, baseRef.value, baseRefObj.value?.ref_type))
+
+function forgeFileLink(filePath: string): string | null {
+  return forgeFileUrl(repo.value?.html_url, forgeProvider.value, headRef.value, filePath)
+}
 const selectedBaseSnapshot = computed(() => resolveSelectedSnapshot(baseSnapshots.value, baseSnapshotId.value))
 const selectedHeadSnapshot = computed(() => resolveSelectedSnapshot(headSnapshots.value, headSnapshotId.value))
 

@@ -43,6 +43,53 @@ func TestEvaluateGatesWithConfigVulnerabilityThresholds(t *testing.T) {
 	}
 }
 
+func TestEvaluateGatesWithConfigSecretsThreshold(t *testing.T) {
+	mock := newMockStore()
+	service := NewService(mock, zerolog.Nop())
+	maxNew := 0
+	filePath := "config/prod.env"
+	deltaResult := &DeltaResult{New: []storepkg.Vulnerability{
+		{Type: "secret", Severity: storepkg.SeverityLevelCritical, FilePath: &filePath},
+		{Type: "dependency", Severity: storepkg.SeverityLevelHigh}, // not a secret, must not count
+	}}
+
+	gate, err := service.EvaluateGatesWithConfig(context.Background(), uuid.New(), uuid.New(), deltaResult, &GateConfig{
+		Secrets: &SecretsGate{MaxNew: &maxNew},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Passed || !gate.Configured {
+		t.Fatalf("gate = %+v, want failed+configured", gate)
+	}
+	if len(gate.Reasons) != 1 {
+		t.Fatalf("reasons = %v, want exactly the secret reason", gate.Reasons)
+	}
+	// The reason must locate the leak, never reveal it.
+	if want := "1 new secret findings exceed the maximum 0 (in config/prod.env)"; gate.Reasons[0] != want {
+		t.Fatalf("reason = %q, want %q", gate.Reasons[0], want)
+	}
+}
+
+func TestEvaluateGatesWithConfigSecretsUnderThresholdPasses(t *testing.T) {
+	mock := newMockStore()
+	service := NewService(mock, zerolog.Nop())
+	maxNew := 1
+	deltaResult := &DeltaResult{New: []storepkg.Vulnerability{
+		{Type: "secret", Severity: storepkg.SeverityLevelCritical},
+	}}
+
+	gate, err := service.EvaluateGatesWithConfig(context.Background(), uuid.New(), uuid.New(), deltaResult, &GateConfig{
+		Secrets: &SecretsGate{MaxNew: &maxNew},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gate.Passed || !gate.Configured {
+		t.Fatalf("gate = %+v, want passed+configured", gate)
+	}
+}
+
 func TestEvaluateGatesWithConfigLicensePolicy(t *testing.T) {
 	base := newMockStore()
 	snapshotID := uuid.New()

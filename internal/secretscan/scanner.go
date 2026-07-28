@@ -42,12 +42,15 @@ func NewScanner(providers []SecretScanProvider, store ScanStore, bus eventPublis
 	}
 }
 
-func (s *Scanner) RunFullScan(ctx context.Context, repoID, snapshotID uuid.UUID, cloneURL, branch, authToken string) (int, error) {
+// allBranches distinguishes a whole-repo baseline (enrolment, manual rescan)
+// from a branch-scoped full scan (a new branch's first push).
+func (s *Scanner) RunFullScan(ctx context.Context, repoID, snapshotID uuid.UUID, cloneURL, branch, authToken string, allBranches bool) (int, error) {
 	findings, err := s.collectRepoFindings(ctx, ScanRepoOptions{
-		CloneURL:  cloneURL,
-		Branch:    branch,
-		AuthToken: authToken,
-		TempDir:   s.tempDir,
+		CloneURL:    cloneURL,
+		Branch:      branch,
+		AuthToken:   authToken,
+		TempDir:     s.tempDir,
+		AllBranches: allBranches,
 	})
 	if err != nil {
 		s.publishFailure(ctx, repoID, snapshotID, err)

@@ -28,6 +28,8 @@
             :selected-ref-name="baseRef"
             :default-branch="repo?.default_branch"
             :loading="loadingRefs"
+            :repo-html-url="repo?.html_url"
+            :provider="repo?.provider"
             compact
             block
             @select="selectBase"
@@ -182,6 +184,8 @@
             :selected-ref-name="headRef"
             :default-branch="repo?.default_branch"
             :loading="loadingRefs"
+            :repo-html-url="repo?.html_url"
+            :provider="repo?.provider"
             compact
             block
             align="right"

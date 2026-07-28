@@ -1,0 +1,27 @@
+#!/bin/sh
+# Reference pre-push hook: blocks a push when the outgoing commits contain
+# secrets. Install by copying (or symlinking) into .git/hooks/pre-push.
+#
+# Requires the hibou CLI, logged in (hibou login) or HIBOU_SERVER/HIBOU_TOKEN.
+# --fail-open turns "the check itself is unavailable" into a warning instead of
+# a blocked push; it never lets actual findings through.
+#
+# Bypassable with git push --no-verify — server-side scanning still catches the
+# leak after the push, this just catches it before.
+
+zero=0000000000000000000000000000000000000000
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue # branch deletion
+
+    if [ "$remote_sha" = "$zero" ]; then
+        # New branch: scan what this push introduces relative to origin's default.
+        range="$(git merge-base "$local_sha" origin/HEAD 2>/dev/null || echo "$local_sha~10" )..$local_sha"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+
+    hibou secret-scan --range "$range" --fail-open || exit 1
+done
+
+exit 0

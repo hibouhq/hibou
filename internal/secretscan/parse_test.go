@@ -68,6 +68,13 @@ func TestParseGitleaksReport(t *testing.T) {
 	if got := finding.Metadata["RuleID"]; got != "aws-access-key-id" {
 		t.Fatalf("Metadata[RuleID] = %v, want %q", got, "aws-access-key-id")
 	}
+	// ADR-010: metadata is persisted verbatim, so the raw secret must not
+	// survive parsing in any field.
+	for _, key := range []string{"Match", "Secret"} {
+		if value, ok := finding.Metadata[key]; ok {
+			t.Fatalf("Metadata[%s] = %v — raw secret material persisted", key, value)
+		}
+	}
 }
 
 func TestParseGitleaksReportEmpty(t *testing.T) {

@@ -25,6 +25,7 @@ type QualityGate struct {
 	Weaknesses      *WeaknessThresholds      `yaml:"weaknesses,omitempty" json:"weaknesses,omitempty"`
 	Vulnerabilities *VulnerabilityThresholds `yaml:"vulnerabilities,omitempty" json:"vulnerabilities,omitempty"`
 	Licenses        *LicensePolicy           `yaml:"licenses,omitempty" json:"licenses,omitempty"`
+	Secrets         *SecretThresholds        `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Coverage        *CoverageThresholds      `yaml:"coverage,omitempty" json:"coverage,omitempty"`
 	// Enforcement controls whether a failing gate blocks the PR. "advisory"
 	// (default) publishes an informational, non-blocking forge check — hibou never
@@ -67,6 +68,12 @@ type VulnerabilityThresholds struct {
 	MaxMedium   *int `yaml:"max_medium,omitempty" json:"max_medium,omitempty"`
 	// MaxNewTotal caps new vulnerabilities of any severity.
 	MaxNewTotal *int `yaml:"max_new_total,omitempty" json:"max_new_total,omitempty"`
+}
+
+// SecretThresholds caps NEW secret findings introduced by a PR. MaxNew: 0 is
+// the expected setting — one leaked credential is one too many.
+type SecretThresholds struct {
+	MaxNew *int `yaml:"max_new,omitempty" json:"max_new,omitempty"`
 }
 
 // LicensePolicy denies license categories and/or SPDX id globs; explicit
@@ -262,7 +269,20 @@ func validateQualityGate(gate *QualityGate, index int) error {
 	if err := validateLicensePolicy(gate.Licenses, index); err != nil {
 		return err
 	}
+	if err := validateSecretThresholds(gate.Secrets, index); err != nil {
+		return err
+	}
 	return validateCoverageThresholds(gate.Coverage, index)
+}
+
+func validateSecretThresholds(thresholds *SecretThresholds, index int) error {
+	if thresholds == nil {
+		return nil
+	}
+	if thresholds.MaxNew != nil && *thresholds.MaxNew < 0 {
+		return fmt.Errorf("quality_gates[%d].secrets.max_new must be >= 0", index)
+	}
+	return nil
 }
 
 func validateVulnerabilityThresholds(thresholds *VulnerabilityThresholds, index int) error {

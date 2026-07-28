@@ -452,14 +452,25 @@ func matchedVulnerabilityType(advisoryRecord dbgen.Advisory) string {
 }
 
 func (s *Service) publishMatchedVulnerability(ctx context.Context, snapshotID, advisoryID uuid.UUID, vulnerability *store.Vulnerability) {
-	s.publish(ctx, events.VulnerabilityCreated, map[string]any{
+	// identifier is the human-facing id (CVE/GHSA/rule) — advisory_id is an
+	// internal UUID and must never reach a notification body or a search link.
+	payload := map[string]any{
 		"id":          vulnerability.ID.String(),
 		"org_id":      "",
 		"snapshot_id": snapshotID.String(),
 		"advisory_id": advisoryID.String(),
+		"identifier":  strings.TrimSpace(vulnerability.PrimaryIdentifierValue),
 		"severity":    strings.ToLower(string(vulnerability.Severity)),
 		"type":        vulnerability.Type,
-	})
+	}
+	if vulnerability.ComponentName != nil && strings.TrimSpace(*vulnerability.ComponentName) != "" {
+		component := strings.TrimSpace(*vulnerability.ComponentName)
+		if vulnerability.ComponentVersion != nil && strings.TrimSpace(*vulnerability.ComponentVersion) != "" {
+			component += "@" + strings.TrimSpace(*vulnerability.ComponentVersion)
+		}
+		payload["component"] = component
+	}
+	s.publish(ctx, events.VulnerabilityCreated, payload)
 }
 
 func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, err error) error {

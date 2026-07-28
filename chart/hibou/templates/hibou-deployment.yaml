@@ -94,14 +94,27 @@ spec:
             capabilities:
               drop:
                 - ALL
-          {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+          {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.scratch.enabled }}
           volumeMounts:
+            {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
             - name: artifact-filesystem
               mountPath: {{ include "hibou.artifactFilesystemPath" . | quote }}
+            {{- end }}
+            {{- if .Values.hibou.scratch.enabled }}
+            - name: scratch
+              mountPath: {{ .Values.hibou.scratch.mountPath | quote }}
+            {{- end }}
           {{- end }}
-      {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+      {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.scratch.enabled }}
       volumes:
+        {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
         - name: artifact-filesystem
           persistentVolumeClaim:
             claimName: {{ include "hibou.artifactFilesystemPVCName" . }}
+        {{- end }}
+        {{- if .Values.hibou.scratch.enabled }}
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ .Values.hibou.scratch.sizeLimit }}
+        {{- end }}
       {{- end }}

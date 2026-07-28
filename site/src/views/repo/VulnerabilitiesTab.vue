@@ -14,6 +14,27 @@
       placeholder="Filter vulnerabilities..."
     />
 
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-md border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+        :disabled="secretScanRunning"
+        title="Queue a full secret scan of this branch; a worker picks it up"
+        @click="runSecretScan"
+      >
+        <KeyRound class="h-3.5 w-3.5" />
+        {{ secretScanRunning ? 'Queueing...' : 'Scan secrets' }}
+      </button>
+      <span
+        v-if="secretScanMessage"
+        class="text-xs text-emerald-300"
+      >{{ secretScanMessage }}</span>
+      <span
+        v-if="secretScanError"
+        class="text-xs text-danger"
+      >{{ secretScanError }}</span>
+    </div>
+
     <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
       <div
         v-if="loading"
@@ -167,6 +188,8 @@
 import { computed, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
+import { KeyRound } from 'lucide-vue-next'
+
 import { api, type FindingAcceptance, type ScanRule, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import LinkedText from '@/components/LinkedText.vue'
@@ -180,6 +203,26 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 
 const vulnerabilities = ref<Vulnerability[]>([])
 const acceptances = ref<Map<string, FindingAcceptance>>(new Map())
+
+const secretScanRunning = ref(false)
+const secretScanMessage = ref('')
+const secretScanError = ref('')
+
+async function runSecretScan() {
+  if (secretScanRunning.value) return
+  secretScanRunning.value = true
+  secretScanMessage.value = ''
+  secretScanError.value = ''
+  try {
+    const refParam = route.query.ref as string | undefined
+    const response = await api.triggerSecretScan(provider.value, slug.value, repoSlug.value, { ref: refParam })
+    secretScanMessage.value = `Secret scan queued for ${response.data.ref}; findings appear once a worker completes it.`
+  } catch (error) {
+    secretScanError.value = error instanceof Error ? error.message : 'Failed to queue secret scan'
+  } finally {
+    secretScanRunning.value = false
+  }
+}
 
 watch([provider, slug, repoSlug], () => { void loadAcceptances() }, { immediate: true })
 const loading = ref(true)

@@ -76,6 +76,9 @@ func (d *Dispatcher) absoluteLink(link string) string {
 	return d.baseURL + link
 }
 
+// Per-process and deliberately so: with N replicas the effective ceiling is
+// N × notificationRateLimitPerMinute. Spam protection, never a correctness
+// control — do not use it to enforce a vendor quota.
 type rateLimiter struct {
 	mu      sync.Mutex
 	windows map[uuid.UUID][]time.Time
