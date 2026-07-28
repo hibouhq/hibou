@@ -5182,6 +5182,13 @@ const docTemplate = `{
         "server.coverageSourceLine": {
             "type": "object",
             "properties": {
+                "branches_covered": {
+                    "description": "branches_valid == 0 means no branch on the line. A hit line with\nbranches_covered \u003c branches_valid renders as partially covered.",
+                    "type": "integer"
+                },
+                "branches_valid": {
+                    "type": "integer"
+                },
                 "hits": {
                     "type": "integer"
                 },
