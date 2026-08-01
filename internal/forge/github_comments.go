@@ -51,10 +51,14 @@ func (g *GitHub) findMarkedComment(ctx context.Context, owner, repo string, prNu
 		if err != nil {
 			return 0, err
 		}
-		if id := commentIDWithMarker(comments, marker); id != 0 {
+		id := commentIDWithMarker(comments, marker)
+		path = nextPagePath(resp)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		if id != 0 {
 			return id, nil
 		}
-		path = nextPagePath(resp)
 	}
 	return 0, nil
 }
