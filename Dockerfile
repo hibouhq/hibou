@@ -19,10 +19,12 @@ ARG BETTERLEAKS_VERSION=1.7.1
 # To update: apko lock apko.yaml.
 FROM ${BASE_IMAGE} AS runtime
 
-# betterleaks is not packaged in wolfi (unlike gitleaks/trufflehog, which come
-# from apko.yaml), so it ships from its GitHub release, verified against the
-# release's checksums.txt. Checksum-verified content keeps the layer stable
-# across rebuilds despite the network fetch.
+# betterleaks is not packaged in wolfi (unlike gitleaks, which comes from
+# apko.yaml), so it ships from its GitHub release, verified against the
+# release's checksums.txt. It needs no shell at runtime (pure go-git), which is
+# why it — and not trufflehog — is the verification engine we ship.
+# Checksum-verified content keeps the layer stable across rebuilds despite the
+# network fetch.
 FROM alpine:3 AS betterleaks
 ARG TARGETARCH
 ARG BETTERLEAKS_VERSION

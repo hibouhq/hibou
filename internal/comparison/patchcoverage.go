@@ -182,21 +182,40 @@ func newCoveragePathIndex(headLines map[string][]PatchLine) *coveragePathIndex {
 // the diff path is used, which reconciles module/package-prefixed coverage
 // paths with repo-relative diff paths without cross-matching unrelated files.
 func (c *coveragePathIndex) lookup(diffPath string) (map[int]int, bool) {
+	coveragePath, ok := c.match(diffPath)
+	if !ok {
+		return nil, false
+	}
+	return c.byPath[coveragePath], true
+}
+
+// resolvePath returns the coverage-tool path a forge path maps to, or the
+// normalized input when nothing matches. Callers that must key results by
+// coverage path (the new-code lens joins onto coverage-diff rows) use this so
+// resolution stays identical to lookup's.
+func (c *coveragePathIndex) resolvePath(diffPath string) string {
+	if coveragePath, ok := c.match(diffPath); ok {
+		return coveragePath
+	}
+	return normalizePath(diffPath)
+}
+
+func (c *coveragePathIndex) match(diffPath string) (string, bool) {
 	normalized := normalizePath(diffPath)
-	if hits, ok := c.byPath[normalized]; ok {
-		return hits, true
+	if _, ok := c.byPath[normalized]; ok {
+		return normalized, true
 	}
 	bestScore := 0
-	var best map[int]int
-	for coveragePath, hits := range c.byPath {
+	best := ""
+	for coveragePath := range c.byPath {
 		score := commonSuffixSegments(coveragePath, normalized)
 		if score > bestScore {
 			bestScore = score
-			best = hits
+			best = coveragePath
 		}
 	}
 	if bestScore == 0 {
-		return nil, false
+		return "", false
 	}
 	return best, true
 }

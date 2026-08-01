@@ -48,6 +48,12 @@ type CoverageFileDelta struct {
 	HeadLinesCovered int      `json:"head_lines_covered"`
 	BaseLinesValid   int      `json:"base_lines_valid"`
 	HeadLinesValid   int      `json:"head_lines_valid"`
+	// New-code lens (ADR-019): of the lines this comparison changed, how many
+	// are instrumented and how many of those are covered. Nil rate means
+	// nothing measurable changed in this file — never render that as 0%.
+	NewLines    int      `json:"new_lines"`
+	NewCovered  int      `json:"new_covered"`
+	NewLineRate *float64 `json:"new_line_rate"`
 }
 
 // CoverageDiff is the full coverage comparison between two snapshots.
@@ -58,6 +64,15 @@ type CoverageDiff struct {
 	BranchRateDelta *float64            `json:"branch_rate_delta"`
 	Files           []CoverageFileDelta `json:"files"`
 	UnchangedFiles  int                 `json:"unchanged_files"`
+	// Aggregate new-code coverage across the comparison — patch coverage
+	// generalized beyond PRs. Nil when no changed line was measurable, or when
+	// the forge could not classify (provider without compare support).
+	NewLines    int      `json:"new_lines"`
+	NewCovered  int      `json:"new_covered"`
+	NewLineRate *float64 `json:"new_line_rate"`
+	// NewCodeTruncated mirrors the forge's file-list cap so a partial new-code
+	// number is never presented as complete.
+	NewCodeTruncated bool `json:"new_code_truncated"`
 }
 
 // coverageRateEpsilon is the smallest line-rate change considered meaningful.

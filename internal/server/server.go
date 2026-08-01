@@ -538,6 +538,8 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/vulnerabilities/facets", s.handleGetRefFindingFacets)
 						r.Get("/{repoSlug}/vulnerabilities/rules", s.handleGetRefRules)
+						r.Get("/{repoSlug}/vulnerabilities/fingerprints", s.handleGetRefFindingFingerprints)
+						r.Put("/{repoSlug}/vulnerabilities/acceptance", s.handleBatchFindingAcceptance)
 						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/acceptance", s.handleSetFindingAcceptance)
 						r.Get("/{repoSlug}/finding-acceptances", s.handleListFindingAcceptances)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
@@ -918,8 +920,19 @@ func (s *Server) runRetentionPass(ctx context.Context) {
 	if s.retentionWorker == nil {
 		return
 	}
-	if err := s.retentionWorker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	// Singleton across replicas: the sweep is idempotent, but N replicas each
+	// walking every repo is N× the work and N× the object-store delete traffic
+	// for one identical outcome.
+	ran, err := store.WithLeaderLock(ctx, s.db, store.LockRetentionPass, func(runCtx context.Context) error {
+		return s.retentionWorker.Run(runCtx)
+	})
+	// Shutdown cancellation is not a failure; keep the original filtering.
+	if err != nil && !errors.Is(err, context.Canceled) {
 		s.log.Error().Err(err).Msg("retention pass failed")
+		return
+	}
+	if !ran {
+		s.log.Debug().Msg("another replica is running the retention pass; skipping this tick")
 	}
 }
 

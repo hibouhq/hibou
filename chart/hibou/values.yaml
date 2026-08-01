@@ -22,10 +22,9 @@ hibou:
   secretScan:
     enabled: false
     onPush: true
-    # -- Detection engines, executed in order; duplicate findings dedup by fingerprint. trufflehog and betterleaks add live credential verification — betterleaks can also prove a credential dead (invalid/revoked), which demotes its severity.
+    # -- Detection engines, executed in order; duplicate findings dedup by fingerprint. betterleaks adds live credential verification and can also prove a credential dead (invalid/revoked), which demotes its severity. NOTE: "trufflehog" is accepted but currently ignored by the server — it needs a shell in the runtime image, which we deliberately do not ship.
     providers:
       - gitleaks
-      - trufflehog
       - betterleaks
     # -- Skip and warn above this repository size. Empty uses the app default (2048).
     maxRepoMB: ""

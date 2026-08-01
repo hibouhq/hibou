@@ -115,6 +115,111 @@ type orgDashboardResponse struct {
 	Coverage repoInventorySummary         `json:"coverage"`
 }
 
+// vulnerabilityListOptionsFromRequest builds the structured filter set from the
+// query string. Shared by the paginated list and the fingerprint export so the
+// two can never disagree about what the current filter selects.
+func vulnerabilityListOptionsFromRequest(r *http.Request, limit, offset int) store.VulnerabilityListOptions {
+	return store.VulnerabilityListOptions{
+		Types:      csvQueryFilterValues(r.URL.Query().Get("type")),
+		Severities: csvQueryFilterValues(r.URL.Query().Get("severity")),
+		Statuses:   csvQueryFilterValues(r.URL.Query().Get("status")),
+		Scanners:   mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
+		Languages:  csvQueryFilterValues(r.URL.Query().Get("language")),
+		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
+		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
+		Limit:      limit,
+		Offset:     offset,
+	}
+}
+
+// maxFingerprintExport bounds "select all matching this filter". It matches the
+// batch-triage cap, so anything this endpoint returns can be acted on in one
+// request.
+const maxFingerprintExport = 500
+
+type findingFingerprintsResponse struct {
+	Fingerprints []string `json:"fingerprints"`
+	// Truncated is true when the filter matched more than the cap, so the UI can
+	// say "first 500 of N" instead of implying it selected everything.
+	Truncated bool `json:"truncated"`
+	Total     int  `json:"total"`
+}
+
+// @Summary      Fingerprints matching the current finding filter
+// @Description  Returns the fingerprints of findings matching the same filters as the list endpoint, for "select all matching" batch triage. Capped at 500 to match the batch-triage limit.
+// @Tags         vulnerabilities
+// @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
+// @Param        slug      path  string  true  "Organization slug"
+// @Param        repoSlug  path  string  true  "Repository slug"
+// @Success      200  {object}  api.Response{data=server.findingFingerprintsResponse}
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/fingerprints [get]
+func (s *Server) handleGetRefFindingFingerprints(w http.ResponseWriter, r *http.Request) {
+	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithVulnerabilitiesByRef)
+	if !ok {
+		return
+	}
+	if snapshot == nil {
+		api.JSON(w, http.StatusOK, findingFingerprintsResponse{Fingerprints: []string{}})
+		return
+	}
+
+	var (
+		vulnerabilities []store.Vulnerability
+		total           int
+		err             error
+	)
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		node, parseErr := filterquery.Parse(q)
+		if parseErr != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
+		sqlResult, sqlErr := filterquery.ToSQL(node, 2)
+		if sqlErr != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
+		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshotDynamic(
+			r.Context(), snapshot.ID, sqlResult.Where, sqlResult.Params, "", maxFingerprintExport, 0,
+		)
+	} else {
+		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, vulnerabilityListOptionsFromRequest(r, maxFingerprintExport, 0))
+	}
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list findings")
+		return
+	}
+
+	seen := make(map[string]struct{}, len(vulnerabilities))
+	fingerprints := make([]string, 0, len(vulnerabilities))
+	for _, vulnerability := range vulnerabilities {
+		fingerprint := strings.TrimSpace(vulnerability.Fingerprint)
+		if fingerprint == "" {
+			continue
+		}
+		// One fingerprint can appear on several rows; a decision is per
+		// fingerprint, so de-duplicate here rather than sending repeats.
+		if _, ok := seen[fingerprint]; ok {
+			continue
+		}
+		seen[fingerprint] = struct{}{}
+		fingerprints = append(fingerprints, fingerprint)
+	}
+
+	api.JSON(w, http.StatusOK, findingFingerprintsResponse{
+		Fingerprints: fingerprints,
+		Truncated:    total > len(vulnerabilities),
+		Total:        total,
+	})
+}
+
 func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	_, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
@@ -163,18 +268,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, store.VulnerabilityListOptions{
-		Types:      csvQueryFilterValues(r.URL.Query().Get("type")),
-		Severities: csvQueryFilterValues(r.URL.Query().Get("severity")),
-		Statuses:   csvQueryFilterValues(r.URL.Query().Get("status")),
-		Scanners:   mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
-		Languages:  csvQueryFilterValues(r.URL.Query().Get("language")),
-		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
-		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
-		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
-		Limit:      pagination.PerPage,
-		Offset:     pagination.Offset,
-	})
+	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, vulnerabilityListOptionsFromRequest(r, pagination.PerPage, pagination.Offset))
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerabilities")
 		return

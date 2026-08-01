@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/findings"
 	"github.com/hibouhq/hibou/internal/sarif"
 	"github.com/hibouhq/hibou/internal/sbom"
@@ -240,6 +241,18 @@ func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *ar
 	}
 	if componentsIngested > 0 {
 		s.enqueueAdvisoryScan(snapshotID, "system")
+	}
+	// The gate must not depend on the advisory scan happening. ScanCompleted is
+	// published only by the advisory scanner, and that only runs when components
+	// were ingested — so a coverage-only or SARIF-only PR never got a gate check
+	// at all, and a failing provider silently suppressed it. Processing finished,
+	// so ask for a recompute regardless; the publisher decides whether the
+	// snapshot's ref is gate-eligible.
+	if s.bus != nil {
+		s.bus.Publish(context.WithoutCancel(ctx), events.Event{
+			Type:    events.GateRecomputeRequested,
+			Payload: map[string]any{"snapshot_id": snapshotID.String()},
+		})
 	}
 	return nil
 }

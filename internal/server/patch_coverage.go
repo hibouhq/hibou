@@ -11,6 +11,35 @@ import (
 	"github.com/hibouhq/hibou/internal/store"
 )
 
+// applyNewCodeLens annotates the coverage diff with new-code stats (ADR-019):
+// which of the comparison's changed lines are instrumented and covered. Works
+// for any base..head pair, not just PRs, and no-ops when the forge cannot
+// classify — the classic view stays correct.
+func (s *Server) applyNewCodeLens(ctx context.Context, repo *store.Repository, coverageDiff *comparison.CoverageDiff, baseSnapshot, headSnapshot *store.Snapshot, cfg *repoconfig.RepoConfig) {
+	if coverageDiff == nil || repo == nil || baseSnapshot == nil || headSnapshot == nil {
+		return
+	}
+	provider := s.forges[repo.Provider]
+	patch := s.changedLinesForComparison(ctx, repo, provider, baseSnapshot.CommitSHA, headSnapshot.CommitSHA)
+	if patch == nil {
+		return
+	}
+
+	headLines, err := s.loadSnapshotCoverageLines(ctx, headSnapshot.ID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", headSnapshot.ID.String()).Msg("load per-line coverage for the new-code lens")
+		return
+	}
+
+	changed := make(map[string][]int, len(patch.Files))
+	for _, file := range patch.Files {
+		if len(file.AddedLines) > 0 {
+			changed[file.Path] = file.AddedLines
+		}
+	}
+	comparison.ApplyNewCodeLens(coverageDiff, changed, headLines, coverageExcludeGlobs(cfg), patch.Truncated)
+}
+
 // buildPatchCoverage computes line-level patch (diff) coverage for a pull
 // request comparison: it fetches the forge diff between the base and head
 // commits, loads both snapshots' per-line hits across every report, honors
@@ -22,20 +51,13 @@ func (s *Server) buildPatchCoverage(ctx context.Context, repo *store.Repository,
 	if provider == nil {
 		return nil
 	}
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
-	if !ok {
-		return nil
-	}
 	if baseSnapshot.CommitSHA == "" || headSnapshot.CommitSHA == "" {
 		return nil
 	}
 
-	patch, err := provider.ComparePatch(ctx, owner, name, baseSnapshot.CommitSHA, headSnapshot.CommitSHA)
-	if err != nil {
-		s.log.Warn().Err(err).Str("provider", repo.Provider).Str("owner", owner).Str("repo", name).
-			Msg("failed to fetch PR patch for patch coverage; falling back to file-level coverage diff")
-		return nil
-	}
+	// Shared with the new-code lens (ADR-019) and cached per immutable SHA pair,
+	// so the compare page pays at most one forge round-trip per comparison.
+	patch := s.changedLinesForComparison(ctx, repo, provider, baseSnapshot.CommitSHA, headSnapshot.CommitSHA)
 	if patch == nil || len(patch.Files) == 0 {
 		return nil
 	}

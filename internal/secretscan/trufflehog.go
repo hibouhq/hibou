@@ -12,6 +12,14 @@ import (
 // TruffleHogProvider execs the trufflehog binary. Its distinguishing feature
 // over gitleaks is live verification: a Verified finding means the credential
 // authenticated against the real service, not just matched a pattern.
+//
+// CURRENTLY UNREACHABLE: buildSecretScanProviders refuses to construct this
+// provider, and the binary is not in the runtime image. TruffleHog re-clones the
+// checkout we hand it through a file:// URI, and git's local transport needs
+// /bin/sh for that — a shell we deliberately do not ship in a security
+// scanner's image. betterleaks covers live verification without one.
+// Kept compiling (and tested) so re-enabling is a small change once the provider
+// can scan in place or take the remote URL directly.
 type TruffleHogProvider struct {
 	log zerolog.Logger
 	bin string

@@ -111,8 +111,16 @@ func (a *GatePublisher) handleScanCompleted(ctx context.Context, payload any) {
 	if a == nil || a.store == nil || a.delta == nil {
 		return
 	}
-	snapshotID := snapshotIDFromPayload(payload)
-	if snapshotID == uuid.Nil {
+	if snapshotID := snapshotIDFromPayload(payload); snapshotID != uuid.Nil {
+		a.publishForSnapshotID(ctx, snapshotID)
+	}
+}
+
+// publishForSnapshotID routes a snapshot to the right gate action: a PR ref
+// publishes (or posts in-progress when not yet computable), a branch ref
+// refreshes the gates of open PRs targeting it.
+func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uuid.UUID) {
+	if a == nil || a.store == nil || a.delta == nil || snapshotID == uuid.Nil {
 		return
 	}
 	snapshot, err := a.store.GetSnapshotByID(ctx, snapshotID)
@@ -131,13 +139,56 @@ func (a *GatePublisher) handleScanCompleted(ctx context.Context, payload any) {
 
 	switch ref.RefType {
 	case dbgen.RefTypePullRequest:
-		if annotation, ok := a.buildGateContext(ctx, snapshot, ref); ok {
-			a.evaluateAndPublish(ctx, annotation)
+		annotation, ok := a.buildGateContext(ctx, snapshot, ref)
+		if !ok {
+			// The gate is not computable yet (target branch has no snapshot, or
+			// the merge target is unknown until the PR webhook lands). Post an
+			// in-progress check so the PR shows "Hibou is working" instead of
+			// nothing at all; a later recompute resolves it.
+			a.publishGatePendingForRef(ctx, snapshot, ref)
+			return
 		}
+		a.evaluateAndPublish(ctx, annotation)
 	case dbgen.RefTypeBranch:
 		// The base branch moved (new snapshot on a branch): open PRs targeting it
 		// now have a different delta, so refresh their gate checks — no CI re-run.
 		a.recomputeOpenPRsForTargetRef(ctx, ref.RepoID, ref.ID)
+	}
+}
+
+// publishGatePendingForRef posts an in-progress check for a PR snapshot whose
+// gate cannot be evaluated yet. It never persists a verdict — the row stays
+// untouched so a later recompute writes the real outcome.
+func (a *GatePublisher) publishGatePendingForRef(ctx context.Context, snapshot dbgen.Snapshot, ref dbgen.Ref) {
+	repo, provider, owner, name, ok := a.loadGateRepository(ctx, ref)
+	if !ok {
+		return
+	}
+	orgSlug, err := a.store.GetOrgSlug(ctx, repo.OrgID)
+	if err != nil {
+		a.log.Debug().Err(err).Str("org_id", repo.OrgID.String()).Msg("load org slug for pending gate check")
+	}
+	annotation := &gateContext{
+		snapshot: snapshot,
+		prRef:    ref,
+		repo:     repo,
+		provider: provider,
+		owner:    owner,
+		name:     name,
+		orgSlug:  orgSlug,
+	}
+	a.publishGateStatusOnly(ctx, annotation, gatePendingStatus())
+}
+
+// gatePendingStatus is the "still computing" state: an empty check-run
+// conclusion (yellow in-progress on GitHub) and a pending commit status.
+func gatePendingStatus() gateStatus {
+	return gateStatus{
+		state:       "pending",
+		conclusion:  "",
+		description: "Waiting for the base branch snapshot to compare against",
+		title:       "Quality gate in progress",
+		summary:     "Hibou received this change and is waiting on the data it needs to evaluate the quality gate (usually the target branch's latest snapshot). This check updates automatically once the comparison is available.",
 	}
 }
 
@@ -163,6 +214,12 @@ func (a *GatePublisher) handleRecomputeRequested(ctx context.Context, payload an
 	}
 	data, _ := payload.(map[string]any)
 
+	// snapshot_id is what artifact processing knows: same routing as a completed
+	// scan (PR ref → publish, branch ref → refresh PRs targeting it).
+	if snapshotID := snapshotIDFromPayload(payload); snapshotID != uuid.Nil {
+		a.publishForSnapshotID(ctx, snapshotID)
+		return
+	}
 	if refID := uuidFromString(valueString(data, "ref_id")); refID != uuid.Nil {
 		a.PublishGateForRef(ctx, refID)
 		return
@@ -620,9 +677,12 @@ type CheckRunProvider interface {
 }
 
 type CheckRun struct {
-	Name        string
-	HeadSHA     string
-	Conclusion  string // success|failure|neutral
+	Name    string
+	HeadSHA string
+	// Conclusion is success|failure|neutral, or empty for "still running" —
+	// which forges render as a pending/in-progress check that a later update
+	// resolves.
+	Conclusion  string
 	Title       string
 	Summary     string
 	DetailsURL  string
@@ -648,6 +708,19 @@ type CheckRunAnnotation struct {
 // are decoupled: a failed post is recorded (forge_synced_at NULL + last_error) for
 // the reconcile loop to retry.
 func (a *GatePublisher) publishGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, status gateStatus) {
+	targetURL, externalID, syncErr := a.pushGateToForge(ctx, annotation, status)
+	a.persistGate(ctx, annotation, gateResult, status, targetURL, externalID, syncErr)
+}
+
+// publishGateStatusOnly pushes a check to the forge without recording a verdict.
+// Used for the in-progress state, where there is no outcome to persist yet.
+func (a *GatePublisher) publishGateStatusOnly(ctx context.Context, annotation *gateContext, status gateStatus) {
+	// Errors are already logged inside; a failed in-progress post is not worth
+	// escalating since the next recompute overwrites it.
+	_, _, _ = a.pushGateToForge(ctx, annotation, status)
+}
+
+func (a *GatePublisher) pushGateToForge(ctx context.Context, annotation *gateContext, status gateStatus) (string, string, error) {
 	targetURL := a.gateTargetURL(annotation)
 
 	var (
@@ -680,7 +753,7 @@ func (a *GatePublisher) publishGate(ctx context.Context, annotation *gateContext
 		a.log.Error().Err(err).Str("repo_id", annotation.repo.ID.String()).Str("commit_sha", annotation.snapshot.CommitSha).Msg("create commit status")
 	}
 
-	a.persistGate(ctx, annotation, gateResult, status, targetURL, externalID, syncErr)
+	return targetURL, externalID, syncErr
 }
 
 func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, status gateStatus, targetURL, externalID string, syncErr error) {

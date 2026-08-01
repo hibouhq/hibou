@@ -425,6 +425,11 @@ export interface CoverageFileDelta {
   head_lines_covered: number
   base_lines_valid: number
   head_lines_valid: number
+  // New-code lens: of the lines this comparison changed, how many are
+  // instrumented and covered. null rate = nothing measurable changed here.
+  new_lines: number
+  new_covered: number
+  new_line_rate: number | null
 }
 
 export interface CoverageDiff {
@@ -434,6 +439,10 @@ export interface CoverageDiff {
   branch_rate_delta: number | null
   files: CoverageFileDelta[]
   unchanged_files: number
+  new_lines: number
+  new_covered: number
+  new_line_rate: number | null
+  new_code_truncated: boolean
 }
 
 export interface PatchFileCoverage {
@@ -577,6 +586,18 @@ export interface CoverageReport {
   format: string
   files: CoverageFile[]
   reports?: CoverageFormatReport[]
+  // Present only when ?since=<ref> requested the new-code lens.
+  new_code?: CoverageNewCode
+}
+
+export interface CoverageNewCode {
+  baseline: string
+  base_sha: string
+  lines: number
+  covered: number
+  line_rate: number | null
+  truncated: boolean
+  file_paths: string[]
 }
 
 export interface CoverageFormatReport {
@@ -609,7 +630,7 @@ export interface CoverageSource {
   path: string
   commit_sha: string
   content: string
-  lines: Array<{ number: number; hits: number; branches_covered: number; branches_valid: number }>
+  lines: Array<{ number: number; hits: number; branches_covered: number; branches_valid: number; is_new?: boolean }>
 }
 
 export interface CoverageFile {
@@ -1254,6 +1275,26 @@ class ApiClient {
     )
   }
 
+  // "Select all matching the current filter": returns fingerprints for the same
+  // filter set the list endpoint uses, capped to the batch-triage limit.
+  listRefFindingFingerprints(provider: string, slug: string, repoSlug: string, params: Record<string, string>) {
+    const query = new URLSearchParams(params)
+    const qs = query.toString()
+    return this.request<ApiResponse<{ fingerprints: string[]; truncated: boolean; total: number }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/fingerprints${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  // Batch triage: one decision + one reason across many fingerprints. The UI
+  // routes single-finding actions through here too, so there is one validated
+  // path rather than two that can drift.
+  batchFindingAcceptance(provider: string, slug: string, repoSlug: string, body: { fingerprints: string[]; status: string; reason?: string; expires_at?: string }) {
+    return this.request<ApiResponse<{ status: string; applied: number; skipped: number }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/acceptance`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    )
+  }
+
   setFindingAcceptance(provider: string, slug: string, repoSlug: string, vulnID: string, body: { status: string; reason?: string; expires_at?: string }) {
     return this.request<ApiResponse<FindingAcceptance | { status: string }>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/acceptance`,
@@ -1329,13 +1370,16 @@ class ApiClient {
     )
   }
 
-  getCoverage(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
+  getCoverage(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string; since?: string }) {
     const query = new URLSearchParams()
     if (params?.ref) {
       query.set('ref', params.ref)
     }
     if (params?.snapshot) {
       query.set('snapshot', params.snapshot)
+    }
+    if (params?.since) {
+      query.set('since', params.since)
     }
     const qs = query.toString()
     return this.request<ApiResponse<CoverageReport | null>>(

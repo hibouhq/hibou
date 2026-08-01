@@ -844,15 +844,7 @@ func TestHandleGetRefComponentGraphPrefersPersistedDeclaredRoot(t *testing.T) {
 			{"ref":"heuristic-root","dependsOn":["declared-root","shared-leaf"]}
 		]
 	}`)
-	quarantineUnrelatedClaimableSnapshots(t, srv, snapshot.ID)
-
-	processed, err := srv.processNextArtifactSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("processNextArtifactSnapshot: %v", err)
-	}
-	if !processed {
-		t.Fatal("processed = false, want true")
-	}
+	processArtifactSnapshotForTest(t, srv, snapshot.ID)
 
 	recorder := httptest.NewRecorder()
 	srv.handleGetRefComponentGraph(recorder, newRepoRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/repos/"+repo.Slug+"/components/graph?ref=main", "github", org.Slug, repo.Slug))

@@ -789,6 +789,10 @@ func (s *Server) handleCompareRefs(w http.ResponseWriter, r *http.Request) {
 		TestDiff:      testDiff,
 	}
 
+	// New-code lens (ADR-019): applies to every comparison, PR or branch↔branch,
+	// so "is the code this change introduced tested?" is answerable everywhere.
+	s.applyNewCodeLens(r.Context(), repo, coverageDiff, baseSnapshot, headSnapshot, s.loadCompareRepoConfig(r.Context(), repo))
+
 	// Auto-detect PR: if head ref is a pull request, enrich with gate + PR
 	// metadata + line-level patch coverage.
 	if headRef.RefType == store.RefTypePullRequest {

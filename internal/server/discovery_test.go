@@ -122,6 +122,7 @@ type discoveryTestForgeProvider struct {
 	webhookErr            error
 	comparePatchDiff      *forge.PatchDiff
 	comparePatchErr       error
+	comparePatchCalls     int
 }
 
 func (p *discoveryTestForgeProvider) ID() string {
@@ -174,6 +175,7 @@ func (p *discoveryTestForgeProvider) CreateCommitStatus(context.Context, string,
 }
 
 func (p *discoveryTestForgeProvider) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	p.comparePatchCalls++
 	return p.comparePatchDiff, p.comparePatchErr
 }
 

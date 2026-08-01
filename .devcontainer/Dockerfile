@@ -127,6 +127,10 @@ RUN <<EOF
         | tar -xzf - -C /usr/local/bin gitleaks
     gitleaks version
 
+    # Dev only: the trufflehog provider is disabled in the server and the binary
+    # is NOT in the runtime image (it needs /bin/sh for its file:// re-clone, and
+    # we keep the scanner image shell-free). Installed here so the kept code
+    # stays exercisable.
     curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TARGETARCH}.tar.gz" \
         | tar -xzf - -C /usr/local/bin trufflehog
     trufflehog --version

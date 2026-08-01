@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 var (
 	secretScanStaged   bool
+	secretScanStdin    bool
 	secretScanRange    string
 	secretScanServer   string
 	secretScanToken    string
@@ -34,6 +36,11 @@ Intended for git hooks:
 
   pre-commit:  hibou secret-scan --staged
   pre-push:    hibou secret-scan --range <remote-sha>..<local-sha>
+  pre-receive: git diff <old>..<new> | hibou secret-scan --stdin
+
+--stdin exists for server-side pre-receive hooks: during pre-receive the pushed
+objects sit in git's quarantine directory and are not in the repository yet, so
+the hook must build the diff itself and pipe it in.
 
 Exit codes: 0 clean, 1 secrets found, 2 check unavailable (use --fail-open to
 turn an unavailable check into exit 0 so an outage cannot block every push).`,
@@ -42,6 +49,7 @@ turn an unavailable check into exit 0 so an outage cannot block every push).`,
 
 func init() {
 	secretScanCmd.Flags().BoolVar(&secretScanStaged, "staged", false, "Scan the staged diff (git diff --cached)")
+	secretScanCmd.Flags().BoolVar(&secretScanStdin, "stdin", false, "Read a unified diff from stdin instead of running git")
 	secretScanCmd.Flags().StringVar(&secretScanRange, "range", "", "Scan a commit range, e.g. origin/main..HEAD")
 	secretScanCmd.Flags().StringVar(&secretScanServer, "server", "", "Hibou server URL (overrides config and HIBOU_SERVER)")
 	secretScanCmd.Flags().StringVar(&secretScanToken, "token", "", "API token (overrides config and HIBOU_TOKEN)")
@@ -101,6 +109,16 @@ func runSecretScan(cmd *cobra.Command, _ []string) error {
 var errSecretsDetected = errors.New("secrets detected")
 
 func collectSecretScanDiff() ([]byte, error) {
+	if secretScanStdin {
+		if secretScanStaged || strings.TrimSpace(secretScanRange) != "" {
+			return nil, errors.New("--stdin cannot be combined with --staged or --range")
+		}
+		patch, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read diff from stdin: %w", err)
+		}
+		return patch, nil
+	}
 	args := []string{"diff", "--no-color", "--cached"}
 	if strings.TrimSpace(secretScanRange) != "" {
 		if secretScanStaged {

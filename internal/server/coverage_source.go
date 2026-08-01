@@ -22,6 +22,10 @@ type coverageSourceLine struct {
 	// branches_covered < branches_valid renders as partially covered.
 	BranchesCovered int `json:"branches_covered"`
 	BranchesValid   int `json:"branches_valid"`
+	// IsNew marks a line this comparison changed (ADR-019), present only when
+	// the request supplies ?base=<ref>. Omitted otherwise, so the plain snapshot
+	// view is byte-identical to before.
+	IsNew bool `json:"is_new,omitempty"`
 }
 
 type coverageSourceResponse struct {
@@ -94,6 +98,7 @@ func (s *Server) handleGetCoverageSource(w http.ResponseWriter, r *http.Request)
 		api.JSONError(w, http.StatusInternalServerError, "failed to load coverage lines")
 		return
 	}
+	s.markNewCodeLines(r, repo, snapshot, requested, lines)
 
 	api.JSON(w, http.StatusOK, coverageSourceResponse{
 		Path:      resolved,
@@ -189,6 +194,49 @@ func resolveTreePath(paths []string, requested string) string {
 		}
 	}
 	return best
+}
+
+// markNewCodeLines flags the lines this file gained or changed relative to
+// ?base=<ref> (ADR-019), so the annotated source can distinguish new code from
+// old. Best-effort: no base, an unknown ref, or a forge that cannot compare
+// leaves every line unmarked and the view behaves exactly as before.
+func (s *Server) markNewCodeLines(r *http.Request, repo *store.Repository, snapshot *store.Snapshot, requested string, lines []coverageSourceLine) {
+	baseName := strings.TrimSpace(r.URL.Query().Get("base"))
+	if baseName == "" || len(lines) == 0 {
+		return
+	}
+	baseRef, err := s.lookupRepoRef(r, repo, normalizeStoredRefName(baseName), refTypeFromName(baseName))
+	if err != nil || baseRef == nil {
+		return
+	}
+	baseSnapshot, err := s.queries.GetLatestNonPurgedSnapshotByRef(r.Context(), baseRef.ID)
+	if err != nil || baseSnapshot == nil {
+		return
+	}
+	patch := s.changedLinesForComparison(r.Context(), repo, s.forges[repo.Provider], baseSnapshot.CommitSHA, snapshot.CommitSHA)
+	if patch == nil {
+		return
+	}
+
+	// The forge reports repo-relative paths; the requested path is already
+	// canonical, so match on suffix to tolerate coverage-rooted requests.
+	changed := map[int]struct{}{}
+	for _, file := range patch.Files {
+		if file.Path != requested && !strings.HasSuffix(file.Path, "/"+requested) && !strings.HasSuffix(requested, "/"+file.Path) {
+			continue
+		}
+		for _, number := range file.AddedLines {
+			changed[number] = struct{}{}
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	for i := range lines {
+		if _, ok := changed[lines[i].Number]; ok {
+			lines[i].IsNew = true
+		}
+	}
 }
 
 // coverageLinesForPath merges per-line hits from every report whose file

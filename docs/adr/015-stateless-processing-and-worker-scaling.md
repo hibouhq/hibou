@@ -36,11 +36,14 @@ Already stateless / replica-safe:
 - Background loops are config-gated for API-only and worker-only role splits: this ADR, [Replica model](#replica-model).
 - Snapshot work claiming is database lease-based, including `FOR UPDATE SKIP LOCKED` as an allowed claim pattern: this ADR, [Work-claim model](#work-claim-model).
 
-Residual gaps to close:
+Closed since this ADR was written:
 
-- Artifact storage is filesystem-only today and the Helm chart has no artifact PVC or volume mount. [`internal/objstore/filesystem.go`](../../internal/objstore/filesystem.go) stores artifacts on replica-local disk, [`internal/objstore/s3.go`](../../internal/objstore/s3.go) is only an unimplemented placeholder, [`internal/server/server.go`](../../internal/server/server.go) wires only `objstore.NewFilesystemStore`, and the chart deployments write `cfg.ArtifactPath` onto ephemeral pod storage: [`chart/hibou/templates/hibou-deployment.yaml`](../../chart/hibou/templates/hibou-deployment.yaml), [`chart/hibou/templates/hibou-worker-deployment.yaml`](../../chart/hibou/templates/hibou-worker-deployment.yaml). The chosen direction is a vendor-neutral S3-compatible object-store backend in [`internal/objstore/s3.go`](../../internal/objstore/s3.go) with a bundled self-hosted SeaweedFS server as the default DMZ and air-gap object store; the backend must be configurable to point at any S3-compatible endpoint, and artifact bytes are not stored in PostgreSQL.
+- **Shared artifact storage.** [`internal/objstore/s3.go`](../../internal/objstore/s3.go) is a real vendor-neutral S3 backend (configurable endpoint, region, bucket, credentials, path-style, TLS), [`internal/server/server.go`](../../internal/server/server.go) selects it by `artifact.backend`, and the chart bundles SeaweedFS as the default object store. Artifacts are no longer on ephemeral replica-local disk.
+- **Repeating-notification dedup.** Stale-scan dedup moved from an in-memory map to the `notification_dedup` table (migration `00004`), keyed by `(event_type, repo_id)`. The old map re-notified every stale repo after a pod restart, which was a bug at one replica and not only at N.
+- **Cross-replica WebSocket fan-out.** [`internal/ws/postgres.go`](../../internal/ws/postgres.go) bridges live deliveries over `pg_notify` plus a reconnecting `pq.Listener`, so any replica's event reaches sockets held by every other replica. The in-process hub remains local-only, as the contract requires.
+
+Residual gaps to close:
 - `session.secret` still defaults to `change-me-in-production` and must be rejected or loudly warned outside development in the app, but the chart already provisions one shared session secret for replicas through [`chart/hibou/templates/hibou-session-secret.yaml`](../../chart/hibou/templates/hibou-session-secret.yaml).
-- WebSocket real-time fan-out is replica-local because the hub and live notification path are in-process: [`internal/ws/hub.go`](../../internal/ws/hub.go), [`internal/events/bus.go`](../../internal/events/bus.go), [`internal/notify/service.go`](../../internal/notify/service.go).
 - The in-memory event bus is process-local and needs an explicit local-only contract for future work: [`internal/events/bus.go`](../../internal/events/bus.go).
 - Graceful shutdown and draining on `SIGTERM` still need to drain in-flight uploads and WebSocket connections and release worker claims promptly.
 - Worker claims renew through an owner-guarded heartbeat loop while work is in flight; if renewal fails because ownership is lost, the worker abandons processing and leaves the snapshot reclaimable by the current or next lease owner.
@@ -131,6 +134,24 @@ A worker claims a snapshot with an atomic database operation such as:
 - or `SELECT ... FOR UPDATE SKIP LOCKED` followed by guarded update
 
 Only the worker that owns the active claim may finalize or fail the processing run.
+
+### Amendment: dedicated job tables where snapshot-level claiming does not fit
+
+The first pass above states it "does not add a separate queue table". That holds for artifact processing and remains the default: if a unit of work maps one-to-one onto a snapshot, claim it on the snapshot row.
+
+Secret scanning is the first case where that mapping breaks, so `secret_scan_jobs` (migration `00005`) is introduced as a dedicated queue table. The reasons are specific, and the same test applies to any future job type:
+
+- **A push may produce no snapshot at all.** Secret scanning is triggered by a push event, not by an artifact upload, so there is frequently no snapshot row to hang the claim on.
+- **One snapshot can need several scans.** A full history scan and an incremental range scan are distinct units of work with distinct outcomes; snapshot-level columns can only express one in-flight run.
+- **Push bursts need coalescing.** Ten pushes to one branch must cost one clone, not ten. A partial unique index on `(repo_id, ref_name, mode) WHERE status = 'pending'` collapses them into the pending row and widens its commit range. There is no equivalent on a snapshot row.
+
+What is deliberately *not* different: claim semantics. `secret_scan_jobs` uses the same model as `snapshots.artifact_processing_*` — `FOR UPDATE SKIP LOCKED` candidate selection, a lease with `claimed_by` / `claim_expires_at`, bounded `attempts`, expired-lease reclaim, and owner-guarded finalize. There is one work-claim model in the system, with two storage locations.
+
+The liveness half of that model is extracted into [`internal/worker`](../../internal/worker/worker.go) so a new job type does not hand-roll a second heartbeat. `worker.Run` renews the lease underneath the work and cancels the work's context with `worker.ErrClaimLost` as its cause the moment ownership is lost, and that error outranks whatever the work returned — a slow worker must never write a result over the new owner's. Claim, complete, and fail stay as typed queries per job table.
+
+Two independent bounds, often conflated: the **lease plus heartbeat** covers a *dead* worker (the lease expires and the job is reclaimed), while a per-job **timeout** covers a *hung but alive* worker. A job may therefore legitimately run longer than one lease period, because the heartbeat keeps extending the claim while work genuinely progresses.
+
+Clone-heavy work adds a deployment constraint that pure-database work did not: worker pods run with `readOnlyRootFilesystem: true`, so a scanner that clones needs an explicitly sized scratch volume plus `ephemeral-storage` requests and limits. Omitting exactly this is what caused the Trivy-DB DiskPressure eviction storm in dogfood.
 
 ### Idempotency model
 

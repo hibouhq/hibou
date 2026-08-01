@@ -51,7 +51,26 @@ func (a *StoreAdapter) ArchiveSnapshot(ctx context.Context, id uuid.UUID) error 
 }
 
 func (a *StoreAdapter) PurgeSnapshot(ctx context.Context, id uuid.UUID) error {
+	// Drop cached forge comparisons involving this commit before the snapshot
+	// goes: they are keyed by commit SHA, so nothing else would ever clean them
+	// up (ADR-019 — the cache has no TTL by design).
+	a.purgeComparePatchCache(ctx, id)
 	return a.queries.PurgeSnapshot(ctx, id)
+}
+
+// purgeComparePatchCache is best-effort: a stale cache row is harmless (the
+// comparison is unreachable once the snapshot is gone), so a failure here must
+// never block the purge itself.
+func (a *StoreAdapter) purgeComparePatchCache(ctx context.Context, snapshotID uuid.UUID) {
+	snapshot, err := a.queries.GetSnapshotByID(ctx, snapshotID)
+	if err != nil || snapshot == nil || snapshot.CommitSHA == "" {
+		return
+	}
+	ref, err := a.queries.GetRefByID(ctx, snapshot.RefID)
+	if err != nil || ref == nil {
+		return
+	}
+	_ = a.queries.DeleteComparePatchCacheForCommit(ctx, ref.RepoID, snapshot.CommitSHA)
 }
 
 func (a *StoreAdapter) MarkSnapshotFailed(ctx context.Context, id uuid.UUID) error {

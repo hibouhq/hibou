@@ -511,3 +511,73 @@ func TestGateAnnotationsFromNewFindings(t *testing.T) {
 func intTestPtr(value int) *int {
 	return &value
 }
+
+// A PR snapshot whose target branch has no snapshot yet cannot be evaluated.
+// Before this, nothing was posted at all and the PR showed no Hibou check —
+// now an in-progress check says "working on it" and no verdict is persisted.
+func TestGatePublisherPostsPendingWhenTargetSnapshotMissing(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID := uuid.New()
+	repoID := uuid.New()
+	prRefID := uuid.New()
+	targetRefID := uuid.New()
+	prSnapshotID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
+	// Deliberately no latestSnapshot[targetRefID]: nothing to compare against.
+	store.orgSlugs[orgID] = "acme-org"
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, &mockRepoConfigLoader{}, nil, "https://hibou.example.com", zerolog.Nop())
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(forgeProvider.statuses) != 1 {
+		t.Fatalf("expected 1 commit status call, got %d", len(forgeProvider.statuses))
+	}
+	if state := forgeProvider.statuses[0].status.State; state != "pending" {
+		t.Fatalf("status state = %q, want pending", state)
+	}
+	// No outcome yet, so nothing may be recorded as a verdict.
+	if len(store.prChecks) != 0 {
+		t.Fatalf("expected no pr_check persisted for a pending gate, got %#v", store.prChecks)
+	}
+}
+
+// The gate must not depend on the advisory scan: artifact processing publishes
+// GateRecomputeRequested with a snapshot_id, which has to route exactly like a
+// completed scan.
+func TestGatePublisherRecomputeBySnapshotIDPublishesGate(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID := uuid.New()
+	repoID := uuid.New()
+	prRefID := uuid.New()
+	targetRefID := uuid.New()
+	prSnapshotID := uuid.New()
+	targetSnapshotID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, &mockRepoConfigLoader{}, nil, "https://hibou.example.com", zerolog.Nop())
+	gatePublisher.handleRecomputeRequested(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(forgeProvider.statuses) != 1 {
+		t.Fatalf("expected the recompute to post a status, got %d calls", len(forgeProvider.statuses))
+	}
+	if state := forgeProvider.statuses[0].status.State; state == "pending" {
+		t.Fatal("expected a resolved verdict, not pending: the comparison was available")
+	}
+	if len(store.prChecks) != 1 {
+		t.Fatalf("expected the verdict persisted, got %d pr_checks", len(store.prChecks))
+	}
+}

@@ -34,6 +34,10 @@
                 title="Line ran, but some branches never took both outcomes"
               /> partial
               <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-red-500/60" /> uncovered
+              <template v-if="hasNewCode">
+                <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-blue-500/70" /> new covered
+                <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-orange-500/70" /> new uncovered
+              </template>
             </span>
             <a
               v-if="blobUrl"
@@ -120,6 +124,8 @@ interface SourceRow {
   hits: number | null
   branchesCovered: number
   branchesValid: number
+  // New code relative to the comparison base (ADR-019), when one was supplied.
+  isNew: boolean
 }
 
 function isPartial(row: SourceRow): boolean {
@@ -152,10 +158,12 @@ const rows = computed<SourceRow[]>(() => {
       hits: line ? line.hits : null,
       branchesCovered: line?.branches_covered ?? 0,
       branchesValid: line?.branches_valid ?? 0,
+      isNew: line?.is_new === true,
     }
   })
 })
 
+const hasNewCode = computed(() => (source.value?.lines ?? []).some((line) => line.is_new === true))
 const coveredCount = computed(() => (source.value?.lines ?? []).filter((line) => line.hits > 0).length)
 const shortSha = computed(() => source.value?.commit_sha.slice(0, 7) ?? '')
 const forgeName = computed(() => forgeLabel(props.provider))
@@ -182,6 +190,13 @@ async function load() {
 function rowClass(row: SourceRow): string {
   if (row.hits === null) return ''
   if (isPartial(row)) return 'partial-coverage-row shadow-[inset_3px_0_0_0_theme(colors.amber.400)]'
+  // New code is what a reviewer is accountable for, so it reads loud (blue /
+  // orange) while unchanged code stays muted green / red.
+  if (row.isNew) {
+    return row.hits > 0
+      ? 'bg-blue-500/30 shadow-[inset_3px_0_0_0_theme(colors.blue.400)]'
+      : 'bg-orange-500/30 shadow-[inset_3px_0_0_0_theme(colors.orange.400)]'
+  }
   if (row.hits > 0) return 'bg-emerald-500/15 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
   return 'bg-red-500/15 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
 }
@@ -189,13 +204,20 @@ function rowClass(row: SourceRow): string {
 function hitsClass(row: SourceRow): string {
   if (row.hits === null) return 'text-gray-700'
   if (isPartial(row)) return 'text-amber-300'
+  if (row.isNew) return row.hits > 0 ? 'text-blue-200' : 'text-orange-200'
   return row.hits > 0 ? 'text-emerald-300' : 'text-red-300'
 }
 
 // Explanation for a partially covered line: the line ran, but a condition never took both outcomes.
 function rowTitle(row: SourceRow): string {
-  if (!isPartial(row)) return ''
-  return `Partially covered: ${row.branchesCovered} of ${row.branchesValid} branches taken`
+  const parts: string[] = []
+  if (row.isNew) {
+    parts.push(row.hits && row.hits > 0 ? 'New code, covered' : 'New code, not covered')
+  }
+  if (isPartial(row)) {
+    parts.push(`Partially covered: ${row.branchesCovered} of ${row.branchesValid} branches taken`)
+  }
+  return parts.join(' · ')
 }
 
 function onKeydown(event: KeyboardEvent) {

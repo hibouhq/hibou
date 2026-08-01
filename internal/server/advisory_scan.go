@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 const advisoryScanTimeout = 30 * time.Minute
@@ -37,18 +38,33 @@ func (s *Server) runAdvisoryScanPass(ctx context.Context) {
 	if s.advisoryScanner == nil || len(s.advisoryProviders) == 0 {
 		return
 	}
+	// In-process guard: stops a slow pass overlapping its own next tick.
 	if !s.advisoryScanActive.CompareAndSwap(false, true) {
 		s.log.Warn().Msg("advisory scan pass already running; skipping overlap")
 		return
 	}
 	defer s.advisoryScanActive.Store(false)
 
+	// Cross-replica guard: without it every replica runs the same full pass and
+	// burns N× the advisory-provider quota for one identical result. Not a
+	// correctness control — scan writes are idempotent — purely quota.
+	ran, err := store.WithLeaderLock(ctx, s.db, store.LockAdvisoryScanPass, s.advisoryScanPass)
+	if err != nil {
+		s.log.Error().Err(err).Msg("advisory scan leader lock failed")
+		return
+	}
+	if !ran {
+		s.log.Debug().Msg("another replica is running the advisory scan pass; skipping this tick")
+	}
+}
+
+func (s *Server) advisoryScanPass(ctx context.Context) error {
 	snapshotIDs, err := s.listLatestSnapshotsForAdvisoryScan(ctx)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			s.log.Error().Err(err).Msg("list snapshots for advisory scan failed")
 		}
-		return
+		return nil
 	}
 
 	succeeded := 0
@@ -63,6 +79,7 @@ func (s *Server) runAdvisoryScanPass(ctx context.Context) {
 		succeeded++
 	}
 	s.log.Info().Int("snapshots", len(snapshotIDs)).Int("succeeded", succeeded).Int("failed", failed).Msg("finished advisory scan pass")
+	return nil
 }
 
 func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid.UUID, error) {

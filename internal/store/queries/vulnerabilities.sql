@@ -213,3 +213,14 @@ DELETE FROM finding_acceptances WHERE repo_id = $1 AND fingerprint = $2;
 -- name: ListActiveFindingAcceptancesByRepo :many
 SELECT * FROM finding_acceptances
 WHERE repo_id = $1 AND (expires_at IS NULL OR expires_at > now());
+
+-- name: ListRepoFingerprints :many
+-- Returns the subset of the given fingerprints that actually belongs to this
+-- repository. Batch triage validates against this so a caller cannot write
+-- acceptances for another repo's findings by guessing fingerprints.
+SELECT DISTINCT v.fingerprint
+FROM vulnerabilities v
+JOIN snapshots s ON s.id = v.snapshot_id
+JOIN refs rf ON rf.id = s.ref_id
+WHERE rf.repo_id = $1
+  AND v.fingerprint = ANY($2::text[]);

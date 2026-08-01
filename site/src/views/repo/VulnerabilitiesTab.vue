@@ -40,6 +40,72 @@
       >{{ secretScanStatusLine }}</span>
     </div>
 
+    <TriageDialog
+      v-if="dialog"
+      :status="dialog.status"
+      :count="dialog.fingerprints.length"
+      :error="dialogError"
+      :submitting="dialogSubmitting"
+      @cancel="closeTriageDialog"
+      @confirm="confirmTriageDialog"
+    />
+
+    <div
+      v-if="selected.size > 0"
+      class="flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5"
+    >
+      <span class="text-sm font-medium text-white">
+        {{ selected.size }} selected
+      </span>
+      <button
+        v-if="!matchingTruncated && matchingTotal === 0"
+        type="button"
+        class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white disabled:opacity-50"
+        :disabled="selectingAll"
+        title="Select every finding matching the current filter, not just this page"
+        @click="selectAllMatchingFilter"
+      >
+        {{ selectingAll ? 'Selecting…' : `Select all matching filter (${pagination.total})` }}
+      </button>
+      <span
+        v-if="matchingTruncated"
+        class="rounded border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] text-warning"
+      >first {{ selected.size }} of {{ matchingTotal }} — apply, then repeat for the rest</span>
+      <button
+        type="button"
+        class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
+        @click="openTriageDialog('accepted', [...selected])"
+      >
+        Accept risk…
+      </button>
+      <button
+        type="button"
+        class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
+        @click="openTriageDialog('false_positive', [...selected])"
+      >
+        Mark false positive…
+      </button>
+      <button
+        type="button"
+        class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
+        title="Remove any suppression: these count against the gate again"
+        @click="reopenFindings([...selected])"
+      >
+        Reopen
+      </button>
+      <button
+        type="button"
+        class="ml-auto text-xs text-gray-400 underline transition hover:text-white"
+        @click="clearSelection"
+      >
+        Clear selection
+      </button>
+      <span
+        v-if="batchMessage"
+        class="text-xs text-emerald-300"
+      >{{ batchMessage }}</span>
+    </div>
+
     <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
       <div
         v-if="loading"
@@ -60,6 +126,17 @@
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
             <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
               <tr>
+                <th class="w-9 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    class="h-3.5 w-3.5 rounded border-surface-border bg-surface-overlay accent-[--color-accent]"
+                    :checked="allShownSelected"
+                    :indeterminate="someShownSelected"
+                    :title="`Select all ${vulnerabilities.length} findings shown`"
+                    :aria-label="`Select all ${vulnerabilities.length} findings shown`"
+                    @change="toggleSelectAllShown"
+                  >
+                </th>
                 <th class="px-3 py-2 font-medium">
                   Severity
                 </th>
@@ -89,8 +166,18 @@
                 v-for="vulnerability in vulnerabilities"
                 :key="vulnerability.id"
                 class="transition hover:bg-white/5"
-                :class="rowClass(vulnerability.type)"
+                :class="[rowClass(vulnerability.type), selected.has(vulnerability.fingerprint) ? 'bg-accent/10' : '']"
               >
+                <td class="px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    class="h-3.5 w-3.5 rounded border-surface-border bg-surface-overlay accent-[--color-accent]"
+                    :checked="selected.has(vulnerability.fingerprint)"
+                    :aria-label="`Select ${vulnerability.title}`"
+                    @click.stop
+                    @change="toggleSelected(vulnerability)"
+                  >
+                </td>
                 <td class="px-3 py-2.5">
                   <span :class="severityClass(vulnerability.severity)">
                     {{ vulnerability.severity }}
@@ -124,16 +211,10 @@
                 </td>
                 <td class="px-3 py-2.5">
                   <span
-                    v-if="acceptanceFor(vulnerability)"
-                    class="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-300"
-                    :title="acceptanceFor(vulnerability)!.reason"
-                  >{{ acceptanceFor(vulnerability)!.status === 'false_positive' ? 'false positive' : 'accepted' }}</span>
-                  <span
-                    v-else
-                    :class="statusBadgeClass(vulnerability.status)"
-                  >
-                    {{ vulnerability.status }}
-                  </span>
+                    class="rounded-full border px-2.5 py-1 text-xs font-medium"
+                    :class="triageFor(vulnerability).badgeClass"
+                    :title="triageTitle(vulnerability)"
+                  >{{ triageFor(vulnerability).label }}</span>
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   {{ formatDetected(vulnerability.detected_at) }}
@@ -143,20 +224,32 @@
                     v-if="acceptanceFor(vulnerability)"
                     type="button"
                     class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
-                    title="Reopen: the finding fails the gate again"
-                    @click.stop="unacceptFinding(vulnerability)"
+                    title="Reopen: this finding counts against the gate again"
+                    @click.stop="reopenFindings([vulnerability.fingerprint])"
                   >
-                    Unaccept
+                    Reopen
                   </button>
-                  <button
+                  <div
                     v-else
-                    type="button"
-                    class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
-                    title="Accept with a reason: stops failing the gate, stays visible"
-                    @click.stop="openAcceptDialog(vulnerability)"
+                    class="flex gap-1"
                   >
-                    Accept…
-                  </button>
+                    <button
+                      type="button"
+                      class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                      title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
+                      @click.stop="openTriageDialog('accepted', [vulnerability.fingerprint])"
+                    >
+                      Accept risk…
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                      title="Not a real issue. Requires a reason; suppressed from the gate."
+                      @click.stop="openTriageDialog('false_positive', [vulnerability.fingerprint])"
+                    >
+                      False positive…
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -190,7 +283,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
 import { KeyRound } from 'lucide-vue-next'
@@ -198,6 +291,8 @@ import { KeyRound } from 'lucide-vue-next'
 import { api, type FindingAcceptance, type ScanRule, type SecretScanJob, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import LinkedText from '@/components/LinkedText.vue'
+import TriageDialog from '@/components/TriageDialog.vue'
+import { triageState } from '@/lib/triage'
 
 const route = useRoute()
 const router = useRouter()
@@ -631,40 +726,180 @@ async function loadAcceptances() {
   }
 }
 
-// Sonar-style accept: reason required; the gate recomputes server-side
-// immediately, no CI re-run.
-async function openAcceptDialog(vulnerability: Vulnerability) {
-  const reason = window.prompt('Reason for accepting this finding (required):')
-  if (!reason || !reason.trim()) return
+// ─── Triage: one decision, one reason, any number of findings ────────────────
+// Batch-first by design: the flow is filter → select all shown → decide once.
+// Reasons are typed in a real dialog (a window.prompt lost the text on any
+// error and could not offer presets or an expiry).
+
+const selected = reactive(new Set<string>())
+// Targets are fingerprints, not row objects: a filter-wide selection includes
+// findings that are not on the current page, and keying off rows would have
+// silently triaged only the visible subset.
+const dialog = ref<{ status: 'accepted' | 'false_positive'; fingerprints: string[] } | null>(null)
+const dialogError = ref('')
+const dialogSubmitting = ref(false)
+const batchMessage = ref('')
+const selectingAll = ref(false)
+const selectAllError = ref('')
+const matchingTotal = ref(0)
+const matchingTruncated = ref(false)
+
+const shownFingerprints = computed(() => vulnerabilities.value.map((item) => item.fingerprint).filter(Boolean))
+const allShownSelected = computed(() => shownFingerprints.value.length > 0 && shownFingerprints.value.every((fp) => selected.has(fp)))
+const someShownSelected = computed(() => !allShownSelected.value && shownFingerprints.value.some((fp) => selected.has(fp)))
+
+// The filter params the current view is showing, reused for "select all
+// matching" so the server selects exactly what the user sees filtered.
+function currentFilterParams(): Record<string, string> {
+  const params: Record<string, string> = {}
+  const add = (key: string, value: unknown) => {
+    if (typeof value === 'string' && value) params[key] = value
+  }
+  add('ref', route.query.ref)
+  add('snapshot', route.query.snapshot)
+  add('type', activeFilters.value.type)
+  add('severity', activeFilters.value.severity)
+  add('status', activeFilters.value.status)
+  add('tool', activeFilters.value.tool)
+  add('file', activeFilters.value.file)
+  add('search', searchQuery.value)
+  return params
+}
+
+// Select every finding matching the filter, not just the current page — the
+// point of "filter then batch-triage". Capped server-side at the batch limit,
+// and the count is reported so a truncated selection is never presented as
+// "everything".
+async function selectAllMatchingFilter() {
+  selectAllError.value = ''
+  selectingAll.value = true
   try {
-    await api.setFindingAcceptance(provider.value, slug.value, repoSlug.value, vulnerability.id, {
-      status: 'accepted',
-      reason: reason.trim(),
-    })
-    await loadAcceptances()
+    const res = await api.listRefFindingFingerprints(provider.value, slug.value, repoSlug.value, currentFilterParams())
+    const data = res.data
+    if (!data || data.fingerprints.length === 0) {
+      selectAllError.value = 'No findings match the current filter.'
+      return
+    }
+    data.fingerprints.forEach((fp) => selected.add(fp))
+    matchingTotal.value = data.total
+    matchingTruncated.value = data.truncated
   } catch (error) {
-    window.alert(error instanceof Error ? error.message : 'Failed to accept finding')
+    selectAllError.value = error instanceof Error ? error.message : 'Failed to select all matching findings'
+  } finally {
+    selectingAll.value = false
   }
 }
 
-async function unacceptFinding(vulnerability: Vulnerability) {
-  try {
-    await api.setFindingAcceptance(provider.value, slug.value, repoSlug.value, vulnerability.id, { status: 'open' })
-    await loadAcceptances()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : 'Failed to reopen finding')
+function toggleSelected(vulnerability: Vulnerability) {
+  if (selected.has(vulnerability.fingerprint)) {
+    selected.delete(vulnerability.fingerprint)
+  } else {
+    selected.add(vulnerability.fingerprint)
   }
 }
 
-function statusBadgeClass(status: string) {
-  const classes: Record<string, string> = {
-    detected: 'rounded-full bg-slate-500/15 px-2.5 py-1 text-xs font-medium text-slate-300',
-    confirmed: 'rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-300',
-    dismissed: 'rounded-full bg-slate-500/10 px-2.5 py-1 text-xs font-medium text-gray-500 line-through',
-    resolved: 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-300',
+// "All" means all currently shown (filtered + paginated) — never the whole repo,
+// which would act on rows the user cannot see.
+function toggleSelectAllShown() {
+  if (allShownSelected.value) {
+    shownFingerprints.value.forEach((fp) => selected.delete(fp))
+    return
   }
+  shownFingerprints.value.forEach((fp) => selected.add(fp))
+}
 
-  return classes[status] || classes.detected
+// A row filtered out of view must never stay silently selected. Skipped while a
+// filter-wide selection is active, since those fingerprints are deliberately off
+// the current page.
+watch(vulnerabilities, () => {
+  if (matchingTotal.value > 0) return
+  const visible = new Set(shownFingerprints.value)
+  for (const fingerprint of [...selected]) {
+    if (!visible.has(fingerprint)) selected.delete(fingerprint)
+  }
+})
+
+function clearSelection() {
+  selected.clear()
+  matchingTotal.value = 0
+  matchingTruncated.value = false
+  selectAllError.value = ''
+}
+
+function openTriageDialog(status: 'accepted' | 'false_positive', fingerprints: string[]) {
+  const unique = [...new Set(fingerprints.filter(Boolean))]
+  if (unique.length === 0) return
+  dialogError.value = ''
+  batchMessage.value = ''
+  dialog.value = { status, fingerprints: unique }
+}
+
+function closeTriageDialog() {
+  dialog.value = null
+  dialogError.value = ''
+  dialogSubmitting.value = false
+}
+
+async function confirmTriageDialog(payload: { reason: string; expiresAt?: string }) {
+  if (!dialog.value) return
+  const { status, fingerprints } = dialog.value
+  dialogSubmitting.value = true
+  dialogError.value = ''
+  try {
+    await applyTriage(status, fingerprints, payload.reason, payload.expiresAt)
+    batchMessage.value = `${fingerprints.length} ${fingerprints.length === 1 ? 'finding' : 'findings'} updated.`
+    closeTriageDialog()
+    clearSelection()
+  } catch (error) {
+    // Keep the dialog open so the typed reason is not lost.
+    dialogError.value = error instanceof Error ? error.message : 'Failed to apply the decision'
+    dialogSubmitting.value = false
+  }
+}
+
+async function reopenFindings(fingerprints: string[]) {
+  const unique = [...new Set(fingerprints.filter(Boolean))]
+  if (unique.length === 0) return
+  batchMessage.value = ''
+  try {
+    await applyTriage('open', unique, '')
+    batchMessage.value = `${unique.length} ${unique.length === 1 ? 'finding' : 'findings'} reopened.`
+    clearSelection()
+  } catch (error) {
+    batchMessage.value = ''
+    secretScanError.value = error instanceof Error ? error.message : 'Failed to reopen findings'
+  }
+}
+
+// One finding still goes through the batch endpoint: same validation, same audit
+// shape, one code path to keep correct.
+async function applyTriage(status: 'accepted' | 'false_positive' | 'open', fingerprints: string[], reason: string, expiresAt?: string) {
+  if (fingerprints.length === 0) return
+  await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, {
+    fingerprints,
+    status,
+    reason: reason || undefined,
+    expires_at: expiresAt,
+  })
+  // Only acceptances changed; the badge derives from them, so no refetch of the
+  // findings list is needed.
+  await loadAcceptances()
+}
+
+function triageFor(vulnerability: Vulnerability) {
+  return triageState(vulnerability, acceptanceFor(vulnerability))
+}
+
+// The tooltip carries the "why" — the recorded reason — plus the expiry when set.
+function triageTitle(vulnerability: Vulnerability): string {
+  const info = triageFor(vulnerability)
+  const acceptance = acceptanceFor(vulnerability)
+  if (!acceptance) return info.description
+  const parts = [info.description, `Reason: ${acceptance.reason}`]
+  if (acceptance.expires_at) {
+    parts.push(`Expires: ${new Date(acceptance.expires_at).toLocaleDateString()}`)
+  }
+  return parts.join('\n')
 }
 
 function rowClass(type: string) {

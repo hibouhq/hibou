@@ -704,6 +704,40 @@
             </div>
           </div>
 
+          <!-- New code first: "is what this change introduced tested?" is the
+               question reviewers actually ask; the absolute rate is history. -->
+          <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="text-xs uppercase tracking-[0.18em] text-gray-500">
+                New code coverage
+              </p>
+              <span class="text-xs text-gray-500">lines this comparison changed</span>
+            </div>
+            <div
+              v-if="coverageDiff.new_line_rate !== null"
+              class="mt-3 flex flex-wrap items-center gap-3"
+            >
+              <span
+                class="text-2xl font-semibold"
+                :style="{ color: rateColor(coverageDiff.new_line_rate) }"
+              >{{ formatRate(coverageDiff.new_line_rate) }}</span>
+              <span class="text-sm text-gray-400">
+                {{ coverageDiff.new_covered }}/{{ coverageDiff.new_lines }} changed lines covered
+              </span>
+              <span
+                v-if="coverageDiff.new_code_truncated"
+                class="rounded border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] text-warning"
+                title="The forge capped the compared file list, so this covers only the first files."
+              >partial — forge truncated the file list</span>
+            </div>
+            <p
+              v-else
+              class="mt-3 text-sm text-gray-500"
+            >
+              No measurable new code in this comparison — the changed lines are not instrumented (docs, comments, or files without coverage).
+            </p>
+          </div>
+
           <div class="grid gap-3 sm:grid-cols-2">
             <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
               <p class="text-xs uppercase tracking-[0.18em] text-gray-500">
@@ -747,7 +781,22 @@
                 Per-file changes
               </h3>
               <div class="flex flex-wrap items-center gap-3">
-                <label class="flex cursor-pointer items-center gap-1.5 text-xs text-gray-400">
+                <label
+                  class="flex cursor-pointer items-center gap-1.5 text-xs"
+                  :class="newCodeOnly ? 'text-white' : 'text-gray-400'"
+                  title="Show only files with lines this comparison changed"
+                >
+                  <input
+                    v-model="newCodeOnly"
+                    type="checkbox"
+                    class="h-3.5 w-3.5 rounded border-surface-border bg-surface-overlay accent-[--color-accent]"
+                  >
+                  new code only
+                </label>
+                <label
+                  v-if="!newCodeOnly"
+                  class="flex cursor-pointer items-center gap-1.5 text-xs text-gray-400"
+                >
                   <input
                     v-model="showUnchangedCoverage"
                     type="checkbox"
@@ -785,13 +834,13 @@
               v-else-if="coverageFilesView === 'tree'"
               class="px-4 py-8 text-sm text-gray-500"
             >
-              No coverage files to show{{ showUnchangedCoverage ? '' : ' — try "show unchanged files"' }}.
+              {{ newCodeOnly ? 'No files with measurable new code in this comparison — the changed lines are not instrumented.' : `No coverage files to show${showUnchangedCoverage ? '' : ' — try "show unchanged files"'}.` }}
             </div>
             <div
               v-else-if="compareListRows.length === 0"
               class="px-4 py-8 text-sm text-gray-500"
             >
-              No per-file coverage changes between these refs{{ showUnchangedCoverage ? '' : ' — "show unchanged files" lists the rest' }}.
+              {{ newCodeOnly ? 'No files with measurable new code in this comparison — the changed lines are not instrumented.' : `No per-file coverage changes between these refs${showUnchangedCoverage ? '' : ' — "show unchanged files" lists the rest'}.` }}
             </div>
             <div
               v-else
@@ -863,9 +912,17 @@
                           class="ml-2 font-medium text-orange-300"
                         >+{{ patchFileByPath.get(file.file_path)!.uncovered_lines }} uncovered</span>
                       </template>
+                      <template v-else-if="file.new_lines > 0">
+                        <span class="font-medium text-blue-300">{{ file.new_covered }} covered</span>
+                        <span
+                          v-if="file.new_lines - file.new_covered > 0"
+                          class="ml-2 font-medium text-orange-300"
+                        >{{ file.new_lines - file.new_covered }} uncovered</span>
+                      </template>
                       <span
                         v-else
                         class="text-gray-600"
+                        title="No instrumented line changed in this file"
                       >—</span>
                     </td>
                     <td class="px-4 py-3 align-top text-gray-300">
@@ -1244,6 +1301,9 @@ const comparison = ref<CompareResult | null>(null)
 const headCoverage = ref<CoverageReport | null>(null)
 const coverageFilesView = ref<'list' | 'tree'>('tree')
 const showUnchangedCoverage = ref(false)
+// New-code lens (ADR-019). Default on for PR comparisons — reviewing a PR is
+// exactly when only the changed lines matter — off for branch comparisons.
+const newCodeOnly = ref(false)
 const compareSourceFile = ref<string | null>(null)
 
 watch(
@@ -1251,6 +1311,7 @@ watch(
   async (head) => {
     headCoverage.value = null
     showUnchangedCoverage.value = false
+    newCodeOnly.value = comparison.value?.pr != null
     if (!head?.ref_name) return
     try {
       const res = await api.getCoverage(provider.value, slug.value, repoSlug.value, { ref: head.ref_name })
@@ -1274,8 +1335,22 @@ const compareTreeFiles = computed(() => {
       delta: deltas.get(key) ?? null,
     }
   })
+  if (newCodeOnly.value) {
+    const withNewCode = newCodeFilePaths.value
+    return files.filter((file) => withNewCode.has(file.path))
+  }
   if (showUnchangedCoverage.value) return files
   return files.filter((file) => deltas.has(file.path))
+})
+
+// Files carrying measurable new code, i.e. the comparison changed at least one
+// instrumented line in them.
+const newCodeFilePaths = computed(() => {
+  const paths = new Set<string>()
+  for (const file of comparison.value?.coverage_diff?.files ?? []) {
+    if (file.new_lines > 0) paths.add(file.file_path)
+  }
+  return paths
 })
 
 type CompareListRow = Omit<CoverageFileDelta, 'change'> & { change: CoverageFileDelta['change'] | 'unchanged' }
@@ -1284,6 +1359,7 @@ type CompareListRow = Omit<CoverageFileDelta, 'change'> & { change: CoverageFile
 // then synthetic unchanged rows built from the head snapshot's file set.
 const compareListRows = computed<CompareListRow[]>(() => {
   const diffRows: CompareListRow[] = comparison.value?.coverage_diff?.files ?? []
+  if (newCodeOnly.value) return diffRows.filter((row) => (row.new_lines ?? 0) > 0)
   if (!showUnchangedCoverage.value) return diffRows
   const changed = new Set(diffRows.map((row) => row.file_path))
   const unchanged: CompareListRow[] = (headCoverage.value?.files ?? [])
@@ -1296,6 +1372,10 @@ const compareListRows = computed<CompareListRow[]>(() => {
       line_rate_delta: null,
       base_lines_covered: file.lines_covered,
       head_lines_covered: file.lines_covered,
+      // Unchanged by definition means no changed lines, so no new code.
+      new_lines: 0,
+      new_covered: 0,
+      new_line_rate: null,
       base_lines_valid: file.lines_valid,
       head_lines_valid: file.lines_valid,
     }))

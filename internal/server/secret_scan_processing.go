@@ -17,6 +17,7 @@ import (
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/metrics"
 	"github.com/hibouhq/hibou/internal/secretscan"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -53,12 +54,19 @@ func buildSecretScanProviders(cfg config.Config, log zerolog.Logger) []secretsca
 			}
 			providers = append(providers, provider)
 		case "trufflehog":
-			provider, err := secretscan.NewTruffleHogProvider(log)
-			if err != nil {
-				log.Warn().Err(err).Msg("secret scan provider trufflehog unavailable, skipping")
-				continue
-			}
-			providers = append(providers, provider)
+			// DISABLED ON PURPOSE (2026-07-28), code kept for when it can be
+			// re-enabled. TruffleHog re-clones the checkout we already made via a
+			// file:// URI, and git's local transport needs /bin/sh for that.
+			// Shipping a shell in a security scanner's image to satisfy one
+			// engine is a worse trade than losing the engine: gitleaks and
+			// betterleaks need no shell (strace-verified), so the runtime image
+			// stays shell-free.
+			//
+			// To re-enable, one of: teach the provider to scan in place without a
+			// second clone, hand trufflehog the remote URL instead of the local
+			// path, or accept busybox in apko.yaml.
+			log.Warn().Msg("secret scan provider trufflehog is disabled in this build (needs a shell in the runtime image); ignoring it")
+			continue
 		case "betterleaks":
 			provider, err := secretscan.NewBetterleaksProvider(log)
 			if err != nil {
@@ -132,6 +140,11 @@ func (s *Server) startNextSecretScanJob(ctx context.Context) (bool, error) {
 }
 
 func (s *Server) processClaimedSecretScanJob(ctx context.Context, job *store.SecretScanJob) {
+	started := time.Now()
+	// Recorded on every exit path, including abandonment, so a worker that keeps
+	// losing claims is visible instead of just quiet.
+	defer func() { metrics.SecretScanDuration.WithLabelValues(job.Mode).Observe(time.Since(started).Seconds()) }()
+
 	lease := worker.LeaseFunc(func(leaseCtx context.Context, expiresAt time.Time) (bool, error) {
 		return s.queries.RenewSecretScanJobClaim(leaseCtx, job.ID, s.artifactWorkerID, expiresAt)
 	})
@@ -149,19 +162,23 @@ func (s *Server) processClaimedSecretScanJob(ctx context.Context, job *store.Sec
 
 	switch {
 	case worker.IsClaimLost(err):
+		metrics.SecretScansTotal.WithLabelValues(job.Mode, "abandoned").Inc()
 		s.log.Warn().Str("job_id", job.ID.String()).Str("worker_id", s.artifactWorkerID).Msg("secret scan abandoned after claim ownership was lost")
 	case errors.Is(err, errSecretScanSkipped):
+		metrics.SecretScansTotal.WithLabelValues(job.Mode, "skipped").Inc()
 		if _, completeErr := s.queries.CompleteSecretScanJob(ctx, job.ID, s.artifactWorkerID); completeErr != nil {
 			s.log.Error().Err(completeErr).Str("job_id", job.ID.String()).Msg("finalize skipped secret scan")
 		}
 		s.log.Warn().Err(err).Str("job_id", job.ID.String()).Str("repo_id", job.RepoID.String()).Msg("secret scan skipped")
 	case err != nil:
+		metrics.SecretScansTotal.WithLabelValues(job.Mode, "failed").Inc()
 		markFinished := int(job.Attempts) >= s.cfg.SecretScan.MaxAttempts
 		if _, failErr := s.queries.FailSecretScanJob(ctx, job.ID, s.artifactWorkerID, truncateSecretScanError(err), markFinished); failErr != nil {
 			s.log.Error().Err(failErr).Str("job_id", job.ID.String()).Msg("finalize failed secret scan")
 		}
 		s.log.Error().Err(err).Str("job_id", job.ID.String()).Str("repo_id", job.RepoID.String()).Bool("mark_finished", markFinished).Msg("secret scan failed")
 	default:
+		metrics.SecretScansTotal.WithLabelValues(job.Mode, "complete").Inc()
 		if _, completeErr := s.queries.CompleteSecretScanJob(ctx, job.ID, s.artifactWorkerID); completeErr != nil {
 			s.log.Error().Err(completeErr).Str("job_id", job.ID.String()).Msg("finalize completed secret scan")
 		}

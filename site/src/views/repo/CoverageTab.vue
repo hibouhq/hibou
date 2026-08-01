@@ -92,6 +92,63 @@
               {{ activeLabel }}
             </p>
           </div>
+
+          <!-- New-code baseline: "of the code added since X, how much is
+               tested?" Empty = classic whole-tree view. -->
+          <label class="flex items-center gap-2 text-xs text-gray-400">
+            <span class="whitespace-nowrap">New code since</span>
+            <select
+              :value="sinceParam"
+              class="rounded-md border border-surface-border bg-surface-overlay px-2 py-1.5 text-xs text-gray-200"
+              @change="selectBaseline(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">
+                — whole tree —
+              </option>
+              <option
+                v-for="option in baselineOptions"
+                :key="option"
+                :value="option"
+              >
+                {{ option }}
+              </option>
+            </select>
+          </label>
+        </div>
+
+        <div
+          v-if="sinceParam"
+          class="mt-4 rounded-lg border border-surface-border bg-surface-overlay/50 p-3"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[11px] uppercase tracking-[0.16em] text-gray-500">
+              New code coverage since {{ sinceParam }}
+            </span>
+            <span
+              v-if="newCode?.truncated"
+              class="rounded border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] text-warning"
+              title="The forge capped the compared file list, so this covers only the first files."
+            >partial — forge truncated the file list</span>
+          </div>
+          <div
+            v-if="newCode && newCode.line_rate !== null"
+            class="mt-2 flex flex-wrap items-baseline gap-3"
+          >
+            <span
+              class="text-2xl font-semibold"
+              :style="{ color: rateColorValue(newCode.line_rate) }"
+            >{{ formatRate(newCode.line_rate) }}</span>
+            <span class="text-sm text-gray-400">
+              {{ newCode.covered }}/{{ newCode.lines }} changed lines covered across {{ newCode.file_paths.length }}
+              {{ newCode.file_paths.length === 1 ? 'file' : 'files' }}
+            </span>
+          </div>
+          <p
+            v-else
+            class="mt-2 text-sm text-gray-500"
+          >
+            {{ newCodeEmptyReason }}
+          </p>
         </div>
 
         <div class="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,1fr)]">
@@ -367,9 +424,9 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { BarChart3, FileCode2, FolderTree, GitBranch, LayoutGrid, TableProperties, Upload } from 'lucide-vue-next'
-import { useRoute } from 'vue-router'
+import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { api, type CoverageFile, type CoverageReport, type Repository } from '@/api/client'
+import { api, type CoverageFile, type CoverageReport, type EnhancedRef, type Repository } from '@/api/client'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreemap from '@/components/CoverageTreemap.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
@@ -377,14 +434,48 @@ import FilterBar from '@/components/FilterBar.vue'
 import { useTableSort } from '@/composables/useTableSort'
 
 const route = useRoute()
+const router = useRouter()
 
 const repo = inject<Ref<Repository | null>>('repo', ref(null))
+const refs = inject<Ref<EnhancedRef[]>>('refs', ref([]))
 
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 const refParam = computed(() => route.query.ref as string | undefined)
 const snapshotParam = computed(() => route.query.snapshot as string | undefined)
+// New-code baseline (ADR-019): "coverage of code added since <ref>". Lives in
+// the URL so a view is shareable; empty means the classic whole-tree view.
+const sinceParam = computed(() => (route.query.since as string | undefined) ?? '')
+const newCode = computed(() => report.value?.new_code ?? null)
+
+// Why the new-code number is absent, stated plainly rather than showing 0%.
+const newCodeEmptyReason = computed(() => {
+  if (!newCode.value) {
+    return `Could not compare against ${sinceParam.value} — the baseline ref has no snapshot yet, or this forge cannot provide comparisons.`
+  }
+  return 'No measurable new code since this baseline — the changed lines are not instrumented (docs, comments, or files without coverage).'
+})
+
+// Baselines worth offering: the repo's other branches and tags. A release tag is
+// the usual pick ("new code since v1.4.0").
+const baselineOptions = computed(() => {
+  const names = (refs.value ?? [])
+    .filter((item) => item.ref_type === 'branch' || item.ref_type === 'tag')
+    .map((item) => item.name)
+    .filter((name) => name && name !== refParam.value)
+  return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b))
+})
+
+function selectBaseline(value: string) {
+  const query: LocationQueryRaw = { ...route.query }
+  if (value) {
+    query.since = value
+  } else {
+    delete query.since
+  }
+  void router.replace({ query })
+}
 
 const loading = ref(true)
 const error = ref('')
@@ -543,7 +634,7 @@ const highestLineRate = computed(() => {
 const filesWithLineData = computed(() => (activeReport.value?.files ?? []).filter((file) => file.line_rate !== null).length)
 
 watch(
-  [provider, slug, repoSlug, refParam, snapshotParam],
+  [provider, slug, repoSlug, refParam, snapshotParam, sinceParam],
   () => {
     void loadCoverage()
   },
@@ -561,7 +652,11 @@ async function loadCoverage() {
   error.value = ''
 
   try {
-    const response = await api.getCoverage(provider.value, slug.value, repoSlug.value, { ref: refParam.value, snapshot: snapshotParam.value })
+    const response = await api.getCoverage(provider.value, slug.value, repoSlug.value, {
+      ref: refParam.value,
+      snapshot: snapshotParam.value,
+      since: sinceParam.value || undefined,
+    })
     report.value = response.data ?? null
   } catch {
     report.value = null

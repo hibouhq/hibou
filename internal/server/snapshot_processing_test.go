@@ -35,15 +35,7 @@ func TestProcessNextArtifactSnapshotIngestsCycloneDXComponents(t *testing.T) {
 			{"ref":"dep-a","dependsOn":["dep-b","missing"]}
 		]
 	}`)
-	quarantineUnrelatedClaimableSnapshots(t, srv, snapshotID)
-
-	processed, err := srv.processNextArtifactSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("processNextArtifactSnapshot: %v", err)
-	}
-	if !processed {
-		t.Fatal("processed = false, want true")
-	}
+	processArtifactSnapshotForTest(t, srv, snapshotID)
 
 	components, err := srv.queries.ListComponentsBySnapshot(context.Background(), snapshotID)
 	if err != nil {
@@ -126,15 +118,7 @@ func TestProcessNextArtifactSnapshotIngestsSPDXComponentsWithoutDependencies(t *
 			}
 		]
 	}`)
-	quarantineUnrelatedClaimableSnapshots(t, srv, snapshotID)
-
-	processed, err := srv.processNextArtifactSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("processNextArtifactSnapshot: %v", err)
-	}
-	if !processed {
-		t.Fatal("processed = false, want true")
-	}
+	processArtifactSnapshotForTest(t, srv, snapshotID)
 
 	components, err := srv.queries.ListComponentsBySnapshot(context.Background(), snapshotID)
 	if err != nil {
@@ -195,15 +179,7 @@ func TestProcessNextArtifactSnapshotIngestsSARIFFindings(t *testing.T) {
 			}]
 		}]
 	}`)
-	quarantineUnrelatedClaimableSnapshots(t, srv, snapshotID)
-
-	processed, err := srv.processNextArtifactSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("processNextArtifactSnapshot: %v", err)
-	}
-	if !processed {
-		t.Fatal("processed = false, want true")
-	}
+	processArtifactSnapshotForTest(t, srv, snapshotID)
 
 	vulnerabilities, _, err := srv.queries.ListVulnerabilitiesBySnapshot(context.Background(), snapshotID, store.VulnerabilityListOptions{Limit: 10})
 	if err != nil {
@@ -452,15 +428,7 @@ func TestProcessNextArtifactSnapshotCompletesWithWarningWhenArtifactsMixed(t *te
 		"components":[{"name":"left-pad","version":"1.3.0","purl":"pkg:npm/left-pad@1.3.0"}]
 	}`)
 	writeArtifactForProcessingTest(t, srv, snapshotID, "sarif", nil, stringPtrForProcessingTest("semgrep"), `{invalid`)
-	quarantineUnrelatedClaimableSnapshots(t, srv, snapshotID)
-
-	processed, err := srv.processNextArtifactSnapshot(context.Background())
-	if err != nil {
-		t.Fatalf("processNextArtifactSnapshot: %v", err)
-	}
-	if !processed {
-		t.Fatal("processed = false, want true")
-	}
+	processArtifactSnapshotForTest(t, srv, snapshotID)
 
 	components, err := srv.queries.ListComponentsBySnapshot(context.Background(), snapshotID)
 	if err != nil {
@@ -647,6 +615,45 @@ func writeArtifactForProcessingTest(t *testing.T, srv *Server, snapshotID uuid.U
 	if err := srv.queries.AddSnapshotArtifactBytes(context.Background(), snapshotID, int64(len(content))); err != nil {
 		t.Fatalf("AddSnapshotArtifactBytes: %v", err)
 	}
+}
+
+// processArtifactSnapshotForTest drives artifact processing until the given
+// snapshot is finished.
+//
+// processNextArtifactSnapshot claims the next claimable snapshot in the WHOLE
+// database, and `go test ./...` runs packages in parallel against one Postgres.
+// A bare quarantine-then-claim races: another package can insert a claimable
+// snapshot in the gap and win the claim, which made these tests fail roughly
+// 1 run in 4. Re-quarantining and retrying until our own snapshot is finished
+// removes the race without teaching production code about tests.
+func processArtifactSnapshotForTest(t *testing.T, srv *Server, snapshotID uuid.UUID) {
+	t.Helper()
+	for attempt := 0; attempt < 10; attempt++ {
+		quarantineUnrelatedClaimableSnapshots(t, srv, snapshotID)
+		processed, err := srv.processNextArtifactSnapshot(context.Background())
+		if err != nil {
+			t.Fatalf("processNextArtifactSnapshot: %v", err)
+		}
+		if artifactProcessingFinishedForTest(t, srv, snapshotID) {
+			return
+		}
+		if !processed {
+			t.Fatalf("snapshot %s was never claimed for artifact processing", snapshotID)
+		}
+		// Something else was claimed (a concurrent package's row); try again.
+	}
+	t.Fatalf("snapshot %s still unprocessed after repeated attempts", snapshotID)
+}
+
+func artifactProcessingFinishedForTest(t *testing.T, srv *Server, snapshotID uuid.UUID) bool {
+	t.Helper()
+	var finished bool
+	if err := srv.db.QueryRowContext(context.Background(),
+		`SELECT artifact_processing_finished_at IS NOT NULL FROM snapshots WHERE id = $1`, snapshotID,
+	).Scan(&finished); err != nil {
+		t.Fatalf("check artifact processing state: %v", err)
+	}
+	return finished
 }
 
 func quarantineUnrelatedClaimableSnapshots(t *testing.T, srv *Server, snapshotID uuid.UUID) {

@@ -275,6 +275,8 @@ const selectedRefName = computed(() => {
 const selectedRef = computed(() => refs.value.find((item) => item.name === selectedRefName.value) ?? null)
 const latestSnapshot = computed(() => snapshots.value.find(isSuccessfulSnapshot) ?? snapshots.value[0] ?? null)
 provide('latestSnapshot', latestSnapshot)
+// Tabs need the ref list for baseline pickers (coverage new-code lens).
+provide('refs', refs)
 const snapshotChips = computed(() => {
   const visibleIndexes: number[] = []
   const mandatoryIndexes = new Set<number>()

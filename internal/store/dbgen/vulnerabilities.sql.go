@@ -715,6 +715,46 @@ func (q *Queries) ListExternalIssues(ctx context.Context, vulnerabilityID uuid.U
 	return items, nil
 }
 
+const listRepoFingerprints = `-- name: ListRepoFingerprints :many
+SELECT DISTINCT v.fingerprint
+FROM vulnerabilities v
+JOIN snapshots s ON s.id = v.snapshot_id
+JOIN refs rf ON rf.id = s.ref_id
+WHERE rf.repo_id = $1
+  AND v.fingerprint = ANY($2::text[])
+`
+
+type ListRepoFingerprintsParams struct {
+	RepoID  uuid.UUID `json:"repo_id"`
+	Column2 []string  `json:"column_2"`
+}
+
+// Returns the subset of the given fingerprints that actually belongs to this
+// repository. Batch triage validates against this so a caller cannot write
+// acceptances for another repo's findings by guessing fingerprints.
+func (q *Queries) ListRepoFingerprints(ctx context.Context, arg ListRepoFingerprintsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listRepoFingerprints, arg.RepoID, pq.Array(arg.Column2))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var fingerprint string
+		if err := rows.Scan(&fingerprint); err != nil {
+			return nil, err
+		}
+		items = append(items, fingerprint)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStateTransitions = `-- name: ListStateTransitions :many
 SELECT id, vulnerability_id, state, changed_by, changed_at, comment FROM vulnerability_state_transitions
 WHERE vulnerability_id = $1

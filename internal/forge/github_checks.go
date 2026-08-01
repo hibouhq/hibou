@@ -31,7 +31,7 @@ func (g *GitHub) CreateOrUpdateCheckRun(ctx context.Context, owner, repo string,
 	if !g.isAppMode() {
 		return "", errors.New("check runs require GitHub App credentials (HIBOU_FORGE_N_APP_ID / HIBOU_FORGE_N_PRIVATE_KEY)")
 	}
-	token, err := g.installationTokenForOwner(ctx, owner)
+	token, err := g.cachedInstallationToken(ctx, owner)
 	if err != nil {
 		return "", err
 	}
@@ -44,11 +44,18 @@ func (g *GitHub) CreateOrUpdateCheckRun(ctx context.Context, owner, repo string,
 		output["annotations"] = annotations
 	}
 	payload := map[string]any{
-		"name":       run.Name,
-		"head_sha":   run.HeadSHA,
-		"status":     "completed",
-		"conclusion": run.Conclusion,
-		"output":     output,
+		"name":     run.Name,
+		"head_sha": run.HeadSHA,
+		"output":   output,
+	}
+	// An empty conclusion means "still working": GitHub renders it as a yellow
+	// in-progress check, which later transitions to success/failure/neutral on
+	// the next update. Sending conclusion:"" with status:completed is rejected.
+	if strings.TrimSpace(run.Conclusion) == "" {
+		payload["status"] = "in_progress"
+	} else {
+		payload["status"] = "completed"
+		payload["conclusion"] = run.Conclusion
 	}
 	if strings.TrimSpace(run.DetailsURL) != "" {
 		payload["details_url"] = run.DetailsURL

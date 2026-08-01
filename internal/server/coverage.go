@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/comparison"
 	coverageparser "github.com/hibouhq/hibou/internal/coverage"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -28,6 +29,22 @@ type coverageSummaryResponse struct {
 	Format          string                 `json:"format"`
 	Files           []coverageFileResponse `json:"files"`
 	Reports         []coverageFormatReport `json:"reports"`
+	// NewCode is present only when ?since=<ref> asks for the new-code lens
+	// (ADR-019): coverage of the lines changed since that baseline.
+	NewCode *coverageNewCodeSummary `json:"new_code,omitempty"`
+}
+
+// coverageNewCodeSummary answers "of the code added since <baseline>, how much
+// is tested?" — the SonarQube-style new-code view, computed from the forge's
+// own comparison rather than a clone or blame store.
+type coverageNewCodeSummary struct {
+	Baseline  string   `json:"baseline"`
+	BaseSHA   string   `json:"base_sha"`
+	Lines     int      `json:"lines"`
+	Covered   int      `json:"covered"`
+	LineRate  *float64 `json:"line_rate"`
+	Truncated bool     `json:"truncated"`
+	FilePaths []string `json:"file_paths"`
 }
 
 type coverageFormatReport struct {
@@ -148,8 +165,73 @@ func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
 		Files:           aggregateFiles,
 		Reports:         orderedReports,
 	}
+	response.NewCode = s.coverageNewCodeSince(r, repo, *snapshotID)
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+// coverageNewCodeSince computes the new-code coverage of the current snapshot
+// relative to ?since=<ref> (a branch or release tag). Returns nil when no
+// baseline was asked for, or when it cannot be resolved — the classic view then
+// renders unchanged rather than showing a wrong number.
+func (s *Server) coverageNewCodeSince(r *http.Request, repo *store.Repository, snapshotID uuid.UUID) *coverageNewCodeSummary {
+	baseline := strings.TrimSpace(r.URL.Query().Get("since"))
+	if baseline == "" {
+		return nil
+	}
+	headSnapshot, err := s.queries.GetSnapshotByID(r.Context(), snapshotID)
+	if err != nil || headSnapshot == nil || headSnapshot.CommitSHA == "" {
+		return nil
+	}
+	baseRef, err := s.resolveRefForRepo(r, repo, baseline)
+	if err != nil || baseRef == nil {
+		return nil
+	}
+	baseSnapshot, err := s.queries.GetLatestNonPurgedSnapshotByRef(r.Context(), baseRef.ID)
+	if err != nil || baseSnapshot == nil || baseSnapshot.CommitSHA == "" {
+		return nil
+	}
+	patch := s.changedLinesForComparison(r.Context(), repo, s.forges[repo.Provider], baseSnapshot.CommitSHA, headSnapshot.CommitSHA)
+	if patch == nil {
+		return nil
+	}
+
+	headLines, err := s.loadSnapshotCoverageLines(r.Context(), snapshotID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("load per-line coverage for the new-code baseline")
+		return nil
+	}
+
+	// Reuse the coverage-diff lens so the branch view and the compare view can
+	// never disagree about what "new code coverage" means.
+	diff := &comparison.CoverageDiff{Files: []comparison.CoverageFileDelta{}}
+	changed := make(map[string][]int, len(patch.Files))
+	for _, file := range patch.Files {
+		if len(file.AddedLines) > 0 {
+			changed[file.Path] = file.AddedLines
+			diff.Files = append(diff.Files, comparison.CoverageFileDelta{FilePath: file.Path})
+		}
+	}
+	cfg := s.loadCompareRepoConfig(r.Context(), repo)
+	comparison.ApplyNewCodeLens(diff, changed, headLines, coverageExcludeGlobs(cfg), patch.Truncated)
+
+	paths := make([]string, 0, len(diff.Files))
+	for _, file := range diff.Files {
+		if file.NewLines > 0 {
+			paths = append(paths, file.FilePath)
+		}
+	}
+	sort.Strings(paths)
+
+	return &coverageNewCodeSummary{
+		Baseline:  baseline,
+		BaseSHA:   baseSnapshot.CommitSHA,
+		Lines:     diff.NewLines,
+		Covered:   diff.NewCovered,
+		LineRate:  diff.NewLineRate,
+		Truncated: diff.NewCodeTruncated,
+		FilePaths: paths,
+	}
 }
 
 func (s *Server) processCoverageUpload(ctx context.Context, snapshotID uuid.UUID, content []byte, format string) {

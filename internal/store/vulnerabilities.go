@@ -751,3 +751,16 @@ func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID
 	}
 	return out, nil
 }
+
+// ListRepoFingerprints returns the subset of fingerprints that belongs to the
+// repository. Batch triage validates against it so a caller cannot write
+// acceptances for another repo's findings.
+func (q *Queries) ListRepoFingerprints(ctx context.Context, repoID uuid.UUID, fingerprints []string) ([]string, error) {
+	if len(fingerprints) == 0 {
+		return nil, nil
+	}
+	return q.db.ListRepoFingerprints(ctx, dbgen.ListRepoFingerprintsParams{
+		RepoID:  repoID,
+		Column2: fingerprints,
+	})
+}

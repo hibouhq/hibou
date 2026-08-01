@@ -934,6 +934,15 @@ type Client struct {
 	UpdatedAt         time.Time       `json:"updated_at"`
 }
 
+type ComparePatchCache struct {
+	RepoID    uuid.UUID       `json:"repo_id"`
+	BaseSha   string          `json:"base_sha"`
+	HeadSha   string          `json:"head_sha"`
+	Truncated bool            `json:"truncated"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
 type Component struct {
 	ID        uuid.UUID `json:"id"`
 	Purl      string    `json:"purl"`
