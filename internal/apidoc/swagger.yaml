@@ -122,6 +122,34 @@ definitions:
       tool:
         type: string
     type: object
+  server.batchAcceptanceRequest:
+    properties:
+      expires_at:
+        type: string
+      fingerprints:
+        description: |-
+          Fingerprints identify the findings; decisions are fingerprint-keyed so they
+          survive snapshot churn, same as the single-finding endpoint.
+        items:
+          type: string
+        type: array
+      reason:
+        type: string
+      status:
+        type: string
+    type: object
+  server.batchAcceptanceResponse:
+    properties:
+      applied:
+        type: integer
+      skipped:
+        description: |-
+          Skipped counts fingerprints that do not belong to this repository, so a
+          partial apply is never silent.
+        type: integer
+      status:
+        type: string
+    type: object
   server.clientImpactResponse:
     properties:
       vulnerabilities:
@@ -190,6 +218,12 @@ definitions:
         type: integer
       hits:
         type: integer
+      is_new:
+        description: |-
+          IsNew marks a line this comparison changed (ADR-019), present only when
+          the request supplies ?base=<ref>. Omitted otherwise, so the plain snapshot
+          view is byte-identical to before.
+        type: boolean
       number:
         type: integer
     type: object
@@ -410,6 +444,20 @@ definitions:
         description: 'Status: "accepted" | "false_positive" to suppress, "open" to
           unaccept.'
         type: string
+    type: object
+  server.findingFingerprintsResponse:
+    properties:
+      fingerprints:
+        items:
+          type: string
+        type: array
+      total:
+        type: integer
+      truncated:
+        description: |-
+          Truncated is true when the filter matched more than the cap, so the UI can
+          say "first 500 of N" instead of implying it selected everything.
+        type: boolean
     type: object
   server.healthResponse:
     properties:
@@ -3485,6 +3533,94 @@ paths:
       security:
       - BearerAuth: []
       summary: Accept or reopen a finding
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/acceptance:
+    put:
+      consumes:
+      - application/json
+      description: Applies one decision and one reason to many findings by fingerprint.
+        Fingerprints outside the repository are skipped and reported. The PR gate
+        recomputes once at the end.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Batch decision
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.batchAcceptanceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.batchAcceptanceResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Triage many findings at once
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/fingerprints:
+    get:
+      description: Returns the fingerprints of findings matching the same filters
+        as the list endpoint, for "select all matching" batch triage. Capped at 500
+        to match the batch-triage limit.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.findingFingerprintsResponse'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Fingerprints matching the current finding filter
       tags:
       - vulnerabilities
   /orgs/{provider}/{slug}/repos/sync:

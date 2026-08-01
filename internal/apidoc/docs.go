@@ -3812,6 +3812,144 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/acceptance": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Applies one decision and one reason to many findings by fingerprint. Fingerprints outside the repository are skipped and reported. The PR gate recomputes once at the end.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Triage many findings at once",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Batch decision",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.batchAcceptanceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.batchAcceptanceResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/fingerprints": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the fingerprints of findings matching the same filters as the list endpoint, for \"select all matching\" batch triage. Capped at 500 to match the batch-triage limit.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Fingerprints matching the current finding filter",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.findingFingerprintsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/acceptance": {
             "put": {
                 "security": [
@@ -5092,6 +5230,42 @@ const docTemplate = `{
                 }
             }
         },
+        "server.batchAcceptanceRequest": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "fingerprints": {
+                    "description": "Fingerprints identify the findings; decisions are fingerprint-keyed so they\nsurvive snapshot churn, same as the single-finding endpoint.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.batchAcceptanceResponse": {
+            "type": "object",
+            "properties": {
+                "applied": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "description": "Skipped counts fingerprints that do not belong to this repository, so a\npartial apply is never silent.",
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "server.clientImpactResponse": {
             "type": "object",
             "properties": {
@@ -5191,6 +5365,10 @@ const docTemplate = `{
                 },
                 "hits": {
                     "type": "integer"
+                },
+                "is_new": {
+                    "description": "IsNew marks a line this comparison changed (ADR-019), present only when\nthe request supplies ?base=\u003cref\u003e. Omitted otherwise, so the plain snapshot\nview is byte-identical to before.",
+                    "type": "boolean"
                 },
                 "number": {
                     "type": "integer"
@@ -5526,6 +5704,24 @@ const docTemplate = `{
                 "status": {
                     "description": "Status: \"accepted\" | \"false_positive\" to suppress, \"open\" to unaccept.",
                     "type": "string"
+                }
+            }
+        },
+        "server.findingFingerprintsResponse": {
+            "type": "object",
+            "properties": {
+                "fingerprints": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "description": "Truncated is true when the filter matched more than the cap, so the UI can\nsay \"first 500 of N\" instead of implying it selected everything.",
+                    "type": "boolean"
                 }
             }
         },
