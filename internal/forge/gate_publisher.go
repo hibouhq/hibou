@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,8 +309,90 @@ func (a *GatePublisher) evaluateAndPublish(ctx context.Context, annotation *gate
 	enforcement := a.loadEnforcementMode(ctx, annotation)
 	status := gateForgeStatus(gateResult, deltaResult, enforcement)
 	a.publishGate(ctx, annotation, gateResult, status)
+	a.upsertGateComment(ctx, annotation, gateResult, deltaResult, status)
 	a.publishGateEvent(ctx, status.eventType, annotation.repo, annotation.snapshot, gateResult)
 	a.broadcastGateUpdate(ctx, annotation, gateResult, status)
+}
+
+// gateCommentMarker identifies Hibou's sticky PR comment so re-runs edit the
+// same one instead of posting a new comment each time.
+const gateCommentMarker = "<!-- hibou:quality-gate -->"
+
+// CommentProvider is implemented by forges that can maintain a single sticky PR
+// comment. Providers without it skip the comment.
+type CommentProvider interface {
+	SupportsPRComments() bool
+	UpsertPRComment(ctx context.Context, owner, repo string, prNumber int, marker, body string) error
+}
+
+func (a *GatePublisher) upsertGateComment(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, deltaResult *delta.DeltaResult, status gateStatus) {
+	provider, ok := annotation.provider.(CommentProvider)
+	if !ok || !provider.SupportsPRComments() {
+		return
+	}
+	prNumber, err := strconv.Atoi(prNumberFromRefName(annotation.prRef.Name))
+	if err != nil {
+		return
+	}
+	body := a.buildGateCommentBody(annotation, gateResult, deltaResult, status)
+	if err := provider.UpsertPRComment(ctx, annotation.owner, annotation.name, prNumber, gateCommentMarker, body); err != nil {
+		a.log.Warn().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("upsert PR quality-gate comment")
+	}
+}
+
+func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult *delta.GateResult, deltaResult *delta.DeltaResult, status gateStatus) string {
+	verdict := "✅ Quality gate passed"
+	switch {
+	case status.state == "failure":
+		verdict = "❌ Quality gate failed"
+	case status.conclusion == "neutral":
+		verdict = "⚠️ Quality gate — advisory"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "### Hibou · %s\n\n", verdict)
+
+	if reasons := gateReasons(gateResult); len(reasons) > 0 {
+		for _, reason := range reasons {
+			fmt.Fprintf(&b, "- %s\n", reason)
+		}
+		b.WriteString("\n")
+	}
+
+	if deltaResult != nil {
+		fmt.Fprintf(&b, "| New findings | Resolved | Unchanged |\n|---|---|---|\n| %d | %d | %d |\n\n",
+			len(deltaResult.New), len(deltaResult.Resolved), deltaResult.Unchanged)
+	}
+
+	links := make([]string, 0, 2)
+	if prURL := a.gateTargetURL(annotation); prURL != "" {
+		links = append(links, fmt.Sprintf("[Review coverage & diff on Hibou](%s)", prURL))
+	}
+	if repoURL := a.repoOverviewURL(annotation); repoURL != "" {
+		links = append(links, fmt.Sprintf("[Open repository in Hibou](%s)", repoURL))
+	}
+	if len(links) > 0 {
+		b.WriteString(strings.Join(links, " · "))
+		b.WriteString("\n")
+	}
+
+	fmt.Fprintf(&b, "\n<sub>commit %s · updated %s</sub>\n",
+		shortCommit(annotation.snapshot.CommitSha), time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	return b.String()
+}
+
+func (a *GatePublisher) repoOverviewURL(annotation *gateContext) string {
+	if a.baseURL == "" || annotation.orgSlug == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/orgs/%s/%s/repos/%s", a.baseURL, annotation.repo.Provider, annotation.orgSlug, annotation.repo.Slug)
+}
+
+func shortCommit(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // broadcastGateUpdate pushes a live PR-gate refresh to subscribed browsers over
@@ -733,7 +816,7 @@ func (a *GatePublisher) pushGateToForge(ctx context.Context, annotation *gateCon
 			HeadSHA:     annotation.snapshot.CommitSha,
 			Conclusion:  status.conclusion,
 			Title:       status.title,
-			Summary:     status.summary,
+			Summary:     summaryWithLink(status.summary, targetURL),
 			DetailsURL:  targetURL,
 			Annotations: status.annotations,
 		})
@@ -754,6 +837,13 @@ func (a *GatePublisher) pushGateToForge(ctx context.Context, annotation *gateCon
 	}
 
 	return targetURL, externalID, syncErr
+}
+
+func summaryWithLink(summary, targetURL string) string {
+	if targetURL == "" {
+		return summary
+	}
+	return summary + fmt.Sprintf("\n\n[Review the coverage & diff on Hibou](%s)", targetURL)
 }
 
 func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, status gateStatus, targetURL, externalID string, syncErr error) {

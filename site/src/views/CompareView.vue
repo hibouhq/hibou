@@ -1409,13 +1409,18 @@ const headSnapshotOpen = ref(false)
 const activeTab = ref<TabId>('overview')
 const expandedPatchFiles = ref<Set<string>>(new Set())
 
+// Auto-expand files with uncovered lines so the gaps are visible at a glance —
+// but cap it. A large PR would otherwise mount every diff at once and jank the
+// page; past the cap we start collapsed and let the reviewer open on demand.
+const MAX_AUTO_EXPANDED_FILES = 10
 watch(
   () => comparison.value?.patch_coverage,
   (patch) => {
+    const withGaps = (patch?.files ?? [])
+      .filter((file) => file.hunks && (file.uncovered_line_numbers?.length ?? 0) > 0)
+      .map((file) => file.file_path)
     expandedPatchFiles.value = new Set(
-      (patch?.files ?? [])
-        .filter((file) => file.hunks && (file.uncovered_line_numbers?.length ?? 0) > 0)
-        .map((file) => file.file_path),
+      withGaps.length > MAX_AUTO_EXPANDED_FILES ? [] : withGaps,
     )
   },
 )

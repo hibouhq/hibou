@@ -77,67 +77,81 @@
         </table>
       </div>
 
-      <div
-        v-else
-        class="overflow-x-auto"
-      >
-        <table class="w-full table-fixed border-collapse font-mono text-xs leading-relaxed">
-          <colgroup>
-            <col class="w-10">
-            <col class="w-1/2">
-            <col class="w-10">
-            <col>
-          </colgroup>
-          <tbody>
-            <template
-              v-for="(row, index) in splitRows"
-              :key="index"
-            >
-              <tr v-if="row.kind === 'hunk'">
-                <td
-                  colspan="4"
-                  class="bg-surface-overlay/80 px-2 py-0.5 text-gray-500"
+      <template v-else>
+        <div class="flex">
+          <div class="min-w-0 flex-1 overflow-x-auto">
+            <table class="w-full border-collapse font-mono text-xs leading-relaxed">
+              <tbody>
+                <template
+                  v-for="(row, index) in splitRows"
+                  :key="index"
                 >
-                  {{ row.header }}
-                </td>
-              </tr>
-              <tr v-else>
-                <td class="select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
-                  {{ row.left?.oldLine ?? '' }}
-                </td>
-                <td
-                  class="whitespace-pre border-r border-surface-border-subtle px-2 align-top"
-                  :class="splitCellClass(row.left, 'left')"
+                  <tr v-if="row.kind === 'hunk'">
+                    <td
+                      colspan="2"
+                      class="whitespace-nowrap bg-surface-overlay/80 px-2 py-0.5 text-gray-500"
+                    >
+                      {{ row.header }}
+                    </td>
+                  </tr>
+                  <tr v-else>
+                    <td class="select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
+                      {{ row.left?.oldLine ?? '' }}
+                    </td>
+                    <td
+                      class="whitespace-pre px-2 align-top"
+                      :class="splitCellClass(row.left, 'left')"
+                    >
+                      <span :class="row.left ? contentClass(row.left) : ''">{{ row.left ? (row.left.content || ' ') : '' }}</span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <div class="min-w-0 flex-1 overflow-x-auto border-l border-surface-border-subtle">
+            <table class="w-full border-collapse font-mono text-xs leading-relaxed">
+              <tbody>
+                <template
+                  v-for="(row, index) in splitRows"
+                  :key="index"
                 >
-                  <span :class="row.left ? contentClass(row.left) : ''">{{ row.left ? (row.left.content || ' ') : '' }}</span>
-                </td>
-                <td class="select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
-                  {{ row.right?.newLine ?? '' }}
-                </td>
-                <td
-                  class="whitespace-pre px-2 align-top"
-                  :class="splitCellClass(row.right, 'right')"
-                >
-                  <span :class="row.right ? contentClass(row.right) : ''">{{ row.right ? (row.right.content || ' ') : '' }}</span>
-                  <span
-                    v-if="row.right && badgeFor(row.right)"
-                    class="ml-2 rounded px-1 text-[10px] uppercase tracking-wide"
-                    :class="badgeFor(row.right)!.className"
-                  >{{ badgeFor(row.right)!.text }}</span>
-                </td>
-              </tr>
-            </template>
-            <tr v-if="hiddenRowCount > 0">
-              <td
-                colspan="4"
-                class="border-t border-surface-border-subtle bg-surface-overlay/60 px-3 py-1.5 text-[11px] text-gray-500"
-              >
-                {{ hiddenRowCount }} more diff {{ hiddenRowCount === 1 ? 'line' : 'lines' }} not shown
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                  <tr v-if="row.kind === 'hunk'">
+                    <td
+                      colspan="2"
+                      class="whitespace-nowrap bg-surface-overlay/80 px-2 py-0.5 text-gray-500"
+                    >
+                      {{ row.header }}
+                    </td>
+                  </tr>
+                  <tr v-else>
+                    <td class="select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
+                      {{ row.right?.newLine ?? '' }}
+                    </td>
+                    <td
+                      class="whitespace-pre px-2 align-top"
+                      :class="splitCellClass(row.right, 'right')"
+                    >
+                      <span :class="row.right ? contentClass(row.right) : ''">{{ row.right ? (row.right.content || ' ') : '' }}</span>
+                      <span
+                        v-if="row.right && badgeFor(row.right)"
+                        class="ml-2 rounded px-1 text-[10px] uppercase tracking-wide"
+                        :class="badgeFor(row.right)!.className"
+                      >{{ badgeFor(row.right)!.text }}</span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div
+          v-if="hiddenRowCount > 0"
+          class="border-t border-surface-border-subtle bg-surface-overlay/60 px-3 py-1.5 text-[11px] text-gray-500"
+        >
+          {{ hiddenRowCount }} more diff {{ hiddenRowCount === 1 ? 'line' : 'lines' }} not shown
+        </div>
+      </template>
     </template>
   </div>
 </template>

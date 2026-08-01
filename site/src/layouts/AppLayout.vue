@@ -169,20 +169,16 @@
         </div>
 
         <div class="ml-auto hidden sm:block">
-          <label class="flex w-56 items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-sm text-gray-300 transition focus-within:w-72 focus-within:border-accent/50 focus-within:text-white lg:w-64">
+          <button
+            type="button"
+            class="flex w-56 items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-sm text-gray-400 transition hover:border-accent/50 hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-60 lg:w-64"
+            :disabled="!searchOrgSlug || !searchOrgProvider"
+            @click="searchPaletteOpen = true"
+          >
             <Search class="h-4 w-4 shrink-0 text-gray-500" />
-            <input
-              ref="searchInputRef"
-              v-model="searchDraft"
-              type="search"
-              :disabled="!searchOrgSlug || !searchOrgProvider"
-              :placeholder="searchOrgSlug ? 'Search…' : 'Select an org'"
-              class="w-full min-w-0 bg-transparent text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none disabled:cursor-not-allowed"
-              @input="handleSearchInput"
-              @keydown.enter.prevent="submitSearch(true)"
-            >
+            <span class="min-w-0 flex-1 truncate text-left">{{ searchOrgSlug ? 'Search…' : 'Select an org' }}</span>
             <span class="hidden shrink-0 rounded border border-surface-border-subtle px-1 text-[10px] text-gray-500 lg:inline">⌘K</span>
-          </label>
+          </button>
         </div>
 
         <div class="ml-auto flex items-center gap-3">
@@ -315,6 +311,14 @@
       </div>
     </header>
 
+    <SearchPalette
+      v-if="searchOrgSlug && searchOrgProvider"
+      :open="searchPaletteOpen"
+      :provider="searchOrgProvider"
+      :slug="searchOrgSlug"
+      @close="searchPaletteOpen = false"
+    />
+
     <!-- Hidden, context-scoped navigation drawer -->
     <Transition
       enter-active-class="transition-opacity duration-150"
@@ -427,6 +431,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { api, type Repository, type ServerVersion } from '@/api/client'
 import InstallCliModal from '@/components/InstallCliModal.vue'
 import NotificationPanel from '@/components/NotificationPanel.vue'
+import SearchPalette from '@/components/SearchPalette.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useOrgStore } from '@/stores/org'
@@ -477,9 +482,7 @@ async function loadCurrentRepoMeta() {
   }
 }
 const repoSearch = ref('')
-const searchInputRef = ref<HTMLInputElement | null>(null)
-const searchDraft = ref('')
-let searchDebounce: number | undefined
+const searchPaletteOpen = ref(false)
 
 const currentOrgSlug = computed(() => {
   if (typeof route.params.slug === 'string') {
@@ -636,9 +639,6 @@ function openInstallCli() {
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleDocumentClick)
   window.removeEventListener('keydown', handleGlobalKeydown)
-  if (searchDebounce) {
-    window.clearTimeout(searchDebounce)
-  }
   notificationsStore.disconnect()
 })
 
@@ -653,12 +653,6 @@ watch(
     repoSearch.value = ''
     isRepoMenuOpen.value = false
     void loadCurrentRepoMeta()
-
-    if (typeof route.query.q === 'string') {
-      searchDraft.value = route.query.q
-    } else if (route.name !== 'search') {
-      searchDraft.value = ''
-    }
   },
   { immediate: true },
 )
@@ -753,46 +747,10 @@ async function handleLogout() {
   await router.push('/login')
 }
 
-function handleSearchInput() {
-  if (searchDebounce) {
-    window.clearTimeout(searchDebounce)
-  }
-
-  const trimmed = searchDraft.value.trim()
-  if (trimmed.length < 2) {
-    return
-  }
-
-  searchDebounce = window.setTimeout(() => {
-    void submitSearch(false)
-  }, 300)
-}
-
-async function submitSearch(push = false) {
-  const query = searchDraft.value.trim()
-  if (query.length < 2 || !searchOrgSlug.value || !searchOrgProvider.value) {
-    return
-  }
-
-  const location = {
-    name: 'search',
-    params: { provider: searchOrgProvider.value, slug: searchOrgSlug.value },
-    query: { q: query },
-  }
-
-  if (push || route.name !== 'search') {
-    await router.push(location)
-    return
-  }
-
-  await router.replace(location)
-}
-
 function handleGlobalKeydown(event: KeyboardEvent) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault()
-    searchInputRef.value?.focus()
-    searchInputRef.value?.select()
+    searchPaletteOpen.value = true
   }
   if (event.key === 'Escape' && isDrawerOpen.value) {
     isDrawerOpen.value = false

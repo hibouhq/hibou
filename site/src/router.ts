@@ -82,7 +82,14 @@ const router = createRouter({
         },
         { path: 'orgs/:provider/:slug/teams', name: 'teams', component: () => import('@/views/TeamsView.vue') },
         { path: 'orgs/:provider/:slug/audit', name: 'audit', component: () => import('@/views/AuditLogsView.vue') },
-        { path: 'settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+        {
+          path: 'settings',
+          component: () => import('@/views/SettingsView.vue'),
+          children: [
+            { path: '', name: 'settings', redirect: { name: 'settings-api-keys' } },
+            { path: 'api-keys', name: 'settings-api-keys', component: () => import('@/views/settings/ApiKeysSettings.vue') },
+          ],
+        },
         { path: '/:pathMatch(.*)*', redirect: '/orgs' },
       ],
     },
