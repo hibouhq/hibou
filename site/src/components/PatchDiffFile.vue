@@ -8,10 +8,10 @@
     </div>
     <template v-else>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-surface-border-subtle bg-surface-overlay/40 px-3 py-1.5 text-[10px] uppercase tracking-wide text-gray-500">
-        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-emerald-500/50" /> covered</span>
-        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-red-500/50" /> uncovered</span>
-        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-blue-500/70" /> new covered</span>
-        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-orange-500/70" /> new uncovered</span>
+        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-blue-500/60" /> covered</span>
+        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-orange-500/60" /> uncovered</span>
+        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-emerald-500/70" /> new covered</span>
+        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-red-500/70" /> new uncovered</span>
         <div class="ml-auto flex items-center gap-2 normal-case tracking-normal">
           <span
             v-if="splitSuppressed"
@@ -317,13 +317,13 @@ function splitCellClass(row: DiffRow | null, side: 'left' | 'right'): string {
   const coverage = side === 'left' ? row.leftCoverage : row.coverage
   switch (coverage) {
     case 'gained':
-      return 'bg-blue-500/30'
+      return 'bg-emerald-500/30'
     case 'lost':
-      return 'bg-orange-500/30'
+      return 'bg-red-500/30'
     case 'covered':
-      return 'bg-emerald-500/15'
+      return 'bg-blue-500/15'
     case 'uncovered':
-      return 'bg-red-500/15'
+      return 'bg-orange-500/15'
     default:
       break
   }
@@ -336,13 +336,13 @@ function rowClass(row: DiffRow): string {
   if (row.kind === 'hunk') return 'bg-surface-overlay/80 text-gray-500'
   switch (row.coverage) {
     case 'gained':
-      return 'bg-blue-500/30 shadow-[inset_3px_0_0_0_theme(colors.blue.400)]'
+      return 'bg-emerald-500/30 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
     case 'lost':
-      return 'bg-orange-500/30 shadow-[inset_3px_0_0_0_theme(colors.orange.400)]'
+      return 'bg-red-500/30 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
     case 'covered':
-      return 'bg-emerald-500/15 shadow-[inset_3px_0_0_0_theme(colors.emerald.500)]'
+      return 'bg-blue-500/15 shadow-[inset_3px_0_0_0_theme(colors.blue.400)]'
     case 'uncovered':
-      return 'bg-red-500/15 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
+      return 'bg-orange-500/15 shadow-[inset_3px_0_0_0_theme(colors.orange.400)]'
     default:
       break
   }
@@ -355,13 +355,13 @@ function contentClass(row: DiffRow): string {
   if (row.kind === 'hunk') return 'text-gray-500'
   switch (row.coverage) {
     case 'gained':
-      return 'text-blue-100'
+      return 'text-emerald-100'
     case 'lost':
-      return 'text-orange-100'
-    case 'covered':
-      return 'text-emerald-200/90'
-    case 'uncovered':
       return 'text-red-200/90'
+    case 'covered':
+      return 'text-blue-200/90'
+    case 'uncovered':
+      return 'text-orange-100'
     default:
       break
   }
@@ -373,11 +373,11 @@ function contentClass(row: DiffRow): string {
 function badgeFor(row: DiffRow): { text: string; className: string } | null {
   if (row.coverage === 'lost') {
     return row.kind === 'add'
-      ? { text: 'new · uncovered', className: 'bg-orange-500/25 text-orange-300' }
-      : { text: 'lost coverage', className: 'bg-orange-500/25 text-orange-300' }
+      ? { text: 'new · uncovered', className: 'bg-red-500/25 text-red-300' }
+      : { text: 'lost coverage', className: 'bg-red-500/25 text-red-300' }
   }
   if (row.coverage === 'gained' && row.kind === 'context') {
-    return { text: 'gained coverage', className: 'bg-blue-500/25 text-blue-300' }
+    return { text: 'gained coverage', className: 'bg-emerald-500/25 text-emerald-300' }
   }
   return null
 }

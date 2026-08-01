@@ -28,15 +28,21 @@
           </div>
           <div class="flex items-center gap-3">
             <span class="flex items-center gap-1.5 text-[11px] text-gray-500">
-              <span class="h-2.5 w-2.5 rounded-sm bg-emerald-500/60" /> covered
+              <span
+                class="h-2.5 w-2.5 rounded-sm"
+                :class="hasNewCode ? 'bg-blue-500/60' : 'bg-emerald-500/60'"
+              /> covered
               <span
                 class="partial-coverage-swatch ml-2 h-2.5 w-2.5 rounded-sm"
                 title="Line ran, but some branches never took both outcomes"
               /> partial
-              <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-red-500/60" /> uncovered
+              <span
+                class="ml-2 h-2.5 w-2.5 rounded-sm"
+                :class="hasNewCode ? 'bg-orange-500/60' : 'bg-red-500/60'"
+              /> uncovered
               <template v-if="hasNewCode">
-                <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-blue-500/70" /> new covered
-                <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-orange-500/70" /> new uncovered
+                <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-emerald-500/70" /> new covered
+                <span class="ml-2 h-2.5 w-2.5 rounded-sm bg-red-500/70" /> new uncovered
               </template>
             </span>
             <a
@@ -75,36 +81,59 @@
         </div>
         <div
           v-else-if="source"
-          class="flex-1 overflow-auto"
+          class="relative flex flex-1 overflow-hidden"
         >
-          <table class="w-full border-collapse font-mono text-xs leading-relaxed">
-            <tbody>
-              <tr
-                v-for="row in rows"
-                :key="row.number"
-                :class="rowClass(row)"
-                :title="rowTitle(row)"
-              >
-                <td class="w-12 select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
-                  {{ row.number }}
-                </td>
-                <td
-                  class="w-16 select-none whitespace-nowrap border-r border-surface-border-subtle px-2 text-right align-top text-[11px] tabular-nums"
-                  :class="hitsClass(row)"
+          <div
+            ref="scrollEl"
+            class="flex-1 overflow-auto"
+          >
+            <table class="w-full border-collapse font-mono text-xs leading-relaxed">
+              <tbody>
+                <tr
+                  v-for="row in rows"
+                  :key="row.number"
+                  :data-line="row.number"
+                  :class="rowClass(row)"
+                  :title="rowTitle(row)"
                 >
-                  <template v-if="row.hits !== null">
-                    {{ row.hits }}×<span
-                      v-if="isPartial(row)"
-                      class="ml-1 text-amber-300/90"
-                    >{{ row.branchesCovered }}/{{ row.branchesValid }}</span>
-                  </template>
-                </td>
-                <td class="whitespace-pre px-3 align-top text-gray-200">
-                  {{ row.text || ' ' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                  <td class="w-12 select-none border-r border-surface-border-subtle px-2 text-right align-top text-[11px] text-gray-600 tabular-nums">
+                    {{ row.number }}
+                  </td>
+                  <td
+                    class="w-16 select-none whitespace-nowrap border-r border-surface-border-subtle px-2 text-right align-top text-[11px] tabular-nums"
+                    :class="hitsClass(row)"
+                  >
+                    <template v-if="row.hits !== null">
+                      {{ row.hits }}×<span
+                        v-if="isPartial(row)"
+                        class="ml-1 text-amber-300/90"
+                      >{{ row.branchesCovered }}/{{ row.branchesValid }}</span>
+                    </template>
+                  </td>
+                  <td class="whitespace-pre px-3 align-top text-gray-200">
+                    {{ row.text || ' ' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div
+            v-if="markers.length"
+            class="relative w-2.5 shrink-0 border-l border-surface-border-subtle bg-surface-overlay/20"
+          >
+            <button
+              v-for="m in markers"
+              :key="m.number"
+              type="button"
+              tabindex="-1"
+              class="absolute right-0 h-[3px] w-full rounded-[1px] opacity-80 transition hover:h-1.5 hover:opacity-100"
+              :class="m.class"
+              :style="{ top: `${m.top}%` }"
+              :title="m.title"
+              :aria-label="m.title"
+              @click="scrollToLine(m.number)"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -146,6 +175,7 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const loading = ref(true)
 const error = ref('')
 const source = ref<CoverageSource | null>(null)
+const scrollEl = ref<HTMLElement | null>(null)
 
 const rows = computed<SourceRow[]>(() => {
   if (!source.value) return []
@@ -187,25 +217,82 @@ async function load() {
   }
 }
 
+// ─── Coverage minimap ─────────────────────────────────────────────────────────
+// A tick per "line of interest" (gap, partial branch, or new code), positioned
+// by the line's fraction of the file so the strip maps 1:1 to the source. Clean
+// covered/unchanged lines get no tick, keeping the strip a to-do list, not noise.
+interface Marker {
+  number: number
+  top: number
+  class: string
+  title: string
+}
+
+const markers = computed<Marker[]>(() => {
+  const total = rows.value.length
+  if (!total) return []
+  const out: Marker[] = []
+  for (const row of rows.value) {
+    const cls = markerColor(row)
+    if (!cls) continue
+    out.push({
+      number: row.number,
+      top: ((row.number - 1) / total) * 100,
+      class: cls,
+      title: markerTitle(row),
+    })
+  }
+  return out
+})
+
+function markerColor(row: SourceRow): string {
+  if (row.hits === null) return ''
+  if (isPartial(row)) return 'bg-amber-400/80'
+  if (row.isNew) return row.hits > 0 ? 'bg-emerald-400/80' : 'bg-red-500/80'
+  if (row.hits > 0) return '' // covered & unchanged: nothing to navigate to
+  return hasNewCode.value ? 'bg-orange-400/80' : 'bg-red-500/80'
+}
+
+function markerTitle(row: SourceRow): string {
+  let state = ''
+  if (isPartial(row)) state = `partial — ${row.branchesCovered}/${row.branchesValid} branches`
+  else if (row.isNew) state = row.hits && row.hits > 0 ? 'new, covered' : 'new, not covered'
+  else if (row.hits === 0) state = 'not covered'
+  return state ? `Line ${row.number} — ${state}` : `Line ${row.number}`
+}
+
+function scrollToLine(number: number): void {
+  const el = scrollEl.value?.querySelector<HTMLElement>(`[data-line="${number}"]`)
+  el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
 function rowClass(row: SourceRow): string {
   if (row.hits === null) return ''
   if (isPartial(row)) return 'partial-coverage-row shadow-[inset_3px_0_0_0_theme(colors.amber.400)]'
-  // New code is what a reviewer is accountable for, so it reads loud (blue /
-  // orange) while unchanged code stays muted green / red.
+  // New code is the pass/fail a reviewer owns, so it reads loud: GREEN when the
+  // change is covered, RED when it is not (the regression to fix). Unchanged
+  // code stays muted: blue when covered, orange when uncovered in a comparison
+  // (pre-existing gap). With no new-code lens, plain green / red apply.
   if (row.isNew) {
     return row.hits > 0
-      ? 'bg-blue-500/30 shadow-[inset_3px_0_0_0_theme(colors.blue.400)]'
-      : 'bg-orange-500/30 shadow-[inset_3px_0_0_0_theme(colors.orange.400)]'
+      ? 'bg-emerald-500/30 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
+      : 'bg-red-500/30 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
   }
-  if (row.hits > 0) return 'bg-emerald-500/15 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
+  if (row.hits > 0) {
+    return hasNewCode.value
+      ? 'bg-blue-500/15 shadow-[inset_3px_0_0_0_theme(colors.blue.400)]'
+      : 'bg-emerald-500/15 shadow-[inset_3px_0_0_0_theme(colors.emerald.400)]'
+  }
+  if (hasNewCode.value) return 'bg-orange-500/15 shadow-[inset_3px_0_0_0_theme(colors.orange.400)]'
   return 'bg-red-500/15 shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
 }
 
 function hitsClass(row: SourceRow): string {
   if (row.hits === null) return 'text-gray-700'
   if (isPartial(row)) return 'text-amber-300'
-  if (row.isNew) return row.hits > 0 ? 'text-blue-200' : 'text-orange-200'
-  return row.hits > 0 ? 'text-emerald-300' : 'text-red-300'
+  if (row.isNew) return row.hits > 0 ? 'text-emerald-200' : 'text-red-300'
+  if (row.hits > 0) return hasNewCode.value ? 'text-blue-200' : 'text-emerald-300'
+  return hasNewCode.value ? 'text-orange-200' : 'text-red-300'
 }
 
 // Explanation for a partially covered line: the line ran, but a condition never took both outcomes.
