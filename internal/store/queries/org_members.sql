@@ -33,6 +33,11 @@ SELECT role
 FROM org_members
 WHERE org_id = $1 AND user_id = $2;
 
+-- name: ListOrgAdminIDs :many
+SELECT user_id
+FROM org_members
+WHERE org_id = $1 AND role = 'admin';
+
 -- name: UpsertForgeOrgMember :exec
 INSERT INTO org_members (org_id, user_id, role, source, synced_at)
 VALUES ($1, $2, $3, 'forge', NOW())

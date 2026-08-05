@@ -84,6 +84,9 @@ jobs:
           - name: Go coverage
             uses: ./.github/actions/devcontainer-ci
             with:
+              # NOTE: no Postgres here by explicit decision (runner resources are
+              # tight), so the DB-backed tests skip in CI. They must be run
+              # locally before shipping: `docker compose up -d postgres && make test`.
               run-cmd: make coverage
 
           - name: Security suite

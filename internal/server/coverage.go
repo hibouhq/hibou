@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/comparison"
 	coverageparser "github.com/hibouhq/hibou/internal/coverage"
 	"github.com/hibouhq/hibou/internal/store"
@@ -80,8 +81,11 @@ type coverageFileResponse struct {
 }
 
 func (s *Server) handleGetCoverage(w http.ResponseWriter, r *http.Request) {
-	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
+		return
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapCoverage, apitoken.AccessRead, org.Slug, repo.Slug) {
 		return
 	}
 

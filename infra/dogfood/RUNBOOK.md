@@ -215,7 +215,9 @@ spec:
 
    With `argocd-image-updater.argoproj.io/write-back-method: argocd`, Image Updater patches the live `Application` resource instead of committing a new `hibou.image.tag` into `infra/dogfood/values-dogfood.yaml` on `main`.
 
-This removes the old Argo CD password-injection blocker without committing the password: bootstrap creates `hibou-db-url` once, then Argo CD can render and sync from Git plus that pre-created secret. Tradeoff: dogfood PostgreSQL persistence is disabled, so data survives normal syncs and ordinary container restarts in the same pod, but is lost when the PostgreSQL pod is deleted and recreated, evicted, or rescheduled/replaced. That makes the database ephemeral, not guaranteed to reset on every Argo CD sync.
+This removes the old Argo CD password-injection blocker without committing the password: bootstrap creates `hibou-db-url` once, then Argo CD can render and sync from Git plus that pre-created secret. Dogfood is intended to run with persistent PostgreSQL storage enabled; durability still depends on the selected Kubernetes `StorageClass`.
+
+Important: set `postgresql.persistence.storageClass` and `seaweedfs.storage.storageClass` in `infra/dogfood/values-dogfood.yaml` to a retained CSI/block-backed class for your cluster. Leaving them empty uses the cluster default, which is often node-local on single-node k3s and will not survive an instance rebuild.
 
 ## Phase 5: GitHub Login and App Setup
 
@@ -355,9 +357,35 @@ git push origin main
 3. Confirm repository pages show imported findings and associated repo metadata.
 4. Confirm HTTPS works without browser warnings and the ingress presents a Let's Encrypt certificate.
 
+## Scaling: API-only + worker split
+
+One binary, three roles, selected purely by config — no separate image.
+
+- **Combined (dogfood today)**: defaults. Every background loop runs on the
+  request-serving pod. Right for one replica.
+- **Split**: set `hibou.background.*: false` (API pods stop running loops) and
+  `hibou.worker.enabled: true` (a dedicated deployment runs them; its env
+  overrides the configmap per loop via `hibou.worker.background.*`).
+- Work is claimed from Postgres with `FOR UPDATE SKIP LOCKED` + leases, so any
+  number of replicas compete safely; scale workers by replicas, not knobs.
+- **Secret scanning is the exception to the defaults**: its loop clones
+  repositories, so it is off everywhere unless opted in
+  (`hibou.background.secretScan` or `hibou.worker.background.secretScan`) and
+  needs a writable scratch volume (`hibou.scratch` / `hibou.worker.scratch`) —
+  the root filesystem is read-only. Dogfood opts in via `values-dogfood.yaml`.
+
 ## Operational Notes
 
 - Release image tag for this deployment: `ghcr.io/hibouhq/hibou:0.1.0`
 - k3s ingress class expected by this setup: `traefik`
 - The public API callback path is `/api/v1/auth/callback`
 - The public webhook path is `/api/v1/webhooks/github`
+- **At least one replica must run the retention loop**
+  (`HIBOU_BACKGROUND_RETENTION_ENABLED=true`, the default): besides snapshot
+  retention it maintains the monthly `audit_logs` partitions. Writes never
+  fail without it (a DEFAULT partition catches strays), but partitions stop
+  being created and expired.
+- `HIBOU_AUDIT_RETENTION_MONTHS` (default `0` = keep forever) sets the
+  audit-log hot window; whole months age out as `DROP PARTITION`.
+- Audit-write failures are logged as `audit log write failed` warnings —
+  worth an alert, since the action itself still succeeds.

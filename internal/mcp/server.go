@@ -10,6 +10,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/apitoken"
+	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -51,13 +53,13 @@ func New(st MCPStore, deltaSvc *delta.Service, log zerolog.Logger, serverVersion
 	mcpSrv := server.NewMCPServer("hibou", serverVersion)
 
 	s := &service{store: st, delta: deltaSvc, log: log.With().Str("component", "mcp").Logger()}
-	mcpSrv.AddTools(
-		server.ServerTool{Tool: listVulnerabilitiesTool, Handler: s.handleListVulnerabilities},
-		server.ServerTool{Tool: getDependencyTreeTool, Handler: s.handleGetDependencyTree},
-		server.ServerTool{Tool: impactAnalysisTool, Handler: s.handleImpactAnalysis},
-		server.ServerTool{Tool: compareRefsTool, Handler: s.handleCompareRefs},
-		server.ServerTool{Tool: searchComponentsTool, Handler: s.handleSearchComponents},
-	)
+	registerScopedTools(mcpSrv, []scopedTool{
+		{listVulnerabilitiesTool, apitoken.CapVulnerabilities, apitoken.AccessRead, s.handleListVulnerabilities},
+		{getDependencyTreeTool, apitoken.CapComponents, apitoken.AccessRead, s.handleGetDependencyTree},
+		{impactAnalysisTool, apitoken.CapVulnerabilities, apitoken.AccessRead, s.handleImpactAnalysis},
+		{compareRefsTool, apitoken.CapVulnerabilities, apitoken.AccessRead, s.handleCompareRefs},
+		{searchComponentsTool, apitoken.CapComponents, apitoken.AccessRead, s.handleSearchComponents},
+	})
 
 	return mcpSrv
 }
@@ -95,10 +97,13 @@ func authContextFunc(st MCPStore, log zerolog.Logger) server.HTTPContextFunc {
 		if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
 			return ctx
 		}
-		if err := st.UpdateAPIKeyLastUsed(ctx, apiKey.ID); err != nil {
-			log.Debug().Err(err).Str("api_key_id", apiKey.ID.String()).Msg("failed to update MCP API key last-used timestamp")
+		if apiKey.LastUsedAt == nil || time.Since(*apiKey.LastUsedAt) >= 5*time.Minute {
+			if err := st.UpdateAPIKeyLastUsed(ctx, apiKey.ID); err != nil {
+				log.Debug().Err(err).Str("api_key_id", apiKey.ID.String()).Msg("failed to update MCP API key last-used timestamp")
+			}
 		}
 
-		return withUser(ctx, apiKey.User)
+		ctx = withUser(ctx, apiKey.User)
+		return auth.WithTokenAuth(ctx, auth.TokenAuthForAPIKey(apiKey))
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/store"
@@ -640,6 +641,9 @@ func (s *Server) buildRefSummary(r *http.Request, repo *store.Repository, snapsh
 func (s *Server) handleGetOrgDashboard(w http.ResponseWriter, r *http.Request) {
 	org, ok := s.loadAuthorizedOrg(r, w)
 	if !ok {
+		return
+	}
+	if !s.enforceOrgWideCapability(w, r, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug) {
 		return
 	}
 

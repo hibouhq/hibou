@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/store"
-	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {
@@ -74,19 +72,8 @@ func (s *Server) handleOnboardRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contextBody, _ := json.Marshal(map[string]any{"pr_number": pr.Number, "pr_url": pr.HTMLURL, "title": pr.Title})
-	ipAddress, userAgent := audit.RequestContext(r)
-	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
-		Action:       audit.ActionOnboardingPR,
-		ResourceType: "repository",
-		ResourceID:   repo.ID.String(),
-		OrgID:        uuid.NullUUID{UUID: org.ID, Valid: true},
-		Context:      contextBody,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
+	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionOnboardingPR, map[string]any{
+		"pr_number": pr.Number, "pr_url": pr.HTMLURL, "title": pr.Title,
 	})
 
 	api.JSON(w, http.StatusCreated, pr)

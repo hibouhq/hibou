@@ -146,6 +146,49 @@ func (ns NullDismissalReason) Value() (driver.Value, error) {
 	return string(ns.DismissalReason), nil
 }
 
+type FindingOrigin string
+
+const (
+	FindingOriginScanner FindingOrigin = "scanner"
+	FindingOriginHuman   FindingOrigin = "human"
+	FindingOriginAgent   FindingOrigin = "agent"
+)
+
+func (e *FindingOrigin) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = FindingOrigin(s)
+	case string:
+		*e = FindingOrigin(s)
+	default:
+		return fmt.Errorf("unsupported scan type for FindingOrigin: %T", src)
+	}
+	return nil
+}
+
+type NullFindingOrigin struct {
+	FindingOrigin FindingOrigin `json:"finding_origin"`
+	Valid         bool          `json:"valid"` // Valid is true if FindingOrigin is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullFindingOrigin) Scan(value interface{}) error {
+	if value == nil {
+		ns.FindingOrigin, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.FindingOrigin.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullFindingOrigin) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.FindingOrigin), nil
+}
+
 type IntegrationType string
 
 const (
@@ -883,17 +926,35 @@ type AffectedRange struct {
 }
 
 type ApiKey struct {
-	ID         uuid.UUID       `json:"id"`
-	UserID     uuid.UUID       `json:"user_id"`
-	Name       string          `json:"name"`
-	KeyHash    string          `json:"key_hash"`
-	Scopes     json.RawMessage `json:"scopes"`
-	ExpiresAt  sql.NullTime    `json:"expires_at"`
-	LastUsedAt sql.NullTime    `json:"last_used_at"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ID          uuid.UUID       `json:"id"`
+	UserID      uuid.UUID       `json:"user_id"`
+	Name        string          `json:"name"`
+	KeyHash     string          `json:"key_hash"`
+	Scopes      json.RawMessage `json:"scopes"`
+	ExpiresAt   sql.NullTime    `json:"expires_at"`
+	LastUsedAt  sql.NullTime    `json:"last_used_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+	OwnerType   string          `json:"owner_type"`
+	OwnerID     uuid.NullUUID   `json:"owner_id"`
+	Description string          `json:"description"`
 }
 
 type AuditLog struct {
+	ID           uuid.UUID       `json:"id"`
+	ActorID      uuid.NullUUID   `json:"actor_id"`
+	ActorType    string          `json:"actor_type"`
+	ActorDisplay string          `json:"actor_display"`
+	Action       string          `json:"action"`
+	ResourceType string          `json:"resource_type"`
+	ResourceID   string          `json:"resource_id"`
+	OrgID        uuid.NullUUID   `json:"org_id"`
+	Context      json.RawMessage `json:"context"`
+	IpAddress    string          `json:"ip_address"`
+	UserAgent    string          `json:"user_agent"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+type AuditLogsDefault struct {
 	ID           uuid.UUID       `json:"id"`
 	ActorID      uuid.NullUUID   `json:"actor_id"`
 	ActorType    string          `json:"actor_type"`
@@ -1497,6 +1558,11 @@ type Vulnerability struct {
 	PrimaryIdentifierValue  string              `json:"primary_identifier_value"`
 	OrgID                   uuid.UUID           `json:"org_id"`
 	RepoID                  uuid.UUID           `json:"repo_id"`
+	Origin                  FindingOrigin       `json:"origin"`
+	OriginApiKeyID          uuid.NullUUID       `json:"origin_api_key_id"`
+	OriginTokenName         string              `json:"origin_token_name"`
+	OriginOwnerType         string              `json:"origin_owner_type"`
+	OriginOwnerID           uuid.NullUUID       `json:"origin_owner_id"`
 }
 
 type VulnerabilityExternalIssue struct {

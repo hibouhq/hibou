@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { LayoutDashboard, Package, ShieldAlert } from 'lucide-vue-next'
+import { KeyRound, LayoutDashboard, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
@@ -97,6 +97,7 @@ const tabs = computed(() => [
   { label: 'Overview', name: 'org-overview', icon: LayoutDashboard, count: null },
   { label: 'Vulnerabilities', name: 'org-vulnerabilities', icon: ShieldAlert, count: vulnTotal.value },
   { label: 'Dependencies', name: 'org-dependencies', icon: Package, count: componentsTotal.value },
+  { label: 'Access', name: 'org-access', icon: KeyRound, count: null },
 ])
 
 function isActiveTab(name: string) {

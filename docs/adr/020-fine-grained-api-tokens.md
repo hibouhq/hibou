@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed
+Accepted — implemented (2026-08). Token format, scope model, deny-by-default
+enforcement (HTTP + MCP), finding provenance, audit, partitioned audit
+retention, and the token-management UI (user- and org-owned) are all in place.
 
 ## Context
 

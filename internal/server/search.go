@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 )
 
 type searchResultResponse struct {
@@ -45,6 +46,9 @@ type searchResponse struct {
 func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	org, ok := s.loadAuthorizedOrg(r, w)
 	if !ok {
+		return
+	}
+	if !s.enforceOrgWideCapability(w, r, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug) {
 		return
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -42,6 +43,9 @@ type findingAcceptanceRequest struct {
 func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Request) {
 	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
 	if !ok {
+		return
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapTriage, apitoken.AccessWrite, org.Slug, repo.Slug) {
 		return
 	}
 
@@ -148,6 +152,9 @@ type batchAcceptanceResponse struct {
 func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Request) {
 	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, true)
 	if !ok {
+		return
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapTriage, apitoken.AccessWrite, org.Slug, repo.Slug) {
 		return
 	}
 

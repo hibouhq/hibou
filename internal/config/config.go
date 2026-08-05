@@ -44,11 +44,15 @@ type Config struct {
 	// true; set HIBOU_COVERAGE_STORE_LINES=false to opt out on very large
 	// monorepos where per-line rows would balloon the database.
 	CoverageStoreLines bool
-	RetentionPolicy    retention.RetentionPolicy
-	Background         BackgroundConfig
-	AdvisoryScan       AdvisoryScanConfig
-	Worker             WorkerConfig
-	SecretScan         SecretScanConfig
+	// AuditRetentionMonths is the hot-retention window for audit_logs: monthly
+	// partitions fully older than this many months are dropped by the retention
+	// pass. 0 (the default) keeps everything forever.
+	AuditRetentionMonths int
+	RetentionPolicy      retention.RetentionPolicy
+	Background           BackgroundConfig
+	AdvisoryScan         AdvisoryScanConfig
+	Worker               WorkerConfig
+	SecretScan           SecretScanConfig
 
 	Forges []ForgeConfig
 }
@@ -182,6 +186,7 @@ func Load() (Config, error) {
 	v.SetDefault("development", false)
 	v.SetDefault("mcp.enabled", true)
 	v.SetDefault("mcp.port", 8081)
+	v.SetDefault("audit.retention_months", 0)
 	v.SetDefault("base.url", "")
 	v.SetDefault("database.url", "postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable")
 	v.SetDefault("log.level", "info")
@@ -328,13 +333,14 @@ func Load() (Config, error) {
 			UsePathStyle:    v.GetBool("artifact.s3.use_path_style"),
 			UseSSL:          v.GetBool("artifact.s3.use_ssl"),
 		},
-		UploadWindow:       uploadWindow,
-		ShutdownTimeout:    shutdownTimeout,
-		MaxUploadSize:      v.GetInt64("max.upload.size"),
-		SessionSecret:      v.GetString("session.secret"),
-		AutoProvisionOrgs:  v.GetBool("auto.provision.orgs"),
-		CoverageStoreLines: v.GetBool("coverage.store_lines"),
-		RetentionPolicy:    retentionPolicy,
+		UploadWindow:         uploadWindow,
+		ShutdownTimeout:      shutdownTimeout,
+		MaxUploadSize:        v.GetInt64("max.upload.size"),
+		SessionSecret:        v.GetString("session.secret"),
+		AutoProvisionOrgs:    v.GetBool("auto.provision.orgs"),
+		CoverageStoreLines:   v.GetBool("coverage.store_lines"),
+		AuditRetentionMonths: v.GetInt("audit.retention_months"),
+		RetentionPolicy:      retentionPolicy,
 		Background: BackgroundConfig{
 			ArtifactProcessingEnabled: v.GetBool("background.artifact_processing.enabled"),
 			RetentionEnabled:          v.GetBool("background.retention.enabled"),

@@ -11,10 +11,53 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/apitoken"
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
+
+func TestFindingAcceptanceTokenScope(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, repo, snapshotID := newBatchTriageFixture(t)
+	findingID, _ := seedTriageFindingWithID(t, srv, snapshotID, "G101")
+	call := func(tokenAuth *internalauth.TokenAuth) *httptest.ResponseRecorder {
+		payload, err := json.Marshal(map[string]any{"status": "accepted", "reason": "test scope"})
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPut, "/acceptance", bytes.NewReader(payload))
+		ctx := internalauth.WithUser(req.Context(), admin)
+		ctx = internalauth.WithTokenAuth(ctx, tokenAuth)
+		routeCtx := chi.NewRouteContext()
+		routeCtx.URLParams.Add("provider", "github")
+		routeCtx.URLParams.Add("slug", org.Slug)
+		routeCtx.URLParams.Add("repoSlug", repo.Slug)
+		routeCtx.URLParams.Add("vulnID", findingID.String())
+		req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, routeCtx))
+		recorder := httptest.NewRecorder()
+		srv.handleSetFindingAcceptance(recorder, req)
+		return recorder
+	}
+
+	readOnly := &internalauth.TokenAuth{
+		Scoped: true,
+		Scope: apitoken.Scope{
+			Org:   org.Slug,
+			Repos: apitoken.RepoSelector{Mode: apitoken.RepoAll},
+			Permissions: map[apitoken.Capability]apitoken.AccessLevel{
+				apitoken.CapTriage: apitoken.AccessRead,
+			},
+		},
+	}
+	if recorder := call(readOnly); recorder.Code != http.StatusForbidden {
+		t.Fatalf("scoped read-only acceptance = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder := call(&internalauth.TokenAuth{}); recorder.Code != http.StatusOK {
+		t.Fatalf("unscoped acceptance = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func TestFindingAcceptanceLifecycle(t *testing.T) {
 	t.Parallel()
@@ -88,9 +131,14 @@ func TestFindingAcceptanceLifecycle(t *testing.T) {
 
 // seedTriageFinding creates one finding on a repo and returns its fingerprint.
 func seedTriageFinding(t *testing.T, srv *Server, snapshotID uuid.UUID, rule string) string {
+	_, fingerprint := seedTriageFindingWithID(t, srv, snapshotID, rule)
+	return fingerprint
+}
+
+func seedTriageFindingWithID(t *testing.T, srv *Server, snapshotID uuid.UUID, rule string) (uuid.UUID, string) {
 	t.Helper()
 	fingerprint := uuid.NewString()
-	if _, err := srv.queries.CreateVulnerability(context.Background(), dbgen.CreateVulnerabilityParams{
+	finding, err := srv.queries.CreateVulnerability(context.Background(), dbgen.CreateVulnerabilityParams{
 		Type:                   "sast",
 		SnapshotID:             snapshotID,
 		Title:                  "finding " + rule,
@@ -101,10 +149,11 @@ func seedTriageFinding(t *testing.T, srv *Server, snapshotID uuid.UUID, rule str
 		Status:                 "detected",
 		ScannerName:            "gosec",
 		Fingerprint:            fingerprint,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateVulnerability(%s): %v", rule, err)
 	}
-	return fingerprint
+	return finding.ID, fingerprint
 }
 
 func newBatchTriageFixture(t *testing.T) (*Server, *store.Organization, *store.User, *store.Repository, uuid.UUID) {

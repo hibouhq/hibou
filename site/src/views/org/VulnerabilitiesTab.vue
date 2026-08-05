@@ -84,7 +84,10 @@
                   />
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
-                  {{ vulnerability.scanner_name || 'n/a' }}
+                  <div class="flex items-center gap-1.5">
+                    <span>{{ vulnerability.scanner_name || 'n/a' }}</span>
+                    <FindingOriginBadge :finding="vulnerability" />
+                  </div>
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   {{ formatDetected(vulnerability.detected_at) }}
@@ -126,6 +129,7 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type OrgVulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
+import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 
 const route = useRoute()

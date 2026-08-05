@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -114,6 +115,9 @@ func (s *service) handleListVulnerabilities(ctx context.Context, request mcp.Cal
 	if err != nil {
 		return toolError(err.Error())
 	}
+	if err := requireCapability(ctx, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug, repo.Slug); err != nil {
+		return toolError(err.Error())
+	}
 
 	vulnerabilities, err := s.store.ListAllVulnerabilitiesBySnapshot(ctx, snapshot.ID)
 	if err != nil {
@@ -160,6 +164,9 @@ func (s *service) handleGetDependencyTree(ctx context.Context, request mcp.CallT
 	if err != nil {
 		return toolError(err.Error())
 	}
+	if err := requireCapability(ctx, apitoken.CapComponents, apitoken.AccessRead, org.Slug, repo.Slug); err != nil {
+		return toolError(err.Error())
+	}
 
 	components, err := s.store.ListComponentsBySnapshotWithVulns(ctx, snapshot.ID)
 	if err != nil {
@@ -204,6 +211,9 @@ func (s *service) handleImpactAnalysis(ctx context.Context, request mcp.CallTool
 
 	org, err := s.resolveOrgAndAuth(ctx, orgArg)
 	if err != nil {
+		return toolError(err.Error())
+	}
+	if err := requireOrgWideCapability(ctx, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug); err != nil {
 		return toolError(err.Error())
 	}
 	advisory, err := s.store.GetAdvisoryByAlias(ctx, cveID)
@@ -263,6 +273,9 @@ func (s *service) handleCompareRefs(ctx context.Context, request mcp.CallToolReq
 	if err != nil {
 		return toolError(err.Error())
 	}
+	if err := requireCapability(ctx, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug, repo.Slug); err != nil {
+		return toolError(err.Error())
+	}
 	_, headRef, headSnapshot, err := s.resolveSnapshot(ctx, org, repoSlug, ref2)
 	if err != nil {
 		return toolError(err.Error())
@@ -305,6 +318,9 @@ func (s *service) handleSearchComponents(ctx context.Context, request mcp.CallTo
 
 	org, err := s.resolveOrgAndAuth(ctx, orgArg)
 	if err != nil {
+		return toolError(err.Error())
+	}
+	if err := requireOrgWideCapability(ctx, apitoken.CapComponents, apitoken.AccessRead, org.Slug); err != nil {
 		return toolError(err.Error())
 	}
 	components, total, err := s.store.SearchComponents(ctx, org.ID, query, 50, 0)

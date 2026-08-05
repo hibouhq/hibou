@@ -21,6 +21,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/metrics"
 	"github.com/hibouhq/hibou/internal/store"
@@ -265,6 +266,26 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 			api.JSONError(w, http.StatusBadRequest, err.Error())
 		}
 		return
+	}
+	org, repo, err := s.resolveUploadAuthorization(r, s.queries, user.ID, input.uploadRequest)
+	if err != nil {
+		s.writeUploadError(w, err)
+		return
+	}
+	repoSlug := input.Repo
+	if repo != nil {
+		repoSlug = repo.Slug
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapUploads, apitoken.AccessWrite, org.Slug, repoSlug) {
+		return
+	}
+	if repo == nil {
+		repo, err = s.enrollUploadRepository(r, org, user.ID, input.uploadRequest)
+		if err != nil {
+			s.writeUploadError(w, err)
+			return
+		}
+		input.Repo = repo.Slug
 	}
 
 	if input.Artifact == nil {
@@ -877,6 +898,19 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 }
 
 func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
+	org, repo, err := s.resolveUploadAuthorization(r, queries, userID, input)
+	if err != nil || repo != nil {
+		return org, repo, err
+	}
+
+	repo, err = s.enrollUploadRepository(r, org, userID, input)
+	if err != nil {
+		return nil, nil, err
+	}
+	return org, repo, nil
+}
+
+func (s *Server) resolveUploadAuthorization(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
 	org, err := queries.GetOrganizationByProviderAndSlug(r.Context(), input.Provider, input.Org)
 	if err != nil {
 		return nil, nil, err
@@ -897,13 +931,6 @@ func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, use
 	if err != nil {
 		return nil, nil, err
 	}
-	if repo == nil {
-		repo, err = s.enrollUploadRepository(r, org, userID, input)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
 	return org, repo, nil
 }
 

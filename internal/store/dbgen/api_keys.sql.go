@@ -15,17 +15,20 @@ import (
 )
 
 const createAPIKey = `-- name: CreateAPIKey :one
-INSERT INTO api_keys (user_id, name, key_hash, scopes, expires_at)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at
+INSERT INTO api_keys (user_id, name, key_hash, scopes, expires_at, owner_type, owner_id, description)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
 `
 
 type CreateAPIKeyParams struct {
-	UserID    uuid.UUID       `json:"user_id"`
-	Name      string          `json:"name"`
-	KeyHash   string          `json:"key_hash"`
-	Scopes    json.RawMessage `json:"scopes"`
-	ExpiresAt sql.NullTime    `json:"expires_at"`
+	UserID      uuid.UUID       `json:"user_id"`
+	Name        string          `json:"name"`
+	KeyHash     string          `json:"key_hash"`
+	Scopes      json.RawMessage `json:"scopes"`
+	ExpiresAt   sql.NullTime    `json:"expires_at"`
+	OwnerType   string          `json:"owner_type"`
+	OwnerID     uuid.NullUUID   `json:"owner_id"`
+	Description string          `json:"description"`
 }
 
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error) {
@@ -35,6 +38,9 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		arg.KeyHash,
 		arg.Scopes,
 		arg.ExpiresAt,
+		arg.OwnerType,
+		arg.OwnerID,
+		arg.Description,
 	)
 	var i ApiKey
 	err := row.Scan(
@@ -46,13 +52,16 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.ExpiresAt,
 		&i.LastUsedAt,
 		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
 	)
 	return i, err
 }
 
 const deleteAPIKey = `-- name: DeleteAPIKey :exec
 DELETE FROM api_keys
-WHERE id = $1 AND user_id = $2
+WHERE id = $1 AND user_id = $2 AND owner_type = 'user'
 `
 
 type DeleteAPIKeyParams struct {
@@ -65,9 +74,27 @@ func (q *Queries) DeleteAPIKey(ctx context.Context, arg DeleteAPIKeyParams) erro
 	return err
 }
 
+const deleteAPIKeyByOrg = `-- name: DeleteAPIKeyByOrg :execrows
+DELETE FROM api_keys
+WHERE id = $1 AND owner_type = 'org' AND owner_id = $2
+`
+
+type DeleteAPIKeyByOrgParams struct {
+	ID      uuid.UUID     `json:"id"`
+	OwnerID uuid.NullUUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteAPIKeyByOrg(ctx context.Context, arg DeleteAPIKeyByOrgParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAPIKeyByOrg, arg.ID, arg.OwnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT ak.id, ak.user_id, ak.name, ak.key_hash, ak.scopes, ak.expires_at, ak.last_used_at, ak.created_at,
-    u.id AS owner_id, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at
+SELECT ak.id, ak.user_id, ak.name, ak.key_hash, ak.scopes, ak.expires_at, ak.owner_type, ak.owner_id, ak.description, ak.last_used_at, ak.created_at,
+    u.id AS actor_user_id, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at
 FROM api_keys ak
 JOIN users u ON u.id = ak.user_id
 WHERE ak.key_hash = $1
@@ -80,9 +107,12 @@ type GetAPIKeyByHashRow struct {
 	KeyHash       string          `json:"key_hash"`
 	Scopes        json.RawMessage `json:"scopes"`
 	ExpiresAt     sql.NullTime    `json:"expires_at"`
+	OwnerType     string          `json:"owner_type"`
+	OwnerID       uuid.NullUUID   `json:"owner_id"`
+	Description   string          `json:"description"`
 	LastUsedAt    sql.NullTime    `json:"last_used_at"`
 	CreatedAt     time.Time       `json:"created_at"`
-	OwnerID       uuid.UUID       `json:"owner_id"`
+	ActorUserID   uuid.UUID       `json:"actor_user_id"`
 	Email         string          `json:"email"`
 	DisplayName   string          `json:"display_name"`
 	AvatarUrl     sql.NullString  `json:"avatar_url"`
@@ -102,9 +132,12 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 		&i.KeyHash,
 		&i.Scopes,
 		&i.ExpiresAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
 		&i.LastUsedAt,
 		&i.CreatedAt,
-		&i.OwnerID,
+		&i.ActorUserID,
 		&i.Email,
 		&i.DisplayName,
 		&i.AvatarUrl,
@@ -116,22 +149,96 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 	return i, err
 }
 
-const listAPIKeysByUser = `-- name: ListAPIKeysByUser :many
-SELECT id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at
+const getAPIKeyByID = `-- name: GetAPIKeyByID :one
+SELECT id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
 FROM api_keys
-WHERE user_id = $1
+WHERE id = $1 AND user_id = $2 AND owner_type = 'user'
+`
+
+type GetAPIKeyByIDParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetAPIKeyByID(ctx context.Context, arg GetAPIKeyByIDParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, getAPIKeyByID, arg.ID, arg.UserID)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+	)
+	return i, err
+}
+
+const getAPIKeyByOrg = `-- name: GetAPIKeyByOrg :one
+SELECT id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
+FROM api_keys
+WHERE id = $1 AND owner_type = 'org' AND owner_id = $2
+`
+
+type GetAPIKeyByOrgParams struct {
+	ID      uuid.UUID     `json:"id"`
+	OwnerID uuid.NullUUID `json:"owner_id"`
+}
+
+func (q *Queries) GetAPIKeyByOrg(ctx context.Context, arg GetAPIKeyByOrgParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, getAPIKeyByOrg, arg.ID, arg.OwnerID)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+	)
+	return i, err
+}
+
+const listAPIKeysByOrg = `-- name: ListAPIKeysByOrg :many
+SELECT id, user_id, name, key_hash, scopes, expires_at, owner_type, owner_id, description, last_used_at, created_at
+FROM api_keys
+WHERE owner_type = 'org' AND owner_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListAPIKeysByUser(ctx context.Context, userID uuid.UUID) ([]ApiKey, error) {
-	rows, err := q.db.QueryContext(ctx, listAPIKeysByUser, userID)
+type ListAPIKeysByOrgRow struct {
+	ID          uuid.UUID       `json:"id"`
+	UserID      uuid.UUID       `json:"user_id"`
+	Name        string          `json:"name"`
+	KeyHash     string          `json:"key_hash"`
+	Scopes      json.RawMessage `json:"scopes"`
+	ExpiresAt   sql.NullTime    `json:"expires_at"`
+	OwnerType   string          `json:"owner_type"`
+	OwnerID     uuid.NullUUID   `json:"owner_id"`
+	Description string          `json:"description"`
+	LastUsedAt  sql.NullTime    `json:"last_used_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+func (q *Queries) ListAPIKeysByOrg(ctx context.Context, ownerID uuid.NullUUID) ([]ListAPIKeysByOrgRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAPIKeysByOrg, ownerID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ApiKey{}
+	items := []ListAPIKeysByOrgRow{}
 	for rows.Next() {
-		var i ApiKey
+		var i ListAPIKeysByOrgRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,
@@ -139,6 +246,9 @@ func (q *Queries) ListAPIKeysByUser(ctx context.Context, userID uuid.UUID) ([]Ap
 			&i.KeyHash,
 			&i.Scopes,
 			&i.ExpiresAt,
+			&i.OwnerType,
+			&i.OwnerID,
+			&i.Description,
 			&i.LastUsedAt,
 			&i.CreatedAt,
 		); err != nil {
@@ -155,6 +265,221 @@ func (q *Queries) ListAPIKeysByUser(ctx context.Context, userID uuid.UUID) ([]Ap
 	return items, nil
 }
 
+const listAPIKeysByUser = `-- name: ListAPIKeysByUser :many
+SELECT id, user_id, name, key_hash, scopes, expires_at, owner_type, owner_id, description, last_used_at, created_at
+FROM api_keys
+WHERE user_id = $1 AND owner_type = 'user'
+ORDER BY created_at DESC
+`
+
+type ListAPIKeysByUserRow struct {
+	ID          uuid.UUID       `json:"id"`
+	UserID      uuid.UUID       `json:"user_id"`
+	Name        string          `json:"name"`
+	KeyHash     string          `json:"key_hash"`
+	Scopes      json.RawMessage `json:"scopes"`
+	ExpiresAt   sql.NullTime    `json:"expires_at"`
+	OwnerType   string          `json:"owner_type"`
+	OwnerID     uuid.NullUUID   `json:"owner_id"`
+	Description string          `json:"description"`
+	LastUsedAt  sql.NullTime    `json:"last_used_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+func (q *Queries) ListAPIKeysByUser(ctx context.Context, userID uuid.UUID) ([]ListAPIKeysByUserRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAPIKeysByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAPIKeysByUserRow{}
+	for rows.Next() {
+		var i ListAPIKeysByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Name,
+			&i.KeyHash,
+			&i.Scopes,
+			&i.ExpiresAt,
+			&i.OwnerType,
+			&i.OwnerID,
+			&i.Description,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAPIKeysExpiringBefore = `-- name: ListAPIKeysExpiringBefore :many
+SELECT id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
+FROM api_keys
+WHERE expires_at IS NOT NULL AND expires_at > NOW() AND expires_at <= $1
+ORDER BY expires_at ASC
+`
+
+func (q *Queries) ListAPIKeysExpiringBefore(ctx context.Context, expiresAt sql.NullTime) ([]ApiKey, error) {
+	rows, err := q.db.QueryContext(ctx, listAPIKeysExpiringBefore, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ApiKey{}
+	for rows.Next() {
+		var i ApiKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Name,
+			&i.KeyHash,
+			&i.Scopes,
+			&i.ExpiresAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+			&i.OwnerType,
+			&i.OwnerID,
+			&i.Description,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnscopedAPIKeysByOrgMembers = `-- name: ListUnscopedAPIKeysByOrgMembers :many
+SELECT DISTINCT ak.id, ak.name, ak.expires_at, ak.last_used_at, ak.created_at,
+    u.id AS member_id, u.display_name AS member_display, u.email AS member_email
+FROM api_keys ak
+JOIN users u ON u.id = ak.user_id
+JOIN org_members om ON om.user_id = ak.user_id AND om.org_id = $1
+WHERE ak.owner_type = 'user' AND ak.scopes = 'null'::jsonb
+ORDER BY ak.last_used_at DESC NULLS LAST, ak.created_at DESC
+`
+
+type ListUnscopedAPIKeysByOrgMembersRow struct {
+	ID            uuid.UUID    `json:"id"`
+	Name          string       `json:"name"`
+	ExpiresAt     sql.NullTime `json:"expires_at"`
+	LastUsedAt    sql.NullTime `json:"last_used_at"`
+	CreatedAt     time.Time    `json:"created_at"`
+	MemberID      uuid.UUID    `json:"member_id"`
+	MemberDisplay string       `json:"member_display"`
+	MemberEmail   string       `json:"member_email"`
+}
+
+func (q *Queries) ListUnscopedAPIKeysByOrgMembers(ctx context.Context, orgID uuid.UUID) ([]ListUnscopedAPIKeysByOrgMembersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnscopedAPIKeysByOrgMembers, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnscopedAPIKeysByOrgMembersRow{}
+	for rows.Next() {
+		var i ListUnscopedAPIKeysByOrgMembersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.ExpiresAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+			&i.MemberID,
+			&i.MemberDisplay,
+			&i.MemberEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const rotateAPIKey = `-- name: RotateAPIKey :one
+UPDATE api_keys
+SET key_hash = $3, last_used_at = NULL
+WHERE id = $1 AND user_id = $2 AND owner_type = 'user'
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
+`
+
+type RotateAPIKeyParams struct {
+	ID      uuid.UUID `json:"id"`
+	UserID  uuid.UUID `json:"user_id"`
+	KeyHash string    `json:"key_hash"`
+}
+
+func (q *Queries) RotateAPIKey(ctx context.Context, arg RotateAPIKeyParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, rotateAPIKey, arg.ID, arg.UserID, arg.KeyHash)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+	)
+	return i, err
+}
+
+const rotateAPIKeyByOrg = `-- name: RotateAPIKeyByOrg :one
+UPDATE api_keys
+SET key_hash = $3, last_used_at = NULL
+WHERE id = $1 AND owner_type = 'org' AND owner_id = $2
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
+`
+
+type RotateAPIKeyByOrgParams struct {
+	ID      uuid.UUID     `json:"id"`
+	OwnerID uuid.NullUUID `json:"owner_id"`
+	KeyHash string        `json:"key_hash"`
+}
+
+func (q *Queries) RotateAPIKeyByOrg(ctx context.Context, arg RotateAPIKeyByOrgParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, rotateAPIKeyByOrg, arg.ID, arg.OwnerID, arg.KeyHash)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+	)
+	return i, err
+}
+
 const updateAPIKeyLastUsed = `-- name: UpdateAPIKeyLastUsed :exec
 UPDATE api_keys
 SET last_used_at = NOW()
@@ -164,4 +489,88 @@ WHERE id = $1
 func (q *Queries) UpdateAPIKeyLastUsed(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.ExecContext(ctx, updateAPIKeyLastUsed, id)
 	return err
+}
+
+const updateAPIKeyMeta = `-- name: UpdateAPIKeyMeta :one
+UPDATE api_keys
+SET name = $3, description = $4, scopes = $5, expires_at = $6
+WHERE id = $1 AND user_id = $2 AND owner_type = 'user'
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
+`
+
+type UpdateAPIKeyMetaParams struct {
+	ID          uuid.UUID       `json:"id"`
+	UserID      uuid.UUID       `json:"user_id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Scopes      json.RawMessage `json:"scopes"`
+	ExpiresAt   sql.NullTime    `json:"expires_at"`
+}
+
+func (q *Queries) UpdateAPIKeyMeta(ctx context.Context, arg UpdateAPIKeyMetaParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, updateAPIKeyMeta,
+		arg.ID,
+		arg.UserID,
+		arg.Name,
+		arg.Description,
+		arg.Scopes,
+		arg.ExpiresAt,
+	)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+	)
+	return i, err
+}
+
+const updateAPIKeyMetaByOrg = `-- name: UpdateAPIKeyMetaByOrg :one
+UPDATE api_keys
+SET name = $3, description = $4, scopes = $5, expires_at = $6
+WHERE id = $1 AND owner_type = 'org' AND owner_id = $2
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description
+`
+
+type UpdateAPIKeyMetaByOrgParams struct {
+	ID          uuid.UUID       `json:"id"`
+	OwnerID     uuid.NullUUID   `json:"owner_id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Scopes      json.RawMessage `json:"scopes"`
+	ExpiresAt   sql.NullTime    `json:"expires_at"`
+}
+
+func (q *Queries) UpdateAPIKeyMetaByOrg(ctx context.Context, arg UpdateAPIKeyMetaByOrgParams) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, updateAPIKeyMetaByOrg,
+		arg.ID,
+		arg.OwnerID,
+		arg.Name,
+		arg.Description,
+		arg.Scopes,
+		arg.ExpiresAt,
+	)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+	)
+	return i, err
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
-	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type OrgSettings struct {
@@ -203,24 +202,13 @@ func isValidTLPLabel(value string) bool {
 }
 
 func (s *Server) writeSettingsAuditLog(r *http.Request, user *store.User, orgID uuid.UUID, previous, current OrgSettings) {
-	contextBody, err := json.Marshal(map[string]any{
-		"old_settings": previous,
-		"new_settings": current,
-	})
-	if err != nil {
-		contextBody = json.RawMessage(`{"status":"marshal_error"}`)
-	}
-	ipAddress, userAgent := audit.RequestContext(r)
-	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
+	s.writeAuditLog(r, user, orgAuditID(orgID), auditEntry{
 		Action:       audit.ActionSettingUpdate,
 		ResourceType: "organization",
 		ResourceID:   orgID.String(),
-		OrgID:        uuid.NullUUID{UUID: orgID, Valid: true},
-		Context:      contextBody,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
+		Context: map[string]any{
+			"old_settings": previous,
+			"new_settings": current,
+		},
 	})
 }

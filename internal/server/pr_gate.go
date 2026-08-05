@@ -13,11 +13,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/store"
-	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/ws"
 )
 
@@ -169,6 +169,9 @@ func (s *Server) handleOverridePRGate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapQualityGates, apitoken.AccessWrite, org.Slug, repo.Slug) {
+		return
+	}
 	user, ok := s.requireGateOverrideRole(r, w, org.ID)
 	if !ok {
 		return
@@ -220,21 +223,13 @@ func (s *Server) handleOverridePRGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contextBody, _ := json.Marshal(map[string]any{
-		"pr_number": prNumber, "state": input.State, "reason": input.Reason, "head_sha": headSHA,
-	})
-	ipAddress, userAgent := audit.RequestContext(r)
-	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
+	s.writeAuditLog(r, user, orgAuditID(org.ID), auditEntry{
 		Action:       audit.ActionGateOverride,
 		ResourceType: "pull_request",
 		ResourceID:   fmt.Sprintf("%s#%d", repo.Slug, prNumber),
-		OrgID:        uuid.NullUUID{UUID: org.ID, Valid: true},
-		Context:      contextBody,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
+		Context: map[string]any{
+			"pr_number": prNumber, "state": input.State, "reason": input.Reason, "head_sha": headSHA,
+		},
 	})
 
 	// Re-evaluate + re-post the forge check so the override takes effect live.

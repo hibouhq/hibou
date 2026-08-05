@@ -38,13 +38,19 @@ INSERT INTO vulnerabilities (
     verified,
     created_by,
     metadata,
-    rule_ref_id
+    rule_ref_id,
+    origin,
+    origin_api_key_id,
+    origin_token_name,
+    origin_owner_type,
+    origin_owner_id
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
     $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-    $31, $32, $33, $34, $35, $36, $37, $38, $39
+    $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+    $41, $42, $43, $44
 )
 ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET
     last_seen_at = NOW(),
@@ -66,8 +72,8 @@ WHERE snapshot_id = $1
   AND (COALESCE(array_length(@severities::text[], 1), 0) = 0 OR severity::text = ANY(@severities::text[]))
   AND (COALESCE(array_length(@scanners::text[], 1), 0) = 0 OR scanner_name = ANY(@scanners::text[]))
   AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(language, '') = ANY(@languages::text[]))
-  AND (@file_query::text = '' OR COALESCE(file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\\')
-  AND (@search::text = '' OR (title ILIKE '%' || @search::text || '%' ESCAPE '\\' OR primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\\'))
+  AND (@file_query::text = '' OR COALESCE(file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
+  AND (@search::text = '' OR (title ILIKE '%' || @search::text || '%' ESCAPE '\' OR primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'))
 ORDER BY
   CASE WHEN @sort::text = 'severity_asc' THEN severity_rank END ASC,
   CASE WHEN @sort::text = 'severity_desc' THEN severity_rank END DESC,
@@ -86,8 +92,8 @@ WHERE snapshot_id = $1
   AND (COALESCE(array_length(@severities::text[], 1), 0) = 0 OR severity::text = ANY(@severities::text[]))
   AND (COALESCE(array_length(@scanners::text[], 1), 0) = 0 OR scanner_name = ANY(@scanners::text[]))
   AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(language, '') = ANY(@languages::text[]))
-  AND (@file_query::text = '' OR COALESCE(file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\\')
-  AND (@search::text = '' OR (title ILIKE '%' || @search::text || '%' ESCAPE '\\' OR primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\\'));
+  AND (@file_query::text = '' OR COALESCE(file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
+  AND (@search::text = '' OR (title ILIKE '%' || @search::text || '%' ESCAPE '\' OR primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'));
 
 -- name: ListAllVulnerabilitiesBySnapshot :many
 SELECT * FROM vulnerabilities
@@ -180,14 +186,14 @@ WHERE v.org_id = $1 AND v.status NOT IN ('resolved', 'dismissed');
 SELECT v.*
 FROM vulnerabilities v
 WHERE v.org_id = $1
-  AND (v.title ILIKE $2 ESCAPE '\\' OR v.description ILIKE $2 ESCAPE '\\' OR v.primary_identifier_value ILIKE $2 ESCAPE '\\')
+  AND (v.title ILIKE $2 ESCAPE '\' OR v.description ILIKE $2 ESCAPE '\' OR v.primary_identifier_value ILIKE $2 ESCAPE '\')
 ORDER BY v.detected_at DESC LIMIT $3 OFFSET $4;
 
 -- name: CountSearchVulnerabilities :one
 SELECT COUNT(*)::bigint
 FROM vulnerabilities v
 WHERE v.org_id = $1
-  AND (v.title ILIKE $2 ESCAPE '\\' OR v.description ILIKE $2 ESCAPE '\\' OR v.primary_identifier_value ILIKE $2 ESCAPE '\\');
+  AND (v.title ILIKE $2 ESCAPE '\' OR v.description ILIKE $2 ESCAPE '\' OR v.primary_identifier_value ILIKE $2 ESCAPE '\');
 
 -- name: ListVulnerabilityToolStats :many
 SELECT scanner_name, type::text, COUNT(*)::bigint AS count

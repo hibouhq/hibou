@@ -148,7 +148,7 @@ func TestToSQLFileILike(t *testing.T) {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
-	if result.Where != "COALESCE(file_path, '') ILIKE '%' || $1 || '%' ESCAPE '\\\\'" {
+	if result.Where != "COALESCE(file_path, '') ILIKE '%' || $1 || '%' ESCAPE '\\'" {
 		t.Fatalf("unexpected where clause: %s", result.Where)
 	}
 }
@@ -202,7 +202,7 @@ func TestToSQLFreeText(t *testing.T) {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
-	expected := "(title ILIKE '%' || $1 || '%' ESCAPE '\\\\' OR primary_identifier_value ILIKE '%' || $1 || '%' ESCAPE '\\\\')"
+	expected := "(title ILIKE '%' || $1 || '%' ESCAPE '\\' OR primary_identifier_value ILIKE '%' || $1 || '%' ESCAPE '\\')"
 	if result.Where != expected {
 		t.Fatalf("unexpected where clause: %s", result.Where)
 	}
@@ -222,7 +222,7 @@ func TestToSQLFreeTextWithQualifier(t *testing.T) {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
-	expected := "((title ILIKE '%' || $1 || '%' ESCAPE '\\\\' OR primary_identifier_value ILIKE '%' || $1 || '%' ESCAPE '\\\\') AND type::text = $2)"
+	expected := "((title ILIKE '%' || $1 || '%' ESCAPE '\\' OR primary_identifier_value ILIKE '%' || $1 || '%' ESCAPE '\\') AND type::text = $2)"
 	if result.Where != expected {
 		t.Fatalf("unexpected where clause: %s", result.Where)
 	}
@@ -317,7 +317,7 @@ func TestToSQLComplexExpression(t *testing.T) {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
-	expected := "((((type::text = $1 OR type::text = $2)) AND severity::text = ANY($3::text[])) AND COALESCE(file_path, '') ILIKE '%' || $4 || '%' ESCAPE '\\\\')"
+	expected := "((((type::text = $1 OR type::text = $2)) AND severity::text = ANY($3::text[])) AND COALESCE(file_path, '') ILIKE '%' || $4 || '%' ESCAPE '\\')"
 	if result.Where != expected {
 		t.Fatalf("unexpected where clause: %s", result.Where)
 	}

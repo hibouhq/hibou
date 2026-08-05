@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
-	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -281,21 +280,5 @@ func (s *Server) rejectLastOrgAdminRemovalOrDemotion(ctx context.Context, orgID,
 }
 
 func (s *Server) writeMemberAuditLog(r *http.Request, user *store.User, orgID uuid.UUID, entry auditEntry) {
-	contextBody, err := json.Marshal(entry.Context)
-	if err != nil {
-		contextBody = json.RawMessage(`{"status":"marshal_error"}`)
-	}
-	ipAddress, userAgent := audit.RequestContext(r)
-	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
-		Action:       entry.Action,
-		ResourceType: entry.ResourceType,
-		ResourceID:   entry.ResourceID,
-		OrgID:        uuid.NullUUID{UUID: orgID, Valid: true},
-		Context:      contextBody,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
-	})
+	s.writeAuditLog(r, user, orgAuditID(orgID), entry)
 }

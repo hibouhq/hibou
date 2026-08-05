@@ -521,22 +521,11 @@ func (s *Server) vexPublisherNamespace(org *store.Organization) string {
 }
 
 func (s *Server) writeVEXAuditLog(r *http.Request, user *store.User, orgID, statementID uuid.UUID, action string, context map[string]any) {
-	contextBody, err := json.Marshal(context)
-	if err != nil {
-		contextBody = json.RawMessage(`{"status":"marshal_error"}`)
-	}
-	ipAddress, userAgent := audit.RequestContext(r)
-	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
+	s.writeAuditLog(r, user, orgAuditID(orgID), auditEntry{
 		Action:       action,
 		ResourceType: "vex_statement",
 		ResourceID:   statementID.String(),
-		OrgID:        uuid.NullUUID{UUID: orgID, Valid: true},
-		Context:      contextBody,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
+		Context:      context,
 	})
 }
 

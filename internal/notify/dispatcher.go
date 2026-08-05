@@ -607,7 +607,7 @@ func (d *Dispatcher) writeAuditLog(ctx context.Context, integration dbgen.Integr
 		encoded = json.RawMessage(`{"status":"marshal_error"}`)
 	}
 
-	_, _ = d.store.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
+	if _, err := d.store.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
 		ActorType:    audit.ActorSystem,
 		ActorDisplay: "notification-dispatcher",
 		Action:       "integration.delivery",
@@ -615,7 +615,9 @@ func (d *Dispatcher) writeAuditLog(ctx context.Context, integration dbgen.Integr
 		ResourceID:   integration.ID.String(),
 		OrgID:        nullUUID(payload.OrgID),
 		Context:      encoded,
-	})
+	}); err != nil {
+		d.log.Warn().Err(err).Str("integration_id", integration.ID.String()).Msg("audit log write failed")
+	}
 }
 
 func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {

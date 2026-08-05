@@ -87,6 +87,7 @@ type Server struct {
 	retentionWorker    *retention.Worker
 	dispatcher         *notify.Dispatcher
 	staleScanChecker   backgroundStarter
+	tokenExpiryChecker backgroundStarter
 	updateChecker      *updatecheck.Checker
 	gatePublisher      *forge.GatePublisher
 	forgeIPAllowlists  map[string]*forgeIPAllowlist
@@ -254,6 +255,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 		&notify.EmailSender{},
 	)
 	s.staleScanChecker = notify.NewStaleScanChecker(s.queries, s.bus, log)
+	s.tokenExpiryChecker = notify.NewTokenExpiryChecker(s.queries, s.bus, log)
 	s.gatePublisher = forge.NewGatePublisher(forges, s.deltaSvc, s.bus, forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, wsGateNotifier{live: s.wsFanout}, cfg.BaseURL, log)
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
@@ -419,7 +421,7 @@ func (s *Server) routes(siteFS fs.FS) {
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
-			r.Post("/auth/cli-token", s.handleCreateCLIToken)
+			r.Use(s.tokenScopeGuard)
 			r.Get("/users/me", s.handleGetMe)
 			r.Get("/notifications", s.notifySvc.HandleListNotifications)
 			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)
@@ -428,7 +430,9 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Route("/users/me/api-keys", func(r chi.Router) {
 				r.Post("/", s.handleCreateAPIKey)
 				r.Get("/", s.handleListAPIKeys)
+				r.Patch("/{keyID}", s.handleUpdateAPIKey)
 				r.Delete("/{keyID}", s.handleDeleteAPIKey)
+				r.Post("/{keyID}/rotate", s.handleRotateAPIKey)
 			})
 			r.Route("/orgs", func(r chi.Router) {
 				r.Get("/onboardable", s.handleListOnboardableOrgs)
@@ -448,6 +452,14 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/settings", s.handleGetOrgSettings)
 					r.Put("/settings", s.handleUpdateOrgSettings)
 					r.Get("/audit-logs", s.handleListAuditLogs)
+					r.Route("/api-keys", func(r chi.Router) {
+						r.Get("/", s.handleListOrgAPIKeys)
+						r.Get("/exposure", s.handleListOrgTokenExposure)
+						r.Post("/", s.handleCreateOrgAPIKey)
+						r.Patch("/{keyID}", s.handleUpdateOrgAPIKey)
+						r.Delete("/{keyID}", s.handleDeleteOrgAPIKey)
+						r.Post("/{keyID}/rotate", s.handleRotateOrgAPIKey)
+					})
 					r.Get("/tool-catalog", s.handleGetToolCatalog)
 					r.Get("/search", s.handleGlobalSearch)
 					r.Route("/members", func(r chi.Router) {
@@ -534,6 +546,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/compare", s.handleCompareRefs)
 						r.Get("/{repoSlug}/trends", s.handleGetTrends)
 						r.Get("/{repoSlug}/findings", s.handleGetRefFindings)
+						r.Post("/{repoSlug}/findings", s.handleCreateFinding)
 						r.Get("/{repoSlug}/findings/facets", s.handleGetRefFindingFacets)
 						r.Get("/{repoSlug}/vulnerabilities", s.handleGetRefFindings)
 						r.Get("/{repoSlug}/vulnerabilities/facets", s.handleGetRefFindingFacets)
@@ -624,6 +637,9 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	}
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		go s.staleScanChecker.Start(runtimeCtx)
+	}
+	if s.tokenExpiryChecker != nil && s.cfg.Background.StaleScanEnabled {
+		go s.tokenExpiryChecker.Start(runtimeCtx)
 	}
 	if s.secretScanner != nil && s.cfg.Background.SecretScanEnabled {
 		go s.runSecretScanLoop(runtimeCtx)
@@ -924,6 +940,11 @@ func (s *Server) runRetentionPass(ctx context.Context) {
 	// walking every repo is N× the work and N× the object-store delete traffic
 	// for one identical outcome.
 	ran, err := store.WithLeaderLock(ctx, s.db, store.LockRetentionPass, func(runCtx context.Context) error {
+		if s.queries != nil {
+			if auditErr := s.queries.MaintainAuditLogPartitions(runCtx, time.Now(), s.cfg.AuditRetentionMonths); auditErr != nil {
+				s.log.Warn().Err(auditErr).Msg("audit log partition maintenance")
+			}
+		}
 		return s.retentionWorker.Run(runCtx)
 	})
 	// Shutdown cancellation is not a failure; keep the original filtering.

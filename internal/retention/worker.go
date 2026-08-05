@@ -588,7 +588,7 @@ func (w *Worker) writeAuditLog(ctx context.Context, action string, candidate sna
 		w.log.Warn().Err(err).Str("snapshot_id", candidate.Snapshot.ID.String()).Msg("marshal retention audit context")
 		return
 	}
-	_, _ = w.auditLog.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
+	if _, err := w.auditLog.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
 		ActorType:    audit.ActorSystem,
 		ActorDisplay: "retention-worker",
 		Action:       action,
@@ -596,7 +596,9 @@ func (w *Worker) writeAuditLog(ctx context.Context, action string, candidate sna
 		ResourceID:   candidate.Snapshot.ID.String(),
 		OrgID:        uuid.NullUUID{UUID: candidate.Repository.OrgID, Valid: true},
 		Context:      payload,
-	})
+	}); err != nil {
+		w.log.Warn().Err(err).Str("snapshot_id", candidate.Snapshot.ID.String()).Msg("audit log write failed")
+	}
 }
 
 func (w *Worker) deleteArtifact(ctx context.Context, key string) error {

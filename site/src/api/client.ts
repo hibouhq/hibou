@@ -263,9 +263,69 @@ export interface Vulnerability {
   secret_type?: string
   has_remediation?: boolean
   solution?: string
+  // Provenance (ADR-020): who produced this finding. 'scanner' is an ingested
+  // tool report, 'human' a person, 'agent' an API token acting for an agent.
+  origin?: FindingOrigin
+  origin_api_key_id?: string
+  origin_token_name?: string
+  origin_owner_type?: string
+  origin_owner_id?: string
   metadata?: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+export type FindingOrigin = 'scanner' | 'human' | 'agent'
+
+// ADR-020 fine-grained tokens. Capabilities map to product surfaces, not routes.
+export type TokenCapability =
+  | 'coverage'
+  | 'vulnerabilities'
+  | 'triage'
+  | 'quality_gates'
+  | 'components'
+  | 'secrets'
+  | 'uploads'
+  | 'admin'
+
+export type TokenAccessLevel = 'none' | 'read' | 'write'
+
+export interface TokenScope {
+  owner?: { type: 'user' | 'org'; id: string }
+  org: string
+  repos: { mode: 'all' | 'list'; slugs?: string[] }
+  permissions: Partial<Record<TokenCapability, TokenAccessLevel>>
+}
+
+export interface ApiKey {
+  id: string
+  user_id: string
+  name: string
+  description: string
+  // Absent/null means a legacy unscoped token carrying the owner's full access.
+  scopes?: TokenScope | null
+  owner_type: string
+  owner_id?: string
+  expires_at?: string
+  last_used_at?: string
+  created_at: string
+}
+
+export interface CreatedApiKey {
+  // Shown once at creation or rotation, never retrievable again.
+  key: string
+  api_key: ApiKey
+}
+
+export interface UnscopedKeyExposure {
+  id: string
+  name: string
+  member_id: string
+  member_display: string
+  member_email: string
+  expires_at?: string
+  last_used_at?: string
+  created_at: string
 }
 
 // A deduplicated scan-rule descriptor (one per tool+rule_id). Findings link to
@@ -776,6 +836,82 @@ class ApiClient {
 
   logout() {
     return fetch(`${API_BASE}/auth/logout`, { method: 'POST' })
+  }
+
+  listApiKeys() {
+    return this.request<ApiResponse<ApiKey[]>>('/users/me/api-keys')
+  }
+
+  createApiKey(body: { name: string; description?: string; scopes: TokenScope; expires_at: string }) {
+    return this.request<ApiResponse<CreatedApiKey>>('/users/me/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateApiKey(
+    keyID: string,
+    body: { name?: string; description?: string; scopes?: TokenScope; expires_at?: string },
+  ) {
+    return this.request<ApiResponse<ApiKey>>(`/users/me/api-keys/${keyID}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  }
+
+  rotateApiKey(keyID: string) {
+    return this.request<ApiResponse<CreatedApiKey>>(`/users/me/api-keys/${keyID}/rotate`, {
+      method: 'POST',
+    })
+  }
+
+  deleteApiKey(keyID: string) {
+    return this.request<void>(`/users/me/api-keys/${keyID}`, { method: 'DELETE' })
+  }
+
+  // Org-owned tokens (ADR-020): managed by any org admin, survive the creator
+  // leaving. All five require an admin browser session.
+  listOrgApiKeys(provider: string, slug: string) {
+    return this.request<ApiResponse<ApiKey[]>>(`/orgs/${provider}/${slug}/api-keys`)
+  }
+
+  // Legacy full-access tokens owned by org members — the org's real token risk
+  // surface until they are restricted or expire. Admin-only, visibility-only.
+  listOrgTokenExposure(provider: string, slug: string) {
+    return this.request<ApiResponse<UnscopedKeyExposure[]>>(`/orgs/${provider}/${slug}/api-keys/exposure`)
+  }
+
+  createOrgApiKey(
+    provider: string,
+    slug: string,
+    body: { name: string; description?: string; scopes: TokenScope; expires_at: string },
+  ) {
+    return this.request<ApiResponse<CreatedApiKey>>(`/orgs/${provider}/${slug}/api-keys`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateOrgApiKey(
+    provider: string,
+    slug: string,
+    keyID: string,
+    body: { name?: string; description?: string; scopes?: TokenScope; expires_at?: string },
+  ) {
+    return this.request<ApiResponse<ApiKey>>(`/orgs/${provider}/${slug}/api-keys/${keyID}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  }
+
+  rotateOrgApiKey(provider: string, slug: string, keyID: string) {
+    return this.request<ApiResponse<CreatedApiKey>>(`/orgs/${provider}/${slug}/api-keys/${keyID}/rotate`, {
+      method: 'POST',
+    })
+  }
+
+  deleteOrgApiKey(provider: string, slug: string, keyID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/api-keys/${keyID}`, { method: 'DELETE' })
   }
 
   listOrgs() {

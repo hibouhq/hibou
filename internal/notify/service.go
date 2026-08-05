@@ -73,6 +73,9 @@ func (s *Service) Subscribe() {
 	s.bus.Subscribe(events.RetentionProtected, func(ctx context.Context, event events.Event) {
 		s.handleRetentionProtected(ctx, event.Payload)
 	})
+	s.bus.Subscribe(events.TokenExpiring, func(ctx context.Context, event events.Event) {
+		s.handleTokenExpiring(ctx, event.Payload)
+	})
 }
 
 func (s *Service) handleScanCompleted(ctx context.Context, payload any) {
@@ -217,6 +220,27 @@ func (s *Service) handleRetentionProtected(ctx context.Context, payload any) {
 		Body:     body,
 		Link:     s.repoLink(ctx, repoID),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelHigh, Valid: true},
+	})
+}
+
+func (s *Service) handleTokenExpiring(ctx context.Context, payload any) {
+	data, _ := payload.(map[string]any)
+	recipients := userIDsFromPayload(data)
+	if len(recipients) == 0 {
+		return
+	}
+
+	tokenName := stringValue(data, "token_name", "an API token")
+	body := "API token " + tokenName + " expires soon — rotate it or extend its expiry before it stops working"
+	if expiresAt, ok := data["expires_at"].(string); ok && expiresAt != "" {
+		body = "API token " + tokenName + " expires " + expiresAt + " — rotate it or extend its expiry before it stops working"
+	}
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.TokenExpiring),
+		Title:    "API token expiring soon",
+		Body:     body,
+		Link:     "/settings/api-keys",
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelMedium, Valid: true},
 	})
 }
 

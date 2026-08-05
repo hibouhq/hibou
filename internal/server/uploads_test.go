@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/apitoken"
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/objstore"
 	"github.com/hibouhq/hibou/internal/retention"
@@ -208,6 +209,41 @@ func TestUploadAutoEnrollsUnknownRepository(t *testing.T) {
 	}
 	if want := org.Slug + "/" + slug; repo.ProviderID != want {
 		t.Fatalf("provider_id = %q, want %q", repo.ProviderID, want)
+	}
+}
+
+func TestUploadAutoDeniedScopedTokenDoesNotEnrollRepository(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	slug := uniqueName(t, "denied-repo")
+	body, err := json.Marshal(uploadPayloadForTest(org.Slug, slug, minimalSBOMForTest(), map[string]any{
+		"commit_sha": "denied-enrollment",
+	}))
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/upload", bytes.NewReader(body))
+	ctx := internalauth.WithUser(req.Context(), admin)
+	ctx = internalauth.WithTokenAuth(ctx, &internalauth.TokenAuth{Scoped: true, Scope: apitoken.Scope{
+		Org:   org.Slug,
+		Repos: apitoken.RepoSelector{Mode: apitoken.RepoList, Slugs: []string{"allowed-repo"}},
+		Permissions: map[apitoken.Capability]apitoken.AccessLevel{
+			apitoken.CapUploads: apitoken.AccessWrite,
+		},
+	}})
+	recorder := httptest.NewRecorder()
+	srv.handleUploadAuto(recorder, req.WithContext(ctx))
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	repo, err := srv.queries.GetRepositoryBySlug(context.Background(), org.ID, slug)
+	if err != nil {
+		t.Fatalf("GetRepositoryBySlug: %v", err)
+	}
+	if repo != nil {
+		t.Fatal("denied scoped upload must not enroll a repository")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -54,6 +55,9 @@ type orgVulnerabilityResponse struct {
 func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	org, ok := s.loadAuthorizedOrg(r, w)
 	if !ok {
+		return
+	}
+	if !s.enforceOrgWideCapability(w, r, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug) {
 		return
 	}
 
@@ -113,6 +117,9 @@ type orgComponentResponse struct {
 func (s *Server) handleListOrgComponents(w http.ResponseWriter, r *http.Request) {
 	org, ok := s.loadAuthorizedOrg(r, w)
 	if !ok {
+		return
+	}
+	if !s.enforceOrgWideCapability(w, r, apitoken.CapComponents, apitoken.AccessRead, org.Slug) {
 		return
 	}
 

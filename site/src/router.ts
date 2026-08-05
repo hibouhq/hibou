@@ -23,6 +23,7 @@ const router = createRouter({
             { path: 'overview', name: 'org-overview', component: () => import('@/views/org/OverviewTab.vue') },
             { path: 'vulnerabilities', name: 'org-vulnerabilities', component: () => import('@/views/org/VulnerabilitiesTab.vue') },
             { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
+            { path: 'access', name: 'org-access', component: () => import('@/views/org/AccessTab.vue') },
           ],
         },
         { path: 'orgs/:provider/:slug/search', name: 'search', component: () => import('@/views/SearchView.vue') },

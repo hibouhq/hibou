@@ -83,6 +83,11 @@ type Vulnerability struct {
 	AuthorEmail             *string         `json:"author_email,omitempty"`
 	Verified                *bool           `json:"verified,omitempty"`
 	CreatedBy               *uuid.UUID      `json:"created_by,omitempty"`
+	Origin                  string          `json:"origin"`
+	OriginAPIKeyID          *uuid.UUID      `json:"origin_api_key_id,omitempty"`
+	OriginTokenName         string          `json:"origin_token_name,omitempty"`
+	OriginOwnerType         string          `json:"origin_owner_type,omitempty"`
+	OriginOwnerID           *uuid.UUID      `json:"origin_owner_id,omitempty"`
 	Metadata                json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt               time.Time       `json:"created_at"`
 	UpdatedAt               time.Time       `json:"updated_at"`
@@ -93,6 +98,11 @@ type Vulnerability struct {
 func (q *Queries) CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*Vulnerability, error) {
 	if len(params.Metadata) == 0 {
 		params.Metadata = json.RawMessage(`{}`)
+	}
+	// Ingested tool reports are the overwhelming majority of writes and never
+	// carry a principal; anything that does must set it deliberately.
+	if params.Origin == "" {
+		params.Origin = dbgen.FindingOriginScanner
 	}
 
 	row, err := q.db.CreateVulnerability(ctx, params)
@@ -557,6 +567,11 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		AuthorEmail:             stringPtrFromNull(row.AuthorEmail),
 		Verified:                boolPtrFromNull(row.Verified),
 		CreatedBy:               uuidPtrFromNull(row.CreatedBy),
+		Origin:                  string(row.Origin),
+		OriginAPIKeyID:          uuidPtrFromNull(row.OriginApiKeyID),
+		OriginTokenName:         row.OriginTokenName,
+		OriginOwnerType:         row.OriginOwnerType,
+		OriginOwnerID:           uuidPtrFromNull(row.OriginOwnerID),
 		Metadata:                row.Metadata,
 		CreatedAt:               row.CreatedAt,
 		UpdatedAt:               row.UpdatedAt,
@@ -565,7 +580,7 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 	}
 }
 
-const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at"
+const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
 
 //nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
@@ -656,6 +671,11 @@ func scanVulnerabilityRow(scanner interface {
 		&row.UpdatedAt,
 		&row.FirstSeenAt,
 		&row.LastSeenAt,
+		&row.Origin,
+		&row.OriginApiKeyID,
+		&row.OriginTokenName,
+		&row.OriginOwnerType,
+		&row.OriginOwnerID,
 	)
 	return row, err
 }

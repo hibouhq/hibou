@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,13 +13,13 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/metrics"
 	"github.com/hibouhq/hibou/internal/secretscan"
 	"github.com/hibouhq/hibou/internal/store"
-	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/worker"
 )
 
@@ -77,6 +76,12 @@ func buildSecretScanProviders(cfg config.Config, log zerolog.Logger) []secretsca
 		default:
 			log.Warn().Str("provider", name).Msg("unknown secret scan provider, skipping")
 		}
+	}
+	// Hibou detecting its own hibou_pat_ tokens on the push-check path is never
+	// a configuration choice — but only augment a working setup: alone it would
+	// make baseline repo scans "complete" without having scanned anything.
+	if len(providers) > 0 {
+		providers = append(providers, secretscan.NewHibouTokenProvider(log))
 	}
 	return providers
 }
@@ -473,24 +478,9 @@ func (s *Server) handleTriggerSecretScan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ipAddress, userAgent := audit.RequestContext(r)
-	actorID := user.ID
-	orgID := org.ID
-	auditCtx, _ := json.Marshal(map[string]any{"job_id": job.ID.String(), "ref": refName, "mode": job.Mode})
-	if _, err := s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: actorID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
-		OrgID:        uuid.NullUUID{UUID: orgID, Valid: true},
-		Action:       audit.ActionScanTrigger,
-		ResourceType: "repository",
-		ResourceID:   repo.ID.String(),
-		Context:      auditCtx,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
-	}); err != nil {
-		s.log.Warn().Err(err).Str("repo_id", repo.ID.String()).Msg("audit secret scan trigger")
-	}
+	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionScanTrigger, map[string]any{
+		"job_id": job.ID.String(), "ref": refName, "mode": job.Mode,
+	})
 
 	api.JSON(w, http.StatusAccepted, struct {
 		JobID  uuid.UUID `json:"job_id"`
@@ -525,6 +515,14 @@ func (s *Server) handleSecretScanCheck(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())
 	if user == nil {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	// Deliberately unbound to an org/repo: the verdict concerns only the
+	// caller's own submitted patch and nothing is persisted, so secrets:read is
+	// the whole requirement — pre-receive hooks cannot reliably name hibou
+	// slugs. This makes secrets:read include push-check compute; documented in
+	// docs/api-tokens.md.
+	if !s.enforceTokenCapability(w, r, apitoken.CapSecrets, apitoken.AccessRead, "", "") {
 		return
 	}
 	if s.secretScanner == nil {

@@ -19,7 +19,6 @@ import (
 	"github.com/hibouhq/hibou/internal/comparison"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/store"
-	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type enrollRepoRequest struct {
@@ -612,23 +611,11 @@ func (s *Server) handleListRefs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeRepositoryAuditLog(r *http.Request, user *store.User, orgID, repoID uuid.UUID, action string, context map[string]any) {
-	contextBody, err := json.Marshal(context)
-	if err != nil {
-		contextBody = json.RawMessage(`{"status":"marshal_error"}`)
-	}
-
-	ipAddress, userAgent := audit.RequestContext(r)
-	_, _ = s.queries.CreateAuditLog(r.Context(), dbgen.CreateAuditLogParams{
-		ActorID:      uuid.NullUUID{UUID: user.ID, Valid: true},
-		ActorType:    audit.ActorUser,
-		ActorDisplay: actorDisplay(user),
+	s.writeAuditLog(r, user, orgAuditID(orgID), auditEntry{
 		Action:       action,
 		ResourceType: "repository",
 		ResourceID:   repoID.String(),
-		OrgID:        uuid.NullUUID{UUID: orgID, Valid: true},
-		Context:      contextBody,
-		IpAddress:    ipAddress,
-		UserAgent:    userAgent,
+		Context:      context,
 	})
 }
 

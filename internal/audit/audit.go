@@ -35,6 +35,7 @@ const (
 	ActionIntegrationDelete = "integration.delete"
 	ActionRepoEnrolled      = "repo.enrolled"
 	ActionFindingAcceptance = "finding.acceptance"
+	ActionFindingCreate     = "finding.create"
 	ActionRepoDetected      = "repo.detected"
 	ActionRepoArchived      = "repo.archived"
 	ActionRepoUnarchived    = "repo.unarchived"
@@ -46,6 +47,10 @@ const (
 	ActionRepoUpdate        = "repo.update"
 	ActionRepoDelete        = "repo.delete"
 	ActionSettingUpdate     = "setting.update"
+	ActionTokenCreate       = "token.create"
+	ActionTokenUpdate       = "token.update"
+	ActionTokenRotate       = "token.rotate"
+	ActionTokenRevoke       = "token.revoke"
 	ActionRetentionArchive  = "retention.archive"
 	ActionRetentionPurge    = "retention.purge"
 )

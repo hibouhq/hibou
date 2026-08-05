@@ -101,6 +101,35 @@ func (q *Queries) ListForgeOrgMemberIDs(ctx context.Context, orgID uuid.UUID) ([
 	return items, nil
 }
 
+const listOrgAdminIDs = `-- name: ListOrgAdminIDs :many
+SELECT user_id
+FROM org_members
+WHERE org_id = $1 AND role = 'admin'
+`
+
+func (q *Queries) ListOrgAdminIDs(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.QueryContext(ctx, listOrgAdminIDs, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrgMembers = `-- name: ListOrgMembers :many
 SELECT om.org_id, om.user_id, om.role, om.created_at,
     u.id AS user_id_2, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at

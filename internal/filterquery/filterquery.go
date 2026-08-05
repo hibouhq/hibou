@@ -68,6 +68,10 @@ var AllowedColumns = map[string]string{
 	"tool":     "scanner_name",
 	"language": "language",
 	"file":     "file_path",
+	"origin":   "origin",
+	// Revoking a token has to be able to pull back everything it filed, so the
+	// token id is a first-class filter: q=agent:<token-uuid>.
+	"agent": "origin_api_key_id",
 }
 
 const maxDepth = 16
@@ -297,7 +301,7 @@ func buildSQL(node Node, param int, depth int) (string, []interface{}, int, erro
 }
 
 func textNodeToSQL(node TextNode, param int) string {
-	return fmt.Sprintf("(title ILIKE '%%' || $%d || '%%' ESCAPE '\\\\' OR primary_identifier_value ILIKE '%%' || $%d || '%%' ESCAPE '\\\\')", param, param)
+	return fmt.Sprintf("(title ILIKE '%%' || $%d || '%%' ESCAPE '\\' OR primary_identifier_value ILIKE '%%' || $%d || '%%' ESCAPE '\\')", param, param)
 }
 
 func buildBinarySQL(operator string, left Node, right Node, param int, depth int) (string, []interface{}, int, error) {
@@ -332,7 +336,7 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 		return singleOrArraySQL(column, values, param, "%s::text = $%d", "%s::text = ANY($%d::text[])")
 	case "language":
 		return singleOrArraySQL("COALESCE("+column+", '')", values, param, "%s = $%d", "%s = ANY($%d::text[])")
-	case "type":
+	case "type", "origin", "agent":
 		return singleOrArraySQL(column, values, param, "%s::text = $%d", "%s::text = ANY($%d::text[])")
 	default:
 		return singleOrArraySQL(column, values, param, "%s = $%d", "%s = ANY($%d::text[])")
@@ -341,11 +345,11 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 
 func fileQualifierToSQL(column string, values []string, param int) string {
 	if len(values) == 1 {
-		return fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\\\'", column, param)
+		return fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\'", column, param)
 	}
 	parts := make([]string, 0, len(values))
 	for index := range values {
-		parts = append(parts, fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\\\'", column, param+index))
+		parts = append(parts, fmt.Sprintf("COALESCE(%s, '') ILIKE '%%' || $%d || '%%' ESCAPE '\\'", column, param+index))
 	}
 	return "(" + strings.Join(parts, " OR ") + ")"
 }
