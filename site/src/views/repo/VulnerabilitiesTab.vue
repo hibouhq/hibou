@@ -42,8 +42,9 @@
 
     <TriageDialog
       v-if="dialog"
-      :status="dialog.status"
+      :kind="dialog.kind"
       :count="dialog.fingerprints.length"
+      :component-backed="dialog.componentBacked"
       :error="dialogError"
       :submitting="dialogSubmitting"
       @cancel="closeTriageDialog"
@@ -71,20 +72,43 @@
         v-if="matchingTruncated"
         class="rounded border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] text-warning"
       >first {{ selected.size }} of {{ matchingTotal }} — apply, then repeat for the rest</span>
-      <button
-        type="button"
-        class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
-        @click="openTriageDialog('accepted', [...selected])"
-      >
-        Accept risk…
-      </button>
-      <button
-        type="button"
-        class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
-        @click="openTriageDialog('false_positive', [...selected])"
-      >
-        Mark false positive…
-      </button>
+      <div class="relative flex">
+        <button
+          type="button"
+          class="rounded-l-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
+          title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
+          @click="openTriageDialog('risk_accepted', [...selected])"
+        >
+          Accept
+        </button>
+        <button
+          type="button"
+          class="rounded-r-md border border-l-0 border-surface-border bg-surface-overlay px-1.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
+          aria-label="More accept options"
+          @click="bulkMenuOpen = !bulkMenuOpen"
+        >
+          ▾
+        </button>
+        <div
+          v-if="bulkMenuOpen"
+          class="absolute left-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
+        >
+          <button
+            type="button"
+            class="block w-full px-3 py-1.5 text-left text-xs text-gray-200 transition hover:bg-surface-overlay"
+            @click="bulkMenuOpen = false; openTriageDialog('risk_accepted', [...selected])"
+          >
+            Accept risk…
+          </button>
+          <button
+            type="button"
+            class="block w-full px-3 py-1.5 text-left text-xs text-gray-200 transition hover:bg-surface-overlay"
+            @click="bulkMenuOpen = false; openTriageDialog('false_positive', [...selected])"
+          >
+            False positive…
+          </button>
+        </div>
+      </div>
       <button
         type="button"
         class="rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1 text-xs text-gray-200 transition hover:border-accent/50 hover:text-white"
@@ -234,24 +258,52 @@
                   </button>
                   <div
                     v-else
-                    class="flex gap-1"
+                    class="relative flex"
                   >
                     <button
                       type="button"
-                      class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                      class="whitespace-nowrap rounded-l-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
                       title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
-                      @click.stop="openTriageDialog('accepted', [vulnerability.fingerprint])"
+                      @click.stop="openTriageDialog('risk_accepted', [vulnerability.fingerprint], vulnerability)"
                     >
-                      Accept risk…
+                      Accept
                     </button>
                     <button
                       type="button"
-                      class="rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
-                      title="Not a real issue. Requires a reason; suppressed from the gate."
-                      @click.stop="openTriageDialog('false_positive', [vulnerability.fingerprint])"
+                      class="rounded-r-lg border border-l-0 border-surface-border px-1.5 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                      aria-label="More accept options"
+                      @click.stop="rowMenuFor = rowMenuFor === vulnerability.id ? '' : vulnerability.id"
                     >
-                      False positive…
+                      ▾
                     </button>
+                    <div
+                      v-if="rowMenuFor === vulnerability.id"
+                      class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
+                    >
+                      <button
+                        type="button"
+                        class="block w-full px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
+                        @click.stop="rowMenuFor = ''; openTriageDialog('risk_accepted', [vulnerability.fingerprint], vulnerability)"
+                      >
+                        Accept risk…
+                      </button>
+                      <button
+                        type="button"
+                        class="block w-full px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
+                        @click.stop="rowMenuFor = ''; openTriageDialog('false_positive', [vulnerability.fingerprint], vulnerability)"
+                      >
+                        False positive…
+                      </button>
+                      <button
+                        v-if="vulnerability.type === 'secret'"
+                        type="button"
+                        class="block w-full border-t border-surface-border-subtle px-3 py-1.5 text-left text-[11px] text-emerald-300 transition hover:bg-surface-overlay"
+                        title="Attest that the credential was revoked and rotated — the only way a secret resolves"
+                        @click.stop="rowMenuFor = ''; markSecretRevoked(vulnerability)"
+                      >
+                        Mark revoked…
+                      </button>
+                    </div>
                   </div>
                 </td>
               </tr>
@@ -291,7 +343,7 @@ import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
 import { KeyRound } from 'lucide-vue-next'
 
-import { api, type FindingAcceptance, type ScanRule, type SecretScanJob, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { api, type AcceptanceReasonKind, type FindingAcceptance, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
@@ -306,7 +358,6 @@ const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 
 const vulnerabilities = ref<Vulnerability[]>([])
-const acceptances = ref<Map<string, FindingAcceptance>>(new Map())
 
 const secretScanRunning = ref(false)
 const secretScanMessage = ref('')
@@ -357,7 +408,6 @@ async function runSecretScan() {
   }
 }
 
-watch([provider, slug, repoSlug], () => { void loadAcceptances() }, { immediate: true })
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected,confirmed' })
 const searchQuery = ref('')
@@ -388,10 +438,12 @@ const statusOptions = ['detected', 'confirmed', 'dismissed', 'resolved']
 // current page. Order by descending count, then alphabetically.
 const toolOptions = computed(() => mergeFacetOptions(facetCounts.value.tool, seenTools.value))
 const fileOptions = computed(() => mergeFacetOptions(facetCounts.value.file, seenFiles.value))
+const acceptanceOptions = ['open', 'accepted', 'risk_accepted', 'false_positive']
 const filterDefs = computed(() => [
   { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected,confirmed' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
+  { key: 'acceptance', label: 'Triage', options: acceptanceOptions },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
 ])
@@ -404,7 +456,7 @@ const sortDirectionOptions = [
   { key: 'asc', label: '↑ Oldest' },
   { key: 'desc', label: '↓ Newest' },
 ]
-const filterKeys = ['type', 'severity', 'status', 'tool', 'file'] as const
+const filterKeys = ['type', 'severity', 'status', 'acceptance', 'tool', 'file'] as const
 const managedQueryKeys = [...filterKeys, 'search', 'sort', 'order', 'page'] as const
 const sortKeys = new Set(sortOptions.map((option) => option.key))
 const sortDirectionKeys = new Set(sortDirectionOptions.map((option) => option.key))
@@ -473,9 +525,7 @@ watch(
   },
 )
 
-watch(
-  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, currentSort, currentSortDirection, () => pagination.value.page],
-  async () => {
+async function loadVulnerabilities() {
     if (!provider.value || !slug.value || !repoSlug.value) {
       vulnerabilities.value = []
       return
@@ -492,6 +542,7 @@ watch(
         tool: activeFilters.value.tool || undefined,
         file: activeFilters.value.file || undefined,
         search: searchQuery.value || undefined,
+        acceptance: activeFilters.value.acceptance || undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,
         per_page: pagination.value.per_page,
@@ -537,7 +588,11 @@ watch(
     } finally {
       loading.value = false
     }
-  },
+}
+
+watch(
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, currentSort, currentSortDirection, () => pagination.value.page],
+  () => { void loadVulnerabilities() },
   { immediate: true },
 )
 
@@ -570,6 +625,7 @@ watch(
         tool: activeFilters.value.tool || undefined,
         file: activeFilters.value.file || undefined,
         search: searchQuery.value || undefined,
+        acceptance: activeFilters.value.acceptance || undefined,
       })
       facetCounts.value = facetsRes.data
     } catch {
@@ -717,17 +773,11 @@ function typeBadgeClass(type: string) {
   return classes[type] || classes.generic
 }
 
+// ADR-023: the acceptance projection is joined server-side onto every row —
+// no second request, no client-side join, and filters like acceptance:fp are
+// real SQL predicates.
 function acceptanceFor(vulnerability: Vulnerability): FindingAcceptance | undefined {
-  return acceptances.value.get(vulnerability.fingerprint)
-}
-
-async function loadAcceptances() {
-  try {
-    const res = await api.listFindingAcceptances(provider.value, slug.value, repoSlug.value)
-    acceptances.value = new Map((res.data ?? []).map((a) => [a.fingerprint, a]))
-  } catch {
-    acceptances.value = new Map()
-  }
+  return vulnerability.acceptance
 }
 
 // ─── Triage: one decision, one reason, any number of findings ────────────────
@@ -739,7 +789,9 @@ const selected = reactive(new Set<string>())
 // Targets are fingerprints, not row objects: a filter-wide selection includes
 // findings that are not on the current page, and keying off rows would have
 // silently triaged only the visible subset.
-const dialog = ref<{ status: 'accepted' | 'false_positive'; fingerprints: string[] } | null>(null)
+const dialog = ref<{ kind: AcceptanceReasonKind; fingerprints: string[]; componentBacked: boolean; vulnID?: string } | null>(null)
+const bulkMenuOpen = ref(false)
+const rowMenuFor = ref('')
 const dialogError = ref('')
 const dialogSubmitting = ref(false)
 const batchMessage = ref('')
@@ -830,12 +882,19 @@ function clearSelection() {
   selectAllError.value = ''
 }
 
-function openTriageDialog(status: 'accepted' | 'false_positive', fingerprints: string[]) {
+function openTriageDialog(kind: AcceptanceReasonKind, fingerprints: string[], vulnerability?: Vulnerability) {
   const unique = [...new Set(fingerprints.filter(Boolean))]
   if (unique.length === 0) return
   dialogError.value = ''
   batchMessage.value = ''
-  dialog.value = { status, fingerprints: unique }
+  dialog.value = {
+    kind,
+    fingerprints: unique,
+    // VEX vocabulary only for a single component-backed finding — batch
+    // decisions never carry per-component statements.
+    componentBacked: unique.length === 1 && !!vulnerability && (vulnerability.type === 'dependency' || vulnerability.type === 'container'),
+    vulnID: unique.length === 1 ? vulnerability?.id : undefined,
+  }
 }
 
 function closeTriageDialog() {
@@ -844,13 +903,27 @@ function closeTriageDialog() {
   dialogSubmitting.value = false
 }
 
-async function confirmTriageDialog(payload: { reason: string; expiresAt?: string }) {
+async function confirmTriageDialog(payload: { reason: string; labels: string[]; vexJustification?: VexJustification; expiresAt?: string }) {
   if (!dialog.value) return
-  const { status, fingerprints } = dialog.value
+  const { kind, fingerprints, vulnID } = dialog.value
   dialogSubmitting.value = true
   dialogError.value = ''
   try {
-    await applyTriage(status, fingerprints, payload.reason, payload.expiresAt)
+    if (vulnID && payload.vexJustification) {
+      // Single finding with a VEX justification goes through the per-finding
+      // endpoint — the batch endpoint deliberately rejects VEX vocabulary.
+      await api.setFindingAcceptance(provider.value, slug.value, repoSlug.value, vulnID, {
+        status: 'accepted',
+        reason_kind: kind,
+        reason: payload.reason,
+        labels: payload.labels,
+        vex_justification: payload.vexJustification,
+        expires_at: payload.expiresAt,
+      })
+      await loadVulnerabilities()
+    } else {
+      await applyTriage('accepted', fingerprints, payload.reason, payload.expiresAt, kind, payload.labels)
+    }
     batchMessage.value = `${fingerprints.length} ${fingerprints.length === 1 ? 'finding' : 'findings'} updated.`
     closeTriageDialog()
     clearSelection()
@@ -877,17 +950,32 @@ async function reopenFindings(fingerprints: string[]) {
 
 // One finding still goes through the batch endpoint: same validation, same audit
 // shape, one code path to keep correct.
-async function applyTriage(status: 'accepted' | 'false_positive' | 'open', fingerprints: string[], reason: string, expiresAt?: string) {
+async function applyTriage(status: 'accepted' | 'open', fingerprints: string[], reason: string, expiresAt?: string, reasonKind?: AcceptanceReasonKind, labels?: string[]) {
   if (fingerprints.length === 0) return
   await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, {
     fingerprints,
     status,
+    reason_kind: reasonKind,
     reason: reason || undefined,
+    labels,
     expires_at: expiresAt,
   })
-  // Only acceptances changed; the badge derives from them, so no refetch of the
-  // findings list is needed.
-  await loadAcceptances()
+  // The acceptance projection rides the findings rows now (server-side join),
+  // so refresh the page we're on.
+  await loadVulnerabilities()
+}
+
+async function markSecretRevoked(vulnerability: Vulnerability) {
+  const comment = window.prompt('Attest revocation: how was this secret revoked/rotated? (recorded in the audit log)')
+  if (comment === null) return
+  batchMessage.value = ''
+  try {
+    await api.attestSecretRevocation(provider.value, slug.value, repoSlug.value, vulnerability.id, comment)
+    batchMessage.value = 'Secret marked revoked.'
+    await loadVulnerabilities()
+  } catch (error) {
+    secretScanError.value = error instanceof Error ? error.message : 'Failed to record revocation'
+  }
 }
 
 function triageFor(vulnerability: Vulnerability) {

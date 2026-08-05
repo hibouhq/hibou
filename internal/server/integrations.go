@@ -395,11 +395,7 @@ func cloneMap(input map[string]any) map[string]any {
 }
 
 func (s *Server) isOrgAdminMember(r *http.Request, orgID uuid.UUID) (bool, error) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		return false, nil
-	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), orgID, user.ID)
+	role, err := s.principalOrgRole(r, orgID)
 	if err != nil {
 		return false, err
 	}

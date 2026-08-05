@@ -645,7 +645,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "List org-owned API keys. Requires org admin.",
+                "description": "List org-owned API keys. Org admins see all of them; any other member sees only the keys they created (so a requester can follow their pending request).",
                 "produces": [
                     "application/json"
                 ],
@@ -717,7 +717,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create an org-owned API key and return the raw key once. Org-owned keys are always scoped to this organization and carry a mandatory expiry. Requires org admin.",
+                "description": "Create an org-owned API key and return the raw key once. Org-owned keys are always scoped to this organization and carry a mandatory expiry. Any org member may create one; a token created by a non-admin stays pending — and fails authentication — until an org admin approves it (like GitHub fine-grained PATs).",
                 "consumes": [
                     "application/json"
                 ],
@@ -947,7 +947,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Update an org-owned API key's name, description, scope, or expiry. Requires org admin.",
+                "description": "Update an org-owned API key's name, description, scope, or expiry. Org admins can edit any org key; a member can edit a key they created — widening its scope drops it back to pending review (ADR-022 amendment).",
                 "consumes": [
                     "application/json"
                 ],
@@ -988,6 +988,174 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/server.updateAPIKeyRequest"
                         }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.APIKey"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/api-keys/{keyID}/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Approve a member-requested org token so it can authenticate. The scope ceiling is re-validated at review time. Requires org admin.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "api-keys"
+                ],
+                "summary": "Approve organization API key",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "API key ID",
+                        "name": "keyID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.APIKey"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/api-keys/{keyID}/reject": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Reject a member-requested org token; it will never authenticate. Requires org admin.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "api-keys"
+                ],
+                "summary": "Reject organization API key",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "API key ID",
+                        "name": "keyID",
+                        "in": "path",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -4637,6 +4805,115 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/revocation": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Marks a leaked-secret finding resolved after a human verified the credential was revoked/rotated. Secrets never auto-resolve from scan absence (ADR-023) — this attestation is the only resolution path.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Attest secret revocation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Vulnerability ID",
+                        "name": "vulnID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Attestation",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.secretRevocationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.Vulnerability"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/search": {
             "get": {
                 "security": [
@@ -5977,10 +6254,20 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "reason": {
                     "type": "string"
                 },
+                "reason_kind": {
+                    "type": "string"
+                },
                 "status": {
+                    "description": "Status: \"accepted\" | \"open\"; ReasonKind required on accept (ADR-023).",
                     "type": "string"
                 }
             }
@@ -6489,11 +6776,25 @@ const docTemplate = `{
                 "expires_at": {
                     "type": "string"
                 },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "reason": {
                     "type": "string"
                 },
+                "reason_kind": {
+                    "description": "ReasonKind is required on accept: \"risk_accepted\" | \"false_positive\".",
+                    "type": "string"
+                },
                 "status": {
-                    "description": "Status: \"accepted\" | \"false_positive\" to suppress, \"open\" to unaccept.",
+                    "description": "Status: \"accepted\" or \"open\" — the only transition (ADR-023).",
+                    "type": "string"
+                },
+                "vex_justification": {
+                    "description": "VEXJustification: only for false-positive dependency findings — the\nstandard CISA/OpenVEX vocabulary for the generated not_affected statement.",
                     "type": "string"
                 }
             }
@@ -6747,6 +7048,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.secretRevocationRequest": {
+            "type": "object",
+            "properties": {
+                "comment": {
                     "type": "string"
                 }
             }
@@ -7085,6 +7394,16 @@ const docTemplate = `{
         "store.APIKey": {
             "type": "object",
             "properties": {
+                "approval_status": {
+                    "description": "ApprovalStatus gates authentication for member-requested org tokens\n(ADR-022 amendment): only \"approved\" tokens authenticate.",
+                    "type": "string"
+                },
+                "approved_at": {
+                    "type": "string"
+                },
+                "approved_by": {
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -7122,6 +7441,7 @@ const docTemplate = `{
                     "$ref": "#/definitions/store.User"
                 },
                 "user_id": {
+                    "description": "UserID is the creating user — provenance, not identity (ADR-022). Nil\nwhen the creator was deleted; org-owned keys keep working then.",
                     "type": "string"
                 }
             }
@@ -7210,13 +7530,22 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "reason": {
+                    "type": "string"
+                },
+                "reason_kind": {
                     "type": "string"
                 },
                 "repo_id": {
                     "type": "string"
                 },
-                "status": {
+                "vex_justification": {
                     "type": "string"
                 }
             }
@@ -7642,6 +7971,14 @@ const docTemplate = `{
         "store.Vulnerability": {
             "type": "object",
             "properties": {
+                "acceptance": {
+                    "description": "Acceptance is the ADR-023 decision projection, joined server-side in the\nlist queries. Nil = open.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.VulnerabilityAcceptance"
+                        }
+                    ]
+                },
                 "advisory_id": {
                     "type": "string"
                 },
@@ -7833,6 +8170,35 @@ const docTemplate = `{
                 },
                 "verified": {
                     "type": "boolean"
+                }
+            }
+        },
+        "store.VulnerabilityAcceptance": {
+            "type": "object",
+            "properties": {
+                "accepted_by": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "reason_kind": {
+                    "type": "string"
+                },
+                "vex_justification": {
+                    "type": "string"
                 }
             }
         },

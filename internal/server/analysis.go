@@ -128,6 +128,7 @@ func vulnerabilityListOptionsFromRequest(r *http.Request, limit, offset int) sto
 		Languages:  csvQueryFilterValues(r.URL.Query().Get("language")),
 		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
 		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+		Acceptance: strings.TrimSpace(r.URL.Query().Get("acceptance")),
 		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
 		Limit:      limit,
 		Offset:     offset,
@@ -371,6 +372,7 @@ func (s *Server) handleGetRefFindingFacets(w http.ResponseWriter, r *http.Reques
 		Languages:  csvQueryFilterValues(r.URL.Query().Get("language")),
 		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
 		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+		Acceptance: strings.TrimSpace(r.URL.Query().Get("acceptance")),
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to compute facets")
@@ -735,8 +737,7 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 }
 
 func (s *Server) loadAuthorizedOrg(r *http.Request, w http.ResponseWriter) (*store.Organization, bool) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, false
 	}
@@ -751,7 +752,7 @@ func (s *Server) loadAuthorizedOrg(r *http.Request, w http.ResponseWriter) (*sto
 		return nil, false
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return nil, false

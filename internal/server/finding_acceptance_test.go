@@ -23,7 +23,7 @@ func TestFindingAcceptanceTokenScope(t *testing.T) {
 	srv, org, admin, repo, snapshotID := newBatchTriageFixture(t)
 	findingID, _ := seedTriageFindingWithID(t, srv, snapshotID, "G101")
 	call := func(tokenAuth *internalauth.TokenAuth) *httptest.ResponseRecorder {
-		payload, err := json.Marshal(map[string]any{"status": "accepted", "reason": "test scope"})
+		payload, err := json.Marshal(map[string]any{"status": "accepted", "reason_kind": "risk_accepted", "reason": "test scope"})
 		if err != nil {
 			t.Fatalf("json.Marshal: %v", err)
 		}
@@ -108,7 +108,10 @@ func TestFindingAcceptanceLifecycle(t *testing.T) {
 	if rec := call(map[string]any{"status": "accepted"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("accept without reason = %d, want 400", rec.Code)
 	}
-	if rec := call(map[string]any{"status": "accepted", "reason": "risk accepted for demo"}); rec.Code != http.StatusOK {
+	if rec := call(map[string]any{"status": "accepted", "reason": "no kind"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("accept without reason_kind = %d, want 400", rec.Code)
+	}
+	if rec := call(map[string]any{"status": "accepted", "reason_kind": "risk_accepted", "reason": "risk accepted for demo", "labels": []string{"Demo", "demo", " q3-review "}}); rec.Code != http.StatusOK {
 		t.Fatalf("accept = %d: %s", rec.Code, rec.Body.String())
 	}
 
@@ -118,6 +121,12 @@ func TestFindingAcceptanceLifecycle(t *testing.T) {
 	}
 	if acceptances[0].Fingerprint != fingerprint || acceptances[0].Reason != "risk accepted for demo" {
 		t.Fatalf("unexpected acceptance: %+v", acceptances[0])
+	}
+	if acceptances[0].ReasonKind != "risk_accepted" {
+		t.Fatalf("reason_kind = %q, want risk_accepted", acceptances[0].ReasonKind)
+	}
+	if len(acceptances[0].Labels) != 2 || acceptances[0].Labels[0] != "demo" || acceptances[0].Labels[1] != "q3-review" {
+		t.Fatalf("labels = %v, want normalized deduped [demo q3-review]", acceptances[0].Labels)
 	}
 
 	if rec := call(map[string]any{"status": "open"}); rec.Code != http.StatusOK {
@@ -200,6 +209,7 @@ func TestBatchFindingAcceptanceAppliesOneReasonToMany(t *testing.T) {
 	rec := callBatchTriage(t, srv, org, admin, repo, map[string]any{
 		"fingerprints": fingerprints,
 		"status":       "accepted",
+		"reason_kind":  "false_positive",
 		"reason":       "test fixtures, not production code",
 	})
 	if rec.Code != http.StatusOK {
@@ -214,8 +224,8 @@ func TestBatchFindingAcceptanceAppliesOneReasonToMany(t *testing.T) {
 		t.Fatalf("stored %d acceptances, want %d", len(acceptances), len(fingerprints))
 	}
 	for _, acceptance := range acceptances {
-		if acceptance.Reason != "test fixtures, not production code" || acceptance.Status != "accepted" {
-			t.Fatalf("acceptance = %+v, want the shared reason and accepted status", acceptance)
+		if acceptance.Reason != "test fixtures, not production code" || acceptance.ReasonKind != "false_positive" {
+			t.Fatalf("acceptance = %+v, want the shared reason and false_positive kind", acceptance)
 		}
 	}
 
@@ -275,6 +285,7 @@ func TestBatchFindingAcceptanceRejectsOversizedBatch(t *testing.T) {
 	rec := callBatchTriage(t, srv, org, admin, repo, map[string]any{
 		"fingerprints": oversized,
 		"status":       "accepted",
+		"reason_kind":  "risk_accepted",
 		"reason":       "too many",
 	})
 	if rec.Code != http.StatusBadRequest {
@@ -293,6 +304,7 @@ func TestBatchFindingAcceptanceSkipsForeignFingerprints(t *testing.T) {
 	rec := callBatchTriage(t, srv, org, admin, repo, map[string]any{
 		"fingerprints": []string{mine, foreign},
 		"status":       "accepted",
+		"reason_kind":  "risk_accepted",
 		"reason":       "mixed batch",
 	})
 	if rec.Code != http.StatusOK {
@@ -315,5 +327,72 @@ func TestBatchFindingAcceptanceSkipsForeignFingerprints(t *testing.T) {
 	}
 	if len(acceptances) != 1 || acceptances[0].Fingerprint != mine {
 		t.Fatalf("acceptances = %+v, want only the owned fingerprint", acceptances)
+	}
+}
+
+// The discrete acceptance filter (ADR-023): open / accepted / by reason kind,
+// applied server-side on the acceptance join in list, count and facets.
+func TestListVulnerabilitiesAcceptanceFilter(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, repo, snapshotID := newBatchTriageFixture(t)
+	accepted := seedTriageFinding(t, srv, snapshotID, "RULE-ACCEPTED")
+	seedTriageFinding(t, srv, snapshotID, "RULE-OPEN")
+
+	rec := callBatchTriage(t, srv, org, admin, repo, map[string]any{
+		"fingerprints": []string{accepted},
+		"status":       "accepted",
+		"reason_kind":  "false_positive",
+		"reason":       "scanner matches test fixture",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("accept = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	list := func(filter string) []store.Vulnerability {
+		t.Helper()
+		rows, total, err := srv.queries.ListVulnerabilitiesBySnapshot(context.Background(), snapshotID, store.VulnerabilityListOptions{
+			Acceptance: filter,
+			Limit:      50,
+		})
+		if err != nil {
+			t.Fatalf("list acceptance=%q: %v", filter, err)
+		}
+		if total != len(rows) {
+			t.Fatalf("acceptance=%q total = %d, rows = %d", filter, total, len(rows))
+		}
+		return rows
+	}
+
+	if rows := list(""); len(rows) != 2 {
+		t.Fatalf("no filter = %d rows, want 2", len(rows))
+	}
+	if rows := list("open"); len(rows) != 1 || rows[0].Fingerprint == accepted {
+		t.Fatalf("open = %+v, want only the untriaged finding", rows)
+	}
+	rows := list("accepted")
+	if len(rows) != 1 || rows[0].Fingerprint != accepted {
+		t.Fatalf("accepted = %+v, want only the accepted finding", rows)
+	}
+	if rows[0].Acceptance == nil || rows[0].Acceptance.ReasonKind != "false_positive" {
+		t.Fatalf("acceptance projection = %+v, want reason_kind=false_positive", rows[0].Acceptance)
+	}
+	if rows := list("false_positive"); len(rows) != 1 || rows[0].Fingerprint != accepted {
+		t.Fatalf("false_positive = %+v, want only the accepted finding", rows)
+	}
+	if rows := list("risk_accepted"); len(rows) != 0 {
+		t.Fatalf("risk_accepted = %d rows, want 0", len(rows))
+	}
+	// Unknown values are dropped, not silently matched to nothing.
+	if rows := list("bogus"); len(rows) != 2 {
+		t.Fatalf("bogus filter = %d rows, want 2 (filter ignored)", len(rows))
+	}
+
+	facets, err := srv.queries.FacetVulnerabilitiesBySnapshot(context.Background(), snapshotID, store.VulnerabilityListOptions{Acceptance: "open"})
+	if err != nil {
+		t.Fatalf("facets acceptance=open: %v", err)
+	}
+	if facets.Severity["low"] != 1 {
+		t.Fatalf("facets severity[low] = %d, want 1 (acceptance filter respected)", facets.Severity["low"])
 	}
 }

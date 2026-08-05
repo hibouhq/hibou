@@ -91,7 +91,13 @@ func authContextFunc(st MCPStore, log zerolog.Logger) server.HTTPContextFunc {
 			log.Debug().Err(err).Msg("failed to load MCP API key")
 			return ctx
 		}
-		if apiKey == nil || apiKey.User == nil {
+		// Mirror the HTTP bearer path: a user-owned key needs a living
+		// creator, an org-owned key is a service principal (ADR-022) and
+		// authenticates without one; pending/rejected keys never do.
+		if apiKey == nil || (apiKey.User == nil && !apiKey.IsOrgOwned()) {
+			return ctx
+		}
+		if !apiKey.IsApproved() {
 			return ctx
 		}
 		if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
@@ -103,7 +109,9 @@ func authContextFunc(st MCPStore, log zerolog.Logger) server.HTTPContextFunc {
 			}
 		}
 
-		ctx = withUser(ctx, apiKey.User)
+		if apiKey.User != nil && !apiKey.IsOrgOwned() {
+			ctx = withUser(ctx, apiKey.User)
+		}
 		return auth.WithTokenAuth(ctx, auth.TokenAuthForAPIKey(apiKey))
 	}
 }

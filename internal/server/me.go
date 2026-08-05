@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/auth"
 )
 
 // @Summary      Get current user
@@ -15,11 +16,19 @@ import (
 // @Security     BearerAuth
 // @Router       /users/me [get]
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+	if user := UserFromContext(r.Context()); user != nil {
+		api.JSON(w, http.StatusOK, user)
 		return
 	}
-
-	api.JSON(w, http.StatusOK, user)
+	// A service principal (ADR-022) has no user: identify the token.
+	if tokenAuth := auth.TokenAuthFromContext(r.Context()); tokenAuth.IsServicePrincipal() {
+		api.JSON(w, http.StatusOK, map[string]any{
+			"principal":  "service",
+			"token_name": tokenAuth.Name,
+			"owner_type": tokenAuth.OwnerType,
+			"owner_id":   tokenAuth.OwnerID,
+		})
+		return
+	}
+	api.JSONError(w, http.StatusUnauthorized, "authentication required")
 }

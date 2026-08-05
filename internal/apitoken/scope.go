@@ -173,6 +173,31 @@ func (s Scope) IsReadOnly() bool {
 	return true
 }
 
+// Widens reports whether `next` grants anything `s` did not: a capability at
+// a higher level, a repo outside the current selection, or list→all repo
+// mode. Narrowing and renames are not widening. Used by the approval flow
+// (ADR-022 amendment): a non-admin widening an approved org token drops it
+// back to pending review.
+func (s Scope) Widens(next Scope) bool {
+	for capability, level := range next.Permissions {
+		if level.rank() > s.level(capability).rank() {
+			return true
+		}
+	}
+	if next.Repos.Mode == RepoAll {
+		return s.Repos.Mode != RepoAll
+	}
+	if s.Repos.Mode == RepoAll {
+		return false
+	}
+	for _, slug := range next.Repos.Slugs {
+		if !s.Repos.Includes(slug) {
+			return true
+		}
+	}
+	return false
+}
+
 // HasPermissions reports whether the scope grants at least one capability.
 func (s Scope) HasPermissions() bool {
 	for _, level := range s.Permissions {

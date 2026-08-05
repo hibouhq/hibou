@@ -53,10 +53,6 @@ func (s *Server) handleCreateVEXStatement(w http.ResponseWriter, r *http.Request
 		return
 	}
 	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	var input createVEXStatementRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -69,7 +65,11 @@ func (s *Server) handleCreateVEXStatement(w http.ResponseWriter, r *http.Request
 		s.handleVEXLookupError(w, err)
 		return
 	}
-	params, err := buildCreateVEXParams(org.ID, repo.ID, user.ID, advisory.ID, input)
+	actorID := uuid.Nil
+	if user != nil {
+		actorID = user.ID
+	}
+	params, err := buildCreateVEXParams(org.ID, repo.ID, actorID, advisory.ID, input)
 	if err != nil {
 		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -148,10 +148,6 @@ func (s *Server) handleUpdateVEXStatement(w http.ResponseWriter, r *http.Request
 		return
 	}
 	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	existing, ok := s.loadVEXStatement(r, w, org.ID, repo.ID)
 	if !ok {
@@ -195,10 +191,6 @@ func (s *Server) handleDeleteVEXStatement(w http.ResponseWriter, r *http.Request
 		return
 	}
 	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	statement, ok := s.loadVEXStatement(r, w, org.ID, repo.ID)
 	if !ok {
@@ -224,10 +216,6 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
 
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
 	if format == "" {
@@ -257,7 +245,12 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := s.exportVEXDocument(r.Context(), rows, org, user, format)
+	synthesized, err := s.acceptanceVEXStatements(r.Context(), repo.ID, rows)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to derive VEX from acceptances")
+		return
+	}
+	payload, err := s.exportVEXDocument(r.Context(), rows, synthesized, org, user, format)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to export VEX document")
 		return
@@ -315,7 +308,7 @@ func buildCreateVEXParams(orgID, repoID, userID, advisoryID uuid.UUID, input cre
 		Source:            source,
 		SourceDocumentUrl: strings.TrimSpace(input.SourceDocumentURL),
 		Supplier:          strings.TrimSpace(input.Supplier),
-		CreatedBy:         uuid.NullUUID{UUID: userID, Valid: true},
+		CreatedBy:         uuid.NullUUID{UUID: userID, Valid: userID != uuid.Nil},
 		ExpiresAt:         expiresAt,
 	}, nil
 }
@@ -454,7 +447,65 @@ func (s *Server) handleVEXLookupError(w http.ResponseWriter, err error) {
 	api.JSONError(w, http.StatusInternalServerError, "failed to resolve advisory")
 }
 
-func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatement, org *store.Organization, user *store.User, format string) ([]byte, error) {
+// acceptanceVEXStatements synthesizes standard-conformant statements from
+// acceptance decisions on dependency findings (ADR-023): false_positive →
+// not_affected + justification; risk_accepted → affected + action statement.
+// Stored VEX statements win — an advisory already covered is skipped, so the
+// export never carries two voices about one advisory.
+func (s *Server) acceptanceVEXStatements(ctx context.Context, repoID uuid.UUID, stored []dbgen.VexStatement) ([]vex.Statement, error) {
+	rows, err := s.queries.ListAcceptedDependencyAdvisories(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	covered := make(map[uuid.UUID]struct{}, len(stored))
+	for _, statement := range stored {
+		covered[statement.AdvisoryID] = struct{}{}
+	}
+
+	statements := make([]vex.Statement, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if !row.AdvisoryID.Valid {
+			continue
+		}
+		if _, ok := covered[row.AdvisoryID.UUID]; ok {
+			continue
+		}
+		key := row.CanonicalID + "|" + row.ComponentPurl.String
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		statement := vex.Statement{
+			VulnerabilityID: row.CanonicalID,
+			ComponentPURL:   row.ComponentPurl.String,
+		}
+		if row.ReasonKind == dbgen.AcceptanceReasonKindFalsePositive {
+			statement.Status = string(dbgen.VexStatusNotAffected)
+			if row.VexJustification.Valid {
+				statement.Justification = string(row.VexJustification.VexJustification)
+			}
+			statement.ImpactStatement = row.Reason
+		} else {
+			// The standard requires an action statement on affected — and
+			// forbids a justification there.
+			statement.Status = string(dbgen.VexStatusAffected)
+			action := "Risk accepted"
+			if row.ExpiresAt.Valid {
+				action += " until " + row.ExpiresAt.Time.UTC().Format("2006-01-02")
+			}
+			if strings.TrimSpace(row.Reason) != "" {
+				action += ": " + strings.TrimSpace(row.Reason)
+			}
+			statement.ActionStatement = action
+		}
+		statements = append(statements, statement)
+	}
+	return statements, nil
+}
+
+func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatement, synthesized []vex.Statement, org *store.Organization, user *store.User, format string) ([]byte, error) {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.AdvisoryID)
@@ -489,6 +540,7 @@ func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatemen
 		}
 		statements = append(statements, statement)
 	}
+	statements = append(statements, synthesized...)
 	meta := vex.ExportMeta{
 		Author: actorDisplay(user),
 		Publisher: vex.ExportPublisher{

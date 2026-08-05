@@ -13,6 +13,7 @@ import (
 const (
 	ActionScanTrigger       = "scan.trigger"
 	ActionSecretDiscovered  = "secret.discovered"
+	ActionSecretRevoked     = "secret.revoked"
 	ActionVEXCreate         = "vex.create"
 	ActionVEXUpdate         = "vex.update"
 	ActionVEXRevoke         = "vex.revoke"
@@ -49,6 +50,8 @@ const (
 	ActionSettingUpdate     = "setting.update"
 	ActionTokenCreate       = "token.create"
 	ActionTokenUpdate       = "token.update"
+	ActionTokenApprove      = "token.approve"
+	ActionTokenReject       = "token.reject"
 	ActionTokenRotate       = "token.rotate"
 	ActionTokenRevoke       = "token.revoke"
 	ActionRetentionArchive  = "retention.archive"

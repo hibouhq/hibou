@@ -6,7 +6,7 @@ import { isAcceptanceActive, triageState } from './triage'
 function acceptance(overrides: Partial<FindingAcceptance> = {}): FindingAcceptance {
   return {
     fingerprint: 'fp',
-    status: 'accepted',
+    reason_kind: 'risk_accepted',
     reason: 'because',
     ...overrides,
   } as FindingAcceptance
@@ -30,7 +30,7 @@ describe('triageState', () => {
     // The acceptance is fingerprint-keyed and survives snapshots, so it is the
     // durable truth even when the scanner still calls the finding confirmed.
     expect(triageState({ status: 'confirmed' }, acceptance()).state).toBe('accepted_risk')
-    expect(triageState({ status: 'detected' }, acceptance({ status: 'false_positive' })).state).toBe('false_positive')
+    expect(triageState({ status: 'detected' }, acceptance({ reason_kind: 'false_positive' })).state).toBe('false_positive')
   })
 
   it('ignores an expired acceptance', () => {

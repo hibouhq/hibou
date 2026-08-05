@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/apitoken"
+	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -341,7 +342,8 @@ func (s *service) handleSearchComponents(ctx context.Context, request mcp.CallTo
 
 func (s *service) resolveOrgAndAuth(ctx context.Context, orgArg string) (*store.Organization, error) {
 	user := UserFromContext(ctx)
-	if user == nil {
+	tokenAuth := auth.TokenAuthFromContext(ctx)
+	if user == nil && !tokenAuth.IsServicePrincipal() {
 		return nil, errors.New("authentication required; provide a Bearer API key")
 	}
 	parts := strings.SplitN(strings.TrimSpace(orgArg), "/", 2)
@@ -355,6 +357,15 @@ func (s *service) resolveOrgAndAuth(ctx context.Context, orgArg string) (*store.
 	}
 	if org == nil {
 		return nil, fmt.Errorf("organization not found: %s", orgArg)
+	}
+
+	// A service principal's membership is ownership (ADR-022); users resolve
+	// via their stored role. The token scope is enforced separately.
+	if tokenAuth.IsServicePrincipal() {
+		if !tokenAuth.ActsForOrg(org.ID) {
+			return nil, fmt.Errorf("you do not have access to organization %s", orgArg)
+		}
+		return org, nil
 	}
 
 	role, err := s.store.GetOrgMemberRole(ctx, org.ID, user.ID)

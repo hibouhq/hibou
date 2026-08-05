@@ -254,10 +254,16 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		metrics.UploadsTotal.WithLabelValues(uploadType, status).Inc()
 	}()
 
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
+	}
+	user := UserFromContext(r.Context())
+	// Attribution-only (ADR-022): zero for a service principal; the audit log
+	// and finding provenance name the token itself.
+	actorID := uuid.Nil
+	if user != nil {
+		actorID = user.ID
 	}
 
 	input, content, err := s.parseAutoUploadRequest(w, r)
@@ -267,7 +273,7 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	org, repo, err := s.resolveUploadAuthorization(r, s.queries, user.ID, input.uploadRequest)
+	org, repo, err := s.resolveUploadAuthorization(r, s.queries, input.uploadRequest)
 	if err != nil {
 		s.writeUploadError(w, err)
 		return
@@ -280,7 +286,7 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if repo == nil {
-		repo, err = s.enrollUploadRepository(r, org, user.ID, input.uploadRequest)
+		repo, err = s.enrollUploadRepository(r, org, actorID, input.uploadRequest)
 		if err != nil {
 			s.writeUploadError(w, err)
 			return
@@ -289,7 +295,7 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if input.Artifact == nil {
-		snapshot, ok := s.completeUploadSnapshot(w, r, user.ID, input)
+		snapshot, ok := s.completeUploadSnapshot(w, r, actorID, input)
 		if !ok {
 			return
 		}
@@ -314,7 +320,7 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		tool = detectedTool
 	}
 
-	_ = s.handleDetectedUploadType(w, r, user.ID, detectedUpload{
+	_ = s.handleDetectedUploadType(w, r, actorID, detectedUpload{
 		input:        input,
 		content:      content,
 		detectedType: detectedType,
@@ -761,8 +767,7 @@ func (s *Server) completeUploadSnapshotIfNeeded(w http.ResponseWriter, r *http.R
 // @Security     BearerAuth
 // @Router       /uploads/{id}/status [get]
 func (s *Server) handleGetUploadStatus(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -803,7 +808,7 @@ func (s *Server) handleGetUploadStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), repo.OrgID, user.ID)
+	role, err := s.principalOrgRole(r, repo.OrgID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, failedToLoadUploadStatus)
 		return
@@ -898,7 +903,7 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 }
 
 func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
-	org, repo, err := s.resolveUploadAuthorization(r, queries, userID, input)
+	org, repo, err := s.resolveUploadAuthorization(r, queries, input)
 	if err != nil || repo != nil {
 		return org, repo, err
 	}
@@ -910,7 +915,7 @@ func (s *Server) resolveUploadScope(r *http.Request, queries *store.Queries, use
 	return org, repo, nil
 }
 
-func (s *Server) resolveUploadAuthorization(r *http.Request, queries *store.Queries, userID uuid.UUID, input uploadRequest) (*store.Organization, *store.Repository, error) {
+func (s *Server) resolveUploadAuthorization(r *http.Request, queries *store.Queries, input uploadRequest) (*store.Organization, *store.Repository, error) {
 	org, err := queries.GetOrganizationByProviderAndSlug(r.Context(), input.Provider, input.Org)
 	if err != nil {
 		return nil, nil, err
@@ -919,7 +924,10 @@ func (s *Server) resolveUploadAuthorization(r *http.Request, queries *store.Quer
 		return nil, nil, errNotFound("organization not found")
 	}
 
-	role, err := queries.GetOrgMemberRole(r.Context(), org.ID, userID)
+	// Principal-aware (ADR-022): a service principal authorizes by owning this
+	// org; users by stored membership. The upload scope itself is enforced by
+	// the token capability checks that follow.
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -17,10 +17,61 @@ import (
 )
 
 type findingAcceptanceRequest struct {
-	// Status: "accepted" | "false_positive" to suppress, "open" to unaccept.
-	Status    string     `json:"status"`
-	Reason    string     `json:"reason"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Status: "accepted" or "open" — the only transition (ADR-023).
+	Status string `json:"status"`
+	// ReasonKind is required on accept: "risk_accepted" | "false_positive".
+	ReasonKind string   `json:"reason_kind"`
+	Reason     string   `json:"reason"`
+	Labels     []string `json:"labels,omitempty"`
+	// VEXJustification: only for false-positive dependency findings — the
+	// standard CISA/OpenVEX vocabulary for the generated not_affected statement.
+	VEXJustification string     `json:"vex_justification,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+}
+
+// validateAcceptanceDecision enforces the ADR-023 rules shared by the single
+// and batch endpoints. componentBacked toggles VEX vocabulary legality.
+func validateAcceptanceDecision(reasonKind, reason, vexJustification string, expiresAt *time.Time, componentBacked bool) (string, error) {
+	switch reasonKind {
+	case "risk_accepted", "false_positive":
+	default:
+		return "", errAcceptance(`reason_kind must be "risk_accepted" or "false_positive"`)
+	}
+	if strings.TrimSpace(reason) == "" && vexJustification == "" {
+		return "", errAcceptance("a reason is required to accept a finding")
+	}
+	if expiresAt != nil && expiresAt.Before(time.Now()) {
+		return "", errAcceptance("expires_at must be in the future")
+	}
+	if vexJustification != "" {
+		if reasonKind != "false_positive" {
+			return "", errAcceptance("vex_justification is only valid with reason_kind=false_positive (the VEX standard forbids justifications on affected statements)")
+		}
+		if !componentBacked {
+			return "", errAcceptance("vex_justification only applies to component-backed (dependency) findings")
+		}
+		switch vexJustification {
+		case "component_not_present", "vulnerable_code_not_present",
+			"vulnerable_code_not_in_execute_path",
+			"vulnerable_code_cannot_be_controlled_by_adversary",
+			"inline_mitigations_already_exist":
+		default:
+			return "", errAcceptance("vex_justification must be one of the CISA/OpenVEX status justifications")
+		}
+	}
+	return reasonKind, nil
+}
+
+type acceptanceValidationError struct{ msg string }
+
+func (e acceptanceValidationError) Error() string { return e.msg }
+
+func errAcceptance(msg string) error { return acceptanceValidationError{msg: msg} }
+
+// componentBackedFindingType reports whether VEX vocabulary applies: VEX
+// describes exploitability of components in a product, nothing else.
+func componentBackedFindingType(findingType string) bool {
+	return findingType == "dependency" || findingType == "container"
 }
 
 // @Summary      Accept or reopen a finding
@@ -86,33 +137,68 @@ func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Reque
 		s.publishGateRecompute(r.Context(), repo.ID)
 		api.JSON(w, http.StatusOK, map[string]string{"status": "open"})
 		return
-	case "accepted", "false_positive":
+	case "accepted":
 	default:
-		api.JSONError(w, http.StatusBadRequest, "status must be accepted, false_positive, or open")
+		api.JSONError(w, http.StatusBadRequest, `status must be "accepted" or "open"`)
 		return
 	}
 
-	reason := strings.TrimSpace(input.Reason)
-	if reason == "" {
-		api.JSONError(w, http.StatusBadRequest, "a reason is required to accept a finding")
-		return
-	}
-	if input.ExpiresAt != nil && input.ExpiresAt.Before(time.Now()) {
-		api.JSONError(w, http.StatusBadRequest, "expires_at must be in the future")
+	reasonKind, err := validateAcceptanceDecision(input.ReasonKind, input.Reason, input.VEXJustification, input.ExpiresAt, componentBackedFindingType(vulnerability.Type))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	userID := user.ID
-	acceptance, err := s.queries.UpsertFindingAcceptance(r.Context(), repo.ID, fingerprint, status, reason, &userID, input.ExpiresAt)
+	var acceptedBy *uuid.UUID
+	if user != nil {
+		acceptedBy = &user.ID
+	}
+	var vexJustification *string
+	if input.VEXJustification != "" {
+		vexJustification = &input.VEXJustification
+	}
+	acceptance, err := s.queries.UpsertFindingAcceptance(r.Context(), store.AcceptFindingInput{
+		RepoID:           repo.ID,
+		Fingerprint:      fingerprint,
+		ReasonKind:       reasonKind,
+		Reason:           strings.TrimSpace(input.Reason),
+		Labels:           normalizeAcceptanceLabels(input.Labels),
+		VEXJustification: vexJustification,
+		AcceptedBy:       acceptedBy,
+		ExpiresAt:        input.ExpiresAt,
+	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to store acceptance")
 		return
 	}
 
-	s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, status, reason)
+	s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, reasonKind, input.Reason)
 	// The gate must reflect the decision immediately, without a CI re-run.
 	s.publishGateRecompute(r.Context(), repo.ID)
 	api.JSON(w, http.StatusOK, acceptance)
+}
+
+// normalizeAcceptanceLabels trims, lowercases, dedupes, and bounds labels —
+// they are for filtering, so canonical form matters more than fidelity.
+func normalizeAcceptanceLabels(labels []string) []string {
+	const maxLabels = 16
+	seen := make(map[string]struct{}, len(labels))
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		normalized := strings.ToLower(strings.TrimSpace(label))
+		if normalized == "" || len(normalized) > 64 {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+		if len(out) == maxLabels {
+			break
+		}
+	}
+	return out
 }
 
 // maxBatchAcceptance bounds one request so a runaway "select all" cannot write
@@ -122,10 +208,13 @@ const maxBatchAcceptance = 500
 type batchAcceptanceRequest struct {
 	// Fingerprints identify the findings; decisions are fingerprint-keyed so they
 	// survive snapshot churn, same as the single-finding endpoint.
-	Fingerprints []string   `json:"fingerprints"`
-	Status       string     `json:"status"`
-	Reason       string     `json:"reason"`
-	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	Fingerprints []string `json:"fingerprints"`
+	// Status: "accepted" | "open"; ReasonKind required on accept (ADR-023).
+	Status     string     `json:"status"`
+	ReasonKind string     `json:"reason_kind"`
+	Reason     string     `json:"reason"`
+	Labels     []string   `json:"labels,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 }
 
 type batchAcceptanceResponse struct {
@@ -165,18 +254,21 @@ func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Req
 	}
 
 	status := strings.ToLower(strings.TrimSpace(input.Status))
-	if status != "open" && status != "accepted" && status != "false_positive" {
-		api.JSONError(w, http.StatusBadRequest, "status must be accepted, false_positive, or open")
+	if status != "open" && status != "accepted" {
+		api.JSONError(w, http.StatusBadRequest, `status must be "accepted" or "open"`)
 		return
 	}
 	reason := strings.TrimSpace(input.Reason)
-	if status != "open" && reason == "" {
-		api.JSONError(w, http.StatusBadRequest, "a reason is required to accept findings")
-		return
-	}
-	if input.ExpiresAt != nil && input.ExpiresAt.Before(time.Now()) {
-		api.JSONError(w, http.StatusBadRequest, "expires_at must be in the future")
-		return
+	reasonKind := input.ReasonKind
+	if status == "accepted" {
+		// Batch decisions never carry VEX justifications: those are
+		// per-finding statements about specific components.
+		var err error
+		reasonKind, err = validateAcceptanceDecision(input.ReasonKind, reason, "", input.ExpiresAt, false)
+		if err != nil {
+			api.JSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	requested := dedupeFingerprints(input.Fingerprints)
@@ -200,7 +292,10 @@ func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	userID := user.ID
+	var acceptedBy *uuid.UUID
+	if user != nil {
+		acceptedBy = &user.ID
+	}
 	applied := 0
 	for _, fingerprint := range owned {
 		if status == "open" {
@@ -208,14 +303,26 @@ func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Req
 				api.JSONError(w, http.StatusInternalServerError, "failed to reopen findings")
 				return
 			}
-		} else if _, err := s.queries.UpsertFindingAcceptance(r.Context(), repo.ID, fingerprint, status, reason, &userID, input.ExpiresAt); err != nil {
+		} else if _, err := s.queries.UpsertFindingAcceptance(r.Context(), store.AcceptFindingInput{
+			RepoID:      repo.ID,
+			Fingerprint: fingerprint,
+			ReasonKind:  reasonKind,
+			Reason:      reason,
+			Labels:      normalizeAcceptanceLabels(input.Labels),
+			AcceptedBy:  acceptedBy,
+			ExpiresAt:   input.ExpiresAt,
+		}); err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to store acceptances")
 			return
 		}
 		applied++
 		// One audit entry per finding: a batch decision must stay individually
 		// auditable, otherwise the trail cannot answer "who suppressed this one".
-		s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, status, reason)
+		auditKind := status
+		if status == "accepted" {
+			auditKind = reasonKind
+		}
+		s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, auditKind, reason)
 	}
 
 	// One recompute for the whole batch, not one per finding.
@@ -290,4 +397,83 @@ func (s *Server) writeAcceptanceAuditLog(r *http.Request, user *store.User, orgI
 		"status":      status,
 		"reason":      reason,
 	})
+}
+
+type secretRevocationRequest struct {
+	Comment string `json:"comment"`
+}
+
+// @Summary      Attest secret revocation
+// @Description  Marks a leaked-secret finding resolved after a human verified the credential was revoked/rotated. Secrets never auto-resolve from scan absence (ADR-023) — this attestation is the only resolution path.
+// @Tags         vulnerabilities
+// @Accept       json
+// @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
+// @Param        slug      path  string  true  "Organization slug"
+// @Param        repoSlug  path  string  true  "Repository slug"
+// @Param        vulnID    path  string  true  "Vulnerability ID"
+// @Param        payload   body  server.secretRevocationRequest  true  "Attestation"
+// @Success      200  {object}  api.Response{data=store.Vulnerability}
+// @Failure      400  {object}  api.Response
+// @Failure      401  {object}  api.Response
+// @Failure      403  {object}  api.Response
+// @Failure      404  {object}  api.Response
+// @Failure      422  {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/revocation [post]
+func (s *Server) handleAttestSecretRevocation(w http.ResponseWriter, r *http.Request) {
+	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, false)
+	if !ok {
+		return
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapTriage, apitoken.AccessWrite, org.Slug, repo.Slug) {
+		return
+	}
+
+	vulnID, err := uuid.Parse(chi.URLParam(r, "vulnID"))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid vulnerability id")
+		return
+	}
+	vulnerability, err := s.queries.GetVulnerabilityByID(r.Context(), vulnID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding")
+		return
+	}
+	if vulnerability == nil || !s.vulnerabilityBelongsToRepo(r, repo, vulnerability) {
+		api.JSONError(w, http.StatusNotFound, "finding not found")
+		return
+	}
+	if vulnerability.Type != "secret" {
+		api.JSONError(w, http.StatusUnprocessableEntity, "revocation attestation only applies to secret findings; other types resolve when scans stop reporting them")
+		return
+	}
+
+	var input secretRevocationRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	comment := "secret revoked & rotated (attested)"
+	if strings.TrimSpace(input.Comment) != "" {
+		comment += ": " + strings.TrimSpace(input.Comment)
+	}
+	var attestedBy *uuid.UUID
+	if user != nil {
+		attestedBy = &user.ID
+	}
+	updated, err := s.queries.UpdateVulnerabilityStatus(r.Context(), vulnID, "resolved", &comment, nil, attestedBy)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to record revocation")
+		return
+	}
+
+	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionSecretRevoked, map[string]any{
+		"finding_id":  vulnID.String(),
+		"fingerprint": vulnerability.Fingerprint,
+		"comment":     strings.TrimSpace(input.Comment),
+	})
+	s.publishGateRecompute(r.Context(), repo.ID)
+	api.JSON(w, http.StatusOK, updated)
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/auth"
@@ -35,6 +37,38 @@ func requestTarget(org, repoSlug string) string {
 		return org
 	}
 	return org + "/" + repoSlug
+}
+
+// principalOrgRole resolves the requesting principal's effective role in an
+// org. A service principal (org-owned token, ADR-022) acting for THIS org is
+// an "admin" when its scope grants admin:write, otherwise a member-equivalent
+// "developer"; it has no role in any other org. Users resolve to their stored
+// membership role. Empty string = no access. The token scope is enforced
+// separately (route guard + capability checks) — this answers only the
+// membership/RBAC question the handlers ask.
+func (s *Server) principalOrgRole(r *http.Request, orgID uuid.UUID) (string, error) {
+	if tokenAuth := auth.TokenAuthFromContext(r.Context()); tokenAuth.IsServicePrincipal() {
+		if !tokenAuth.ActsForOrg(orgID) {
+			return "", nil
+		}
+		if tokenAuth.Scope.Allows(apitoken.CapAdmin, apitoken.AccessWrite, "", "") {
+			return "admin", nil
+		}
+		return "developer", nil
+	}
+
+	user := UserFromContext(r.Context())
+	if user == nil {
+		return "", nil
+	}
+	return s.queries.GetOrgMemberRole(r.Context(), orgID, user.ID)
+}
+
+// hasPrincipal reports whether the request carries any authenticated
+// principal — a user (session or user-owned token) or an org service
+// principal. The unauthenticated 401 keeps its meaning under ADR-022.
+func (s *Server) hasPrincipal(r *http.Request) bool {
+	return UserFromContext(r.Context()) != nil || auth.TokenAuthFromContext(r.Context()).IsServicePrincipal()
 }
 
 func (s *Server) enforceTokenCapability(w http.ResponseWriter, r *http.Request, cap apitoken.Capability, need apitoken.AccessLevel, org, repoSlug string) bool {

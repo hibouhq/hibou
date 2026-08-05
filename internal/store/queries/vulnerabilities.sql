@@ -65,35 +65,60 @@ RETURNING *;
 SELECT * FROM vulnerabilities WHERE id = $1;
 
 -- name: ListVulnerabilitiesBySnapshot :many
-SELECT * FROM vulnerabilities
-WHERE snapshot_id = $1
-  AND status = ANY(@statuses::vulnerability_status[])
-  AND (COALESCE(array_length(@types::text[], 1), 0) = 0 OR type::text = ANY(@types::text[]))
-  AND (COALESCE(array_length(@severities::text[], 1), 0) = 0 OR severity::text = ANY(@severities::text[]))
-  AND (COALESCE(array_length(@scanners::text[], 1), 0) = 0 OR scanner_name = ANY(@scanners::text[]))
-  AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(language, '') = ANY(@languages::text[]))
-  AND (@file_query::text = '' OR COALESCE(file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
-  AND (@search::text = '' OR (title ILIKE '%' || @search::text || '%' ESCAPE '\' OR primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'))
+-- The acceptance LEFT JOIN is the ADR-023 hot read: decision status is
+-- computed server-side off the (repo_id, fingerprint) unique index,
+-- O(page size) lookups, never a client-side join.
+SELECT sqlc.embed(v),
+  fa.reason_kind AS acceptance_reason_kind,
+  fa.reason AS acceptance_reason,
+  fa.labels AS acceptance_labels,
+  fa.vex_justification AS acceptance_vex_justification,
+  fa.accepted_by AS acceptance_accepted_by,
+  fa.expires_at AS acceptance_expires_at,
+  fa.created_at AS acceptance_created_at
+FROM vulnerabilities v
+LEFT JOIN finding_acceptances fa
+  ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+  AND (fa.expires_at IS NULL OR fa.expires_at > now())
+WHERE v.snapshot_id = $1
+  AND v.status = ANY(@statuses::vulnerability_status[])
+  AND (COALESCE(array_length(@types::text[], 1), 0) = 0 OR v.type::text = ANY(@types::text[]))
+  AND (COALESCE(array_length(@severities::text[], 1), 0) = 0 OR v.severity::text = ANY(@severities::text[]))
+  AND (COALESCE(array_length(@scanners::text[], 1), 0) = 0 OR v.scanner_name = ANY(@scanners::text[]))
+  AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(v.language, '') = ANY(@languages::text[]))
+  AND (@file_query::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
+  AND (@search::text = '' OR (v.title ILIKE '%' || @search::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'))
+  AND (@acceptance::text = ''
+       OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
+       OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR fa.reason_kind::text = @acceptance::text)
 ORDER BY
-  CASE WHEN @sort::text = 'severity_asc' THEN severity_rank END ASC,
-  CASE WHEN @sort::text = 'severity_desc' THEN severity_rank END DESC,
-  CASE WHEN @sort::text = 'status_asc' THEN status END ASC,
-  CASE WHEN @sort::text = 'status_desc' THEN status END DESC,
-  CASE WHEN @sort::text = 'detected_asc' THEN detected_at END ASC,
-  CASE WHEN @sort::text = 'detected_desc' OR @sort::text = '' THEN detected_at END DESC,
-  id DESC
+  CASE WHEN @sort::text = 'severity_asc' THEN v.severity_rank END ASC,
+  CASE WHEN @sort::text = 'severity_desc' THEN v.severity_rank END DESC,
+  CASE WHEN @sort::text = 'status_asc' THEN v.status END ASC,
+  CASE WHEN @sort::text = 'status_desc' THEN v.status END DESC,
+  CASE WHEN @sort::text = 'detected_asc' THEN v.detected_at END ASC,
+  CASE WHEN @sort::text = 'detected_desc' OR @sort::text = '' THEN v.detected_at END DESC,
+  v.id DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CountVulnerabilitiesBySnapshot :one
-SELECT COUNT(*)::bigint FROM vulnerabilities
-WHERE snapshot_id = $1
-  AND status = ANY(@statuses::vulnerability_status[])
-  AND (COALESCE(array_length(@types::text[], 1), 0) = 0 OR type::text = ANY(@types::text[]))
-  AND (COALESCE(array_length(@severities::text[], 1), 0) = 0 OR severity::text = ANY(@severities::text[]))
-  AND (COALESCE(array_length(@scanners::text[], 1), 0) = 0 OR scanner_name = ANY(@scanners::text[]))
-  AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(language, '') = ANY(@languages::text[]))
-  AND (@file_query::text = '' OR COALESCE(file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
-  AND (@search::text = '' OR (title ILIKE '%' || @search::text || '%' ESCAPE '\' OR primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'));
+SELECT COUNT(*)::bigint FROM vulnerabilities v
+LEFT JOIN finding_acceptances fa
+  ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+  AND (fa.expires_at IS NULL OR fa.expires_at > now())
+WHERE v.snapshot_id = $1
+  AND v.status = ANY(@statuses::vulnerability_status[])
+  AND (COALESCE(array_length(@types::text[], 1), 0) = 0 OR v.type::text = ANY(@types::text[]))
+  AND (COALESCE(array_length(@severities::text[], 1), 0) = 0 OR v.severity::text = ANY(@severities::text[]))
+  AND (COALESCE(array_length(@scanners::text[], 1), 0) = 0 OR v.scanner_name = ANY(@scanners::text[]))
+  AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(v.language, '') = ANY(@languages::text[]))
+  AND (@file_query::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
+  AND (@search::text = '' OR (v.title ILIKE '%' || @search::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'))
+  AND (@acceptance::text = ''
+       OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
+       OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR fa.reason_kind::text = @acceptance::text);
 
 -- name: ListAllVulnerabilitiesBySnapshot :many
 SELECT * FROM vulnerabilities
@@ -203,11 +228,13 @@ GROUP BY scanner_name, type
 ORDER BY count DESC;
 
 -- name: UpsertFindingAcceptance :one
-INSERT INTO finding_acceptances (repo_id, fingerprint, status, reason, accepted_by, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO finding_acceptances (repo_id, fingerprint, reason_kind, reason, labels, vex_justification, accepted_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (repo_id, fingerprint) DO UPDATE SET
-	status = EXCLUDED.status,
+	reason_kind = EXCLUDED.reason_kind,
 	reason = EXCLUDED.reason,
+	labels = EXCLUDED.labels,
+	vex_justification = EXCLUDED.vex_justification,
 	accepted_by = EXCLUDED.accepted_by,
 	expires_at = EXCLUDED.expires_at,
 	created_at = now()
@@ -230,3 +257,15 @@ JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs rf ON rf.id = s.ref_id
 WHERE rf.repo_id = $1
   AND v.fingerprint = ANY($2::text[]);
+
+-- name: ListAcceptedDependencyAdvisories :many
+-- Acceptance decisions on component-backed findings, joined to their advisory
+-- for VEX synthesis at export time (ADR-023: acceptances GENERATE VEX; no
+-- materialized rows to drift).
+SELECT DISTINCT fa.fingerprint, fa.reason_kind, fa.reason, fa.vex_justification, fa.expires_at,
+  v.advisory_id, a.canonical_id, v.component_purl
+FROM finding_acceptances fa
+JOIN vulnerabilities v ON v.repo_id = fa.repo_id AND v.fingerprint = fa.fingerprint
+JOIN advisories a ON a.id = v.advisory_id
+WHERE fa.repo_id = $1 AND (fa.expires_at IS NULL OR fa.expires_at > now())
+  AND v.advisory_id IS NOT NULL AND v.type IN ('dependency', 'container');

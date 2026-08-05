@@ -47,8 +47,38 @@ func (s *Server) loadOrgAdminForTokens(w http.ResponseWriter, r *http.Request) (
 	return s.loadOrgAdminUser(r, w)
 }
 
+// loadOrgMemberForTokens is the gate for the endpoints any member may call
+// (ADR-022 amendment: requesting a token, editing one they created). Browser
+// session only; returns the member's role so callers can gate on it.
+func (s *Server) loadOrgMemberForTokens(w http.ResponseWriter, r *http.Request) (*store.Organization, *store.User, string, bool) {
+	if auth.TokenAuthFromContext(r.Context()) != nil {
+		api.JSONError(w, http.StatusForbidden, "API keys can only be managed from a browser session")
+		return nil, nil, "", false
+	}
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return nil, nil, "", false
+	}
+	org, err := s.resolveOrg(r)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return nil, nil, "", false
+	}
+	if org == nil {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return nil, nil, "", false
+	}
+	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	if err != nil || role == "" {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return nil, nil, "", false
+	}
+	return org, user, role, true
+}
+
 // @Summary      List organization API keys
-// @Description  List org-owned API keys. Requires org admin.
+// @Description  List org-owned API keys. Org admins see all of them; any other member sees only the keys they created (so a requester can follow their pending request).
 // @Tags         api-keys
 // @Produce      json
 // @Param        provider  path  string  true  "Forge provider"
@@ -60,7 +90,7 @@ func (s *Server) loadOrgAdminForTokens(w http.ResponseWriter, r *http.Request) (
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/api-keys [get]
 func (s *Server) handleListOrgAPIKeys(w http.ResponseWriter, r *http.Request) {
-	org, _, ok := s.loadOrgAdminForTokens(w, r)
+	org, user, role, ok := s.loadOrgMemberForTokens(w, r)
 	if !ok {
 		return
 	}
@@ -69,6 +99,18 @@ func (s *Server) handleListOrgAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list API keys")
 		return
+	}
+
+	// Non-admins follow their own requests only; the org's full token
+	// inventory is an admin view.
+	if role != "admin" {
+		own := make([]store.APIKey, 0, len(keys))
+		for _, key := range keys {
+			if key.UserID != nil && *key.UserID == user.ID {
+				own = append(own, key)
+			}
+		}
+		keys = own
 	}
 
 	api.JSON(w, http.StatusOK, keys)
@@ -102,7 +144,7 @@ func (s *Server) handleListOrgTokenExposure(w http.ResponseWriter, r *http.Reque
 }
 
 // @Summary      Create organization API key
-// @Description  Create an org-owned API key and return the raw key once. Org-owned keys are always scoped to this organization and carry a mandatory expiry. Requires org admin.
+// @Description  Create an org-owned API key and return the raw key once. Org-owned keys are always scoped to this organization and carry a mandatory expiry. Any org member may create one; a token created by a non-admin stays pending — and fails authentication — until an org admin approves it (like GitHub fine-grained PATs).
 // @Tags         api-keys
 // @Accept       json
 // @Produce      json
@@ -117,7 +159,7 @@ func (s *Server) handleListOrgTokenExposure(w http.ResponseWriter, r *http.Reque
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/api-keys [post]
 func (s *Server) handleCreateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
-	org, user, ok := s.loadOrgAdminForTokens(w, r)
+	org, user, role, ok := s.loadOrgMemberForTokens(w, r)
 	if !ok {
 		return
 	}
@@ -150,13 +192,22 @@ func (s *Server) handleCreateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey, err := s.queries.CreateAPIKey(r.Context(), user.ID, input.Name, store.HashAPIKey(rawKey), scopes, input.ExpiresAt, "org", &org.ID, input.Description)
+	// A non-admin's token is a request: it exists (the secret is shown once,
+	// now) but fails authentication until an org admin approves it.
+	approval := store.APIKeyApprovalApproved
+	if role != "admin" {
+		approval = store.APIKeyApprovalPending
+	}
+
+	apiKey, err := s.queries.CreateAPIKeyWithApproval(r.Context(), user.ID, input.Name, store.HashAPIKey(rawKey), scopes, input.ExpiresAt, "org", &org.ID, input.Description, approval)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to create API key")
 		return
 	}
 
-	s.writeTokenAuditLog(r, user, orgAuditID(org.ID), apiKey, audit.ActionTokenCreate, nil)
+	s.writeTokenAuditLog(r, user, orgAuditID(org.ID), apiKey, audit.ActionTokenCreate, map[string]any{
+		"approval_status": apiKey.ApprovalStatus,
+	})
 
 	api.JSON(w, http.StatusCreated, createAPIKeyResponse{Key: rawKey, APIKey: apiKey})
 }
@@ -195,7 +246,7 @@ func normalizeOrgScope(raw json.RawMessage, org *store.Organization) (json.RawMe
 }
 
 // @Summary      Update organization API key
-// @Description  Update an org-owned API key's name, description, scope, or expiry. Requires org admin.
+// @Description  Update an org-owned API key's name, description, scope, or expiry. Org admins can edit any org key; a member can edit a key they created — widening its scope drops it back to pending review (ADR-022 amendment).
 // @Tags         api-keys
 // @Accept       json
 // @Produce      json
@@ -211,8 +262,17 @@ func normalizeOrgScope(raw json.RawMessage, org *store.Organization) (json.RawMe
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/api-keys/{keyID} [patch]
 func (s *Server) handleUpdateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
-	org, user, existing, ok := s.loadOrgOwnedAPIKey(w, r)
+	org, user, role, ok := s.loadOrgMemberForTokens(w, r)
 	if !ok {
+		return
+	}
+	existing, ok := s.loadOrgOwnedAPIKeyForOrg(w, r, org)
+	if !ok {
+		return
+	}
+	isAdmin := role == "admin"
+	if !isAdmin && (existing.UserID == nil || *existing.UserID != user.ID) {
+		api.JSONError(w, http.StatusForbidden, "only org admins or the key's creator can edit it")
 		return
 	}
 
@@ -235,11 +295,19 @@ func (s *Server) handleUpdateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 		description = *input.Description
 	}
 	scopes := existing.Scopes
+	approval := existing.ApprovalStatus
 	if len(input.Scopes) > 0 {
 		normalized, err := normalizeOrgScope(input.Scopes, org)
 		if err != nil {
 			api.JSONError(w, http.StatusBadRequest, err.Error())
 			return
+		}
+		// A non-admin widening an approved token re-triggers review; narrowing
+		// does not. Admin edits never demote (their approval is implicit).
+		if !isAdmin && approval == store.APIKeyApprovalApproved {
+			if widens, err := scopeWidens(existing.Scopes, normalized); err != nil || widens {
+				approval = store.APIKeyApprovalPending
+			}
 		}
 		scopes = normalized
 	}
@@ -252,7 +320,7 @@ func (s *Server) handleUpdateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := s.queries.UpdateAPIKeyMetaByOrg(r.Context(), existing.ID, org.ID, name, description, scopes, expiresAt)
+	updated, err := s.queries.UpdateAPIKeyMetaByOrg(r.Context(), existing.ID, org.ID, name, description, scopes, expiresAt, approval)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to update API key")
 		return
@@ -263,11 +331,96 @@ func (s *Server) handleUpdateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeTokenAuditLog(r, user, orgAuditID(org.ID), updated, audit.ActionTokenUpdate, map[string]any{
-		"previous_name":  existing.Name,
-		"previous_scope": scopeAuditSummary(existing),
+		"previous_name":   existing.Name,
+		"previous_scope":  scopeAuditSummary(existing),
+		"approval_status": updated.ApprovalStatus,
 	})
 
 	api.JSON(w, http.StatusOK, updated)
+}
+
+// scopeWidens reports whether the new scope document grants anything the old
+// one did not. An unparseable old scope counts as widening — fail toward
+// review, never toward silent escalation.
+func scopeWidens(oldScope, newScope json.RawMessage) (bool, error) {
+	previous, err := apitoken.Parse(oldScope)
+	if err != nil {
+		return true, err
+	}
+	next, err := apitoken.Parse(newScope)
+	if err != nil {
+		return true, err
+	}
+	return previous.Widens(next), nil
+}
+
+// @Summary      Approve organization API key
+// @Description  Approve a member-requested org token so it can authenticate. The scope ceiling is re-validated at review time. Requires org admin.
+// @Tags         api-keys
+// @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
+// @Param        slug      path  string  true  "Organization slug"
+// @Param        keyID     path  string  true  "API key ID"
+// @Success      200  {object}  api.Response{data=store.APIKey}
+// @Failure      400  {object}  api.Response
+// @Failure      401  {object}  api.Response
+// @Failure      403  {object}  api.Response
+// @Failure      404  {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/api-keys/{keyID}/approve [post]
+func (s *Server) handleApproveOrgAPIKey(w http.ResponseWriter, r *http.Request) {
+	s.reviewOrgAPIKey(w, r, store.APIKeyApprovalApproved, audit.ActionTokenApprove)
+}
+
+// @Summary      Reject organization API key
+// @Description  Reject a member-requested org token; it will never authenticate. Requires org admin.
+// @Tags         api-keys
+// @Produce      json
+// @Param        provider  path  string  true  "Forge provider"
+// @Param        slug      path  string  true  "Organization slug"
+// @Param        keyID     path  string  true  "API key ID"
+// @Success      200  {object}  api.Response{data=store.APIKey}
+// @Failure      400  {object}  api.Response
+// @Failure      401  {object}  api.Response
+// @Failure      403  {object}  api.Response
+// @Failure      404  {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/api-keys/{keyID}/reject [post]
+func (s *Server) handleRejectOrgAPIKey(w http.ResponseWriter, r *http.Request) {
+	s.reviewOrgAPIKey(w, r, store.APIKeyApprovalRejected, audit.ActionTokenReject)
+}
+
+func (s *Server) reviewOrgAPIKey(w http.ResponseWriter, r *http.Request, decision, action string) {
+	org, user, existing, ok := s.loadOrgOwnedAPIKey(w, r)
+	if !ok {
+		return
+	}
+	// A service principal cannot review tokens: loadOrgAdminForTokens already
+	// forces a browser session, so user is always a real admin here.
+	if decision == store.APIKeyApprovalApproved {
+		// Re-validate the scope ceiling at review time: what was mintable when
+		// requested may not be mintable now.
+		if _, err := normalizeOrgScope(existing.Scopes, org); err != nil {
+			api.JSONError(w, http.StatusBadRequest, "cannot approve: "+err.Error())
+			return
+		}
+	}
+
+	reviewed, err := s.queries.SetAPIKeyApprovalByOrg(r.Context(), existing.ID, org.ID, decision, user.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to review API key")
+		return
+	}
+	if reviewed == nil {
+		api.JSONError(w, http.StatusNotFound, "API key not found")
+		return
+	}
+
+	s.writeTokenAuditLog(r, user, orgAuditID(org.ID), reviewed, action, map[string]any{
+		"requested_by": existing.UserID,
+	})
+
+	api.JSON(w, http.StatusOK, reviewed)
 }
 
 // @Summary      Rotate organization API key
@@ -348,28 +501,37 @@ func (s *Server) handleDeleteOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 
 // loadOrgOwnedAPIKey resolves the path key strictly within the org's ownership
 // (`owner_type='org' AND owner_id=<org>`), so a user-owned key or another
-// org's key is a 404 regardless of who asks.
+// org's key is a 404 regardless of who asks. Requires org admin.
 func (s *Server) loadOrgOwnedAPIKey(w http.ResponseWriter, r *http.Request) (*store.Organization, *store.User, *store.APIKey, bool) {
 	org, user, ok := s.loadOrgAdminForTokens(w, r)
 	if !ok {
 		return nil, nil, nil, false
 	}
+	apiKey, ok := s.loadOrgOwnedAPIKeyForOrg(w, r, org)
+	if !ok {
+		return nil, nil, nil, false
+	}
+	return org, user, apiKey, true
+}
 
+// loadOrgOwnedAPIKeyForOrg is the role-agnostic half of loadOrgOwnedAPIKey:
+// callers that admit non-admins (member edits) authorize separately.
+func (s *Server) loadOrgOwnedAPIKeyForOrg(w http.ResponseWriter, r *http.Request, org *store.Organization) (*store.APIKey, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "keyID"))
 	if err != nil {
 		api.JSONError(w, http.StatusBadRequest, "invalid API key ID")
-		return nil, nil, nil, false
+		return nil, false
 	}
 
 	apiKey, err := s.queries.GetAPIKeyByOrg(r.Context(), id, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load API key")
-		return nil, nil, nil, false
+		return nil, false
 	}
 	if apiKey == nil {
 		api.JSONError(w, http.StatusNotFound, "API key not found")
-		return nil, nil, nil, false
+		return nil, false
 	}
 
-	return org, user, apiKey, true
+	return apiKey, true
 }

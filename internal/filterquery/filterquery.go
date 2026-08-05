@@ -72,6 +72,10 @@ var AllowedColumns = map[string]string{
 	// Revoking a token has to be able to pull back everything it filed, so the
 	// token id is a first-class filter: q=agent:<token-uuid>.
 	"agent": "origin_api_key_id",
+	// ADR-023 decision filters, resolved against the acceptance LEFT JOIN
+	// (alias fa) that the dynamic list query always carries.
+	"acceptance": "fa.reason_kind",
+	"label":      "fa.labels",
 }
 
 const maxDepth = 16
@@ -328,6 +332,10 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 	}
 
 	switch node.Key {
+	case "acceptance":
+		return acceptanceQualifierToSQL(values, param)
+	case "label":
+		return labelQualifierToSQL(values, param)
 	case "file":
 		return fileQualifierToSQL(column, values, param), fileQualifierParams(values), param + len(values), nil
 	case "status":
@@ -341,6 +349,43 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 	default:
 		return singleOrArraySQL(column, values, param, "%s = $%d", "%s = ANY($%d::text[])")
 	}
+}
+
+// acceptanceQualifierToSQL maps the ADR-023 decision filter: risk | fp |
+// none (open). Values are a closed vocabulary, so the SQL is parameterless.
+func acceptanceQualifierToSQL(values []string, param int) (string, []interface{}, int, error) {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		switch value {
+		case "risk", "risk_accepted":
+			parts = append(parts, "fa.reason_kind = 'risk_accepted'")
+		case "fp", "false_positive":
+			parts = append(parts, "fa.reason_kind = 'false_positive'")
+		case "none", "open":
+			parts = append(parts, "fa.id IS NULL")
+		case "any", "accepted":
+			parts = append(parts, "fa.id IS NOT NULL")
+		default:
+			return "", nil, param, fmt.Errorf("acceptance must be one of risk, fp, accepted, open (got %q)", value)
+		}
+	}
+	if len(parts) == 1 {
+		return parts[0], nil, param, nil
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", nil, param, nil
+}
+
+func labelQualifierToSQL(values []string, param int) (string, []interface{}, int, error) {
+	parts := make([]string, 0, len(values))
+	params := make([]interface{}, 0, len(values))
+	for index, value := range values {
+		parts = append(parts, fmt.Sprintf("$%d = ANY(fa.labels)", param+index))
+		params = append(params, value)
+	}
+	if len(parts) == 1 {
+		return parts[0], params, param + 1, nil
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", params, param + len(values), nil
 }
 
 func fileQualifierToSQL(column string, values []string, param int) string {

@@ -38,6 +38,30 @@
             </div>
           </div>
 
+          <label
+            v-if="showVEX"
+            class="block"
+          >
+            <span class="text-[11px] uppercase tracking-wide text-gray-500">
+              VEX justification (generates the not_affected statement)
+            </span>
+            <select
+              v-model="vexJustification"
+              class="mt-1.5 w-full rounded-md border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-100 focus:border-accent/60 focus:outline-none"
+            >
+              <option value="">
+                No structured justification
+              </option>
+              <option
+                v-for="justification in VEX_JUSTIFICATIONS"
+                :key="justification.value"
+                :value="justification.value"
+              >
+                {{ justification.label }}
+              </option>
+            </select>
+          </label>
+
           <label class="block">
             <span class="text-[11px] uppercase tracking-wide text-gray-500">
               Reason <span class="text-danger">*</span>
@@ -54,6 +78,24 @@
           </label>
 
           <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-gray-500">
+              Labels (optional, comma-separated)
+            </span>
+            <input
+              v-model="labelsInput"
+              type="text"
+              placeholder="waiting-upstream-fix, q3-review"
+              class="mt-1.5 w-full rounded-md border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600 focus:border-accent/60 focus:outline-none"
+            >
+            <span class="mt-1 block text-[11px] text-gray-500">
+              For tracking and filtering — labels never change gate or VEX behavior.
+            </span>
+          </label>
+
+          <label
+            v-if="showExpiry"
+            class="block"
+          >
             <span class="text-[11px] uppercase tracking-wide text-gray-500">
               Expires (optional)
             </span>
@@ -87,7 +129,7 @@
           <button
             type="button"
             class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="submitting || reason.trim().length === 0"
+            :disabled="submitting || (reason.trim().length === 0 && !vexJustification)"
             @click="submit"
           >
             {{ submitting ? 'Applying…' : confirmLabel }}
@@ -101,13 +143,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 
-import { REASON_PRESETS, triageStateInfo, type TriageState } from '@/lib/triage'
+import type { AcceptanceReasonKind, VexJustification } from '@/api/client'
+import { REASON_PRESETS, triageStateInfo, VEX_JUSTIFICATIONS, type TriageState } from '@/lib/triage'
 
 const props = defineProps<{
-  /** The acceptance status being applied: 'accepted' | 'false_positive'. */
-  status: 'accepted' | 'false_positive'
+  /** The justification kind being applied (ADR-023). */
+  kind: AcceptanceReasonKind
   /** How many findings this decision covers. */
   count: number
+  /** True when the target is a dependency finding — unlocks the VEX vocabulary. */
+  componentBacked?: boolean
   /** Error from a failed submit, rendered in-dialog so the typed reason survives. */
   error?: string
   submitting?: boolean
@@ -115,24 +160,30 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'cancel'): void
-  (e: 'confirm', payload: { reason: string; expiresAt?: string }): void
+  (e: 'confirm', payload: { reason: string; labels: string[]; vexJustification?: VexJustification; expiresAt?: string }): void
 }>()
 
 const reason = ref('')
+const labelsInput = ref('')
+const vexJustification = ref<'' | VexJustification>('')
 const expiresAt = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 
-const resultingState = computed<TriageState>(() => (props.status === 'false_positive' ? 'false_positive' : 'accepted_risk'))
+const resultingState = computed<TriageState>(() => (props.kind === 'false_positive' ? 'false_positive' : 'accepted_risk'))
 const resultingDescription = computed(() => triageStateInfo(resultingState.value).description)
-const presets = computed(() => REASON_PRESETS[props.status] ?? [])
+const presets = computed(() => REASON_PRESETS[props.kind] ?? [])
+// VEX vocabulary appears only where VEX applies: dependency false-positives.
+const showVEX = computed(() => props.kind === 'false_positive' && props.componentBacked === true)
+// Expiry is a risk concept; an FP does not expire (ADR-023).
+const showExpiry = computed(() => props.kind === 'risk_accepted')
 
 const title = computed(() => {
-  const action = props.status === 'false_positive' ? 'Mark false positive' : 'Accept risk'
+  const action = props.kind === 'false_positive' ? 'Mark false positive' : 'Accept risk'
   const noun = props.count === 1 ? 'finding' : 'findings'
   return `${action} on ${props.count} ${noun}`
 })
-const confirmLabel = computed(() => (props.status === 'false_positive' ? 'Mark false positive' : 'Accept risk'))
+const confirmLabel = computed(() => (props.kind === 'false_positive' ? 'Mark false positive' : 'Accept risk'))
 
 // Minimum selectable expiry is tomorrow: an expiry of today would already be
 // past by the server's check.
@@ -148,11 +199,13 @@ function cancel() {
 
 function submit() {
   const trimmed = reason.value.trim()
-  if (!trimmed || props.submitting) return
+  if ((!trimmed && !vexJustification.value) || props.submitting) return
   emit('confirm', {
     reason: trimmed,
+    labels: labelsInput.value.split(',').map((label) => label.trim()).filter(Boolean),
+    vexJustification: showVEX.value && vexJustification.value ? vexJustification.value : undefined,
     // Send end-of-day so a date picked today is unambiguously in the future.
-    expiresAt: expiresAt.value ? new Date(`${expiresAt.value}T23:59:59`).toISOString() : undefined,
+    expiresAt: showExpiry.value && expiresAt.value ? new Date(`${expiresAt.value}T23:59:59`).toISOString() : undefined,
   })
 }
 

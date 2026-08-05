@@ -14,6 +14,91 @@ import (
 	"github.com/google/uuid"
 )
 
+type AcceptanceReasonKind string
+
+const (
+	AcceptanceReasonKindRiskAccepted  AcceptanceReasonKind = "risk_accepted"
+	AcceptanceReasonKindFalsePositive AcceptanceReasonKind = "false_positive"
+)
+
+func (e *AcceptanceReasonKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AcceptanceReasonKind(s)
+	case string:
+		*e = AcceptanceReasonKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AcceptanceReasonKind: %T", src)
+	}
+	return nil
+}
+
+type NullAcceptanceReasonKind struct {
+	AcceptanceReasonKind AcceptanceReasonKind `json:"acceptance_reason_kind"`
+	Valid                bool                 `json:"valid"` // Valid is true if AcceptanceReasonKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAcceptanceReasonKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.AcceptanceReasonKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AcceptanceReasonKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAcceptanceReasonKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AcceptanceReasonKind), nil
+}
+
+type ApiKeyApprovalStatus string
+
+const (
+	ApiKeyApprovalStatusPending  ApiKeyApprovalStatus = "pending"
+	ApiKeyApprovalStatusApproved ApiKeyApprovalStatus = "approved"
+	ApiKeyApprovalStatusRejected ApiKeyApprovalStatus = "rejected"
+)
+
+func (e *ApiKeyApprovalStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ApiKeyApprovalStatus(s)
+	case string:
+		*e = ApiKeyApprovalStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ApiKeyApprovalStatus: %T", src)
+	}
+	return nil
+}
+
+type NullApiKeyApprovalStatus struct {
+	ApiKeyApprovalStatus ApiKeyApprovalStatus `json:"api_key_approval_status"`
+	Valid                bool                 `json:"valid"` // Valid is true if ApiKeyApprovalStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullApiKeyApprovalStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ApiKeyApprovalStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ApiKeyApprovalStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullApiKeyApprovalStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ApiKeyApprovalStatus), nil
+}
+
 type CvssVersion string
 
 const (
@@ -926,17 +1011,20 @@ type AffectedRange struct {
 }
 
 type ApiKey struct {
-	ID          uuid.UUID       `json:"id"`
-	UserID      uuid.UUID       `json:"user_id"`
-	Name        string          `json:"name"`
-	KeyHash     string          `json:"key_hash"`
-	Scopes      json.RawMessage `json:"scopes"`
-	ExpiresAt   sql.NullTime    `json:"expires_at"`
-	LastUsedAt  sql.NullTime    `json:"last_used_at"`
-	CreatedAt   time.Time       `json:"created_at"`
-	OwnerType   string          `json:"owner_type"`
-	OwnerID     uuid.NullUUID   `json:"owner_id"`
-	Description string          `json:"description"`
+	ID             uuid.UUID            `json:"id"`
+	UserID         uuid.NullUUID        `json:"user_id"`
+	Name           string               `json:"name"`
+	KeyHash        string               `json:"key_hash"`
+	Scopes         json.RawMessage      `json:"scopes"`
+	ExpiresAt      sql.NullTime         `json:"expires_at"`
+	LastUsedAt     sql.NullTime         `json:"last_used_at"`
+	CreatedAt      time.Time            `json:"created_at"`
+	OwnerType      string               `json:"owner_type"`
+	OwnerID        uuid.NullUUID        `json:"owner_id"`
+	Description    string               `json:"description"`
+	ApprovalStatus ApiKeyApprovalStatus `json:"approval_status"`
+	ApprovedBy     uuid.NullUUID        `json:"approved_by"`
+	ApprovedAt     sql.NullTime         `json:"approved_at"`
 }
 
 type AuditLog struct {
@@ -1069,14 +1157,16 @@ type Deployment struct {
 }
 
 type FindingAcceptance struct {
-	ID          uuid.UUID     `json:"id"`
-	RepoID      uuid.UUID     `json:"repo_id"`
-	Fingerprint string        `json:"fingerprint"`
-	Status      string        `json:"status"`
-	Reason      string        `json:"reason"`
-	AcceptedBy  uuid.NullUUID `json:"accepted_by"`
-	ExpiresAt   sql.NullTime  `json:"expires_at"`
-	CreatedAt   time.Time     `json:"created_at"`
+	ID               uuid.UUID            `json:"id"`
+	RepoID           uuid.UUID            `json:"repo_id"`
+	Fingerprint      string               `json:"fingerprint"`
+	Reason           string               `json:"reason"`
+	AcceptedBy       uuid.NullUUID        `json:"accepted_by"`
+	ExpiresAt        sql.NullTime         `json:"expires_at"`
+	CreatedAt        time.Time            `json:"created_at"`
+	ReasonKind       AcceptanceReasonKind `json:"reason_kind"`
+	Labels           []string             `json:"labels"`
+	VexJustification NullVexJustification `json:"vex_justification"`
 }
 
 type ForgeOrgAdmin struct {

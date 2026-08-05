@@ -84,12 +84,15 @@ func (s *Server) handleGetConfigSchema(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(repoconfig.SchemaBytes())
 }
 
+// loadAuthorizedRepoWithUser authorizes the request principal for a repo. The
+// returned user is attribution, not authorization (ADR-022): it is nil for an
+// org service principal, and callers must tolerate that.
 func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Request, requireAdmin bool) (*store.Organization, *store.Repository, *store.User, bool) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, nil, nil, false
 	}
+	user := UserFromContext(r.Context())
 
 	org, err := s.resolveOrg(r)
 	if err != nil {
@@ -101,7 +104,7 @@ func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Reque
 		return nil, nil, nil, false
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return nil, nil, nil, false

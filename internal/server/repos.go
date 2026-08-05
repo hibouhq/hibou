@@ -220,11 +220,11 @@ func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider, accoun
 }
 
 func (s *Server) loadAdminOrgForEnrollment(w http.ResponseWriter, r *http.Request) (*store.User, *store.Organization, bool) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, nil, false
 	}
+	user := UserFromContext(r.Context())
 	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
@@ -234,7 +234,7 @@ func (s *Server) loadAdminOrgForEnrollment(w http.ResponseWriter, r *http.Reques
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return nil, nil, false
 	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return nil, nil, false
@@ -313,8 +313,7 @@ func handleEnrollRepoCreateError(w http.ResponseWriter, err error) bool {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/repos [get]
 func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -329,7 +328,7 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
@@ -359,8 +358,7 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/repos/{repoSlug} [get]
 func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -375,7 +373,7 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
@@ -568,8 +566,7 @@ func (s *Server) handleRemoveRepo(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/repos/{repoSlug}/refs [get]
 func (s *Server) handleListRefs(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -584,7 +581,7 @@ func (s *Server) handleListRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return

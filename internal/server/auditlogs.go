@@ -45,8 +45,7 @@ type auditLogEntryResponse struct {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/audit-logs [get]
 func (s *Server) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -61,7 +60,7 @@ func (s *Server) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return

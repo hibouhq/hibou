@@ -82,15 +82,22 @@ func (q *Queries) CountVulnerabilitiesBySeverity(ctx context.Context, snapshotID
 }
 
 const countVulnerabilitiesBySnapshot = `-- name: CountVulnerabilitiesBySnapshot :one
-SELECT COUNT(*)::bigint FROM vulnerabilities
-WHERE snapshot_id = $1
-  AND status = ANY($2::vulnerability_status[])
-  AND (COALESCE(array_length($3::text[], 1), 0) = 0 OR type::text = ANY($3::text[]))
-  AND (COALESCE(array_length($4::text[], 1), 0) = 0 OR severity::text = ANY($4::text[]))
-  AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR scanner_name = ANY($5::text[]))
-  AND (COALESCE(array_length($6::text[], 1), 0) = 0 OR COALESCE(language, '') = ANY($6::text[]))
-  AND ($7::text = '' OR COALESCE(file_path, '') ILIKE '%' || $7::text || '%' ESCAPE '\')
-  AND ($8::text = '' OR (title ILIKE '%' || $8::text || '%' ESCAPE '\' OR primary_identifier_value ILIKE '%' || $8::text || '%' ESCAPE '\'))
+SELECT COUNT(*)::bigint FROM vulnerabilities v
+LEFT JOIN finding_acceptances fa
+  ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+  AND (fa.expires_at IS NULL OR fa.expires_at > now())
+WHERE v.snapshot_id = $1
+  AND v.status = ANY($2::vulnerability_status[])
+  AND (COALESCE(array_length($3::text[], 1), 0) = 0 OR v.type::text = ANY($3::text[]))
+  AND (COALESCE(array_length($4::text[], 1), 0) = 0 OR v.severity::text = ANY($4::text[]))
+  AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR v.scanner_name = ANY($5::text[]))
+  AND (COALESCE(array_length($6::text[], 1), 0) = 0 OR COALESCE(v.language, '') = ANY($6::text[]))
+  AND ($7::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || $7::text || '%' ESCAPE '\')
+  AND ($8::text = '' OR (v.title ILIKE '%' || $8::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || $8::text || '%' ESCAPE '\'))
+  AND ($9::text = ''
+       OR ($9::text = 'open' AND fa.fingerprint IS NULL)
+       OR ($9::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR fa.reason_kind::text = $9::text)
 `
 
 type CountVulnerabilitiesBySnapshotParams struct {
@@ -102,6 +109,7 @@ type CountVulnerabilitiesBySnapshotParams struct {
 	Languages  []string  `json:"languages"`
 	FileQuery  string    `json:"file_query"`
 	Search     string    `json:"search"`
+	Acceptance string    `json:"acceptance"`
 }
 
 func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountVulnerabilitiesBySnapshotParams) (int64, error) {
@@ -114,6 +122,7 @@ func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountV
 		pq.Array(arg.Languages),
 		arg.FileQuery,
 		arg.Search,
+		arg.Acceptance,
 	)
 	var column_1 int64
 	err := row.Scan(&column_1)
@@ -575,8 +584,64 @@ func (q *Queries) GetVulnerabilityByID(ctx context.Context, id uuid.UUID) (Vulne
 	return i, err
 }
 
+const listAcceptedDependencyAdvisories = `-- name: ListAcceptedDependencyAdvisories :many
+SELECT DISTINCT fa.fingerprint, fa.reason_kind, fa.reason, fa.vex_justification, fa.expires_at,
+  v.advisory_id, a.canonical_id, v.component_purl
+FROM finding_acceptances fa
+JOIN vulnerabilities v ON v.repo_id = fa.repo_id AND v.fingerprint = fa.fingerprint
+JOIN advisories a ON a.id = v.advisory_id
+WHERE fa.repo_id = $1 AND (fa.expires_at IS NULL OR fa.expires_at > now())
+  AND v.advisory_id IS NOT NULL AND v.type IN ('dependency', 'container')
+`
+
+type ListAcceptedDependencyAdvisoriesRow struct {
+	Fingerprint      string               `json:"fingerprint"`
+	ReasonKind       AcceptanceReasonKind `json:"reason_kind"`
+	Reason           string               `json:"reason"`
+	VexJustification NullVexJustification `json:"vex_justification"`
+	ExpiresAt        sql.NullTime         `json:"expires_at"`
+	AdvisoryID       uuid.NullUUID        `json:"advisory_id"`
+	CanonicalID      string               `json:"canonical_id"`
+	ComponentPurl    sql.NullString       `json:"component_purl"`
+}
+
+// Acceptance decisions on component-backed findings, joined to their advisory
+// for VEX synthesis at export time (ADR-023: acceptances GENERATE VEX; no
+// materialized rows to drift).
+func (q *Queries) ListAcceptedDependencyAdvisories(ctx context.Context, repoID uuid.UUID) ([]ListAcceptedDependencyAdvisoriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAcceptedDependencyAdvisories, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAcceptedDependencyAdvisoriesRow{}
+	for rows.Next() {
+		var i ListAcceptedDependencyAdvisoriesRow
+		if err := rows.Scan(
+			&i.Fingerprint,
+			&i.ReasonKind,
+			&i.Reason,
+			&i.VexJustification,
+			&i.ExpiresAt,
+			&i.AdvisoryID,
+			&i.CanonicalID,
+			&i.ComponentPurl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listActiveFindingAcceptancesByRepo = `-- name: ListActiveFindingAcceptancesByRepo :many
-SELECT id, repo_id, fingerprint, status, reason, accepted_by, expires_at, created_at FROM finding_acceptances
+SELECT id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification FROM finding_acceptances
 WHERE repo_id = $1 AND (expires_at IS NULL OR expires_at > now())
 `
 
@@ -593,11 +658,13 @@ func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID
 			&i.ID,
 			&i.RepoID,
 			&i.Fingerprint,
-			&i.Status,
 			&i.Reason,
 			&i.AcceptedBy,
 			&i.ExpiresAt,
 			&i.CreatedAt,
+			&i.ReasonKind,
+			pq.Array(&i.Labels),
+			&i.VexJustification,
 		); err != nil {
 			return nil, err
 		}
@@ -823,23 +890,38 @@ func (q *Queries) ListStateTransitions(ctx context.Context, vulnerabilityID uuid
 }
 
 const listVulnerabilitiesBySnapshot = `-- name: ListVulnerabilitiesBySnapshot :many
-SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
-WHERE snapshot_id = $1
-  AND status = ANY($4::vulnerability_status[])
-  AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR type::text = ANY($5::text[]))
-  AND (COALESCE(array_length($6::text[], 1), 0) = 0 OR severity::text = ANY($6::text[]))
-  AND (COALESCE(array_length($7::text[], 1), 0) = 0 OR scanner_name = ANY($7::text[]))
-  AND (COALESCE(array_length($8::text[], 1), 0) = 0 OR COALESCE(language, '') = ANY($8::text[]))
-  AND ($9::text = '' OR COALESCE(file_path, '') ILIKE '%' || $9::text || '%' ESCAPE '\')
-  AND ($10::text = '' OR (title ILIKE '%' || $10::text || '%' ESCAPE '\' OR primary_identifier_value ILIKE '%' || $10::text || '%' ESCAPE '\'))
+SELECT v.id, v.type, v.snapshot_id, v.title, v.description, v.original_severity, v.severity, v.severity_override_reason, v.severity_override_by, v.status, v.dismissal_reason, v.state_comment, v.detected_at, v.confirmed_at, v.confirmed_by, v.dismissed_at, v.dismissed_by, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line, v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language, v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability, v.owasp_top_10, v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type, v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata, v.created_at, v.updated_at, v.first_seen_at, v.last_seen_at, v.severity_rank, v.rule_ref_id, v.primary_identifier_kind, v.primary_identifier_value, v.org_id, v.repo_id, v.origin, v.origin_api_key_id, v.origin_token_name, v.origin_owner_type, v.origin_owner_id,
+  fa.reason_kind AS acceptance_reason_kind,
+  fa.reason AS acceptance_reason,
+  fa.labels AS acceptance_labels,
+  fa.vex_justification AS acceptance_vex_justification,
+  fa.accepted_by AS acceptance_accepted_by,
+  fa.expires_at AS acceptance_expires_at,
+  fa.created_at AS acceptance_created_at
+FROM vulnerabilities v
+LEFT JOIN finding_acceptances fa
+  ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+  AND (fa.expires_at IS NULL OR fa.expires_at > now())
+WHERE v.snapshot_id = $1
+  AND v.status = ANY($4::vulnerability_status[])
+  AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR v.type::text = ANY($5::text[]))
+  AND (COALESCE(array_length($6::text[], 1), 0) = 0 OR v.severity::text = ANY($6::text[]))
+  AND (COALESCE(array_length($7::text[], 1), 0) = 0 OR v.scanner_name = ANY($7::text[]))
+  AND (COALESCE(array_length($8::text[], 1), 0) = 0 OR COALESCE(v.language, '') = ANY($8::text[]))
+  AND ($9::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || $9::text || '%' ESCAPE '\')
+  AND ($10::text = '' OR (v.title ILIKE '%' || $10::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || $10::text || '%' ESCAPE '\'))
+  AND ($11::text = ''
+       OR ($11::text = 'open' AND fa.fingerprint IS NULL)
+       OR ($11::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR fa.reason_kind::text = $11::text)
 ORDER BY
-  CASE WHEN $11::text = 'severity_asc' THEN severity_rank END ASC,
-  CASE WHEN $11::text = 'severity_desc' THEN severity_rank END DESC,
-  CASE WHEN $11::text = 'status_asc' THEN status END ASC,
-  CASE WHEN $11::text = 'status_desc' THEN status END DESC,
-  CASE WHEN $11::text = 'detected_asc' THEN detected_at END ASC,
-  CASE WHEN $11::text = 'detected_desc' OR $11::text = '' THEN detected_at END DESC,
-  id DESC
+  CASE WHEN $12::text = 'severity_asc' THEN v.severity_rank END ASC,
+  CASE WHEN $12::text = 'severity_desc' THEN v.severity_rank END DESC,
+  CASE WHEN $12::text = 'status_asc' THEN v.status END ASC,
+  CASE WHEN $12::text = 'status_desc' THEN v.status END DESC,
+  CASE WHEN $12::text = 'detected_asc' THEN v.detected_at END ASC,
+  CASE WHEN $12::text = 'detected_desc' OR $12::text = '' THEN v.detected_at END DESC,
+  v.id DESC
 LIMIT $2 OFFSET $3
 `
 
@@ -854,10 +936,25 @@ type ListVulnerabilitiesBySnapshotParams struct {
 	Languages  []string  `json:"languages"`
 	FileQuery  string    `json:"file_query"`
 	Search     string    `json:"search"`
+	Acceptance string    `json:"acceptance"`
 	Sort       string    `json:"sort"`
 }
 
-func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVulnerabilitiesBySnapshotParams) ([]Vulnerability, error) {
+type ListVulnerabilitiesBySnapshotRow struct {
+	Vulnerability              Vulnerability            `json:"vulnerability"`
+	AcceptanceReasonKind       NullAcceptanceReasonKind `json:"acceptance_reason_kind"`
+	AcceptanceReason           sql.NullString           `json:"acceptance_reason"`
+	AcceptanceLabels           []string                 `json:"acceptance_labels"`
+	AcceptanceVexJustification NullVexJustification     `json:"acceptance_vex_justification"`
+	AcceptanceAcceptedBy       uuid.NullUUID            `json:"acceptance_accepted_by"`
+	AcceptanceExpiresAt        sql.NullTime             `json:"acceptance_expires_at"`
+	AcceptanceCreatedAt        sql.NullTime             `json:"acceptance_created_at"`
+}
+
+// The acceptance LEFT JOIN is the ADR-023 hot read: decision status is
+// computed server-side off the (repo_id, fingerprint) unique index,
+// O(page size) lookups, never a client-side join.
+func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVulnerabilitiesBySnapshotParams) ([]ListVulnerabilitiesBySnapshotRow, error) {
 	rows, err := q.db.QueryContext(ctx, listVulnerabilitiesBySnapshot,
 		arg.SnapshotID,
 		arg.Limit,
@@ -869,83 +966,91 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 		pq.Array(arg.Languages),
 		arg.FileQuery,
 		arg.Search,
+		arg.Acceptance,
 		arg.Sort,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Vulnerability{}
+	items := []ListVulnerabilitiesBySnapshotRow{}
 	for rows.Next() {
-		var i Vulnerability
+		var i ListVulnerabilitiesBySnapshotRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Type,
-			&i.SnapshotID,
-			&i.Title,
-			&i.Description,
-			&i.OriginalSeverity,
-			&i.Severity,
-			&i.SeverityOverrideReason,
-			&i.SeverityOverrideBy,
-			&i.Status,
-			&i.DismissalReason,
-			&i.StateComment,
-			&i.DetectedAt,
-			&i.ConfirmedAt,
-			&i.ConfirmedBy,
-			&i.DismissedAt,
-			&i.DismissedBy,
-			&i.ResolvedAt,
-			&i.ResolvedBy,
-			&i.ScannerName,
-			&i.ScannerVendor,
-			&i.ScannerVersion,
-			&i.ScannerExternalID,
-			&i.FilePath,
-			&i.StartLine,
-			&i.EndLine,
-			&i.LocationHash,
-			&i.Fingerprint,
-			&i.ComponentID,
-			&i.ComponentName,
-			&i.ComponentVersion,
-			&i.ComponentPurl,
-			&i.Ecosystem,
-			&i.AdvisoryID,
-			&i.AffectedRangeID,
-			&i.Language,
-			&i.Confidence,
-			&i.Solution,
-			&i.HasRemediation,
-			&i.RemediationLink,
-			&i.Reachability,
-			&i.OwaspTop10,
-			&i.DueDate,
-			&i.PresentOnDefaultBranch,
-			&i.ResolvedOnDefaultBranch,
-			&i.SecretType,
-			&i.SecretHash,
-			&i.CommitSha,
-			&i.AuthorEmail,
-			&i.Verified,
-			&i.CreatedBy,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.FirstSeenAt,
-			&i.LastSeenAt,
-			&i.SeverityRank,
-			&i.RuleRefID,
-			&i.PrimaryIdentifierKind,
-			&i.PrimaryIdentifierValue,
-			&i.OrgID,
-			&i.RepoID,
-			&i.Origin,
-			&i.OriginApiKeyID,
-			&i.OriginTokenName,
-			&i.OriginOwnerType,
-			&i.OriginOwnerID,
+			&i.Vulnerability.ID,
+			&i.Vulnerability.Type,
+			&i.Vulnerability.SnapshotID,
+			&i.Vulnerability.Title,
+			&i.Vulnerability.Description,
+			&i.Vulnerability.OriginalSeverity,
+			&i.Vulnerability.Severity,
+			&i.Vulnerability.SeverityOverrideReason,
+			&i.Vulnerability.SeverityOverrideBy,
+			&i.Vulnerability.Status,
+			&i.Vulnerability.DismissalReason,
+			&i.Vulnerability.StateComment,
+			&i.Vulnerability.DetectedAt,
+			&i.Vulnerability.ConfirmedAt,
+			&i.Vulnerability.ConfirmedBy,
+			&i.Vulnerability.DismissedAt,
+			&i.Vulnerability.DismissedBy,
+			&i.Vulnerability.ResolvedAt,
+			&i.Vulnerability.ResolvedBy,
+			&i.Vulnerability.ScannerName,
+			&i.Vulnerability.ScannerVendor,
+			&i.Vulnerability.ScannerVersion,
+			&i.Vulnerability.ScannerExternalID,
+			&i.Vulnerability.FilePath,
+			&i.Vulnerability.StartLine,
+			&i.Vulnerability.EndLine,
+			&i.Vulnerability.LocationHash,
+			&i.Vulnerability.Fingerprint,
+			&i.Vulnerability.ComponentID,
+			&i.Vulnerability.ComponentName,
+			&i.Vulnerability.ComponentVersion,
+			&i.Vulnerability.ComponentPurl,
+			&i.Vulnerability.Ecosystem,
+			&i.Vulnerability.AdvisoryID,
+			&i.Vulnerability.AffectedRangeID,
+			&i.Vulnerability.Language,
+			&i.Vulnerability.Confidence,
+			&i.Vulnerability.Solution,
+			&i.Vulnerability.HasRemediation,
+			&i.Vulnerability.RemediationLink,
+			&i.Vulnerability.Reachability,
+			&i.Vulnerability.OwaspTop10,
+			&i.Vulnerability.DueDate,
+			&i.Vulnerability.PresentOnDefaultBranch,
+			&i.Vulnerability.ResolvedOnDefaultBranch,
+			&i.Vulnerability.SecretType,
+			&i.Vulnerability.SecretHash,
+			&i.Vulnerability.CommitSha,
+			&i.Vulnerability.AuthorEmail,
+			&i.Vulnerability.Verified,
+			&i.Vulnerability.CreatedBy,
+			&i.Vulnerability.Metadata,
+			&i.Vulnerability.CreatedAt,
+			&i.Vulnerability.UpdatedAt,
+			&i.Vulnerability.FirstSeenAt,
+			&i.Vulnerability.LastSeenAt,
+			&i.Vulnerability.SeverityRank,
+			&i.Vulnerability.RuleRefID,
+			&i.Vulnerability.PrimaryIdentifierKind,
+			&i.Vulnerability.PrimaryIdentifierValue,
+			&i.Vulnerability.OrgID,
+			&i.Vulnerability.RepoID,
+			&i.Vulnerability.Origin,
+			&i.Vulnerability.OriginApiKeyID,
+			&i.Vulnerability.OriginTokenName,
+			&i.Vulnerability.OriginOwnerType,
+			&i.Vulnerability.OriginOwnerID,
+			&i.AcceptanceReasonKind,
+			&i.AcceptanceReason,
+			pq.Array(&i.AcceptanceLabels),
+			&i.AcceptanceVexJustification,
+			&i.AcceptanceAcceptedBy,
+			&i.AcceptanceExpiresAt,
+			&i.AcceptanceCreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1381,32 +1486,38 @@ func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, arg UpdateVulne
 }
 
 const upsertFindingAcceptance = `-- name: UpsertFindingAcceptance :one
-INSERT INTO finding_acceptances (repo_id, fingerprint, status, reason, accepted_by, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO finding_acceptances (repo_id, fingerprint, reason_kind, reason, labels, vex_justification, accepted_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (repo_id, fingerprint) DO UPDATE SET
-	status = EXCLUDED.status,
+	reason_kind = EXCLUDED.reason_kind,
 	reason = EXCLUDED.reason,
+	labels = EXCLUDED.labels,
+	vex_justification = EXCLUDED.vex_justification,
 	accepted_by = EXCLUDED.accepted_by,
 	expires_at = EXCLUDED.expires_at,
 	created_at = now()
-RETURNING id, repo_id, fingerprint, status, reason, accepted_by, expires_at, created_at
+RETURNING id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification
 `
 
 type UpsertFindingAcceptanceParams struct {
-	RepoID      uuid.UUID     `json:"repo_id"`
-	Fingerprint string        `json:"fingerprint"`
-	Status      string        `json:"status"`
-	Reason      string        `json:"reason"`
-	AcceptedBy  uuid.NullUUID `json:"accepted_by"`
-	ExpiresAt   sql.NullTime  `json:"expires_at"`
+	RepoID           uuid.UUID            `json:"repo_id"`
+	Fingerprint      string               `json:"fingerprint"`
+	ReasonKind       AcceptanceReasonKind `json:"reason_kind"`
+	Reason           string               `json:"reason"`
+	Labels           []string             `json:"labels"`
+	VexJustification NullVexJustification `json:"vex_justification"`
+	AcceptedBy       uuid.NullUUID        `json:"accepted_by"`
+	ExpiresAt        sql.NullTime         `json:"expires_at"`
 }
 
 func (q *Queries) UpsertFindingAcceptance(ctx context.Context, arg UpsertFindingAcceptanceParams) (FindingAcceptance, error) {
 	row := q.db.QueryRowContext(ctx, upsertFindingAcceptance,
 		arg.RepoID,
 		arg.Fingerprint,
-		arg.Status,
+		arg.ReasonKind,
 		arg.Reason,
+		pq.Array(arg.Labels),
+		arg.VexJustification,
 		arg.AcceptedBy,
 		arg.ExpiresAt,
 	)
@@ -1415,11 +1526,13 @@ func (q *Queries) UpsertFindingAcceptance(ctx context.Context, arg UpsertFinding
 		&i.ID,
 		&i.RepoID,
 		&i.Fingerprint,
-		&i.Status,
 		&i.Reason,
 		&i.AcceptedBy,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.ReasonKind,
+		pq.Array(&i.Labels),
+		&i.VexJustification,
 	)
 	return i, err
 }

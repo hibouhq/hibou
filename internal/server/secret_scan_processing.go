@@ -512,8 +512,7 @@ const maxSecretCheckPatchBytes = 1 << 20
 // pre-receive hook or the CLI submits the patch content — the commits exist
 // nowhere Hibou can clone — and gets a verdict. Persists nothing.
 func (s *Server) handleSecretScanCheck(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}

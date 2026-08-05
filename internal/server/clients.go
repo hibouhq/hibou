@@ -589,12 +589,11 @@ func marshalClientLabels(labels map[string]string) (json.RawMessage, error) {
 }
 
 func (s *Server) requireOrgAdmin(r *http.Request, w http.ResponseWriter, orgID uuid.UUID) bool {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return false
 	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), orgID, user.ID)
+	role, err := s.principalOrgRole(r, orgID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return false

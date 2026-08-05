@@ -133,9 +133,16 @@ definitions:
         items:
           type: string
         type: array
+      labels:
+        items:
+          type: string
+        type: array
       reason:
         type: string
+      reason_kind:
+        type: string
       status:
+        description: 'Status: "accepted" | "open"; ReasonKind required on accept (ADR-023).'
         type: string
     type: object
   server.batchAcceptanceResponse:
@@ -478,11 +485,22 @@ definitions:
     properties:
       expires_at:
         type: string
+      labels:
+        items:
+          type: string
+        type: array
       reason:
         type: string
+      reason_kind:
+        description: 'ReasonKind is required on accept: "risk_accepted" | "false_positive".'
+        type: string
       status:
-        description: 'Status: "accepted" | "false_positive" to suppress, "open" to
-          unaccept.'
+        description: 'Status: "accepted" or "open" — the only transition (ADR-023).'
+        type: string
+      vex_justification:
+        description: |-
+          VEXJustification: only for false-positive dependency findings — the
+          standard CISA/OpenVEX vocabulary for the generated not_affected statement.
         type: string
     type: object
   server.findingFingerprintsResponse:
@@ -655,6 +673,11 @@ definitions:
       title:
         type: string
       type:
+        type: string
+    type: object
+  server.secretRevocationRequest:
+    properties:
+      comment:
         type: string
     type: object
   server.syncReposResponse:
@@ -875,6 +898,15 @@ definitions:
     type: object
   store.APIKey:
     properties:
+      approval_status:
+        description: |-
+          ApprovalStatus gates authentication for member-requested org tokens
+          (ADR-022 amendment): only "approved" tokens authenticate.
+        type: string
+      approved_at:
+        type: string
+      approved_by:
+        type: string
       created_at:
         type: string
       description:
@@ -900,6 +932,9 @@ definitions:
       user:
         $ref: '#/definitions/store.User'
       user_id:
+        description: |-
+          UserID is the creating user — provenance, not identity (ADR-022). Nil
+          when the creator was deleted; org-owned keys keep working then.
         type: string
     type: object
   store.Client:
@@ -960,11 +995,17 @@ definitions:
         type: string
       id:
         type: string
+      labels:
+        items:
+          type: string
+        type: array
       reason:
+        type: string
+      reason_kind:
         type: string
       repo_id:
         type: string
-      status:
+      vex_justification:
         type: string
     type: object
   store.Integration:
@@ -1251,6 +1292,12 @@ definitions:
     type: object
   store.Vulnerability:
     properties:
+      acceptance:
+        allOf:
+        - $ref: '#/definitions/store.VulnerabilityAcceptance'
+        description: |-
+          Acceptance is the ADR-023 decision projection, joined server-side in the
+          list queries. Nil = open.
       advisory_id:
         type: string
       affected_range_id:
@@ -1379,6 +1426,25 @@ definitions:
         type: string
       verified:
         type: boolean
+    type: object
+  store.VulnerabilityAcceptance:
+    properties:
+      accepted_by:
+        type: string
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      labels:
+        items:
+          type: string
+        type: array
+      reason:
+        type: string
+      reason_kind:
+        type: string
+      vex_justification:
+        type: string
     type: object
   uuid.NullUUID:
     properties:
@@ -1750,7 +1816,9 @@ paths:
       - organizations
   /orgs/{provider}/{slug}/api-keys:
     get:
-      description: List org-owned API keys. Requires org admin.
+      description: List org-owned API keys. Org admins see all of them; any other
+        member sees only the keys they created (so a requester can follow their pending
+        request).
       parameters:
       - description: Forge provider
         in: path
@@ -1798,7 +1866,9 @@ paths:
       - application/json
       description: Create an org-owned API key and return the raw key once. Org-owned
         keys are always scoped to this organization and carry a mandatory expiry.
-        Requires org admin.
+        Any org member may create one; a token created by a non-admin stays pending
+        — and fails authentication — until an org admin approves it (like GitHub fine-grained
+        PATs).
       parameters:
       - description: Forge provider
         in: path
@@ -1898,7 +1968,8 @@ paths:
       consumes:
       - application/json
       description: Update an org-owned API key's name, description, scope, or expiry.
-        Requires org admin.
+        Org admins can edit any org key; a member can edit a key they created — widening
+        its scope drops it back to pending review (ADR-022 amendment).
       parameters:
       - description: Forge provider
         in: path
@@ -1952,6 +2023,112 @@ paths:
       security:
       - BearerAuth: []
       summary: Update organization API key
+      tags:
+      - api-keys
+  /orgs/{provider}/{slug}/api-keys/{keyID}/approve:
+    post:
+      description: Approve a member-requested org token so it can authenticate. The
+        scope ceiling is re-validated at review time. Requires org admin.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: API key ID
+        in: path
+        name: keyID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.APIKey'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Approve organization API key
+      tags:
+      - api-keys
+  /orgs/{provider}/{slug}/api-keys/{keyID}/reject:
+    post:
+      description: Reject a member-requested org token; it will never authenticate.
+        Requires org admin.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: API key ID
+        in: path
+        name: keyID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.APIKey'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Reject organization API key
       tags:
       - api-keys
   /orgs/{provider}/{slug}/api-keys/{keyID}/rotate:
@@ -4136,6 +4313,77 @@ paths:
       security:
       - BearerAuth: []
       summary: Accept or reopen a finding
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/revocation:
+    post:
+      consumes:
+      - application/json
+      description: Marks a leaked-secret finding resolved after a human verified the
+        credential was revoked/rotated. Secrets never auto-resolve from scan absence
+        (ADR-023) — this attestation is the only resolution path.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Vulnerability ID
+        in: path
+        name: vulnID
+        required: true
+        type: string
+      - description: Attestation
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.secretRevocationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Vulnerability'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Attest secret revocation
       tags:
       - vulnerabilities
   /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/acceptance:

@@ -68,15 +68,25 @@ if [ "$WAIT" -eq 1 ]; then
     || die "release CI failed — nothing was published, see: gh run view $RUN_ID -R $REPO --log-failed"
 
   # CI green is not the same as the registry serving the new tag.
-  info "Waiting for chart ${VERSION} in GHCR"
+  info "Waiting for chart ${VERSION} in GHCR (up to 5m)"
   for i in $(seq 1 30); do
-    if helm show chart "$CHART" --version "$VERSION" >/dev/null 2>&1; then
+    # Keep the last helm error: "not found" and "unauthorized" need different
+    # fixes, and swallowing it made every failure look like a hang.
+    if CHART_ERR="$(helm show chart "$CHART" --version "$VERSION" 2>&1 >/dev/null)"; then
       break
     fi
-    [ "$i" -eq 30 ] && die "chart ${VERSION} never appeared (private package? run: helm registry login ghcr.io)"
+    if [ "$i" -eq 30 ]; then
+      echo "helm: ${CHART_ERR}" >&2
+      die "chart ${VERSION} never appeared (if unauthorized: helm registry login ghcr.io)"
+    fi
+    printf '.' >&2
     sleep 10
   done
+  echo >&2
 fi
+
+kubectl version --request-timeout=5s >/dev/null 2>&1 \
+  || die "cluster unreachable (KUBECONFIG=${KUBECONFIG})"
 
 HELM_ARGS=(
   upgrade --install hibou "$CHART"

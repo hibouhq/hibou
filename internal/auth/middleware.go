@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -22,6 +23,26 @@ const (
 
 var ErrTokenScopeDenied = errors.New("token scope does not permit this action")
 
+// Approval errors (ADR-022 amendment) are deliberately specific: a pending
+// token is a real credential whose owner must ask an org admin to review it —
+// never let that read as a bad or revoked key.
+var (
+	ErrTokenPendingApproval = errors.New("token pending approval: ask an org admin to review it in Settings → API keys")
+	ErrTokenRejected        = errors.New("token was rejected by an org admin: ask them to review it in Settings → API keys")
+)
+
+// approvalError maps a key's approval status to the error a request bearing
+// it must receive, or nil when the key may authenticate.
+func approvalError(apiKey *store.APIKey) error {
+	switch apiKey.ApprovalStatus {
+	case store.APIKeyApprovalPending:
+		return ErrTokenPendingApproval
+	case store.APIKeyApprovalRejected:
+		return ErrTokenRejected
+	}
+	return nil
+}
+
 // TokenAuth carries a bearer token's resolved scope for request authorization,
 // plus the identity a token-authored record is attributed to (ADR-020 finding
 // provenance). Name and owner are captured here at authentication time so
@@ -33,6 +54,19 @@ type TokenAuth struct {
 	OwnerID   uuid.UUID
 	Scope     apitoken.Scope
 	Scoped    bool
+}
+
+// IsServicePrincipal reports whether this token acts as its organization
+// rather than as a user (ADR-022): org-owned tokens carry no request user —
+// their org membership is ownership, their authority is the scope.
+func (t *TokenAuth) IsServicePrincipal() bool {
+	return t != nil && t.OwnerType == "org"
+}
+
+// ActsForOrg reports whether a service principal belongs to the given org.
+// False for user tokens — callers fall back to user membership then.
+func (t *TokenAuth) ActsForOrg(orgID uuid.UUID) bool {
+	return t.IsServicePrincipal() && t.OwnerID == orgID
 }
 
 func WithUser(ctx context.Context, user *store.User) context.Context {
@@ -108,8 +142,21 @@ func SessionAuth(mgr *Manager, queries *store.Queries) func(http.Handler) http.H
 				}
 			}
 
-			if user, apiKey, err := authenticateBearerToken(r, queries); err == nil && user != nil {
-				ctx = WithUser(ctx, user)
+			user, apiKey, err := authenticateBearerToken(r, queries)
+			// A pending/rejected token is answered here with its specific
+			// message: the generic handler 401 would hide what the caller
+			// must do (ask an org admin to review the token).
+			if errors.Is(err, ErrTokenPendingApproval) || errors.Is(err, ErrTokenRejected) {
+				api.JSONError(w, http.StatusUnauthorized, err.Error())
+				return
+			}
+			if err == nil && apiKey != nil {
+				// Service principals (org-owned keys, ADR-022) carry no user:
+				// the request acts as the org, and handlers authorize via
+				// TokenAuth.ActsForOrg + the token scope.
+				if user != nil && !apiKey.IsOrgOwned() {
+					ctx = WithUser(ctx, user)
+				}
 				ctx = WithTokenAuth(ctx, TokenAuthForAPIKey(apiKey))
 			}
 
@@ -148,8 +195,16 @@ func authenticateBearerToken(r *http.Request, queries *store.Queries) (*store.Us
 	if err != nil {
 		return nil, nil, err
 	}
-	if apiKey == nil || apiKey.User == nil {
+	if apiKey == nil {
 		return nil, nil, errors.New("invalid API key")
+	}
+	// A user-owned key whose creator is gone is dead. An org-owned key is a
+	// service principal (ADR-022) and outlives its creator by design.
+	if apiKey.User == nil && !apiKey.IsOrgOwned() {
+		return nil, nil, errors.New("invalid API key")
+	}
+	if err := approvalError(apiKey); err != nil {
+		return nil, nil, err
 	}
 	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
 		return nil, nil, errors.New("API key expired")
@@ -212,5 +267,8 @@ func apiKeyOwnerID(apiKey *store.APIKey) uuid.UUID {
 	if apiKey.OwnerID != nil {
 		return *apiKey.OwnerID
 	}
-	return apiKey.UserID
+	if apiKey.UserID != nil {
+		return *apiKey.UserID
+	}
+	return uuid.Nil
 }

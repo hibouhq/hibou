@@ -181,12 +181,8 @@ func (s *Server) loadTeamAdminUser(r *http.Request, w http.ResponseWriter) (*sto
 	if !s.requireOrgAdmin(r, w, org.ID) {
 		return nil, nil, nil, false
 	}
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return nil, nil, nil, false
-	}
-	return org, team, user, true
+	// Nil for a service principal — attribution only (ADR-022).
+	return org, team, UserFromContext(r.Context()), true
 }
 
 func (s *Server) replaceTeamMemberRole(ctx context.Context, teamID, userID uuid.UUID, role string) error {

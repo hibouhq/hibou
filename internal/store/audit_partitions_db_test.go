@@ -142,6 +142,56 @@ func TestLegacyUnscopedKeySemanticsLive(t *testing.T) {
 	}
 }
 
+func TestOrgKeySurvivesCreatorDeletionLive(t *testing.T) {
+	queries, db := newAuditPartitionTestDB(t)
+	ctx := context.Background()
+
+	// ADR-022's core promise: deleting the creating user must not kill an
+	// org-owned key, and the key must still authenticate (as a service
+	// principal). Pre-00012 the FK cascade deleted the row outright.
+	var userID, orgID string
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO users (email, display_name, provider, provider_id)
+		VALUES ('sp-creator@example.com', 'Creator', 'github', 'sp-creator-' || gen_random_uuid())
+		RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO organizations (name, slug, display_name, provider)
+		VALUES ('sp-org-' || gen_random_uuid(), 'sp-org-' || gen_random_uuid(), 'SP Org', 'github')
+		RETURNING id`).Scan(&orgID); err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM organizations WHERE id = $1`, orgID) })
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO api_keys (user_id, name, key_hash, scopes, owner_type, owner_id, expires_at)
+		VALUES ($1, 'org-bot', 'hash-sp-survives-test',
+			'{"org":"sp","repos":{"mode":"all"},"permissions":{"coverage":"read"}}'::jsonb,
+			'org', $2, now() + interval '30 days')`, userID, orgID); err != nil {
+		t.Fatalf("insert org key: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM api_keys WHERE key_hash = 'hash-sp-survives-test'`) })
+
+	if _, err := db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		t.Fatalf("delete creator: %v", err)
+	}
+
+	key, err := queries.GetAPIKeyByHash(ctx, "hash-sp-survives-test")
+	if err != nil {
+		t.Fatalf("GetAPIKeyByHash after creator deletion: %v", err)
+	}
+	if key == nil {
+		t.Fatal("org key vanished with its creator — the ADR-022 FK fix regressed")
+	}
+	if key.User != nil || key.UserID != nil {
+		t.Fatalf("creator should be gone: user=%v userID=%v", key.User, key.UserID)
+	}
+	if !key.IsOrgOwned() {
+		t.Fatal("key must still read as org-owned")
+	}
+}
+
 func TestAuditLogWriteWithAPIKeyActorLive(t *testing.T) {
 	queries, db := newAuditPartitionTestDB(t)
 	ctx := context.Background()

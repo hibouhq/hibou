@@ -210,13 +210,18 @@ func (s *Server) handleOverridePRGate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	refID := ref.ID
+	// Service principals have no user; the audit log still names the token.
+	var overrideBy *uuid.UUID
+	if user != nil {
+		overrideBy = &user.ID
+	}
 	check, err := s.queries.SetPRCheckOverride(r.Context(), store.PRCheckOverrideInput{
 		RepoID:  repo.ID,
 		RefID:   &refID,
 		HeadSha: headSHA,
 		State:   input.State,
 		Reason:  input.Reason,
-		By:      &user.ID,
+		By:      overrideBy,
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to record gate override")
@@ -242,12 +247,12 @@ func (s *Server) handleOverridePRGate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireGateOverrideRole(r *http.Request, w http.ResponseWriter, orgID uuid.UUID) (*store.User, bool) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, false
 	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), orgID, user.ID)
+	user := UserFromContext(r.Context())
+	role, err := s.principalOrgRole(r, orgID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return nil, false

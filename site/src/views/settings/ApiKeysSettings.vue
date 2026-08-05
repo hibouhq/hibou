@@ -31,17 +31,28 @@ const orgByID = new Map<string, Organization>()
 const orgBySlug = new Map<string, Organization>()
 
 // The raw secret is held only long enough to show it once. Nothing re-fetches it.
-const issued = ref<{ key: string; name: string; rotated: boolean } | null>(null)
+const issued = ref<{ key: string; name: string; rotated: boolean; pending?: boolean } | null>(null)
 const copied = ref(false)
 const busyKeyID = ref('')
 
 // Expiry is mandatory for scoped tokens (ADR-020) — no "never" option.
+// 'custom' opens a date picker for a precise expiration date (ADR-022).
 const EXPIRY_CHOICES = [
   { value: '30', label: '30 days' },
   { value: '90', label: '90 days' },
   { value: '180', label: '180 days' },
   { value: '365', label: '1 year' },
+  { value: 'custom', label: 'Custom date…' },
 ]
+
+const customExpiryDate = ref('')
+
+// The picker floor: tomorrow, local time (an expiry today would be near-dead
+// on arrival).
+const minExpiryDate = computed(() => {
+  const tomorrow = new Date(Date.now() + 86_400_000)
+  return `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`
+})
 
 function emptyScope(): TokenScope {
   return { org: '', repos: { mode: 'list', slugs: [] }, permissions: {} }
@@ -53,7 +64,10 @@ const scopeIsUsable = computed(() => {
   return scope.value.repos.mode === 'all' || (scope.value.repos.slugs ?? []).length > 0
 })
 
-const canSubmit = computed(() => name.value.trim().length > 0 && scopeIsUsable.value && !submitting.value)
+const customExpiryValid = computed(() =>
+  expiresInDays.value !== 'custom' || (customExpiryDate.value >= minExpiryDate.value))
+
+const canSubmit = computed(() => name.value.trim().length > 0 && scopeIsUsable.value && customExpiryValid.value && !submitting.value)
 
 async function load() {
   loading.value = true
@@ -87,6 +101,7 @@ function openCreate() {
   name.value = ''
   description.value = ''
   expiresInDays.value = '90'
+  customExpiryDate.value = ''
   owner.value = 'user'
   scope.value = emptyScope()
   formError.value = ''
@@ -101,6 +116,7 @@ function openEdit(key: ApiKey) {
   name.value = key.name
   description.value = key.description
   expiresInDays.value = key.expires_at ? 'keep' : '90'
+  customExpiryDate.value = ''
   owner.value = key.owner_type === 'org' ? 'org' : 'user'
   scope.value = structuredClone(usableScope(key)) ?? emptyScope()
   formError.value = ''
@@ -115,6 +131,11 @@ function keyOrg(key: ApiKey): Organization | undefined {
 
 function expiryTimestamp(): string | undefined {
   if (expiresInDays.value === 'keep') return undefined
+  if (expiresInDays.value === 'custom') {
+    // End of the selected local day: "expires March 3rd" means all of March
+    // 3rd still works.
+    return new Date(`${customExpiryDate.value}T23:59:59`).toISOString()
+  }
   const days = Number(expiresInDays.value) || 90
   return new Date(Date.now() + days * 86_400_000).toISOString()
 }
@@ -153,7 +174,12 @@ async function submit() {
       const response = owner.value === 'org' && org
         ? await api.createOrgApiKey(org.provider, org.slug, body)
         : await api.createApiKey(body)
-      issued.value = { key: response.data.key, name: response.data.api_key.name, rotated: false }
+      issued.value = {
+        key: response.data.key,
+        name: response.data.api_key.name,
+        rotated: false,
+        pending: response.data.api_key.approval_status === 'pending',
+      }
       copied.value = false
     }
     creating.value = false
@@ -320,6 +346,13 @@ void load()
           <p class="mt-0.5 text-xs text-gray-400">
             Copy it now — this is the only time it is shown. It cannot be retrieved again.
           </p>
+          <p
+            v-if="issued.pending"
+            class="mt-1 text-xs font-medium text-amber-300"
+          >
+            Pending approval: this token will not authenticate until an org admin approves it
+            (Organization → Access → Organization-owned tokens).
+          </p>
           <div class="mt-2 flex items-center gap-2">
             <code class="min-w-0 flex-1 overflow-x-auto rounded-lg border border-surface-border bg-surface-overlay px-3 py-2 font-mono text-xs text-emerald-300">{{ issued.key }}</code>
             <button
@@ -388,6 +421,20 @@ void load()
               {{ choice.label }}
             </option>
           </select>
+          <input
+            v-if="expiresInDays === 'custom'"
+            v-model="customExpiryDate"
+            type="date"
+            :min="minExpiryDate"
+            aria-label="Custom expiration date"
+            class="mt-2 w-full rounded-lg border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-200 [color-scheme:dark]"
+          >
+          <p
+            v-if="expiresInDays === 'custom' && !customExpiryValid"
+            class="mt-1 text-xs text-amber-300"
+          >
+            Pick a date from tomorrow onward.
+          </p>
         </div>
       </div>
 
@@ -427,7 +474,7 @@ void load()
         </div>
         <p class="mt-1.5 text-xs text-gray-500">
           {{ owner === 'org'
-            ? 'Owned by the organization the scope targets: survives your departure, and any org admin can rotate or revoke it. Requires org admin. Right for CI and shared agents.'
+            ? 'Owned by the organization the scope targets: survives your departure, and any org admin can rotate or revoke it. If you are not an org admin, the token is created as a pending request and works only once an admin approves it. Right for CI and shared agents.'
             : 'Owned by you and dies with your account. Right for your own automation.' }}
         </p>
       </div>
@@ -529,6 +576,16 @@ void load()
               v-if="key.owner_type === 'org'"
               class="rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] font-medium text-blue-300"
             >org-owned</span>
+            <span
+              v-if="key.approval_status === 'pending'"
+              class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+              title="Fails authentication until an org admin approves it"
+            >pending approval</span>
+            <span
+              v-else-if="key.approval_status === 'rejected'"
+              class="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-300"
+              title="An org admin rejected this token; it will never authenticate"
+            >rejected</span>
             <span
               v-if="isExpired(key)"
               class="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-300"

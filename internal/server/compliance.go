@@ -88,11 +88,11 @@ func (s *Server) handleSoAExport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireComplianceAccess(w http.ResponseWriter, r *http.Request) (*store.Organization, bool) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, false
 	}
+	user := UserFromContext(r.Context())
 	if s.complianceSvc == nil {
 		api.JSONError(w, http.StatusServiceUnavailable, "compliance export unavailable")
 		return nil, false
@@ -106,19 +106,24 @@ func (s *Server) requireComplianceAccess(w http.ResponseWriter, r *http.Request)
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return nil, false
 	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return nil, false
 	}
-	allowed, err := s.enforcer.CheckPermission(user.ID.String(), fmt.Sprintf("org:%s/compliance", org.ID), "export")
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to authorize compliance export")
-		return nil, false
-	}
-	if !allowed {
-		api.JSONError(w, http.StatusForbidden, "insufficient permissions")
-		return nil, false
+	// The casbin grant is a user-RBAC refinement; a service principal's
+	// authority is its org ownership (checked above) plus the route scope
+	// (vulnerabilities:read org-wide), so it has no casbin subject to check.
+	if user != nil {
+		allowed, err := s.enforcer.CheckPermission(user.ID.String(), fmt.Sprintf("org:%s/compliance", org.ID), "export")
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to authorize compliance export")
+			return nil, false
+		}
+		if !allowed {
+			api.JSONError(w, http.StatusForbidden, "insufficient permissions")
+			return nil, false
+		}
 	}
 	return org, true
 }

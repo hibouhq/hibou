@@ -118,7 +118,10 @@ func (c *TokenExpiryChecker) recipients(ctx context.Context, key *store.APIKey) 
 		}
 		return admins
 	}
-	return []uuid.UUID{key.UserID}
+	if key.UserID == nil {
+		return nil
+	}
+	return []uuid.UUID{*key.UserID}
 }
 
 func uuidStrings(ids []uuid.UUID) []string {

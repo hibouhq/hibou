@@ -37,8 +37,7 @@ type updateTeamRequest struct {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/teams [post]
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -53,7 +52,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -113,8 +112,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/teams [get]
 func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -129,7 +127,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
@@ -159,8 +157,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/teams/{teamSlug} [get]
 func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -175,7 +172,7 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
@@ -212,8 +209,7 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/teams/{teamSlug} [put]
 func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -228,7 +224,7 @@ func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -302,8 +298,7 @@ func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/teams/{teamSlug} [delete]
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -318,7 +313,7 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return

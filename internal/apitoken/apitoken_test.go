@@ -158,3 +158,38 @@ func TestScopeAllowsOrgWide(t *testing.T) {
 		t.Fatal("repo-list scope must not allow organization-wide read")
 	}
 }
+
+func TestScopeWidens(t *testing.T) {
+	base := Scope{
+		Org:   "acme",
+		Repos: RepoSelector{Mode: RepoList, Slugs: []string{"api"}},
+		Permissions: map[Capability]AccessLevel{
+			CapCoverage: AccessRead,
+			CapUploads:  AccessWrite,
+		},
+	}
+
+	cases := []struct {
+		name string
+		next Scope
+		want bool
+	}{
+		{"identical", base, false},
+		{"level raised", Scope{Repos: base.Repos, Permissions: map[Capability]AccessLevel{CapCoverage: AccessWrite}}, true},
+		{"new capability", Scope{Repos: base.Repos, Permissions: map[Capability]AccessLevel{CapTriage: AccessRead}}, true},
+		{"level dropped", Scope{Repos: base.Repos, Permissions: map[Capability]AccessLevel{CapUploads: AccessRead}}, false},
+		{"repo added", Scope{Repos: RepoSelector{Mode: RepoList, Slugs: []string{"api", "web"}}, Permissions: base.Permissions}, true},
+		{"repo removed", Scope{Repos: RepoSelector{Mode: RepoList, Slugs: []string{}}, Permissions: base.Permissions}, false},
+		{"list to all", Scope{Repos: RepoSelector{Mode: RepoAll}, Permissions: base.Permissions}, true},
+	}
+	for _, tc := range cases {
+		if got := base.Widens(tc.next); got != tc.want {
+			t.Errorf("%s: Widens() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	all := Scope{Repos: RepoSelector{Mode: RepoAll}, Permissions: base.Permissions}
+	if all.Widens(Scope{Repos: RepoSelector{Mode: RepoList, Slugs: []string{"anything"}}, Permissions: base.Permissions}) {
+		t.Errorf("all → list must not widen")
+	}
+}

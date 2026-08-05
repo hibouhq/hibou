@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { KeyRound, RefreshCw, ShieldAlert, Trash2 } from 'lucide-vue-next'
+import { BadgeCheck, BadgeX, KeyRound, RefreshCw, ShieldAlert, Trash2 } from 'lucide-vue-next'
 
 import type { ApiKey, TokenScope, UnscopedKeyExposure } from '@/api/client'
 import { api } from '@/api/client'
@@ -52,6 +52,23 @@ async function rotate(key: ApiKey) {
     await load()
   } catch (rotateError) {
     error.value = rotateError instanceof Error ? rotateError.message : 'Failed to rotate the token'
+  } finally {
+    busyKeyID.value = ''
+  }
+}
+
+async function review(key: ApiKey, decision: 'approve' | 'reject') {
+  if (decision === 'reject' && !window.confirm(`Reject "${key.name}"? It will never authenticate.`)) return
+  busyKeyID.value = key.id
+  try {
+    if (decision === 'approve') {
+      await api.approveOrgApiKey(provider.value, slug.value, key.id)
+    } else {
+      await api.rejectOrgApiKey(provider.value, slug.value, key.id)
+    }
+    await load()
+  } catch (reviewError) {
+    error.value = reviewError instanceof Error ? reviewError.message : 'Failed to review the token'
   } finally {
     busyKeyID.value = ''
   }
@@ -134,13 +151,15 @@ void load()
             Organization-owned tokens
           </h2>
           <p class="mt-0.5 text-sm text-gray-400">
-            Survive their creator leaving; any org admin can rotate or revoke them. Create new ones under
+            Survive their creator leaving; any org admin can rotate or revoke them. Any member can request
+            one under
             <RouterLink
               :to="{ name: 'settings-api-keys' }"
               class="text-accent hover:underline"
             >
               Settings → API keys
-            </RouterLink>.
+            </RouterLink>
+            — tokens requested by non-admins wait here for your approval and cannot authenticate until then.
           </p>
         </div>
         <p
@@ -156,17 +175,48 @@ void load()
             class="flex flex-wrap items-center justify-between gap-3 border-b border-surface-border-subtle px-5 py-3 last:border-b-0"
           >
             <div class="min-w-0">
-              <div class="text-sm font-medium text-white">
-                {{ key.name }}
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-sm font-medium text-white">{{ key.name }}</span>
+                <span
+                  v-if="key.approval_status === 'pending'"
+                  class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+                  title="Requested by a member; fails authentication until approved"
+                >pending approval</span>
+                <span
+                  v-else-if="key.approval_status === 'rejected'"
+                  class="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-300"
+                >rejected</span>
               </div>
               <div class="mt-0.5 font-mono text-xs text-gray-500">
                 {{ scopeSummary(key) }}
               </div>
               <div class="mt-0.5 text-xs text-gray-500">
-                Last used {{ formatDate(key.last_used_at) }} · expires {{ formatDate(key.expires_at) }}
+                <template v-if="key.created_by_display">
+                  {{ key.approval_status === 'pending' ? 'Requested' : 'Created' }} by {{ key.created_by_display }} ·
+                </template>Last used {{ formatDate(key.last_used_at) }} · expires {{ formatDate(key.expires_at) }}
               </div>
             </div>
             <div class="flex shrink-0 gap-2">
+              <button
+                v-if="key.approval_status !== 'approved'"
+                type="button"
+                :disabled="busyKeyID === key.id"
+                class="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                @click="review(key, 'approve')"
+              >
+                <BadgeCheck class="h-3.5 w-3.5" />
+                Approve
+              </button>
+              <button
+                v-if="key.approval_status === 'pending'"
+                type="button"
+                :disabled="busyKeyID === key.id"
+                class="flex items-center gap-1.5 rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs text-red-400 transition hover:border-red-500/40 hover:text-red-300 disabled:opacity-50"
+                @click="review(key, 'reject')"
+              >
+                <BadgeX class="h-3.5 w-3.5" />
+                Reject
+              </button>
               <button
                 type="button"
                 :disabled="busyKeyID === key.id"

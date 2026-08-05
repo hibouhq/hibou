@@ -196,12 +196,8 @@ func (s *Server) loadOrgAdminUser(r *http.Request, w http.ResponseWriter) (*stor
 	if !s.requireOrgAdmin(r, w, org.ID) {
 		return nil, nil, false
 	}
-	user := UserFromContext(r.Context())
-	if user == nil {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return nil, nil, false
-	}
-	return org, user, true
+	// Nil for a service principal — attribution only (ADR-022).
+	return org, UserFromContext(r.Context()), true
 }
 
 func parseMemberInput(rawUserID, rawRole string, w http.ResponseWriter) (uuid.UUID, string, bool) {

@@ -270,6 +270,8 @@ export interface Vulnerability {
   origin_token_name?: string
   origin_owner_type?: string
   origin_owner_id?: string
+  // Server-side acceptance projection (ADR-023); absent = open.
+  acceptance?: FindingAcceptance
   metadata?: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -297,6 +299,8 @@ export interface TokenScope {
   permissions: Partial<Record<TokenCapability, TokenAccessLevel>>
 }
 
+export type ApiKeyApprovalStatus = 'pending' | 'approved' | 'rejected'
+
 export interface ApiKey {
   id: string
   user_id: string
@@ -309,6 +313,14 @@ export interface ApiKey {
   expires_at?: string
   last_used_at?: string
   created_at: string
+  // ADR-022 amendment: a member-requested org token stays 'pending' — and
+  // fails authentication — until an org admin approves it.
+  approval_status: ApiKeyApprovalStatus
+  approved_by?: string
+  approved_at?: string
+  // Creator's name; populated by the org key list so admins can see who
+  // requested a pending token.
+  created_by_display?: string
 }
 
 export interface CreatedApiKey {
@@ -400,15 +412,27 @@ export interface ComponentUpdate {
   licenses?: string[]
 }
 
+export type AcceptanceReasonKind = 'risk_accepted' | 'false_positive'
+
+export type VexJustification =
+  | 'component_not_present'
+  | 'vulnerable_code_not_present'
+  | 'vulnerable_code_not_in_execute_path'
+  | 'vulnerable_code_cannot_be_controlled_by_adversary'
+  | 'inline_mitigations_already_exist'
+
 export interface FindingAcceptance {
-  id: string
-  repo_id: string
-  fingerprint: string
-  status: 'accepted' | 'false_positive'
+  id?: string
+  repo_id?: string
+  fingerprint?: string
+  // ADR-023: one decision (row exists = accepted), reason_kind says why.
+  reason_kind: AcceptanceReasonKind
   reason: string
+  labels?: string[]
+  vex_justification?: VexJustification
   accepted_by?: string
   expires_at?: string
-  created_at: string
+  created_at?: string
 }
 
 export interface ComponentEntry {
@@ -869,8 +893,9 @@ class ApiClient {
     return this.request<void>(`/users/me/api-keys/${keyID}`, { method: 'DELETE' })
   }
 
-  // Org-owned tokens (ADR-020): managed by any org admin, survive the creator
-  // leaving. All five require an admin browser session.
+  // Org-owned tokens (ADR-020/022): managed by any org admin, survive the
+  // creator leaving. Any member can create one (non-admins get a pending
+  // request); management and review require an admin browser session.
   listOrgApiKeys(provider: string, slug: string) {
     return this.request<ApiResponse<ApiKey[]>>(`/orgs/${provider}/${slug}/api-keys`)
   }
@@ -906,6 +931,20 @@ class ApiClient {
 
   rotateOrgApiKey(provider: string, slug: string, keyID: string) {
     return this.request<ApiResponse<CreatedApiKey>>(`/orgs/${provider}/${slug}/api-keys/${keyID}/rotate`, {
+      method: 'POST',
+    })
+  }
+
+  // Approve a member-requested org token so it can authenticate; the scope
+  // ceiling is re-validated server-side at review time.
+  approveOrgApiKey(provider: string, slug: string, keyID: string) {
+    return this.request<ApiResponse<ApiKey>>(`/orgs/${provider}/${slug}/api-keys/${keyID}/approve`, {
+      method: 'POST',
+    })
+  }
+
+  rejectOrgApiKey(provider: string, slug: string, keyID: string) {
+    return this.request<ApiResponse<ApiKey>>(`/orgs/${provider}/${slug}/api-keys/${keyID}/reject`, {
       method: 'POST',
     })
   }
@@ -1294,6 +1333,7 @@ class ApiClient {
       language?: string
       file?: string
       search?: string
+      acceptance?: string
       sort?: string
       page?: number
       per_page?: number
@@ -1331,6 +1371,9 @@ class ApiClient {
     if (params?.search) {
       query.set('search', params.search)
     }
+    if (params?.acceptance) {
+      query.set('acceptance', params.acceptance)
+    }
     if (params?.sort) {
       query.set('sort', params.sort)
     }
@@ -1363,10 +1406,11 @@ class ApiClient {
       language?: string
       file?: string
       search?: string
+      acceptance?: string
     },
   ) {
     const query = new URLSearchParams()
-    for (const key of ['ref', 'snapshot', 'type', 'severity', 'status', 'tool', 'language', 'file', 'search'] as const) {
+    for (const key of ['ref', 'snapshot', 'type', 'severity', 'status', 'tool', 'language', 'file', 'search', 'acceptance'] as const) {
       const value = params?.[key]
       if (value) {
         query.set(key, value)
@@ -1424,17 +1468,26 @@ class ApiClient {
   // Batch triage: one decision + one reason across many fingerprints. The UI
   // routes single-finding actions through here too, so there is one validated
   // path rather than two that can drift.
-  batchFindingAcceptance(provider: string, slug: string, repoSlug: string, body: { fingerprints: string[]; status: string; reason?: string; expires_at?: string }) {
+  batchFindingAcceptance(provider: string, slug: string, repoSlug: string, body: { fingerprints: string[]; status: string; reason_kind?: AcceptanceReasonKind; reason?: string; labels?: string[]; expires_at?: string }) {
     return this.request<ApiResponse<{ status: string; applied: number; skipped: number }>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/acceptance`,
       { method: 'PUT', body: JSON.stringify(body) },
     )
   }
 
-  setFindingAcceptance(provider: string, slug: string, repoSlug: string, vulnID: string, body: { status: string; reason?: string; expires_at?: string }) {
+  setFindingAcceptance(provider: string, slug: string, repoSlug: string, vulnID: string, body: { status: string; reason_kind?: AcceptanceReasonKind; reason?: string; labels?: string[]; vex_justification?: VexJustification; expires_at?: string }) {
     return this.request<ApiResponse<FindingAcceptance | { status: string }>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/acceptance`,
       { method: 'PUT', body: JSON.stringify(body) },
+    )
+  }
+
+  // Secrets never auto-resolve (ADR-023): resolution is a human attestation
+  // that the credential was revoked and rotated.
+  attestSecretRevocation(provider: string, slug: string, repoSlug: string, vulnID: string, comment: string) {
+    return this.request<ApiResponse<Vulnerability>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/revocation`,
+      { method: 'POST', body: JSON.stringify({ comment }) },
     )
   }
 

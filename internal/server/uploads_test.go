@@ -963,6 +963,7 @@ func TestImportUploadedVEXIsIdempotent(t *testing.T) {
 	repo := createUploadTestRepository(t, srv, org)
 	content := minimalOpenVEXForTest()
 	request := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	request = request.WithContext(internalauth.WithUser(request.Context(), admin))
 	artifact := &uploadArtifact{Filename: "artifact.openvex.json"}
 	input := uploadRequest{
 		Provider:  "github",
@@ -1017,6 +1018,7 @@ func TestImportUploadedVEXSameDocumentRevisionConverges(t *testing.T) {
 	seedVEXAdvisoryForTestID(t, srv, "CVE-2026-0002")
 	repo := createUploadTestRepository(t, srv, org)
 	request := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	request = request.WithContext(internalauth.WithUser(request.Context(), admin))
 	input := uploadRequest{
 		Provider:  "github",
 		Org:       org.Slug,
@@ -1081,6 +1083,7 @@ func TestImportUploadedVEXDifferentDocumentsPreserveUniqueScopes(t *testing.T) {
 	seedVEXAdvisoryForTestID(t, srv, "CVE-2026-0003")
 	repo := createUploadTestRepository(t, srv, org)
 	request := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	request = request.WithContext(internalauth.WithUser(request.Context(), admin))
 	input := uploadRequest{
 		Provider:  "github",
 		Org:       org.Slug,
@@ -1808,6 +1811,7 @@ func createPendingSnapshotForAdvanceUploadTest(t *testing.T, srv *Server, userID
 	t.Helper()
 
 	req := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	req = req.WithContext(internalauth.WithUser(req.Context(), &store.User{ID: userID}))
 	snapshot, err := srv.createPendingUploadSnapshot(req, userID, uploadRequest{
 		Provider:  "github",
 		Org:       orgSlug,

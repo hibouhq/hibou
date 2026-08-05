@@ -45,11 +45,11 @@ type updateOrgRequest struct {
 // @Security     BearerAuth
 // @Router       /orgs/onboardable [get]
 func (s *Server) handleListOnboardableOrgs(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	user := UserFromContext(r.Context())
 	if s.orgProvisionSvc == nil {
 		api.JSON(w, http.StatusOK, []orgprovision.OnboardableAccount{})
 		return
@@ -77,11 +77,11 @@ func (s *Server) handleListOnboardableOrgs(w http.ResponseWriter, r *http.Reques
 // @Security     BearerAuth
 // @Router       /orgs [post]
 func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	user := UserFromContext(r.Context())
 
 	input, ok := decodeCreateOrgInput(w, r)
 	if !ok {
@@ -250,11 +250,11 @@ func (s *Server) forgeWebURL(provider string) string {
 // @Security     BearerAuth
 // @Router       /orgs [get]
 func (s *Server) handleListOrgs(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	user := UserFromContext(r.Context())
 
 	pagination := api.ParsePagination(r)
 	orgs, total, err := s.queries.ListOrganizationsByUser(r.Context(), user.ID, pagination.PerPage, pagination.Offset)
@@ -289,8 +289,7 @@ func (s *Server) handleListOrgs(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug} [get]
 func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -305,7 +304,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -334,8 +333,7 @@ func (s *Server) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug} [put]
 func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -356,7 +354,7 @@ func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
@@ -410,8 +408,7 @@ func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug} [delete]
 func (s *Server) handleDeleteOrg(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -426,7 +423,7 @@ func (s *Server) handleDeleteOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return

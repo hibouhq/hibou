@@ -21,8 +21,7 @@ type OrgSettings struct {
 }
 
 func (s *Server) handleGetOrgSettings(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -35,7 +34,7 @@ func (s *Server) handleGetOrgSettings(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
 	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
@@ -49,11 +48,11 @@ func (s *Server) handleGetOrgSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request) {
-	user := UserFromContext(r.Context())
-	if user == nil {
+	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	user := UserFromContext(r.Context())
 	org, err := s.resolveOrg(r)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
@@ -63,7 +62,7 @@ func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 		api.JSONError(w, http.StatusNotFound, "organization not found")
 		return
 	}
-	role, err := s.queries.GetOrgMemberRole(r.Context(), org.ID, user.ID)
+	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
 		return
