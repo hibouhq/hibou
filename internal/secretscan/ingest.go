@@ -186,7 +186,9 @@ func isDuplicateSecretFinding(err error) bool {
 func secretStatusToVulnerabilityStatus(status string) string {
 	switch status {
 	case secretStatusFalsePositive:
-		return "dismissed"
+		// A provider-side false-positive verdict is a scanner judgment, not a
+		// Hibou decision — the suppressed observation state (ADR-023).
+		return "suppressed"
 	case secretStatusRevoked, secretStatusRotating:
 		return "resolved"
 	default:

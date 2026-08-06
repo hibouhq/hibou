@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -53,7 +54,6 @@ type GatePublisherStore interface {
 	ListOpenPRRefs(ctx context.Context, repoID uuid.UUID) ([]dbgen.Ref, error)
 	ListRepoIDsByOrg(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error)
 	ListUnsyncedPRCheckRefIDs(ctx context.Context, limit int32) ([]uuid.UUID, error)
-	GetGateOverride(ctx context.Context, repoID uuid.UUID, headSha string) (state, reason string, ok bool, err error)
 	UpsertPRCheck(ctx context.Context, in store.UpsertPRCheckInput) error
 }
 
@@ -305,7 +305,6 @@ func (a *GatePublisher) evaluateAndPublish(ctx context.Context, annotation *gate
 	if !ok {
 		return
 	}
-	a.applyGateOverride(ctx, annotation, gateResult)
 	enforcement := a.loadEnforcementMode(ctx, annotation)
 	status := gateForgeStatus(gateResult, deltaResult, enforcement)
 	a.publishGate(ctx, annotation, gateResult, status)
@@ -415,39 +414,6 @@ func (a *GatePublisher) broadcastGateUpdate(ctx context.Context, annotation *gat
 		return
 	}
 	a.live.PublishGateUpdate(ctx, gateUpdateTopic, payload)
-}
-
-// applyGateOverride forces the gate outcome to a persisted manual override
-// (release_manager action) so the published check reflects it. The override row
-// is preserved across re-evaluations; it is keyed to the PR head SHA.
-func (a *GatePublisher) applyGateOverride(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult) {
-	if gateResult == nil {
-		return
-	}
-	state, reason, ok, err := a.store.GetGateOverride(ctx, annotation.repo.ID, annotation.snapshot.CommitSha)
-	if err != nil {
-		a.log.Warn().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("load gate override")
-		return
-	}
-	if !ok {
-		return
-	}
-	switch state {
-	case "pass":
-		gateResult.Passed = true
-		gateResult.Reasons = []string{gateOverrideNote("passing", reason)}
-	case "fail":
-		gateResult.Passed = false
-		gateResult.Reasons = append([]string{gateOverrideNote("failing", reason)}, gateResult.Reasons...)
-	}
-}
-
-func gateOverrideNote(outcome, reason string) string {
-	note := "Manually overridden to " + outcome
-	if strings.TrimSpace(reason) != "" {
-		note += ": " + strings.TrimSpace(reason)
-	}
-	return note
 }
 
 type gateContext struct {
@@ -904,8 +870,10 @@ func (a *GatePublisher) gateTargetURL(annotation *gateContext) string {
 		return ""
 	}
 	base := fmt.Sprintf("%s/orgs/%s/%s/repos/%s", a.baseURL, annotation.repo.Provider, annotation.orgSlug, annotation.repo.Slug)
-	if pr := prNumberFromRefName(annotation.prRef.Name); pr != "" {
-		return base + "/pulls/" + pr
+	// The compare page is the one PR surface (ADR-023 removed the standalone
+	// gate page); base/head resolve by canonical ref name.
+	if annotation.prRef.Name != "" && annotation.targetRef.Name != "" {
+		return base + "/compare?base=" + url.QueryEscape(annotation.targetRef.Name) + "&head=" + url.QueryEscape(annotation.prRef.Name)
 	}
 	return base
 }
@@ -1057,19 +1025,6 @@ func (a *GatePublisherStoreAdapter) ListRepoIDsByOrg(ctx context.Context, orgID 
 		ids = append(ids, repos[i].ID)
 	}
 	return ids, nil
-}
-
-// GetGateOverride returns the manual override (state "pass"/"fail" + reason) for a
-// PR head, if one is set. ok is false when there is no row or no override.
-func (a *GatePublisherStoreAdapter) GetGateOverride(ctx context.Context, repoID uuid.UUID, headSha string) (string, string, bool, error) {
-	check, err := a.queries.GetPRCheck(ctx, repoID, headSha, securityStatusContext)
-	if err != nil || check == nil {
-		return "", "", false, err
-	}
-	if check.OverrideState == "" {
-		return "", "", false, nil
-	}
-	return check.OverrideState, check.OverrideReason, true, nil
 }
 
 // ListUnsyncedPRCheckRefIDs returns the PR ref IDs of gate checks whose forge post

@@ -245,7 +245,6 @@ export interface Vulnerability {
   severity: string
   original_severity?: string
   status: string
-  dismissal_reason?: string
   state_comment?: string
   detected_at: string
   scanner_name?: string
@@ -640,8 +639,6 @@ export interface PRGate {
   source: 'persisted' | 'computed' | 'pending'
   updated_at?: string
   // Manual maintainer override. Empty string means no override is active.
-  override_state?: '' | 'pass' | 'fail'
-  override_reason?: string
 }
 
 export interface TrendPoint {
@@ -1273,20 +1270,6 @@ class ApiClient {
     )
   }
 
-  // Manually override (or clear, with state "") the quality gate for a PR. Server
-  // enforces release_manager/admin (403) and requires an analyzed head commit (409).
-  overridePRGate(
-    provider: string,
-    slug: string,
-    repoSlug: string,
-    pr: string | number,
-    body: { state: '' | 'pass' | 'fail'; reason: string },
-  ) {
-    return this.request<ApiResponse<PRGate>>(
-      `/orgs/${provider}/${slug}/repos/${repoSlug}/pulls/${pr}/gate/override`,
-      { method: 'POST', body: JSON.stringify(body) },
-    )
-  }
 
   compareSBOMs(provider: string, slug: string, repoSlug: string, body: CompareSBOMsRequest) {
     return this.request<ApiResponse<SBOMDiff>>(

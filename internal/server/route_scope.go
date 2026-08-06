@@ -231,8 +231,7 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute + "/secrets/jobs":  needs(apitoken.CapSecrets, apitoken.AccessRead),
 	"POST " + repoRoute + "/secrets/scan": needs(apitoken.CapSecrets, apitoken.AccessWrite),
 
-	"GET " + repoRoute + "/pulls/{pr}/gate":           needs(apitoken.CapQualityGates, apitoken.AccessRead),
-	"POST " + repoRoute + "/pulls/{pr}/gate/override": needs(apitoken.CapQualityGates, apitoken.AccessWrite),
+	"GET " + repoRoute + "/pulls/{pr}/gate": needs(apitoken.CapQualityGates, apitoken.AccessRead),
 }
 
 // tokenScopeGuard is the deny-by-default gate for scoped API tokens (ADR-020).

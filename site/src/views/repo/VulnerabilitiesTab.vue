@@ -409,7 +409,7 @@ async function runSecretScan() {
 }
 
 const loading = ref(true)
-const activeFilters = ref<Record<string, string>>({ status: 'detected,confirmed' })
+const activeFilters = ref<Record<string, string>>({ status: 'detected' })
 const searchQuery = ref('')
 const currentSort = ref('detected')
 const currentSortDirection = ref('desc')
@@ -432,7 +432,7 @@ const facetCounts = ref<VulnerabilityFacets>({ type: {}, severity: {}, status: {
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
-const statusOptions = ['detected', 'confirmed', 'dismissed', 'resolved']
+const statusOptions = ['detected', 'resolved', 'suppressed']
 // Build Sources/File option lists from the facet keys (full result set) merged
 // with what's been seen on loaded pages, so options aren't limited to the
 // current page. Order by descending count, then alphabetically.
@@ -440,7 +440,7 @@ const toolOptions = computed(() => mergeFacetOptions(facetCounts.value.tool, see
 const fileOptions = computed(() => mergeFacetOptions(facetCounts.value.file, seenFiles.value))
 const acceptanceOptions = ['open', 'accepted', 'risk_accepted', 'false_positive']
 const filterDefs = computed(() => [
-  { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected,confirmed' },
+  { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
   { key: 'acceptance', label: 'Triage', options: acceptanceOptions },
@@ -640,7 +640,7 @@ function changePage(page: number) {
 }
 
 function readQueryState() {
-  const filters: Record<string, string> = { status: 'detected,confirmed' }
+  const filters: Record<string, string> = { status: 'detected' }
 
   for (const key of filterKeys) {
     const value = route.query[key]
@@ -691,7 +691,7 @@ function buildQueryParams(state: { filters: Record<string, string>; search: stri
 
   for (const key of filterKeys) {
     const value = state.filters[key]
-    if (value && !(key === 'status' && value === 'detected,confirmed')) {
+    if (value && !(key === 'status' && value === 'detected')) {
       params[key] = value
     }
   }
@@ -716,7 +716,7 @@ function buildQueryParams(state: { filters: Record<string, string>; search: stri
 }
 
 function normalizeFilters(filters: Record<string, string>) {
-  const normalized: Record<string, string> = { status: filters.status || 'detected,confirmed' }
+  const normalized: Record<string, string> = { status: filters.status || 'detected' }
 
   for (const key of filterKeys) {
     const value = filters[key]
@@ -920,10 +920,17 @@ async function confirmTriageDialog(payload: { reason: string; labels: string[]; 
         vex_justification: payload.vexJustification,
         expires_at: payload.expiresAt,
       })
-      await loadVulnerabilities()
     } else {
       await applyTriage('accepted', fingerprints, payload.reason, payload.expiresAt, kind, payload.labels)
     }
+    patchRowsAfterTriage(fingerprints, {
+      reason_kind: kind,
+      reason: payload.reason,
+      labels: payload.labels,
+      vex_justification: payload.vexJustification,
+      expires_at: payload.expiresAt,
+      created_at: new Date().toISOString(),
+    })
     batchMessage.value = `${fingerprints.length} ${fingerprints.length === 1 ? 'finding' : 'findings'} updated.`
     closeTriageDialog()
     clearSelection()
@@ -940,6 +947,7 @@ async function reopenFindings(fingerprints: string[]) {
   batchMessage.value = ''
   try {
     await applyTriage('open', unique, '')
+    patchRowsAfterTriage(unique, undefined)
     batchMessage.value = `${unique.length} ${unique.length === 1 ? 'finding' : 'findings'} reopened.`
     clearSelection()
   } catch (error) {
@@ -960,9 +968,20 @@ async function applyTriage(status: 'accepted' | 'open', fingerprints: string[], 
     labels,
     expires_at: expiresAt,
   })
-  // The acceptance projection rides the findings rows now (server-side join),
-  // so refresh the page we're on.
-  await loadVulnerabilities()
+}
+
+// ADR-023 UX: accept/reopen patch the rows in place — no list refetch. The one
+// exception is an active acceptance filter, where the decision changes which
+// rows match, so the page must be requeried.
+function patchRowsAfterTriage(fingerprints: string[], acceptance: FindingAcceptance | undefined) {
+  if (activeFilters.value.acceptance) {
+    void loadVulnerabilities()
+    return
+  }
+  const affected = new Set(fingerprints)
+  vulnerabilities.value = vulnerabilities.value.map((vulnerability) =>
+    affected.has(vulnerability.fingerprint) ? { ...vulnerability, acceptance } : vulnerability,
+  )
 }
 
 async function markSecretRevoked(vulnerability: Vulnerability) {
@@ -972,7 +991,9 @@ async function markSecretRevoked(vulnerability: Vulnerability) {
   try {
     await api.attestSecretRevocation(provider.value, slug.value, repoSlug.value, vulnerability.id, comment)
     batchMessage.value = 'Secret marked revoked.'
-    await loadVulnerabilities()
+    vulnerabilities.value = vulnerabilities.value.map((row) =>
+      row.id === vulnerability.id ? { ...row, status: 'resolved' } : row,
+    )
   } catch (error) {
     secretScanError.value = error instanceof Error ? error.message : 'Failed to record revocation'
   }

@@ -14,7 +14,7 @@ import (
 )
 
 const getLatestPRCheckByRef = `-- name: GetLatestPRCheckByRef :one
-SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, override_state, override_reason, override_by, override_at, created_at, updated_at
+SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
 FROM pr_checks
 WHERE ref_id = $1 AND context = $2
 ORDER BY updated_at DESC
@@ -45,10 +45,6 @@ func (q *Queries) GetLatestPRCheckByRef(ctx context.Context, arg GetLatestPRChec
 		&i.TargetUrl,
 		&i.ForgeSyncedAt,
 		&i.LastError,
-		&i.OverrideState,
-		&i.OverrideReason,
-		&i.OverrideBy,
-		&i.OverrideAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -56,7 +52,7 @@ func (q *Queries) GetLatestPRCheckByRef(ctx context.Context, arg GetLatestPRChec
 }
 
 const getPRCheck = `-- name: GetPRCheck :one
-SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, override_state, override_reason, override_by, override_at, created_at, updated_at
+SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
 FROM pr_checks
 WHERE repo_id = $1 AND head_sha = $2 AND context = $3
 `
@@ -86,10 +82,6 @@ func (q *Queries) GetPRCheck(ctx context.Context, arg GetPRCheckParams) (PrCheck
 		&i.TargetUrl,
 		&i.ForgeSyncedAt,
 		&i.LastError,
-		&i.OverrideState,
-		&i.OverrideReason,
-		&i.OverrideBy,
-		&i.OverrideAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -97,7 +89,7 @@ func (q *Queries) GetPRCheck(ctx context.Context, arg GetPRCheckParams) (PrCheck
 }
 
 const listUnsyncedPRChecks = `-- name: ListUnsyncedPRChecks :many
-SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, override_state, override_reason, override_by, override_at, created_at, updated_at
+SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
 FROM pr_checks
 WHERE forge_synced_at IS NULL
 ORDER BY created_at ASC
@@ -129,10 +121,6 @@ func (q *Queries) ListUnsyncedPRChecks(ctx context.Context, limit int32) ([]PrCh
 			&i.TargetUrl,
 			&i.ForgeSyncedAt,
 			&i.LastError,
-			&i.OverrideState,
-			&i.OverrideReason,
-			&i.OverrideBy,
-			&i.OverrideAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -163,72 +151,6 @@ type MarkPRCheckSyncedParams struct {
 func (q *Queries) MarkPRCheckSynced(ctx context.Context, arg MarkPRCheckSyncedParams) error {
 	_, err := q.db.ExecContext(ctx, markPRCheckSynced, arg.ID, arg.ExternalID)
 	return err
-}
-
-const setPRCheckOverride = `-- name: SetPRCheckOverride :one
-INSERT INTO pr_checks (
-    repo_id, ref_id, head_sha, context, state,
-    override_state, override_reason, override_by, override_at
-)
-VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, NOW())
-ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
-    override_state = EXCLUDED.override_state,
-    override_reason = EXCLUDED.override_reason,
-    override_by = EXCLUDED.override_by,
-    override_at = EXCLUDED.override_at,
-    ref_id = COALESCE(pr_checks.ref_id, EXCLUDED.ref_id),
-    updated_at = NOW()
-RETURNING id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, override_state, override_reason, override_by, override_at, created_at, updated_at
-`
-
-type SetPRCheckOverrideParams struct {
-	RepoID         uuid.UUID     `json:"repo_id"`
-	RefID          uuid.NullUUID `json:"ref_id"`
-	HeadSha        string        `json:"head_sha"`
-	Context        string        `json:"context"`
-	OverrideState  string        `json:"override_state"`
-	OverrideReason string        `json:"override_reason"`
-	OverrideBy     uuid.NullUUID `json:"override_by"`
-}
-
-// Sets (or clears, with override_state=”) a manual gate override for a PR head.
-// Creates a minimal pending row if none exists yet; otherwise touches only the
-// override_* columns so a subsequent scan/re-eval preserves it.
-func (q *Queries) SetPRCheckOverride(ctx context.Context, arg SetPRCheckOverrideParams) (PrCheck, error) {
-	row := q.db.QueryRowContext(ctx, setPRCheckOverride,
-		arg.RepoID,
-		arg.RefID,
-		arg.HeadSha,
-		arg.Context,
-		arg.OverrideState,
-		arg.OverrideReason,
-		arg.OverrideBy,
-	)
-	var i PrCheck
-	err := row.Scan(
-		&i.ID,
-		&i.RepoID,
-		&i.RefID,
-		&i.HeadSha,
-		&i.Context,
-		&i.State,
-		&i.Conclusion,
-		&i.Enforcement,
-		&i.Passed,
-		&i.Reasons,
-		&i.DeltaSummary,
-		&i.ExternalID,
-		&i.TargetUrl,
-		&i.ForgeSyncedAt,
-		&i.LastError,
-		&i.OverrideState,
-		&i.OverrideReason,
-		&i.OverrideBy,
-		&i.OverrideAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
 }
 
 const upsertPRCheck = `-- name: UpsertPRCheck :one
@@ -263,7 +185,7 @@ ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
     forge_synced_at = EXCLUDED.forge_synced_at,
     last_error = EXCLUDED.last_error,
     updated_at = NOW()
-RETURNING id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, override_state, override_reason, override_by, override_at, created_at, updated_at
+RETURNING id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
 `
 
 type UpsertPRCheckParams struct {
@@ -317,10 +239,6 @@ func (q *Queries) UpsertPRCheck(ctx context.Context, arg UpsertPRCheckParams) (P
 		&i.TargetUrl,
 		&i.ForgeSyncedAt,
 		&i.LastError,
-		&i.OverrideState,
-		&i.OverrideReason,
-		&i.OverrideBy,
-		&i.OverrideAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

@@ -49,7 +49,7 @@ checksum-valid matches as *verified*.
 | `coverage` | Coverage, tests, per-file coverage sources | — |
 | `vulnerabilities` | Findings, facets, rules, org dashboard/search¹ | **File new findings** (`POST …/findings`) |
 | `triage` | Finding acceptances, VEX statements | **Change the state of existing findings** — accept, dismiss, VEX |
-| `quality_gates` | PR gate results, gate definitions¹ | Override a gate; manage gate definitions¹ |
+| `quality_gates` | PR gate results, gate definitions¹ | Manage gate definitions¹ (the manual gate override was removed by ADR-023 — triage is the only path to green) |
 | `components` | SBOM, dependency graphs, component search¹, clients¹ | Trigger component scans; manage clients¹ |
 | `secrets` | Secret-scan jobs; the synchronous push-check² | Trigger secret scans |
 | `uploads` | Upload status, snapshot files | Submit scan artifacts (`POST /upload`), create releases |

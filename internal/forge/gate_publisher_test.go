@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -123,8 +122,7 @@ type gatePublisherStore struct {
 	latestSnapshot map[uuid.UUID]dbgen.Snapshot
 	orgSlugs       map[uuid.UUID]string
 	openPRRefs     map[uuid.UUID][]dbgen.Ref
-	repoIDsByOrg   map[uuid.UUID][]uuid.UUID
-	overrides      map[string][2]string // headSHA -> {state, reason}
+	repoIDsByOrg   map[uuid.UUID][]uuid.UUID // headSHA -> {state, reason}
 	prChecks       []storepkg.UpsertPRCheckInput
 }
 
@@ -148,7 +146,6 @@ func newGatePublisherStore() *gatePublisherStore {
 		orgSlugs:       map[uuid.UUID]string{},
 		openPRRefs:     map[uuid.UUID][]dbgen.Ref{},
 		repoIDsByOrg:   map[uuid.UUID][]uuid.UUID{},
-		overrides:      map[string][2]string{},
 	}
 }
 
@@ -199,14 +196,6 @@ func (m *gatePublisherStore) ListRepoIDsByOrg(_ context.Context, orgID uuid.UUID
 
 func (m *gatePublisherStore) ListUnsyncedPRCheckRefIDs(_ context.Context, _ int32) ([]uuid.UUID, error) {
 	return nil, nil
-}
-
-func (m *gatePublisherStore) GetGateOverride(_ context.Context, _ uuid.UUID, headSha string) (string, string, bool, error) {
-	o, ok := m.overrides[headSha]
-	if !ok || o[0] == "" {
-		return "", "", false, nil
-	}
-	return o[0], o[1], true, nil
 }
 
 func TestGatePublisherPostsFailureStatusForPRSnapshot(t *testing.T) {
@@ -293,7 +282,7 @@ func TestGatePublisherAdvisoryDefaultNeverBlocks(t *testing.T) {
 	if got := forgeProvider.statuses[0].status.State; got != "success" {
 		t.Fatalf("advisory gate must post non-blocking success, got %q", got)
 	}
-	if want := "https://hibou.example.com/orgs/github/acme-org/repos/api/pulls/7"; forgeProvider.statuses[0].status.TargetURL != want {
+	if want := "https://hibou.example.com/orgs/github/acme-org/repos/api/compare?base=main&head=refs%2Fpull%2F7"; forgeProvider.statuses[0].status.TargetURL != want {
 		t.Fatalf("unexpected target url: got %q want %q", forgeProvider.statuses[0].status.TargetURL, want)
 	}
 	if len(store.prChecks) != 1 {
@@ -435,48 +424,6 @@ func TestGatePublisherBranchScanRecomputesTargetingPRs(t *testing.T) {
 	}
 	if forgeProvider.statuses[0].sha != "pr-head" {
 		t.Fatalf("expected re-post on the PR head snapshot, got sha %q", forgeProvider.statuses[0].sha)
-	}
-}
-
-// TestGatePublisherAppliesGateOverride verifies a persisted "pass" override flips a
-// blocking, failing gate to success on the published check.
-func TestGatePublisherAppliesGateOverride(t *testing.T) {
-	store := newGatePublisherStore()
-	forgeProvider := &mockForgeProvider{}
-	orgID := uuid.New()
-	repoID := uuid.New()
-	prRefID := uuid.New()
-	targetRefID := uuid.New()
-	prSnapshotID := uuid.New()
-	targetSnapshotID := uuid.New()
-
-	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
-	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/5", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
-	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "ovr-head", CreatedAt: time.Now().UTC()}
-	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
-	store.orgSlugs[orgID] = "acme-org"
-	store.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-9", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-ovr"}}
-	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 0, Enabled: true}}
-	// A release_manager overrode this head to pass.
-	store.overrides["ovr-head"] = [2]string{"pass", "confirmed false positive"}
-
-	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
-	loader := &mockRepoConfigLoader{enforcement: "blocking"}
-	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, loader, nil, "https://hibou.example.com", zerolog.Nop())
-	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
-
-	if len(forgeProvider.statuses) != 1 {
-		t.Fatalf("expected 1 commit status, got %d", len(forgeProvider.statuses))
-	}
-	if got := forgeProvider.statuses[0].status.State; got != "success" {
-		t.Fatalf("override to pass must flip a blocking failure to success, got %q", got)
-	}
-	if len(store.prChecks) != 1 || !store.prChecks[0].Passed {
-		t.Fatalf("expected persisted pr_check to be passed, got %#v", store.prChecks)
-	}
-	if len(store.prChecks[0].Reasons) == 0 || !strings.Contains(store.prChecks[0].Reasons[0], "overridden") {
-		t.Fatalf("expected override note in reasons, got %#v", store.prChecks[0].Reasons)
 	}
 }
 

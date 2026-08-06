@@ -1,14 +1,13 @@
 // One displayed vocabulary for finding triage.
 //
-// A finding carries two independent states: the scanner's `status` enum
-// (detected/confirmed/dismissed/resolved, which dies with its snapshot) and an
-// optional fingerprint-keyed acceptance (accepted/false_positive, which
-// survives snapshots). Showing both is what made the UI confusing, so every
-// view derives a single state from here instead.
+// A finding carries two independent axes (ADR-023): the machine-owned
+// observation status (detected/resolved/suppressed, which dies with its
+// snapshot) and an optional fingerprint-keyed acceptance — the human decision,
+// which survives snapshots. Every view derives one displayed state from here.
 
 import type { FindingAcceptance, Vulnerability } from '@/api/client'
 
-export type TriageState = 'open' | 'confirmed' | 'accepted_risk' | 'false_positive' | 'fixed'
+export type TriageState = 'open' | 'accepted_risk' | 'false_positive' | 'fixed' | 'suppressed'
 
 export interface TriageStateInfo {
   state: TriageState
@@ -31,14 +30,6 @@ const STATES: Record<TriageState, TriageStateInfo> = {
     countsAgainstGate: true,
     humanDecision: false,
   },
-  confirmed: {
-    state: 'confirmed',
-    label: 'Confirmed',
-    description: 'A real issue, to be fixed.',
-    badgeClass: 'border-danger/40 bg-danger/10 text-danger',
-    countsAgainstGate: true,
-    humanDecision: true,
-  },
   accepted_risk: {
     state: 'accepted_risk',
     label: 'Risk accepted',
@@ -60,6 +51,14 @@ const STATES: Record<TriageState, TriageStateInfo> = {
     label: 'Fixed',
     description: 'No longer present in the latest scan.',
     badgeClass: 'border-ok/40 bg-ok/10 text-ok',
+    countsAgainstGate: false,
+    humanDecision: false,
+  },
+  suppressed: {
+    state: 'suppressed',
+    label: 'Suppressed',
+    description: 'Excluded by the scanner itself (in-source suppression), not a Hibou decision.',
+    badgeClass: 'whitespace-nowrap border-surface-border bg-surface-overlay text-gray-500',
     countsAgainstGate: false,
     humanDecision: false,
   },
@@ -89,14 +88,10 @@ export function triageState(
     return acceptance!.reason_kind === 'false_positive' ? STATES.false_positive : STATES.accepted_risk
   }
   switch ((vulnerability.status ?? '').toLowerCase()) {
-    case 'confirmed':
-      return STATES.confirmed
     case 'resolved':
       return STATES.fixed
-    // Legacy rows predating the acceptance table used the enum for suppression;
-    // they read as accepted risk so history stays truthful without a migration.
-    case 'dismissed':
-      return STATES.accepted_risk
+    case 'suppressed':
+      return STATES.suppressed
     default:
       return STATES.open
   }

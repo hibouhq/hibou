@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,8 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
-	"github.com/hibouhq/hibou/internal/apitoken"
-	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/store"
@@ -24,19 +21,17 @@ import (
 const gateStatusContext = "hibou/security"
 
 type prGateResponse struct {
-	PRNumber       int        `json:"pr_number"`
-	HeadSHA        string     `json:"head_sha"`
-	Context        string     `json:"context"`
-	State          string     `json:"state"`
-	Conclusion     string     `json:"conclusion,omitempty"`
-	Enforcement    string     `json:"enforcement"`
-	Passed         bool       `json:"passed"`
-	Reasons        []string   `json:"reasons"`
-	TargetURL      string     `json:"target_url,omitempty"`
-	OverrideState  string     `json:"override_state,omitempty"` // "" | pass | fail
-	OverrideReason string     `json:"override_reason,omitempty"`
-	Source         string     `json:"source"` // persisted | computed | pending
-	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+	PRNumber    int        `json:"pr_number"`
+	HeadSHA     string     `json:"head_sha"`
+	Context     string     `json:"context"`
+	State       string     `json:"state"`
+	Conclusion  string     `json:"conclusion,omitempty"`
+	Enforcement string     `json:"enforcement"`
+	Passed      bool       `json:"passed"`
+	Reasons     []string   `json:"reasons"`
+	TargetURL   string     `json:"target_url,omitempty"`
+	Source      string     `json:"source"` // persisted | computed | pending
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // handleGetPRGate returns the quality-gate outcome for a pull request. It prefers
@@ -138,130 +133,20 @@ func persistedGateResponse(prNumber int, check *store.PrCheck) prGateResponse {
 		_ = json.Unmarshal(check.Reasons, &reasons)
 	}
 	resp := prGateResponse{
-		PRNumber:       prNumber,
-		HeadSHA:        check.HeadSha,
-		Context:        check.Context,
-		State:          check.State,
-		Conclusion:     check.Conclusion,
-		Enforcement:    check.Enforcement,
-		Passed:         check.Passed,
-		Reasons:        reasons,
-		TargetURL:      check.TargetUrl,
-		OverrideState:  check.OverrideState,
-		OverrideReason: check.OverrideReason,
-		Source:         "persisted",
+		PRNumber:    prNumber,
+		HeadSHA:     check.HeadSha,
+		Context:     check.Context,
+		State:       check.State,
+		Conclusion:  check.Conclusion,
+		Enforcement: check.Enforcement,
+		Passed:      check.Passed,
+		Reasons:     reasons,
+		TargetURL:   check.TargetUrl,
+		Source:      "persisted",
 	}
 	updated := check.UpdatedAt
 	resp.UpdatedAt = &updated
 	return resp
-}
-
-type overrideGateRequest struct {
-	State  string `json:"state"`  // "pass" | "fail" | "" (clear)
-	Reason string `json:"reason"` // optional justification
-}
-
-// handleOverridePRGate records a manual gate override for a PR head (a
-// release_manager/admin action) and triggers a re-post of the forge check so the
-// override takes effect without a CI re-run. See ADR-018 D2/§7.
-func (s *Server) handleOverridePRGate(w http.ResponseWriter, r *http.Request) {
-	org, repo, ok := s.loadAuthorizedRepo(r, w)
-	if !ok {
-		return
-	}
-	if !s.enforceTokenCapability(w, r, apitoken.CapQualityGates, apitoken.AccessWrite, org.Slug, repo.Slug) {
-		return
-	}
-	user, ok := s.requireGateOverrideRole(r, w, org.ID)
-	if !ok {
-		return
-	}
-	prNumber, err := strconv.Atoi(strings.TrimSpace(chi.URLParam(r, "pr")))
-	if err != nil || prNumber <= 0 {
-		api.JSONError(w, http.StatusBadRequest, "invalid pull request number")
-		return
-	}
-	var input overrideGateRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	switch input.State {
-	case "", "pass", "fail":
-	default:
-		api.JSONError(w, http.StatusBadRequest, `state must be "pass", "fail", or "" to clear`)
-		return
-	}
-
-	ref, err := s.queries.GetRefByRepoAndName(r.Context(), repo.ID, pullRequestRefName(repo.Provider, prNumber), store.RefTypePullRequest)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load pull request")
-		return
-	}
-	if ref == nil {
-		api.JSONError(w, http.StatusNotFound, "pull request not found")
-		return
-	}
-	prSnapshot, _ := s.queries.GetLatestSnapshotByRef(r.Context(), ref.ID)
-	headSHA := prHeadSHA(ref, prSnapshot)
-	if headSHA == "" {
-		api.JSONError(w, http.StatusConflict, "pull request has no analyzed head commit yet")
-		return
-	}
-
-	refID := ref.ID
-	// Service principals have no user; the audit log still names the token.
-	var overrideBy *uuid.UUID
-	if user != nil {
-		overrideBy = &user.ID
-	}
-	check, err := s.queries.SetPRCheckOverride(r.Context(), store.PRCheckOverrideInput{
-		RepoID:  repo.ID,
-		RefID:   &refID,
-		HeadSha: headSHA,
-		State:   input.State,
-		Reason:  input.Reason,
-		By:      overrideBy,
-	})
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to record gate override")
-		return
-	}
-
-	s.writeAuditLog(r, user, orgAuditID(org.ID), auditEntry{
-		Action:       audit.ActionGateOverride,
-		ResourceType: "pull_request",
-		ResourceID:   fmt.Sprintf("%s#%d", repo.Slug, prNumber),
-		Context: map[string]any{
-			"pr_number": prNumber, "state": input.State, "reason": input.Reason, "head_sha": headSHA,
-		},
-	})
-
-	// Re-evaluate + re-post the forge check so the override takes effect live.
-	s.bus.Publish(r.Context(), events.Event{
-		Type:    events.GateRecomputeRequested,
-		Payload: map[string]any{"ref_id": refID.String()},
-	})
-
-	api.JSON(w, http.StatusOK, persistedGateResponse(prNumber, check))
-}
-
-func (s *Server) requireGateOverrideRole(r *http.Request, w http.ResponseWriter, orgID uuid.UUID) (*store.User, bool) {
-	if !s.hasPrincipal(r) {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return nil, false
-	}
-	user := UserFromContext(r.Context())
-	role, err := s.principalOrgRole(r, orgID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
-		return nil, false
-	}
-	if role != "admin" && role != "release_manager" {
-		api.JSONError(w, http.StatusForbidden, "release manager or admin access required")
-		return nil, false
-	}
-	return user, true
 }
 
 // wsGateNotifier adapts the WS fanout to forge.LiveGateNotifier so the gate

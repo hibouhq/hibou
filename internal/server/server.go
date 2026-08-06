@@ -580,7 +580,6 @@ func (s *Server) routes(siteFS fs.FS) {
 							r.Get("/", s.handleGetDelta)
 						})
 						r.Get("/{repoSlug}/pulls/{pr}/gate", s.handleGetPRGate)
-						r.Post("/{repoSlug}/pulls/{pr}/gate/override", s.handleOverridePRGate)
 					})
 				})
 			})

@@ -138,7 +138,7 @@ const slug = computed(() => route.params.slug as string)
 
 const vulnerabilities = ref<OrgVulnerability[]>([])
 const loading = ref(true)
-const activeFilters = ref<Record<string, string>>({ status: 'detected,confirmed' })
+const activeFilters = ref<Record<string, string>>({ status: 'detected' })
 const searchQuery = ref('')
 const currentSort = ref('severity')
 const currentSortDirection = ref('desc')
@@ -147,10 +147,10 @@ const seenTools = ref<Set<string>>(new Set())
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
-const statusOptions = ['detected', 'confirmed', 'dismissed', 'resolved']
+const statusOptions = ['detected', 'resolved', 'suppressed']
 const toolOptions = computed(() => Array.from(seenTools.value).sort())
 const filterDefs = computed(() => [
-  { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected,confirmed' },
+  { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
@@ -165,7 +165,7 @@ const sortDirectionOptions = [
   { key: 'asc', label: '↑ Asc' },
 ]
 
-const hasActiveFilters = computed(() => Object.entries(activeFilters.value).some(([key, value]) => Boolean(value) && !(key === 'status' && value === 'detected,confirmed')) || searchQuery.value.trim().length > 0)
+const hasActiveFilters = computed(() => Object.entries(activeFilters.value).some(([key, value]) => Boolean(value) && !(key === 'status' && value === 'detected')) || searchQuery.value.trim().length > 0)
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
 watch(

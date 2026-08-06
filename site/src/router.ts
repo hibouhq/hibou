@@ -45,9 +45,11 @@ const router = createRouter({
           component: () => import('@/views/SBOMCompareView.vue'),
         },
         {
+          // The standalone PR-gate page is gone (ADR-023): the compare view is
+          // the one PR surface. Old forge-comment links land here; new comments
+          // link to compare with base/head directly.
           path: 'orgs/:provider/:slug/repos/:repoSlug/pulls/:pr',
-          name: 'repo-pr-gate',
-          component: () => import('@/views/PRGateView.vue'),
+          redirect: to => ({ name: 'repo-compare', params: { provider: to.params.provider, slug: to.params.slug, repoSlug: to.params.repoSlug }, query: to.query }),
         },
         {
           path: 'orgs/:provider/:slug/repos/:repoSlug',

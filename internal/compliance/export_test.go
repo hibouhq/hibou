@@ -16,6 +16,7 @@ import (
 )
 
 type stubExportStore struct {
+	acceptances         []store.FindingAcceptance
 	org                 dbgen.Organization
 	repo                dbgen.Repository
 	snapshot            dbgen.Snapshot
@@ -28,6 +29,10 @@ type stubExportStore struct {
 	shotErr             error
 	advisoryBatchCalls  int
 	componentBatchCalls int
+}
+
+func (s *stubExportStore) ListActiveFindingAcceptancesByRepo(_ context.Context, _ uuid.UUID) ([]store.FindingAcceptance, error) {
+	return s.acceptances, nil
 }
 
 func (s *stubExportStore) GetRepoBySlug(context.Context, uuid.UUID, string) (dbgen.Repository, error) {

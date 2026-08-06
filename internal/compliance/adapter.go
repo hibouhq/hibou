@@ -19,6 +19,10 @@ func NewStoreAdapter(queries *store.Queries) *StoreAdapter {
 	return &StoreAdapter{queries: queries}
 }
 
+func (a *StoreAdapter) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]store.FindingAcceptance, error) {
+	return a.queries.ListActiveFindingAcceptancesByRepo(ctx, repoID)
+}
+
 func (a *StoreAdapter) GetRepoBySlug(ctx context.Context, orgID uuid.UUID, slug string) (dbgen.Repository, error) {
 	repo, err := a.queries.GetRepositoryBySlug(ctx, orgID, slug)
 	if err != nil || repo == nil {

@@ -103,37 +103,3 @@ func (q *Queries) ListUnsyncedPRChecks(ctx context.Context, limit int32) ([]PrCh
 	}
 	return q.db.ListUnsyncedPRChecks(ctx, limit)
 }
-
-// PRCheckOverrideInput sets (or clears, with State "") a manual gate override for
-// a PR head. RefID/By may be nil. State is "" | "pass" | "fail".
-type PRCheckOverrideInput struct {
-	RepoID  uuid.UUID
-	RefID   *uuid.UUID
-	HeadSha string
-	Context string
-	State   string
-	Reason  string
-	By      *uuid.UUID
-}
-
-// SetPRCheckOverride creates a pending row if none exists; otherwise updates only
-// the override columns so a subsequent scan/re-eval preserves it.
-func (q *Queries) SetPRCheckOverride(ctx context.Context, in PRCheckOverrideInput) (*PrCheck, error) {
-	context := in.Context
-	if context == "" {
-		context = defaultGateContext
-	}
-	row, err := q.db.SetPRCheckOverride(ctx, dbgen.SetPRCheckOverrideParams{
-		RepoID:         in.RepoID,
-		RefID:          nullUUIDFromPtr(in.RefID),
-		HeadSha:        in.HeadSha,
-		Context:        context,
-		OverrideState:  in.State,
-		OverrideReason: in.Reason,
-		OverrideBy:     nullUUIDFromPtr(in.By),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &row, nil
-}

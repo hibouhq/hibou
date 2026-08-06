@@ -909,6 +909,11 @@ definitions:
         type: string
       created_at:
         type: string
+      created_by_display:
+        description: |-
+          CreatedByDisplay is the creator's name, populated by the org list only —
+          the review UI must show who requested a pending token.
+        type: string
       description:
         type: string
       expires_at:
@@ -1316,10 +1321,6 @@ definitions:
         type: string
       confidence:
         type: string
-      confirmed_at:
-        type: string
-      confirmed_by:
-        type: string
       created_at:
         type: string
       created_by:
@@ -1327,12 +1328,6 @@ definitions:
       description:
         type: string
       detected_at:
-        type: string
-      dismissal_reason:
-        type: string
-      dismissed_at:
-        type: string
-      dismissed_by:
         type: string
       due_date:
         type: string

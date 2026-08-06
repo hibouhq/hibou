@@ -186,51 +186,6 @@ func (ns NullDeploymentStatus) Value() (driver.Value, error) {
 	return string(ns.DeploymentStatus), nil
 }
 
-type DismissalReason string
-
-const (
-	DismissalReasonAcceptableRisk    DismissalReason = "acceptable_risk"
-	DismissalReasonFalsePositive     DismissalReason = "false_positive"
-	DismissalReasonMitigatingControl DismissalReason = "mitigating_control"
-	DismissalReasonNotApplicable     DismissalReason = "not_applicable"
-	DismissalReasonUsedInTests       DismissalReason = "used_in_tests"
-)
-
-func (e *DismissalReason) Scan(src interface{}) error {
-	switch s := src.(type) {
-	case []byte:
-		*e = DismissalReason(s)
-	case string:
-		*e = DismissalReason(s)
-	default:
-		return fmt.Errorf("unsupported scan type for DismissalReason: %T", src)
-	}
-	return nil
-}
-
-type NullDismissalReason struct {
-	DismissalReason DismissalReason `json:"dismissal_reason"`
-	Valid           bool            `json:"valid"` // Valid is true if DismissalReason is not NULL
-}
-
-// Scan implements the Scanner interface.
-func (ns *NullDismissalReason) Scan(value interface{}) error {
-	if value == nil {
-		ns.DismissalReason, ns.Valid = "", false
-		return nil
-	}
-	ns.Valid = true
-	return ns.DismissalReason.Scan(value)
-}
-
-// Value implements the driver Valuer interface.
-func (ns NullDismissalReason) Value() (driver.Value, error) {
-	if !ns.Valid {
-		return nil, nil
-	}
-	return string(ns.DismissalReason), nil
-}
-
 type FindingOrigin string
 
 const (
@@ -857,10 +812,9 @@ func (ns NullVexStatus) Value() (driver.Value, error) {
 type VulnerabilityStatus string
 
 const (
-	VulnerabilityStatusDetected  VulnerabilityStatus = "detected"
-	VulnerabilityStatusConfirmed VulnerabilityStatus = "confirmed"
-	VulnerabilityStatusDismissed VulnerabilityStatus = "dismissed"
-	VulnerabilityStatusResolved  VulnerabilityStatus = "resolved"
+	VulnerabilityStatusDetected   VulnerabilityStatus = "detected"
+	VulnerabilityStatusResolved   VulnerabilityStatus = "resolved"
+	VulnerabilityStatusSuppressed VulnerabilityStatus = "suppressed"
 )
 
 func (e *VulnerabilityStatus) Scan(src interface{}) error {
@@ -1289,27 +1243,23 @@ type Organization struct {
 }
 
 type PrCheck struct {
-	ID             uuid.UUID       `json:"id"`
-	RepoID         uuid.UUID       `json:"repo_id"`
-	RefID          uuid.NullUUID   `json:"ref_id"`
-	HeadSha        string          `json:"head_sha"`
-	Context        string          `json:"context"`
-	State          string          `json:"state"`
-	Conclusion     string          `json:"conclusion"`
-	Enforcement    string          `json:"enforcement"`
-	Passed         bool            `json:"passed"`
-	Reasons        json.RawMessage `json:"reasons"`
-	DeltaSummary   json.RawMessage `json:"delta_summary"`
-	ExternalID     string          `json:"external_id"`
-	TargetUrl      string          `json:"target_url"`
-	ForgeSyncedAt  sql.NullTime    `json:"forge_synced_at"`
-	LastError      string          `json:"last_error"`
-	OverrideState  string          `json:"override_state"`
-	OverrideReason string          `json:"override_reason"`
-	OverrideBy     uuid.NullUUID   `json:"override_by"`
-	OverrideAt     sql.NullTime    `json:"override_at"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID            uuid.UUID       `json:"id"`
+	RepoID        uuid.UUID       `json:"repo_id"`
+	RefID         uuid.NullUUID   `json:"ref_id"`
+	HeadSha       string          `json:"head_sha"`
+	Context       string          `json:"context"`
+	State         string          `json:"state"`
+	Conclusion    string          `json:"conclusion"`
+	Enforcement   string          `json:"enforcement"`
+	Passed        bool            `json:"passed"`
+	Reasons       json.RawMessage `json:"reasons"`
+	DeltaSummary  json.RawMessage `json:"delta_summary"`
+	ExternalID    string          `json:"external_id"`
+	TargetUrl     string          `json:"target_url"`
+	ForgeSyncedAt sql.NullTime    `json:"forge_synced_at"`
+	LastError     string          `json:"last_error"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 type QualityGate struct {
@@ -1586,73 +1536,68 @@ type VexStatement struct {
 }
 
 type Vulnerability struct {
-	ID                      uuid.UUID           `json:"id"`
-	Type                    string              `json:"type"`
-	SnapshotID              uuid.UUID           `json:"snapshot_id"`
-	Title                   string              `json:"title"`
-	Description             string              `json:"description"`
-	OriginalSeverity        SeverityLevel       `json:"original_severity"`
-	Severity                SeverityLevel       `json:"severity"`
-	SeverityOverrideReason  sql.NullString      `json:"severity_override_reason"`
-	SeverityOverrideBy      uuid.NullUUID       `json:"severity_override_by"`
-	Status                  string              `json:"status"`
-	DismissalReason         NullDismissalReason `json:"dismissal_reason"`
-	StateComment            sql.NullString      `json:"state_comment"`
-	DetectedAt              time.Time           `json:"detected_at"`
-	ConfirmedAt             sql.NullTime        `json:"confirmed_at"`
-	ConfirmedBy             uuid.NullUUID       `json:"confirmed_by"`
-	DismissedAt             sql.NullTime        `json:"dismissed_at"`
-	DismissedBy             uuid.NullUUID       `json:"dismissed_by"`
-	ResolvedAt              sql.NullTime        `json:"resolved_at"`
-	ResolvedBy              uuid.NullUUID       `json:"resolved_by"`
-	ScannerName             string              `json:"scanner_name"`
-	ScannerVendor           string              `json:"scanner_vendor"`
-	ScannerVersion          string              `json:"scanner_version"`
-	ScannerExternalID       string              `json:"scanner_external_id"`
-	FilePath                sql.NullString      `json:"file_path"`
-	StartLine               sql.NullInt32       `json:"start_line"`
-	EndLine                 sql.NullInt32       `json:"end_line"`
-	LocationHash            sql.NullString      `json:"location_hash"`
-	Fingerprint             string              `json:"fingerprint"`
-	ComponentID             uuid.NullUUID       `json:"component_id"`
-	ComponentName           sql.NullString      `json:"component_name"`
-	ComponentVersion        sql.NullString      `json:"component_version"`
-	ComponentPurl           sql.NullString      `json:"component_purl"`
-	Ecosystem               sql.NullString      `json:"ecosystem"`
-	AdvisoryID              uuid.NullUUID       `json:"advisory_id"`
-	AffectedRangeID         uuid.NullUUID       `json:"affected_range_id"`
-	Language                sql.NullString      `json:"language"`
-	Confidence              sql.NullString      `json:"confidence"`
-	Solution                sql.NullString      `json:"solution"`
-	HasRemediation          bool                `json:"has_remediation"`
-	RemediationLink         sql.NullString      `json:"remediation_link"`
-	Reachability            NullReachability    `json:"reachability"`
-	OwaspTop10              sql.NullString      `json:"owasp_top_10"`
-	DueDate                 sql.NullTime        `json:"due_date"`
-	PresentOnDefaultBranch  bool                `json:"present_on_default_branch"`
-	ResolvedOnDefaultBranch bool                `json:"resolved_on_default_branch"`
-	SecretType              sql.NullString      `json:"secret_type"`
-	SecretHash              sql.NullString      `json:"secret_hash"`
-	CommitSha               sql.NullString      `json:"commit_sha"`
-	AuthorEmail             sql.NullString      `json:"author_email"`
-	Verified                sql.NullBool        `json:"verified"`
-	CreatedBy               uuid.NullUUID       `json:"created_by"`
-	Metadata                json.RawMessage     `json:"metadata"`
-	CreatedAt               time.Time           `json:"created_at"`
-	UpdatedAt               time.Time           `json:"updated_at"`
-	FirstSeenAt             time.Time           `json:"first_seen_at"`
-	LastSeenAt              time.Time           `json:"last_seen_at"`
-	SeverityRank            sql.NullInt16       `json:"severity_rank"`
-	RuleRefID               uuid.NullUUID       `json:"rule_ref_id"`
-	PrimaryIdentifierKind   string              `json:"primary_identifier_kind"`
-	PrimaryIdentifierValue  string              `json:"primary_identifier_value"`
-	OrgID                   uuid.UUID           `json:"org_id"`
-	RepoID                  uuid.UUID           `json:"repo_id"`
-	Origin                  FindingOrigin       `json:"origin"`
-	OriginApiKeyID          uuid.NullUUID       `json:"origin_api_key_id"`
-	OriginTokenName         string              `json:"origin_token_name"`
-	OriginOwnerType         string              `json:"origin_owner_type"`
-	OriginOwnerID           uuid.NullUUID       `json:"origin_owner_id"`
+	ID                      uuid.UUID        `json:"id"`
+	Type                    string           `json:"type"`
+	SnapshotID              uuid.UUID        `json:"snapshot_id"`
+	Title                   string           `json:"title"`
+	Description             string           `json:"description"`
+	OriginalSeverity        SeverityLevel    `json:"original_severity"`
+	Severity                SeverityLevel    `json:"severity"`
+	SeverityOverrideReason  sql.NullString   `json:"severity_override_reason"`
+	SeverityOverrideBy      uuid.NullUUID    `json:"severity_override_by"`
+	Status                  string           `json:"status"`
+	StateComment            sql.NullString   `json:"state_comment"`
+	DetectedAt              time.Time        `json:"detected_at"`
+	ResolvedAt              sql.NullTime     `json:"resolved_at"`
+	ResolvedBy              uuid.NullUUID    `json:"resolved_by"`
+	ScannerName             string           `json:"scanner_name"`
+	ScannerVendor           string           `json:"scanner_vendor"`
+	ScannerVersion          string           `json:"scanner_version"`
+	ScannerExternalID       string           `json:"scanner_external_id"`
+	FilePath                sql.NullString   `json:"file_path"`
+	StartLine               sql.NullInt32    `json:"start_line"`
+	EndLine                 sql.NullInt32    `json:"end_line"`
+	LocationHash            sql.NullString   `json:"location_hash"`
+	Fingerprint             string           `json:"fingerprint"`
+	ComponentID             uuid.NullUUID    `json:"component_id"`
+	ComponentName           sql.NullString   `json:"component_name"`
+	ComponentVersion        sql.NullString   `json:"component_version"`
+	ComponentPurl           sql.NullString   `json:"component_purl"`
+	Ecosystem               sql.NullString   `json:"ecosystem"`
+	AdvisoryID              uuid.NullUUID    `json:"advisory_id"`
+	AffectedRangeID         uuid.NullUUID    `json:"affected_range_id"`
+	Language                sql.NullString   `json:"language"`
+	Confidence              sql.NullString   `json:"confidence"`
+	Solution                sql.NullString   `json:"solution"`
+	HasRemediation          bool             `json:"has_remediation"`
+	RemediationLink         sql.NullString   `json:"remediation_link"`
+	Reachability            NullReachability `json:"reachability"`
+	OwaspTop10              sql.NullString   `json:"owasp_top_10"`
+	DueDate                 sql.NullTime     `json:"due_date"`
+	PresentOnDefaultBranch  bool             `json:"present_on_default_branch"`
+	ResolvedOnDefaultBranch bool             `json:"resolved_on_default_branch"`
+	SecretType              sql.NullString   `json:"secret_type"`
+	SecretHash              sql.NullString   `json:"secret_hash"`
+	CommitSha               sql.NullString   `json:"commit_sha"`
+	AuthorEmail             sql.NullString   `json:"author_email"`
+	Verified                sql.NullBool     `json:"verified"`
+	CreatedBy               uuid.NullUUID    `json:"created_by"`
+	Metadata                json.RawMessage  `json:"metadata"`
+	CreatedAt               time.Time        `json:"created_at"`
+	UpdatedAt               time.Time        `json:"updated_at"`
+	FirstSeenAt             time.Time        `json:"first_seen_at"`
+	LastSeenAt              time.Time        `json:"last_seen_at"`
+	SeverityRank            sql.NullInt16    `json:"severity_rank"`
+	RuleRefID               uuid.NullUUID    `json:"rule_ref_id"`
+	PrimaryIdentifierKind   string           `json:"primary_identifier_kind"`
+	PrimaryIdentifierValue  string           `json:"primary_identifier_value"`
+	OrgID                   uuid.UUID        `json:"org_id"`
+	RepoID                  uuid.UUID        `json:"repo_id"`
+	Origin                  FindingOrigin    `json:"origin"`
+	OriginApiKeyID          uuid.NullUUID    `json:"origin_api_key_id"`
+	OriginTokenName         string           `json:"origin_token_name"`
+	OriginOwnerType         string           `json:"origin_owner_type"`
+	OriginOwnerID           uuid.NullUUID    `json:"origin_owner_id"`
 }
 
 type VulnerabilityExternalIssue struct {

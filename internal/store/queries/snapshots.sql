@@ -263,7 +263,13 @@ WHERE sc.snapshot_id = $1;
 SELECT c.*, COUNT(DISTINCT v.id)::bigint AS vuln_count
 FROM components c
 JOIN snapshot_components sc ON sc.component_id = c.id
-LEFT JOIN vulnerabilities v ON v.snapshot_id = sc.snapshot_id AND v.component_id = c.id AND v.status NOT IN ('resolved', 'dismissed')
+LEFT JOIN vulnerabilities v ON v.snapshot_id = sc.snapshot_id AND v.component_id = c.id AND v.status NOT IN ('resolved', 'suppressed')
+  AND NOT EXISTS (
+    SELECT 1 FROM finding_acceptances fa
+    WHERE fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+      AND fa.reason_kind = 'false_positive'
+      AND (fa.expires_at IS NULL OR fa.expires_at > now())
+  )
 WHERE sc.snapshot_id = $1
 GROUP BY c.id
 ORDER BY c.name, c.version;

@@ -463,7 +463,7 @@ func (s *Server) handleAttestSecretRevocation(w http.ResponseWriter, r *http.Req
 	if user != nil {
 		attestedBy = &user.ID
 	}
-	updated, err := s.queries.UpdateVulnerabilityStatus(r.Context(), vulnID, "resolved", &comment, nil, attestedBy)
+	updated, err := s.queries.UpdateVulnerabilityStatus(r.Context(), vulnID, "resolved", &comment, attestedBy)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to record revocation")
 		return

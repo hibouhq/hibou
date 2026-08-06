@@ -13,23 +13,22 @@ function acceptance(overrides: Partial<FindingAcceptance> = {}): FindingAcceptan
 }
 
 describe('triageState', () => {
-  it('maps the scanner enum when there is no human decision', () => {
+  it('maps the observation status when there is no human decision', () => {
     expect(triageState({ status: 'detected' }).state).toBe('open')
-    expect(triageState({ status: 'confirmed' }).state).toBe('confirmed')
     expect(triageState({ status: 'resolved' }).state).toBe('fixed')
   })
 
-  it('reads legacy dismissed rows as accepted risk', () => {
-    // Predates the acceptance table; must stay truthful without a migration.
-    const info = triageState({ status: 'dismissed' })
-    expect(info.state).toBe('accepted_risk')
+  it('reads scanner-suppressed rows as suppressed, not open', () => {
+    const info = triageState({ status: 'suppressed' })
+    expect(info.state).toBe('suppressed')
     expect(info.countsAgainstGate).toBe(false)
+    expect(info.humanDecision).toBe(false)
   })
 
-  it('lets a human decision win over the scanner enum', () => {
+  it('lets a human decision win over the observation status', () => {
     // The acceptance is fingerprint-keyed and survives snapshots, so it is the
-    // durable truth even when the scanner still calls the finding confirmed.
-    expect(triageState({ status: 'confirmed' }, acceptance()).state).toBe('accepted_risk')
+    // durable truth regardless of what the scanner reports.
+    expect(triageState({ status: 'detected' }, acceptance()).state).toBe('accepted_risk')
     expect(triageState({ status: 'detected' }, acceptance({ reason_kind: 'false_positive' })).state).toBe('false_positive')
   })
 
@@ -37,7 +36,6 @@ describe('triageState', () => {
     // Suppression must never outlive its stated window.
     const expired = acceptance({ expires_at: '2020-01-01T00:00:00Z' })
     expect(triageState({ status: 'detected' }, expired).state).toBe('open')
-    expect(triageState({ status: 'confirmed' }, expired).state).toBe('confirmed')
   })
 
   it('honours an acceptance that has not expired yet', () => {
@@ -50,11 +48,11 @@ describe('triageState', () => {
     expect(triageState({ status: 'detected' }, bad).state).toBe('accepted_risk')
   })
 
-  it('only the suppressed states are exempt from the gate', () => {
+  it('only open findings count against the gate', () => {
     expect(triageState({ status: 'detected' }).countsAgainstGate).toBe(true)
-    expect(triageState({ status: 'confirmed' }).countsAgainstGate).toBe(true)
     expect(triageState({ status: 'detected' }, acceptance()).countsAgainstGate).toBe(false)
     expect(triageState({ status: 'resolved' }).countsAgainstGate).toBe(false)
+    expect(triageState({ status: 'suppressed' }).countsAgainstGate).toBe(false)
   })
 
   it('unknown or empty statuses fall back to open rather than disappearing', () => {

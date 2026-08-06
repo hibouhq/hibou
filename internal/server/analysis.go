@@ -28,6 +28,9 @@ type severityCounts struct {
 	Medium   int `json:"medium"`
 	Low      int `json:"low"`
 	Info     int `json:"info"`
+	// AcceptedRisk flags how many of the counted findings carry a
+	// risk_accepted decision (ADR-023): still risk, but owned.
+	AcceptedRisk int `json:"accepted_risk"`
 }
 
 type advisoryResponse struct {
@@ -611,11 +614,15 @@ func (s *Server) buildRefSummary(r *http.Request, repo *store.Repository, snapsh
 	if err != nil {
 		return refSummaryResponse{}, err
 	}
+	acceptances, err := s.queries.ListActiveFindingAcceptancesByRepo(r.Context(), repo.ID)
+	if err != nil {
+		return refSummaryResponse{}, err
+	}
 
 	status := string(snapshot.Status)
 	createdAt := snapshot.CreatedAt
 	summary := refSummaryResponse{
-		Vulnerabilities: countVulnerabilitySeverities(vulnerabilities),
+		Vulnerabilities: riskSeverityCounts(vulnerabilities, acceptances),
 		ComponentsTotal: len(components),
 		SnapshotDate:    &createdAt,
 		SnapshotStatus:  &status,
@@ -731,7 +738,11 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 		return entry, err
 	}
 
-	entry.Vulnerabilities = countVulnerabilitySeverities(vulnerabilities)
+	acceptances, err := s.queries.ListActiveFindingAcceptancesByRepo(r.Context(), repository.ID)
+	if err != nil {
+		return entry, err
+	}
+	entry.Vulnerabilities = riskSeverityCounts(vulnerabilities, acceptances)
 	entry.ComponentsTotal = len(components)
 	return entry, nil
 }
@@ -1559,7 +1570,7 @@ func shouldCountVulnerability(vulnerability store.Vulnerability) bool {
 	if vulnerability.Type != "dependency" && vulnerability.Type != "malware" {
 		return false
 	}
-	if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+	if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
 		return false
 	}
 	return vulnerability.ComponentID != nil && vulnerability.AdvisoryID != nil
@@ -1770,12 +1781,33 @@ func paginateSlice[T any](items []T, offset, limit int) []T {
 	return items[offset:end]
 }
 
-func countVulnerabilitySeverities(vulnerabilities []store.Vulnerability) severityCounts {
+// riskSeverityCounts implements the ADR-023 risk-reporting semantics:
+// resolved/suppressed findings are not risk, a false positive never was one,
+// and an accepted risk still counts — flagged in AcceptedRisk.
+func riskSeverityCounts(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance) severityCounts {
+	kinds := acceptanceKindsByFingerprint(acceptances)
 	counts := severityCounts{}
 	for _, vulnerability := range vulnerabilities {
+		if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
+			continue
+		}
+		switch kinds[vulnerability.Fingerprint] {
+		case "false_positive":
+			continue
+		case "risk_accepted":
+			counts.AcceptedRisk++
+		}
 		incrementSeverity(&counts, string(vulnerability.Severity))
 	}
 	return counts
+}
+
+func acceptanceKindsByFingerprint(acceptances []store.FindingAcceptance) map[string]string {
+	kinds := make(map[string]string, len(acceptances))
+	for _, acceptance := range acceptances {
+		kinds[acceptance.Fingerprint] = acceptance.ReasonKind
+	}
+	return kinds
 }
 
 func addSeverityCounts(dst *severityCounts, src severityCounts) {
@@ -1784,6 +1816,7 @@ func addSeverityCounts(dst *severityCounts, src severityCounts) {
 	dst.Medium += src.Medium
 	dst.Low += src.Low
 	dst.Info += src.Info
+	dst.AcceptedRisk += src.AcceptedRisk
 }
 
 func highestAdvisorySeverity(advisories []dbgen.Advisory) string {

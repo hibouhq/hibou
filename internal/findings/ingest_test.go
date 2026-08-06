@@ -2,6 +2,7 @@ package findings
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,9 +53,10 @@ func (m *mockIngestStore) CreateVulnerability(_ context.Context, params dbgen.Cr
 		Type:        params.Type,
 		Title:       params.Title,
 		Severity:    params.Severity,
-		Status:      "detected",
+		Status:      params.Status,
 		Fingerprint: params.Fingerprint,
 		ScannerName: params.ScannerName,
+		Metadata:    params.Metadata,
 	}
 	if params.FilePath.Valid {
 		vulnerability.FilePath = &params.FilePath.String
@@ -143,5 +145,36 @@ func TestIngestSkipsDuplicates(t *testing.T) {
 	}
 	if len(store.vulnerabilities) != 1 {
 		t.Fatalf("expected one stored vulnerability, got %d", len(store.vulnerabilities))
+	}
+}
+
+// ADR-023: a scanner-suppressed result (SARIF suppressions[]) must never open
+// a finding — it lands with status 'suppressed', kind + justification kept.
+func TestIngestSuppressedFinding(t *testing.T) {
+	mock := &mockIngestStore{}
+	ingester := NewIngester(mock, zerolog.Nop())
+
+	created, err := ingester.Ingest(context.Background(), uuid.New(), []GenericFinding{
+		{Tool: "eslint", RuleID: "no-eval", Severity: "high", Message: "suppressed", Fingerprint: "fp-sup",
+			Suppressed: true, SuppressionKind: "inSource", SuppressionJustification: "test fixture"},
+		{Tool: "eslint", RuleID: "no-eval", Severity: "high", Message: "active", Fingerprint: "fp-act"},
+	})
+	if err != nil || created != 2 {
+		t.Fatalf("Ingest = %d, %v; want 2, nil", created, err)
+	}
+
+	byFingerprint := map[string]*store.Vulnerability{}
+	for _, vulnerability := range mock.vulnerabilities {
+		byFingerprint[vulnerability.Fingerprint] = vulnerability
+	}
+	suppressed := byFingerprint["fp-sup"]
+	if suppressed.Status != "suppressed" {
+		t.Fatalf("suppressed finding status = %q, want suppressed", suppressed.Status)
+	}
+	if !strings.Contains(string(suppressed.Metadata), `"kind":"inSource"`) || !strings.Contains(string(suppressed.Metadata), `"justification":"test fixture"`) {
+		t.Fatalf("suppression metadata not preserved: %s", suppressed.Metadata)
+	}
+	if active := byFingerprint["fp-act"]; active.Status != "detected" {
+		t.Fatalf("active finding status = %q, want detected", active.Status)
 	}
 }

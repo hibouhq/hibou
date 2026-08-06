@@ -96,6 +96,7 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 				LocationHash: sha256Hex(toolName + "/" + ruleID + "/" + filePath + "/" + strconv.Itoa(int(startLine))),
 				Rule:         ruleDescriptor(ruleID, rule),
 			}
+			applySuppression(&finding, result.Suppressions)
 			findings = append(findings, finding)
 		}
 	}
@@ -138,6 +139,23 @@ func ruleDescriptor(ruleID string, rule ReportingDescriptor) *RuleDescriptor {
 		desc.DefaultLevel = strings.TrimSpace(rule.DefaultConfiguration.Level)
 	}
 	return desc
+}
+
+// applySuppression marks a finding suppressed when the result carries at
+// least one non-rejected suppression (SARIF §3.27.23: an empty array means
+// the result is active; a rejected suppression does not suppress). checkov
+// downgrades suppressed results to level=warning, so classification keys on
+// this field, never on level.
+func applySuppression(finding *Finding, suppressions []Suppression) {
+	for _, suppression := range suppressions {
+		if strings.EqualFold(suppression.Status, "rejected") {
+			continue
+		}
+		finding.Suppressed = true
+		finding.SuppressionKind = suppression.Kind
+		finding.SuppressionJustification = strings.TrimSpace(suppression.Justification)
+		return
+	}
 }
 
 func resolveRule(rules []ReportingDescriptor, result Result) ReportingDescriptor {

@@ -1,6 +1,9 @@
 services:
   postgres:
     image: postgres:18
+    # The full `go test ./...` run opens one pool per DB-backed package; the
+    # default 100 connections trips "too many clients" flakes.
+    command: postgres -c max_connections=300
     ports:
       - '5432:5432'
     environment:

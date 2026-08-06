@@ -62,6 +62,14 @@
             </select>
           </label>
 
+          <p
+            v-else-if="kind === 'false_positive' && count === 1 && componentBacked === false"
+            class="rounded-md border border-surface-border-subtle bg-surface-overlay px-3 py-2 text-[11px] text-gray-500"
+          >
+            VEX not applicable — VEX describes third-party component exploitability;
+            this is a first-party code finding. No VEX row is generated.
+          </p>
+
           <label class="block">
             <span class="text-[11px] uppercase tracking-wide text-gray-500">
               Reason <span class="text-danger">*</span>

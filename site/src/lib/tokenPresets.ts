@@ -35,7 +35,7 @@ export const TOKEN_PRESETS: TokenPreset[] = [
   {
     key: 'triage-agent',
     label: 'Triage agent',
-    hint: 'Files findings and acts on them, but cannot override gates or touch org settings',
+    hint: 'Files findings and acts on them, but cannot touch gate definitions or org settings',
     permissions: { vulnerabilities: 'write', triage: 'write', coverage: 'read', components: 'read' },
   },
 ]

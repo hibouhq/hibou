@@ -60,6 +60,20 @@ type Result struct {
 	Fingerprints        map[string]string `json:"fingerprints"`
 	PartialFingerprints map[string]string `json:"partialFingerprints"`
 	CodeFlows           []map[string]any  `json:"codeFlows"`
+	// Suppressions is SARIF's occurrence-level exclusion record (ADR-023
+	// appendix): semgrep/ESLint/checkov emit suppressed results by default,
+	// gosec with -track-suppressions. Empty array = active result (that is
+	// SARIF semantics, not absence of data); nil = field absent.
+	Suppressions []Suppression `json:"suppressions"`
+}
+
+// Suppression is one entry of result.suppressions. Kind is "inSource" or
+// "external"; Status (optional) is "accepted", "underReview", or "rejected" —
+// only a rejected suppression leaves the result active.
+type Suppression struct {
+	Kind          string `json:"kind"`
+	Status        string `json:"status"`
+	Justification string `json:"justification"`
 }
 
 type Location struct {
@@ -115,4 +129,10 @@ type Finding struct {
 	Fingerprint  string          `json:"fingerprint"`
 	LocationHash string          `json:"location_hash"`
 	Rule         *RuleDescriptor `json:"rule,omitempty"`
+	// Suppressed marks a result the scanner itself excluded in-source
+	// (#nosemgrep, eslint-disable, checkov:skip, #nosec…). It must never
+	// become an open finding (ADR-023).
+	Suppressed               bool   `json:"suppressed,omitempty"`
+	SuppressionKind          string `json:"suppression_kind,omitempty"`
+	SuppressionJustification string `json:"suppression_justification,omitempty"`
 }

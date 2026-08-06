@@ -37,24 +37,6 @@ SELECT *
 FROM pr_checks
 WHERE repo_id = $1 AND head_sha = $2 AND context = $3;
 
--- name: SetPRCheckOverride :one
--- Sets (or clears, with override_state='') a manual gate override for a PR head.
--- Creates a minimal pending row if none exists yet; otherwise touches only the
--- override_* columns so a subsequent scan/re-eval preserves it.
-INSERT INTO pr_checks (
-    repo_id, ref_id, head_sha, context, state,
-    override_state, override_reason, override_by, override_at
-)
-VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, NOW())
-ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
-    override_state = EXCLUDED.override_state,
-    override_reason = EXCLUDED.override_reason,
-    override_by = EXCLUDED.override_by,
-    override_at = EXCLUDED.override_at,
-    ref_id = COALESCE(pr_checks.ref_id, EXCLUDED.ref_id),
-    updated_at = NOW()
-RETURNING *;
-
 -- name: GetLatestPRCheckByRef :one
 SELECT *
 FROM pr_checks

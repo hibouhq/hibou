@@ -29,6 +29,12 @@ type GenericFinding struct {
 	Message     string
 	Fingerprint string
 	Rule        *ScanRuleInput
+	// Suppressed: the scanner excluded this result in-source (SARIF
+	// suppressions[], ADR-023). Ingested with status 'suppressed' —
+	// visible, never open, never gating.
+	Suppressed               bool
+	SuppressionKind          string
+	SuppressionJustification string
 }
 
 // ScanRuleInput is the per-rule descriptor extracted from scanner output. It is
@@ -86,6 +92,21 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		if fingerprint == "" {
 			fingerprint = locationHash
 		}
+		status := "detected"
+		metadata := json.RawMessage(`{}`)
+		if finding.Suppressed {
+			// A scanner-suppressed result never opens a finding (ADR-023);
+			// kind + justification ride the metadata for the detail view.
+			status = "suppressed"
+			encoded, marshalErr := json.Marshal(map[string]any{"suppression": map[string]string{
+				"kind":          finding.SuppressionKind,
+				"justification": finding.SuppressionJustification,
+			}})
+			if marshalErr != nil {
+				return created, marshalErr
+			}
+			metadata = encoded
+		}
 		_, err = i.store.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
 			Type:                   "sast",
 			SnapshotID:             snapshotID,
@@ -95,14 +116,14 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 			PrimaryIdentifierValue: strings.TrimSpace(finding.RuleID),
 			OriginalSeverity:       severity,
 			Severity:               severity,
-			Status:                 "detected",
+			Status:                 status,
 			ScannerName:            strings.TrimSpace(finding.Tool),
 			FilePath:               nullString(strings.TrimSpace(finding.FilePath)),
 			StartLine:              sql.NullInt32{Int32: startLine, Valid: startLine > 0},
 			EndLine:                sql.NullInt32{Int32: endLine, Valid: endLine > 0},
 			LocationHash:           nullString(locationHash),
 			Fingerprint:            fingerprint,
-			Metadata:               json.RawMessage(`{}`),
+			Metadata:               metadata,
 			RuleRefID:              ruleRef,
 		})
 		if err != nil {

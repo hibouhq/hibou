@@ -157,3 +157,66 @@ func TestExtractCWEsFromTags(t *testing.T) {
 		t.Fatalf("unexpected CWEs: %#v", cwes)
 	}
 }
+
+// ADR-023: results the scanner itself suppressed in-source (semgrep/ESLint/
+// checkov ship them by default) must be marked, never surfaced as active.
+// Empty array = active (SARIF semantics); a rejected suppression is void.
+func TestExtractFindingsSuppressions(t *testing.T) {
+	doc, err := Parse(strings.NewReader(`{
+		"version":"2.1.0",
+		"runs":[{
+			"tool":{"driver":{"name":"eslint"}},
+			"results":[
+				{
+					"ruleId":"no-eval",
+					"level":"error",
+					"message":{"text":"suppressed one"},
+					"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.js"},"region":{"startLine":1}}}],
+					"suppressions":[{"kind":"inSource","justification":"test fixture"}]
+				},
+				{
+					"ruleId":"no-eval",
+					"level":"error",
+					"message":{"text":"active with empty array"},
+					"locations":[{"physicalLocation":{"artifactLocation":{"uri":"b.js"},"region":{"startLine":2}}}],
+					"suppressions":[]
+				},
+				{
+					"ruleId":"no-eval",
+					"level":"error",
+					"message":{"text":"rejected suppression stays active"},
+					"locations":[{"physicalLocation":{"artifactLocation":{"uri":"c.js"},"region":{"startLine":3}}}],
+					"suppressions":[{"kind":"inSource","status":"rejected","justification":"nope"}]
+				},
+				{
+					"ruleId":"no-eval",
+					"level":"error",
+					"message":{"text":"no field at all"},
+					"locations":[{"physicalLocation":{"artifactLocation":{"uri":"d.js"},"region":{"startLine":4}}}]
+				}
+			]
+		}]
+	}`))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	findings, err := ExtractFindings(doc, "repo-123")
+	if err != nil {
+		t.Fatalf("ExtractFindings returned error: %v", err)
+	}
+	if len(findings) != 4 {
+		t.Fatalf("expected 4 findings, got %d", len(findings))
+	}
+
+	suppressed := findings[0]
+	if !suppressed.Suppressed || suppressed.SuppressionKind != "inSource" || suppressed.SuppressionJustification != "test fixture" {
+		t.Fatalf("suppressed finding not marked: %#v", suppressed)
+	}
+	for i, want := range []string{"active with empty array", "rejected suppression stays active", "no field at all"} {
+		finding := findings[i+1]
+		if finding.Suppressed {
+			t.Fatalf("%q must stay active, got %#v", want, finding)
+		}
+	}
+}

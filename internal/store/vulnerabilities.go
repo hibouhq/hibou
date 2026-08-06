@@ -56,13 +56,8 @@ type Vulnerability struct {
 	SeverityOverrideReason  *string         `json:"severity_override_reason,omitempty"`
 	SeverityOverrideBy      *uuid.UUID      `json:"severity_override_by,omitempty"`
 	Status                  string          `json:"status"`
-	DismissalReason         *string         `json:"dismissal_reason,omitempty"`
 	StateComment            *string         `json:"state_comment,omitempty"`
 	DetectedAt              time.Time       `json:"detected_at"`
-	ConfirmedAt             *time.Time      `json:"confirmed_at,omitempty"`
-	ConfirmedBy             *uuid.UUID      `json:"confirmed_by,omitempty"`
-	DismissedAt             *time.Time      `json:"dismissed_at,omitempty"`
-	DismissedBy             *uuid.UUID      `json:"dismissed_by,omitempty"`
 	ResolvedAt              *time.Time      `json:"resolved_at,omitempty"`
 	ResolvedBy              *uuid.UUID      `json:"resolved_by,omitempty"`
 	ScannerName             string          `json:"scanner_name,omitempty"`
@@ -189,7 +184,7 @@ func (q *Queries) GetVulnerabilityByID(ctx context.Context, id uuid.UUID) (*Vuln
 func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID uuid.UUID, opts VulnerabilityListOptions) ([]Vulnerability, int, error) {
 	statuses := normalizeStringFilters(opts.Statuses)
 	if len(statuses) == 0 {
-		statuses = []string{"detected", "confirmed", "dismissed", "resolved"}
+		statuses = []string{"detected", "resolved", "suppressed"}
 	}
 	params := dbgen.ListVulnerabilitiesBySnapshotParams{
 		SnapshotID: snapshotID,
@@ -255,7 +250,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 
 	statuses := normalizeStringFilters(opts.Statuses)
 	if len(statuses) == 0 {
-		statuses = []string{"detected", "confirmed", "dismissed", "resolved"}
+		statuses = []string{"detected", "resolved", "suppressed"}
 	}
 	conds = append(conds, fmt.Sprintf("status = ANY($%d)", addArg(pq.Array(statuses))))
 
@@ -391,7 +386,7 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 	severities := normalizeStringFilters(opts.Severities)
 	statuses := normalizeStringFilters(opts.Statuses)
 	if len(statuses) == 0 {
-		statuses = []string{"detected", "confirmed", "dismissed", "resolved"}
+		statuses = []string{"detected", "resolved", "suppressed"}
 	}
 	scanners := normalizeStringFilters(opts.Scanners)
 	languages := normalizeStringFilters(opts.Languages)
@@ -558,15 +553,12 @@ func (q *Queries) ListAllVulnerabilitiesBySnapshot(ctx context.Context, snapshot
 	return vulnerabilities, nil
 }
 
-func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, id uuid.UUID, status string, comment, dismissalReason *string, userID *uuid.UUID) (*Vulnerability, error) {
+func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, id uuid.UUID, status string, comment *string, userID *uuid.UUID) (*Vulnerability, error) {
 	params := dbgen.UpdateVulnerabilityStatusParams{
 		ID:           id,
 		Status:       status,
 		StateComment: nullStringFromPtr(comment),
-		ConfirmedBy:  nullUUIDFromPtr(userID),
-	}
-	if dismissalReason != nil && *dismissalReason != "" {
-		params.DismissalReason = dbgen.NullDismissalReason{DismissalReason: dbgen.DismissalReason(*dismissalReason), Valid: true}
+		ResolvedBy:   nullUUIDFromPtr(userID),
 	}
 
 	row, err := q.db.UpdateVulnerabilityStatus(ctx, params)
@@ -602,13 +594,8 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		SeverityOverrideReason:  stringPtrFromNull(row.SeverityOverrideReason),
 		SeverityOverrideBy:      uuidPtrFromNull(row.SeverityOverrideBy),
 		Status:                  row.Status,
-		DismissalReason:         dismissalReasonPtrFromNull(row.DismissalReason),
 		StateComment:            stringPtrFromNull(row.StateComment),
 		DetectedAt:              row.DetectedAt,
-		ConfirmedAt:             timePtrFromNull(row.ConfirmedAt),
-		ConfirmedBy:             uuidPtrFromNull(row.ConfirmedBy),
-		DismissedAt:             timePtrFromNull(row.DismissedAt),
-		DismissedBy:             uuidPtrFromNull(row.DismissedBy),
 		ResolvedAt:              timePtrFromNull(row.ResolvedAt),
 		ResolvedBy:              uuidPtrFromNull(row.ResolvedBy),
 		ScannerName:             row.ScannerName,
@@ -686,7 +673,7 @@ func scanVulnerabilityWithAcceptance(scanner interface {
 	return vulnerability, nil
 }
 
-const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, dismissal_reason, state_comment, detected_at, confirmed_at, confirmed_by, dismissed_at, dismissed_by, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
+const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
 
 //nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
@@ -728,13 +715,8 @@ func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {
 		&row.SeverityOverrideReason,
 		&row.SeverityOverrideBy,
 		&row.Status,
-		&row.DismissalReason,
 		&row.StateComment,
 		&row.DetectedAt,
-		&row.ConfirmedAt,
-		&row.ConfirmedBy,
-		&row.DismissedAt,
-		&row.DismissedBy,
 		&row.ResolvedAt,
 		&row.ResolvedBy,
 		&row.ScannerName,
@@ -795,14 +777,6 @@ func boolPtrFromNull(value sql.NullBool) *bool {
 		return nil
 	}
 	v := value.Bool
-	return &v
-}
-
-func dismissalReasonPtrFromNull(value dbgen.NullDismissalReason) *string {
-	if !value.Valid {
-		return nil
-	}
-	v := string(value.DismissalReason)
 	return &v
 }
 

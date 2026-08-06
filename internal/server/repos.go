@@ -893,9 +893,17 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One acceptance fetch for the whole trend — decisions are repo-scoped.
+	acceptances, err := s.queries.ListActiveFindingAcceptancesByRepo(r.Context(), repo.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding acceptances")
+		return
+	}
+	acceptanceKinds := acceptanceKindsByFingerprint(acceptances)
+
 	points := make([]trendPointResponse, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		point, err := s.buildTrendPoint(r, snapshot)
+		point, err := s.buildTrendPoint(r, snapshot, acceptanceKinds)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -989,7 +997,7 @@ func parseTrendSince(raw string) (*time.Time, error) {
 	return &parsed, nil
 }
 
-func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot) (trendPointResponse, error) {
+func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot, acceptanceKinds map[string]string) (trendPointResponse, error) {
 	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 	if err != nil {
 		return trendPointResponse{}, errors.New("failed to load vulnerability trends")
@@ -998,7 +1006,7 @@ func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot) (tren
 	if err != nil {
 		return trendPointResponse{}, errors.New("failed to load component trends")
 	}
-	findings, vulns := countTrendSnapshotSeverities(vulnerabilities)
+	findings, vulns := countTrendSnapshotSeverities(vulnerabilities, acceptanceKinds)
 	return trendPointResponse{
 		SnapshotID:       snapshot.ID,
 		Date:             snapshot.CreatedAt,
@@ -1017,11 +1025,15 @@ func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot) (tren
 	}, nil
 }
 
-func countTrendSnapshotSeverities(vulnerabilities []store.Vulnerability) (severityCounts, severityCounts) {
+func countTrendSnapshotSeverities(vulnerabilities []store.Vulnerability, acceptanceKinds map[string]string) (severityCounts, severityCounts) {
 	findings := severityCounts{}
 	vulns := severityCounts{}
 	for _, vulnerability := range vulnerabilities {
-		if vulnerability.Status == "resolved" || vulnerability.Status == "dismissed" {
+		if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
+			continue
+		}
+		// ADR-023 risk semantics: a false positive never was a vulnerability.
+		if acceptanceKinds[vulnerability.Fingerprint] == "false_positive" {
 			continue
 		}
 		if vulnerability.Type == "dependency" || vulnerability.Type == "malware" {

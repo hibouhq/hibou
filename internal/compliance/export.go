@@ -46,7 +46,12 @@ type VulnEntry struct {
 	VEXStatus        string    `json:"vex_status"`
 	VEXJustification string    `json:"vex_justification,omitempty"`
 	VEXSource        string    `json:"vex_source,omitempty"`
-	FirstSeenAt      time.Time `json:"first_seen_at"`
+	// Acceptance is the ADR-023 triage decision: reason_kind makes "how much
+	// accepted risk are we carrying vs how noisy are our scanners" a GROUP BY.
+	AcceptanceReasonKind string    `json:"acceptance_reason_kind,omitempty"`
+	AcceptanceReason     string    `json:"acceptance_reason,omitempty"`
+	AcceptanceLabels     []string  `json:"acceptance_labels,omitempty"`
+	FirstSeenAt          time.Time `json:"first_seen_at"`
 }
 
 type Summary struct {
@@ -57,6 +62,9 @@ type Summary struct {
 	Info           int `json:"info"`
 	VEXNotAffected int `json:"vex_not_affected"`
 	VEXFixed       int `json:"vex_fixed"`
+	// ADR-023: an accepted risk is still risk; a false positive never was one.
+	RiskAccepted   int `json:"risk_accepted"`
+	FalsePositives int `json:"false_positives"`
 }
 
 type ExportStore interface {
@@ -67,6 +75,7 @@ type ExportStore interface {
 	GetAdvisoriesByIDs(ctx context.Context, ids []uuid.UUID) ([]dbgen.Advisory, error)
 	GetComponentsByIDs(ctx context.Context, ids []uuid.UUID) ([]dbgen.Component, error)
 	ListVEXStatementsByAdvisory(ctx context.Context, arg dbgen.ListVEXStatementsByAdvisoryParams) ([]dbgen.VexStatement, error)
+	ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]store.FindingAcceptance, error)
 	GetRefByID(ctx context.Context, id uuid.UUID) (dbgen.Ref, error)
 }
 
@@ -109,6 +118,9 @@ type reportData struct {
 	advisoryByID    map[uuid.UUID]dbgen.Advisory
 	componentByID   map[uuid.UUID]dbgen.Component
 	vexByAdvisory   map[uuid.UUID][]dbgen.VexStatement
+	// acceptanceByFingerprint holds the repo's active triage decisions
+	// (ADR-023), joined onto entries by fingerprint.
+	acceptanceByFingerprint map[string]store.FindingAcceptance
 }
 
 func (s *Service) loadReportData(ctx context.Context, orgID uuid.UUID, repoSlug string, asOfDate time.Time) (*reportData, error) {
@@ -144,15 +156,24 @@ func (s *Service) loadReportData(ctx context.Context, orgID uuid.UUID, repoSlug 
 	if err != nil {
 		return nil, err
 	}
+	acceptances, err := s.store.ListActiveFindingAcceptancesByRepo(ctx, repo.ID)
+	if err != nil {
+		return nil, err
+	}
+	acceptanceByFingerprint := make(map[string]store.FindingAcceptance, len(acceptances))
+	for _, acceptance := range acceptances {
+		acceptanceByFingerprint[acceptance.Fingerprint] = acceptance
+	}
 	return &reportData{
-		repo:            repo,
-		org:             org,
-		snapshot:        snapshot,
-		ref:             ref,
-		vulnerabilities: vulnerabilities,
-		advisoryByID:    advisoryByID,
-		componentByID:   componentByID,
-		vexByAdvisory:   vexByAdvisory,
+		repo:                    repo,
+		org:                     org,
+		snapshot:                snapshot,
+		ref:                     ref,
+		vulnerabilities:         vulnerabilities,
+		advisoryByID:            advisoryByID,
+		componentByID:           componentByID,
+		vexByAdvisory:           vexByAdvisory,
+		acceptanceByFingerprint: acceptanceByFingerprint,
 	}, nil
 }
 
@@ -190,11 +211,26 @@ func (s *Service) buildReportVulnerabilityEntry(data *reportData, vulnerability 
 		Severity:    string(vulnerability.Severity),
 		Status:      vulnerability.Status,
 		ScannerName: vulnerability.ScannerName,
-		IsAffected:  vulnerability.Status != "resolved" && vulnerability.Status != "dismissed",
+		IsAffected:  vulnerability.Status != "resolved" && vulnerability.Status != "suppressed",
 		FirstSeenAt: vulnerability.FirstSeenAt,
 	}
 	if vulnerability.FilePath != nil {
 		entry.FilePath = *vulnerability.FilePath
+	}
+	if acceptance, ok := data.acceptanceByFingerprint[vulnerability.Fingerprint]; ok {
+		entry.AcceptanceReasonKind = acceptance.ReasonKind
+		entry.AcceptanceReason = acceptance.Reason
+		entry.AcceptanceLabels = acceptance.Labels
+		switch acceptance.ReasonKind {
+		case "risk_accepted":
+			report.Summary.RiskAccepted++
+		case "false_positive":
+			report.Summary.FalsePositives++
+			// A false positive never was a vulnerability (ADR-023 semantics
+			// table): excluded from risk, kept in the report for scanner-noise
+			// accounting.
+			entry.IsAffected = false
+		}
 	}
 	applyReportComponent(&entry, data.componentByID, vulnerability.ComponentID, componentSeen)
 	if err := applyReportAdvisory(&entry, report, data, vulnerability, asOfDate); err != nil {

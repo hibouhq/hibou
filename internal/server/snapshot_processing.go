@@ -368,15 +368,18 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 			continue
 		}
 		genericFindings = append(genericFindings, findings.GenericFinding{
-			Tool:        finding.Tool,
-			RuleID:      finding.RuleID,
-			Severity:    finding.Severity,
-			FilePath:    finding.FilePath,
-			StartLine:   finding.StartLine,
-			EndLine:     finding.EndLine,
-			Message:     finding.Message,
-			Fingerprint: finding.Fingerprint,
-			Rule:        scanRuleInput(finding.Rule),
+			Tool:                     finding.Tool,
+			RuleID:                   finding.RuleID,
+			Severity:                 finding.Severity,
+			FilePath:                 finding.FilePath,
+			StartLine:                finding.StartLine,
+			EndLine:                  finding.EndLine,
+			Message:                  finding.Message,
+			Fingerprint:              finding.Fingerprint,
+			Rule:                     scanRuleInput(finding.Rule),
+			Suppressed:               finding.Suppressed,
+			SuppressionKind:          finding.SuppressionKind,
+			SuppressionJustification: finding.SuppressionJustification,
 		})
 	}
 	if droppedAdvisories > 0 {

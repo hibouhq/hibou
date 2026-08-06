@@ -7407,6 +7407,10 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "created_by_display": {
+                    "description": "CreatedByDisplay is the creator's name, populated by the org list only —\nthe review UI must show who requested a pending token.",
+                    "type": "string"
+                },
                 "description": {
                     "type": "string"
                 },
@@ -8006,12 +8010,6 @@ const docTemplate = `{
                 "confidence": {
                     "type": "string"
                 },
-                "confirmed_at": {
-                    "type": "string"
-                },
-                "confirmed_by": {
-                    "type": "string"
-                },
                 "created_at": {
                     "type": "string"
                 },
@@ -8022,15 +8020,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "detected_at": {
-                    "type": "string"
-                },
-                "dismissal_reason": {
-                    "type": "string"
-                },
-                "dismissed_at": {
-                    "type": "string"
-                },
-                "dismissed_by": {
                     "type": "string"
                 },
                 "due_date": {

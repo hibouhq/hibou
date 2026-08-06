@@ -56,7 +56,7 @@ ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET
     last_seen_at = NOW(),
     severity = EXCLUDED.severity,
     original_severity = EXCLUDED.original_severity,
-    status = CASE WHEN vulnerabilities.status IN ('dismissed', 'resolved') THEN vulnerabilities.status ELSE EXCLUDED.status END,
+    status = CASE WHEN vulnerabilities.status = 'resolved' THEN vulnerabilities.status ELSE EXCLUDED.status END,
     metadata = EXCLUDED.metadata,
     rule_ref_id = EXCLUDED.rule_ref_id
 RETURNING *;
@@ -162,13 +162,8 @@ GROUP BY type;
 UPDATE vulnerabilities
 SET status = $2,
     state_comment = $3,
-    dismissal_reason = $4,
-    confirmed_at = CASE WHEN $2 = 'confirmed' THEN NOW() ELSE confirmed_at END,
-    confirmed_by = CASE WHEN $2 = 'confirmed' THEN $5 ELSE confirmed_by END,
-    dismissed_at = CASE WHEN $2 = 'dismissed' THEN NOW() ELSE dismissed_at END,
-    dismissed_by = CASE WHEN $2 = 'dismissed' THEN $5 ELSE dismissed_by END,
     resolved_at = CASE WHEN $2 = 'resolved' THEN NOW() ELSE resolved_at END,
-    resolved_by = CASE WHEN $2 = 'resolved' THEN $5 ELSE resolved_by END,
+    resolved_by = CASE WHEN $2 = 'resolved' THEN $4 ELSE resolved_by END,
     updated_at = NOW()
 WHERE id = $1
 RETURNING *;
@@ -177,7 +172,7 @@ RETURNING *;
 UPDATE vulnerabilities SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(), last_seen_at = NOW()
 WHERE snapshot_id = sqlc.arg(snapshot_id)
   AND type = sqlc.arg(vuln_type)
-  AND status NOT IN ('dismissed', 'resolved')
+  AND status != 'resolved'
   AND id NOT IN (SELECT unnest(sqlc.arg(fresh_ids)::uuid[]));
 
 -- name: CreateStateTransition :one
@@ -203,9 +198,16 @@ SELECT * FROM vulnerability_external_issues WHERE vulnerability_id = $1;
 DELETE FROM vulnerability_external_issues WHERE id = $1;
 
 -- name: CountVulnerabilitiesByOrg :one
+-- ADR-023 risk semantics: a false positive never was a vulnerability.
 SELECT COUNT(*)::bigint
 FROM vulnerabilities v
-WHERE v.org_id = $1 AND v.status NOT IN ('resolved', 'dismissed');
+WHERE v.org_id = $1 AND v.status NOT IN ('resolved', 'suppressed')
+  AND NOT EXISTS (
+    SELECT 1 FROM finding_acceptances fa
+    WHERE fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+      AND fa.reason_kind = 'false_positive'
+      AND (fa.expires_at IS NULL OR fa.expires_at > now())
+  );
 
 -- name: SearchVulnerabilities :many
 SELECT v.*
