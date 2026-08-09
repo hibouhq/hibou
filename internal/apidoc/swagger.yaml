@@ -503,6 +503,42 @@ definitions:
           standard CISA/OpenVEX vocabulary for the generated not_affected statement.
         type: string
     type: object
+  server.findingAdvisoryResponse:
+    properties:
+      canonical_id:
+        type: string
+      cvss_score:
+        type: string
+      cvss_vector:
+        type: string
+      cwes:
+        items:
+          type: string
+        type: array
+      description:
+        type: string
+      severity:
+        type: string
+      title:
+        type: string
+    type: object
+  server.findingDetailResponse:
+    properties:
+      acceptance:
+        $ref: '#/definitions/store.FindingAcceptance'
+      advisory:
+        $ref: '#/definitions/server.findingAdvisoryResponse'
+      finding:
+        $ref: '#/definitions/store.Vulnerability'
+      occurrences:
+        items:
+          $ref: '#/definitions/store.FindingOccurrence'
+        type: array
+      vex:
+        items:
+          $ref: '#/definitions/server.findingVEXResponse'
+        type: array
+    type: object
   server.findingFingerprintsResponse:
     properties:
       fingerprints:
@@ -516,6 +552,17 @@ definitions:
           Truncated is true when the filter matched more than the cap, so the UI can
           say "first 500 of N" instead of implying it selected everything.
         type: boolean
+    type: object
+  server.findingVEXResponse:
+    properties:
+      justification:
+        type: string
+      source:
+        type: string
+      statement:
+        type: string
+      status:
+        type: string
     type: object
   server.healthResponse:
     properties:
@@ -582,6 +629,52 @@ definitions:
         type: string
       updated_at:
         type: string
+    type: object
+  server.reachabilityRequest:
+    properties:
+      analyzer:
+        type: string
+      commit_sha:
+        type: string
+      go_symbols:
+        description: |-
+          Reference-inventory mode (Java class-level, Rust crate-level): what the
+          built code names. Persisted per snapshot so a NEWLY PUBLISHED CVE on
+          unchanged code is classified by the daily advisory scan immediately,
+          without waiting for the next CI run.
+        items:
+          type: string
+        type: array
+      java_packages:
+        items:
+          type: string
+        type: array
+      reachable:
+        description: 'Identifier mode (Go / govulncheck, symbol-level): advisory ids.'
+        items:
+          type: string
+        type: array
+      rust_present:
+        items:
+          type: string
+        type: array
+      rust_referenced:
+        items:
+          type: string
+        type: array
+      unreachable:
+        items:
+          type: string
+        type: array
+    type: object
+  server.reachabilityResponse:
+    properties:
+      reachable_updated:
+        type: integer
+      snapshot_id:
+        type: string
+      unreachable_updated:
+        type: integer
     type: object
   server.readyResponse:
     properties:
@@ -1013,6 +1106,30 @@ definitions:
       vex_justification:
         type: string
     type: object
+  store.FindingOccurrence:
+    properties:
+      commit_sha:
+        type: string
+      ref_name:
+        type: string
+      ref_type:
+        type: string
+      snapshot_at:
+        type: string
+      status:
+        type: string
+    type: object
+  store.FixingPullRequest:
+    properties:
+      fingerprint:
+        type: string
+      number:
+        type: string
+      ref_name:
+        type: string
+      title:
+        type: string
+    type: object
   store.Integration:
     properties:
       config:
@@ -1341,6 +1458,14 @@ definitions:
         type: string
       first_seen_at:
         type: string
+      fixed_in_prs:
+        description: |-
+          FixedInPRs lists open pull requests whose latest gate run resolves this
+          fingerprint — it changes the triage decision ("merge #12 instead of
+          accepting"). Attached by the list/detail handlers, never stored.
+        items:
+          $ref: '#/definitions/store.FixingPullRequest'
+        type: array
       has_remediation:
         type: boolean
       id:
@@ -3964,6 +4089,113 @@ paths:
       security:
       - BearerAuth: []
       summary: File a finding
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}:
+    get:
+      description: 'One aggregated view of a finding by fingerprint: latest occurrence,
+        advisory data, triage decision, VEX statements, and the refs currently detecting
+        it.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Finding fingerprint
+        in: path
+        name: fingerprint
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.findingDetailResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Finding detail
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/reachability:
+    post:
+      consumes:
+      - application/json
+      description: Applies CI-side reachability verdicts (e.g. govulncheck call-graph
+        analysis) to the snapshot identified by the commit SHA. Findings named in
+        `reachable` are marked reachable, `unreachable` ones not_reachable; anything
+        unmentioned stays unknown. With the org's reachability setting on, unreachable
+        findings stop counting toward gate severity ceilings.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Analyzer verdicts
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.reachabilityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.reachabilityResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Submit reachability analysis
       tags:
       - vulnerabilities
   /orgs/{provider}/{slug}/repos/{repoSlug}/refs:

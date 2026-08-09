@@ -109,7 +109,12 @@ type compareResultResponse struct {
 	PatchCoverage *comparison.PatchCoverage `json:"patch_coverage,omitempty"`
 	TestDiff      *comparison.TestDiff      `json:"test_diff"`
 	Gate          *delta.GateResult         `json:"gate,omitempty"`
-	PR            *comparePRInfo            `json:"pr,omitempty"`
+	// GateSource: "persisted" = the exact verdict the forge check shows (the
+	// two surfaces cannot disagree); "computed" = live evaluation for
+	// comparisons no check was published for.
+	GateSource string         `json:"gate_source,omitempty"`
+	GateCommit string         `json:"gate_commit,omitempty"`
+	PR         *comparePRInfo `json:"pr,omitempty"`
 }
 
 type trendPointResponse struct {
@@ -815,6 +820,27 @@ type comparePREnrichment struct {
 // line-level patch coverage. It writes an HTTP error and returns false only
 // when gate evaluation fails; all coverage enrichment degrades gracefully.
 func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comparePREnrichment, response *compareResultResponse) bool {
+	// Single source of truth (dogfood bug: page said FAILED while the forge
+	// said PASSED): when this comparison IS the published PR gate, return the
+	// persisted pr_checks verdict verbatim. Triage changes re-publish it via
+	// GateRecomputeRequested, so it follows acceptance/VEX edits.
+	if in.headRef.MergeTargetRefID != nil && in.baseRef.ID == *in.headRef.MergeTargetRefID && in.headSnapshot.CommitSHA != "" {
+		if check, err := s.queries.GetPRCheck(r.Context(), in.repo.ID, in.headSnapshot.CommitSHA, gateStatusContext); err == nil && check != nil && check.State != "pending" {
+			reasons := []string{}
+			if len(check.Reasons) > 0 {
+				_ = json.Unmarshal(check.Reasons, &reasons)
+			}
+			response.Gate = &delta.GateResult{Passed: check.Passed, Configured: true, Reasons: reasons}
+			response.GateSource = "persisted"
+			response.GateCommit = check.HeadSha
+			s.enrichComparePRInfo(in, response)
+			cfg := s.loadCompareRepoConfig(r.Context(), in.repo)
+			response.PatchCoverage = s.buildPatchCoverage(r.Context(), in.repo, in.baseSnapshot, in.headSnapshot, cfg)
+			return true
+		}
+	}
+
+	response.GateSource = "computed"
 	gateConfig := s.resolveRepoGateConfig(r.Context(), in.repo.Provider, in.repo.DefaultBranch, in.repo.ProviderID, in.repo.Name, in.repo.Slug, in.baseSnapshot.ID)
 	if gateConfig == nil {
 		gateConfig = &delta.GateConfig{}
@@ -827,17 +853,7 @@ func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comp
 	}
 	response.Gate = gate
 
-	prNum := extractPRNumberFromRefName(in.headRef.Name)
-	if in.headRef.PrNumber != nil {
-		prNum, _ = strconv.Atoi(*in.headRef.PrNumber)
-	}
-	response.PR = &comparePRInfo{
-		Number:       prNum,
-		Title:        in.headRef.PrTitle,
-		SourceBranch: in.headRef.PrSourceBranch,
-		TargetBranch: in.baseRef.Name,
-		State:        optionalStringValue(in.headRef.PrState),
-	}
+	s.enrichComparePRInfo(in, response)
 
 	// Line-level patch coverage + coverage quality gate matched from
 	// .hibou.yaml against the PR target branch. Both degrade to nil/no-op.
@@ -854,6 +870,20 @@ func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comp
 		}
 	}
 	return true
+}
+
+func (s *Server) enrichComparePRInfo(in comparePREnrichment, response *compareResultResponse) {
+	prNum := extractPRNumberFromRefName(in.headRef.Name)
+	if in.headRef.PrNumber != nil {
+		prNum, _ = strconv.Atoi(*in.headRef.PrNumber)
+	}
+	response.PR = &comparePRInfo{
+		Number:       prNum,
+		Title:        in.headRef.PrTitle,
+		SourceBranch: in.headRef.PrSourceBranch,
+		TargetBranch: in.baseRef.Name,
+		State:        optionalStringValue(in.headRef.PrState),
+	}
 }
 
 // latestScanStatus reports the newest advisory scan's status for a snapshot.

@@ -74,6 +74,10 @@ type AffectedRange struct {
 	// ("3.18" for Alpine 3.18, "12" for Debian bookworm). Empty for language
 	// ecosystems, whose versions are release-independent.
 	Release string
+	// VulnerableSymbols are the advisory's declared vulnerable functions,
+	// qualified by import path (Go/OSV imports[].symbols). Empty when the
+	// advisory does not say — never guessed.
+	VulnerableSymbols []string
 }
 
 func NormalizeSeverity(score float64) Severity {

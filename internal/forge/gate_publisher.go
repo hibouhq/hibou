@@ -55,6 +55,10 @@ type GatePublisherStore interface {
 	ListRepoIDsByOrg(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error)
 	ListUnsyncedPRCheckRefIDs(ctx context.Context, limit int32) ([]uuid.UUID, error)
 	UpsertPRCheck(ctx context.Context, in store.UpsertPRCheckInput) error
+	// ReplacePRCheckResolvedFingerprints records what this PR fixes, so the
+	// findings list can show "a PR already fixes this" without recomputing
+	// deltas (TODO-FEAT finding-detail §1).
+	ReplacePRCheckResolvedFingerprints(ctx context.Context, repoID uuid.UUID, headSHA string, fingerprints []string) error
 }
 
 type RepoConfigLoader interface {
@@ -140,6 +144,14 @@ func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uui
 
 	switch ref.RefType {
 	case dbgen.RefTypePullRequest:
+		if head, stale := snapshotBehindHead(snapshot, ref); stale {
+			// The PR moved past this snapshot (push before CI uploaded, or a
+			// force-push): a verdict for a stale commit is a lie. Post the
+			// pending state ON THE CURRENT HEAD instead, naming what we wait
+			// for; the head's own upload publishes the real verdict.
+			a.publishGateWaitingForHead(ctx, snapshot, ref, head)
+			return
+		}
 		annotation, ok := a.buildGateContext(ctx, snapshot, ref)
 		if !ok {
 			// The gate is not computable yet (target branch has no snapshot, or
@@ -155,6 +167,51 @@ func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uui
 		// now have a different delta, so refresh their gate checks — no CI re-run.
 		a.recomputeOpenPRsForTargetRef(ctx, ref.RepoID, ref.ID)
 	}
+}
+
+// snapshotBehindHead reports whether the ref's webhook-tracked head has moved
+// past the snapshot we would evaluate — the "gate comment stamps a commit
+// that is not the PR head" bug.
+func snapshotBehindHead(snapshot dbgen.Snapshot, ref dbgen.Ref) (string, bool) {
+	head := ""
+	if ref.LatestCommitSha.Valid {
+		head = strings.TrimSpace(ref.LatestCommitSha.String)
+	}
+	return head, head != "" && snapshot.CommitSha != "" && head != snapshot.CommitSha
+}
+
+// publishGateWaitingForHead posts the pending state against the PR's CURRENT
+// head commit, naming it — so a fresh push always shows a check immediately
+// ("waiting for scan of <head>") and stale verdicts never masquerade as
+// current. No verdict is persisted.
+func (a *GatePublisher) publishGateWaitingForHead(ctx context.Context, snapshot dbgen.Snapshot, ref dbgen.Ref, headSHA string) {
+	repo, provider, owner, name, ok := a.loadGateRepository(ctx, ref)
+	if !ok {
+		return
+	}
+	orgSlug, err := a.store.GetOrgSlug(ctx, repo.OrgID)
+	if err != nil {
+		a.log.Debug().Err(err).Str("org_id", repo.OrgID.String()).Msg("load org slug for waiting gate check")
+	}
+	// The check must attach to the head the reviewer is looking at.
+	headSnapshot := snapshot
+	headSnapshot.CommitSha = headSHA
+	annotation := &gateContext{
+		snapshot: headSnapshot,
+		prRef:    ref,
+		repo:     repo,
+		provider: provider,
+		owner:    owner,
+		name:     name,
+		orgSlug:  orgSlug,
+	}
+	status := gatePendingStatus()
+	status.description = "Waiting for scan of " + shortCommit(headSHA)
+	status.title = "Quality gate — waiting for scan of " + shortCommit(headSHA)
+	status.summary = fmt.Sprintf(
+		"The pull request head moved to %s but its scan has not been uploaded yet. The last evaluated commit was %s; this check updates automatically when the new head's upload arrives.",
+		shortCommit(headSHA), shortCommit(snapshot.CommitSha))
+	a.publishGateStatusOnly(ctx, annotation, status)
 }
 
 // publishGatePendingForRef posts an in-progress check for a PR snapshot whose
@@ -263,6 +320,10 @@ func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) 
 	if !ok {
 		return
 	}
+	if head, stale := snapshotBehindHead(annotation.snapshot, annotation.prRef); stale {
+		a.publishGateWaitingForHead(ctx, annotation.snapshot, annotation.prRef, head)
+		return
+	}
 	a.evaluateAndPublish(ctx, annotation)
 }
 
@@ -307,7 +368,7 @@ func (a *GatePublisher) evaluateAndPublish(ctx context.Context, annotation *gate
 	}
 	enforcement := a.loadEnforcementMode(ctx, annotation)
 	status := gateForgeStatus(gateResult, deltaResult, enforcement)
-	a.publishGate(ctx, annotation, gateResult, status)
+	a.publishGate(ctx, annotation, gateResult, deltaResult, status)
 	a.upsertGateComment(ctx, annotation, gateResult, deltaResult, status)
 	a.publishGateEvent(ctx, status.eventType, annotation.repo, annotation.snapshot, gateResult)
 	a.broadcastGateUpdate(ctx, annotation, gateResult, status)
@@ -375,8 +436,9 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "\n<sub>commit %s · updated %s</sub>\n",
-		shortCommit(annotation.snapshot.CommitSha), time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	// No timestamp: the forge already shows "edited X ago", and a
+	// deterministic body is what lets UpsertPRComment skip no-op edits.
+	fmt.Fprintf(&b, "\n<sub>evaluated commit %s</sub>\n", shortCommit(annotation.snapshot.CommitSha))
 	return b.String()
 }
 
@@ -756,9 +818,9 @@ type CheckRunAnnotation struct {
 // the same (repo, head SHA, context) row without a CI re-run. Post and persistence
 // are decoupled: a failed post is recorded (forge_synced_at NULL + last_error) for
 // the reconcile loop to retry.
-func (a *GatePublisher) publishGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, status gateStatus) {
+func (a *GatePublisher) publishGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, deltaResult *delta.DeltaResult, status gateStatus) {
 	targetURL, externalID, syncErr := a.pushGateToForge(ctx, annotation, status)
-	a.persistGate(ctx, annotation, gateResult, status, targetURL, externalID, syncErr)
+	a.persistGate(ctx, annotation, gateResult, status, targetURL, externalID, syncErr, deltaResult)
 }
 
 // publishGateStatusOnly pushes a check to the forge without recording a verdict.
@@ -812,7 +874,7 @@ func summaryWithLink(summary, targetURL string) string {
 	return summary + fmt.Sprintf("\n\n[Review the coverage & diff on Hibou](%s)", targetURL)
 }
 
-func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, status gateStatus, targetURL, externalID string, syncErr error) {
+func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult, status gateStatus, targetURL, externalID string, syncErr error, deltaResult *delta.DeltaResult) {
 	if a.store == nil {
 		return
 	}
@@ -848,6 +910,21 @@ func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext
 	}
 	if err := a.store.UpsertPRCheck(ctx, input); err != nil {
 		a.log.Error().Err(err).Str("repo_id", annotation.repo.ID.String()).Str("commit_sha", annotation.snapshot.CommitSha).Msg("persist pr_check")
+		return
+	}
+
+	// Best-effort: the resolved set powers the "fix in #N" chip, never the
+	// gate verdict, so a failure here must not fail the publish.
+	if deltaResult != nil {
+		fingerprints := make([]string, 0, len(deltaResult.Resolved))
+		for _, vulnerability := range deltaResult.Resolved {
+			if vulnerability.Fingerprint != "" {
+				fingerprints = append(fingerprints, vulnerability.Fingerprint)
+			}
+		}
+		if err := a.store.ReplacePRCheckResolvedFingerprints(ctx, annotation.repo.ID, annotation.snapshot.CommitSha, fingerprints); err != nil {
+			a.log.Debug().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("persist pr_check resolved fingerprints")
+		}
 	}
 }
 
@@ -965,6 +1042,16 @@ func (a *GatePublisherStoreAdapter) GetRefByID(ctx context.Context, id uuid.UUID
 		CreatedAt:        ref.CreatedAt,
 		UpdatedAt:        ref.UpdatedAt,
 	}, nil
+}
+
+// ReplacePRCheckResolvedFingerprints resolves the check row by (repo, head)
+// and rewrites its resolved-fingerprint set.
+func (a *GatePublisherStoreAdapter) ReplacePRCheckResolvedFingerprints(ctx context.Context, repoID uuid.UUID, headSHA string, fingerprints []string) error {
+	check, err := a.queries.GetPRCheck(ctx, repoID, headSHA, securityStatusContext)
+	if err != nil || check == nil {
+		return err
+	}
+	return a.queries.ReplacePRCheckResolvedFingerprints(ctx, check.ID, fingerprints)
 }
 
 func (a *GatePublisherStoreAdapter) UpsertPRCheck(ctx context.Context, in store.UpsertPRCheckInput) error {

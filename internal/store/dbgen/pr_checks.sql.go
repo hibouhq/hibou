@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const getLatestPRCheckByRef = `-- name: GetLatestPRCheckByRef :one
@@ -88,6 +89,59 @@ func (q *Queries) GetPRCheck(ctx context.Context, arg GetPRCheckParams) (PrCheck
 	return i, err
 }
 
+const listFixingPullRequests = `-- name: ListFixingPullRequests :many
+SELECT f.fingerprint, r.name AS ref_name, r.pr_number, r.pr_title
+FROM pr_check_resolved_fingerprints f
+JOIN pr_checks c ON c.id = f.pr_check_id
+JOIN refs r ON r.id = c.ref_id
+WHERE c.repo_id = $1
+  AND f.fingerprint = ANY($2::text[])
+  AND r.ref_type = 'pull_request'
+  AND COALESCE(r.pr_state, 'open') = 'open'
+ORDER BY r.pr_number
+`
+
+type ListFixingPullRequestsParams struct {
+	RepoID       uuid.UUID `json:"repo_id"`
+	Fingerprints []string  `json:"fingerprints"`
+}
+
+type ListFixingPullRequestsRow struct {
+	Fingerprint string         `json:"fingerprint"`
+	RefName     string         `json:"ref_name"`
+	PrNumber    sql.NullString `json:"pr_number"`
+	PrTitle     string         `json:"pr_title"`
+}
+
+// Open PRs whose latest published gate resolves the given fingerprints.
+func (q *Queries) ListFixingPullRequests(ctx context.Context, arg ListFixingPullRequestsParams) ([]ListFixingPullRequestsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFixingPullRequests, arg.RepoID, pq.Array(arg.Fingerprints))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFixingPullRequestsRow{}
+	for rows.Next() {
+		var i ListFixingPullRequestsRow
+		if err := rows.Scan(
+			&i.Fingerprint,
+			&i.RefName,
+			&i.PrNumber,
+			&i.PrTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnsyncedPRChecks = `-- name: ListUnsyncedPRChecks :many
 SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
 FROM pr_checks
@@ -150,6 +204,28 @@ type MarkPRCheckSyncedParams struct {
 
 func (q *Queries) MarkPRCheckSynced(ctx context.Context, arg MarkPRCheckSyncedParams) error {
 	_, err := q.db.ExecContext(ctx, markPRCheckSynced, arg.ID, arg.ExternalID)
+	return err
+}
+
+const replacePRCheckResolvedFingerprints = `-- name: ReplacePRCheckResolvedFingerprints :exec
+WITH cleared AS (
+    DELETE FROM pr_check_resolved_fingerprints WHERE pr_check_id = $1
+)
+INSERT INTO pr_check_resolved_fingerprints (pr_check_id, fingerprint)
+SELECT $1, unnest($2::text[])
+ON CONFLICT DO NOTHING
+`
+
+type ReplacePRCheckResolvedFingerprintsParams struct {
+	PrCheckID    uuid.UUID `json:"pr_check_id"`
+	Fingerprints []string  `json:"fingerprints"`
+}
+
+// The set of findings this PR resolves versus its base, refreshed on every
+// gate publish. Persisted so the findings list can answer "a PR already fixes
+// this" with a join instead of recomputing deltas per render.
+func (q *Queries) ReplacePRCheckResolvedFingerprints(ctx context.Context, arg ReplacePRCheckResolvedFingerprintsParams) error {
+	_, err := q.db.ExecContext(ctx, replacePRCheckResolvedFingerprints, arg.PrCheckID, pq.Array(arg.Fingerprints))
 	return err
 }
 

@@ -5,55 +5,69 @@
         <span class="compare-beacon" />
         <span class="compare-display">Compare</span>
       </p>
-      <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 lg:gap-2">
-        <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
-          <component
-            :is="headRefIcon"
-            class="h-5 w-5 shrink-0 text-gray-400"
+      <!-- The title IS the control: click either side to change head/base. -->
+      <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+        <div class="flex min-w-0 items-center gap-1.5">
+          <BranchPRSelector
+            :refs="refs"
+            :selected-ref-name="headRef"
+            :default-branch="repo?.default_branch"
+            :loading="loadingRefs"
+            :repo-html-url="repo?.html_url"
+            :provider="repo?.provider"
+            hero
+            @select="selectHead"
           />
           <a
             v-if="headForgeUrl"
             :href="headForgeUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="compare-ref inline-flex min-w-0 items-center gap-1.5 truncate transition hover:text-accent"
+            class="shrink-0 text-gray-500 transition hover:text-accent"
             :title="`Open ${headLabel} on ${forgeName}`"
           >
-            <span class="min-w-0 truncate">{{ headLabel }}</span>
-            <ExternalLink class="h-3.5 w-3.5 shrink-0 text-gray-500" />
+            <ExternalLink class="h-3.5 w-3.5" />
           </a>
-          <span
-            v-else
-            class="compare-ref min-w-0 truncate"
-          >{{ headLabel }}</span>
-        </span>
-        <span class="compare-arrow flex h-10 w-10 items-center justify-center text-2xl">→</span>
-        <span class="flex min-w-0 items-center gap-2 text-xl font-semibold tracking-tight sm:text-2xl">
-          <component
-            :is="baseRefIcon"
-            class="h-5 w-5 shrink-0 text-gray-400"
+        </div>
+        <button
+          type="button"
+          class="compare-swap inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/60 hover:text-white"
+          :disabled="!baseRef || !headRef"
+          title="Swap base and head"
+          aria-label="Swap base and head"
+          @click="swapRefs"
+        >
+          <ArrowLeftRight class="h-4 w-4" />
+        </button>
+        <div class="flex min-w-0 items-center gap-1.5">
+          <BranchPRSelector
+            :refs="refs"
+            :selected-ref-name="baseRef"
+            :default-branch="repo?.default_branch"
+            :loading="loadingRefs"
+            :repo-html-url="repo?.html_url"
+            :provider="repo?.provider"
+            hero
+            align="right"
+            @select="selectBase"
           />
           <a
             v-if="baseForgeUrl"
             :href="baseForgeUrl"
             target="_blank"
             rel="noopener noreferrer"
-            class="compare-ref compare-ref-head inline-flex min-w-0 items-center gap-1.5 truncate transition hover:text-accent"
+            class="shrink-0 text-gray-500 transition hover:text-accent"
             :title="`Open ${baseLabel} on ${forgeName}`"
           >
-            <span class="min-w-0 truncate">{{ baseLabel }}</span>
-            <ExternalLink class="h-3.5 w-3.5 shrink-0 text-gray-500" />
+            <ExternalLink class="h-3.5 w-3.5" />
           </a>
-          <span
-            v-else
-            class="compare-ref compare-ref-head min-w-0 truncate"
-          >{{ baseLabel }}</span>
-        </span>
+        </div>
       </div>
       <span
         v-if="gateState"
-        class="absolute right-0 top-1/2 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium"
+        class="absolute right-0 top-0 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium"
         :class="gateState.badgeClass"
+        :title="gateSourceTitle"
       >
         <span
           class="h-1.5 w-1.5 rounded-full"
@@ -66,23 +80,8 @@
     <div
       class="compare-rise relative z-20 mt-4 border-b border-surface-border pb-3"
     >
-      <div class="compare-comparator grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-start lg:gap-2">
+      <div class="compare-comparator grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
         <div class="min-w-0 flex-1 space-y-2">
-          <span class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
-            <span class="compare-dot compare-dot-head" />
-            Head <span class="text-gray-600">(from)</span>
-          </span>
-          <BranchPRSelector
-            :refs="refs"
-            :selected-ref-name="headRef"
-            :default-branch="repo?.default_branch"
-            :loading="loadingRefs"
-            :repo-html-url="repo?.html_url"
-            :provider="repo?.provider"
-            compact
-            block
-            @select="selectHead"
-          />
           <div
             v-if="headSnapshots.length > 0"
             class="flex items-center gap-2"
@@ -157,34 +156,7 @@
           </div>
         </div>
 
-        <button
-          type="button"
-          class="compare-swap mx-auto my-1 inline-flex h-10 w-10 shrink-0 self-center items-center justify-center rounded-xl border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/60 hover:text-white"
-          :disabled="!baseRef || !headRef"
-          title="Swap base and head"
-          aria-label="Swap base and head"
-          @click="swapRefs"
-        >
-          <ArrowLeftRight class="h-4 w-4" />
-        </button>
-
         <div class="min-w-0 flex-1 space-y-2">
-          <span class="flex items-center justify-end gap-2 text-xs uppercase tracking-[0.2em] text-gray-500">
-            Base <span class="text-gray-600">(to)</span>
-            <span class="compare-dot compare-dot-base" />
-          </span>
-          <BranchPRSelector
-            :refs="refs"
-            :selected-ref-name="baseRef"
-            :default-branch="repo?.default_branch"
-            :loading="loadingRefs"
-            :repo-html-url="repo?.html_url"
-            :provider="repo?.provider"
-            compact
-            block
-            align="right"
-            @select="selectBase"
-          />
           <div
             v-if="baseSnapshots.length > 0"
             class="flex items-center gap-2"
@@ -355,7 +327,14 @@
               v-for="reason in gateReasons"
               :key="reason"
             >
-              {{ reason }}
+              <button
+                type="button"
+                class="text-left underline decoration-danger/40 underline-offset-2 transition hover:decoration-danger"
+                title="Show exactly the findings behind this reason"
+                @click="openSecurityForReason(reason)"
+              >
+                {{ reason }}
+              </button>
             </li>
           </ul>
         </div>
@@ -486,78 +465,172 @@
         </div>
       </div>
 
-      <!-- Security tab -->
+      <!-- Security tab: delta grouped by CAUSE — one decision per cause. -->
       <div
         v-show="activeTab === 'security'"
-        class="overflow-hidden rounded-2xl border border-surface-border-subtle"
+        class="space-y-3"
       >
+        <TriageDialog
+          v-if="groupDialog"
+          :kind="groupDialog.kind"
+          :count="groupDialog.group.rows.length"
+          :error="groupDialogError"
+          :submitting="groupDialogSubmitting"
+          @cancel="groupDialog = null"
+          @confirm="confirmGroupAccept"
+        />
         <div
           v-if="headScanRunning"
-          class="border-b border-surface-border-subtle bg-surface-overlay/40 px-4 py-2 text-xs text-amber-300"
+          class="rounded-xl border border-surface-border-subtle bg-surface-overlay/40 px-4 py-2 text-xs text-amber-300"
         >
           Scanning components against advisory providers… this list may still change.
         </div>
         <div
-          v-if="vulnRows.length === 0"
-          class="px-4 py-10 text-sm text-gray-500"
+          v-if="securitySeverityFilter"
+          class="flex items-center gap-2 text-xs text-gray-400"
+        >
+          Showing only
+          <span :class="severityBadgeClass(securitySeverityFilter)">{{ securitySeverityFilter }}</span>
+          findings (from a gate reason)
+          <button
+            type="button"
+            class="underline transition hover:text-white"
+            @click="securitySeverityFilter = ''"
+          >
+            clear
+          </button>
+        </div>
+        <div
+          v-if="securityGroups.length === 0"
+          class="rounded-2xl border border-surface-border-subtle px-4 py-10 text-sm text-gray-500"
         >
           {{ headScanRunning ? 'No vulnerability changes yet — scan in progress.' : 'No vulnerability changes between these refs.' }}
         </div>
         <div
-          v-else
-          class="overflow-x-auto"
+          v-for="group in securityGroups"
+          :key="group.key"
+          class="overflow-hidden rounded-2xl border border-surface-border-subtle"
         >
-          <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
-            <thead class="bg-surface-overlay/60 text-left text-xs uppercase tracking-[0.18em] text-gray-500">
-              <tr>
-                <th class="px-4 py-3 font-medium">
-                  Change
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Severity
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Type
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Identifier
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Title
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Location
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-surface-border-subtle">
-              <tr
-                v-for="vuln in vulnRows"
-                :key="`${vuln.change}-${vuln.advisory_id}-${vuln.component_name}`"
-                class="transition hover:bg-white/5"
+          <div
+            class="flex flex-wrap items-center gap-3 bg-surface-overlay/60 px-4 py-2.5"
+          >
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-center gap-2 text-left"
+              @click="toggleGroup(group.key)"
+            >
+              <ChevronDown
+                class="h-4 w-4 shrink-0 text-gray-500 transition"
+                :class="expandedGroups.has(group.key) ? '' : '-rotate-90'"
+              />
+              <span
+                v-if="group.kind === 'resolved'"
+                :class="changeBadgeClass('resolved')"
+              >resolved</span>
+              <span
+                v-else
+                :class="changeBadgeClass('new')"
+              >new</span>
+              <span class="min-w-0 truncate text-sm font-medium text-white">{{ group.label }}</span>
+              <span class="shrink-0 rounded-full bg-surface-overlay px-2 py-0.5 text-[11px] font-semibold text-gray-300">{{ group.rows.length }}</span>
+              <span class="hidden truncate text-xs text-gray-500 sm:inline">{{ group.context }}</span>
+            </button>
+            <span
+              v-if="groupAcceptedKeys.has(group.key)"
+              class="whitespace-nowrap rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+            >Risk accepted</span>
+            <template v-else-if="group.kind === 'dependency' && group.fingerprints.length > 0">
+              <button
+                type="button"
+                class="whitespace-nowrap rounded-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
+                :title="`One decision for the whole component: accept all ${group.rows.length} findings with one reason`"
+                @click.stop="openGroupAccept('risk_accepted', group)"
               >
-                <td class="px-4 py-4">
-                  <span :class="changeBadgeClass(vuln.change)">{{ vuln.change }}</span>
-                </td>
-                <td class="px-4 py-4">
-                  <span :class="severityBadgeClass(vuln.severity)">{{ vuln.severity }}</span>
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ vuln.type }}
-                </td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">
-                  {{ vuln.primary_identifier_value || vuln.scanner_name || 'n/a' }}
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ vuln.title }}
-                </td>
-                <td class="px-4 py-4 text-gray-400">
-                  {{ vulnerabilityLocation(vuln) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                Accept component…
+              </button>
+            </template>
+          </div>
+          <div
+            v-if="expandedGroups.has(group.key)"
+            class="overflow-x-auto"
+          >
+            <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
+              <tbody class="divide-y divide-surface-border-subtle">
+                <tr
+                  v-for="vuln in group.rows"
+                  :key="`${vuln.change}-${vuln.id}`"
+                  class="transition hover:bg-white/5"
+                >
+                  <td class="w-24 px-4 py-3">
+                    <span :class="severityBadgeClass(vuln.severity)">{{ vuln.severity }}</span>
+                  </td>
+                  <td class="px-4 py-3 font-mono text-xs text-accent">
+                    {{ vuln.primary_identifier_value || vuln.scanner_name || 'n/a' }}
+                  </td>
+                  <td class="max-w-md truncate px-4 py-3 text-gray-300">
+                    {{ vuln.title }}
+                  </td>
+                  <!-- Kind-specific cell: a dep vuln is not a SAST hit. -->
+                  <td class="px-4 py-3 text-xs text-gray-400">
+                    <template v-if="group.kind === 'dependency'">
+                      <span
+                        v-if="vuln.reachability === 'not_reachable'"
+                        class="mr-2 rounded-full border border-surface-border bg-surface-overlay px-1.5 py-0.5 text-[10px] text-gray-500"
+                        title="Vulnerable symbol never called (govulncheck)"
+                      >unreachable</span>
+                      <span
+                        v-if="vuln.has_remediation && vuln.remediation_link"
+                        class="text-emerald-300"
+                      >
+                        <a
+                          :href="vuln.remediation_link"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="underline"
+                        >fix available</a>
+                      </span>
+                      <span
+                        v-else-if="vuln.has_remediation"
+                        class="text-emerald-300"
+                      >fix available</span>
+                      <span v-else>no fix yet</span>
+                    </template>
+                    <template v-else-if="group.kind === 'secret'">
+                      <span class="text-gray-400">{{ vulnerabilityLocation(vuln) }}</span>
+                      <span
+                        v-if="vuln.change === 'resolved'"
+                        class="ml-2 text-amber-300"
+                        title="A secret vanishing from the diff says nothing about the credential — the repo finding stays open until revocation is attested"
+                      >still needs attestation</span>
+                    </template>
+                    <template v-else>
+                      <a
+                        v-if="vuln.file_path && forgeFileLink(vuln.file_path)"
+                        :href="forgeFileLink(vuln.file_path)!"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="underline decoration-gray-600 underline-offset-2 transition hover:text-white"
+                      >{{ vulnerabilityLocation(vuln) }}</a>
+                      <span v-else>{{ vulnerabilityLocation(vuln) }}</span>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
+        <p
+          v-if="comparison.delta.unchanged_vulnerabilities > 0"
+          class="px-1 text-xs text-gray-500"
+        >
+          {{ comparison.delta.unchanged_vulnerabilities }} unchanged {{ comparison.delta.unchanged_vulnerabilities === 1 ? 'finding' : 'findings' }} carried over —
+          <RouterLink
+            :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug }, query: comparison.head.snapshot_id ? { snapshot: comparison.head.snapshot_id } : {} }"
+            class="underline transition hover:text-white"
+          >
+            view them with their triage state
+          </RouterLink>
+        </p>
       </div>
 
       <!-- Coverage tab -->
@@ -1273,11 +1346,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitBranch, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert, Tag } from 'lucide-vue-next'
+import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
+import { api, type AcceptanceReasonKind, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import TriageDialog from '@/components/TriageDialog.vue'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
@@ -1453,18 +1527,11 @@ function refLabel(refObj: EnhancedRef | undefined, refName: string | undefined):
   return refObj?.name || refName || ''
 }
 
-function refIconFor(refObj: EnhancedRef | undefined) {
-  if (refObj?.ref_type === 'pull_request') return GitPullRequest
-  if (refObj?.ref_type === 'tag') return Tag
-  return GitBranch
-}
 
 const headRefObj = computed(() => refs.value.find(r => r.name === headRef.value))
 const baseRefObj = computed(() => refs.value.find(r => r.name === baseRef.value))
 const headLabel = computed(() => refLabel(headRefObj.value, headRef.value) || 'Head')
 const baseLabel = computed(() => refLabel(baseRefObj.value, baseRef.value) || 'Base')
-const headRefIcon = computed(() => refIconFor(headRefObj.value))
-const baseRefIcon = computed(() => refIconFor(baseRefObj.value))
 const forgeProvider = computed(() => repo.value?.provider || provider.value)
 const forgeName = computed(() => forgeLabel(forgeProvider.value))
 const headForgeUrl = computed(() => forgeRefUrl(repo.value?.html_url, forgeProvider.value, headRef.value, headRefObj.value?.ref_type))
@@ -1480,6 +1547,17 @@ const coverageDiff = computed(() => comparison.value?.coverage_diff ?? null)
 const patchCoverage = computed(() => comparison.value?.patch_coverage ?? null)
 const testDiff = computed(() => comparison.value?.test_diff ?? null)
 const gateReasons = computed(() => comparison.value?.gate?.reasons ?? [])
+
+// The QG badge explains where its verdict comes from — the page/forge
+// disagreement (dogfood bug #5) must never be silent again.
+const gateSourceTitle = computed(() => {
+  if (!comparison.value?.gate) return undefined
+  if (comparison.value.gate_source === 'persisted') {
+    const commit = comparison.value.gate_commit ? ` (commit ${comparison.value.gate_commit.slice(0, 7)})` : ''
+    return `Same verdict as the forge check${commit}`
+  }
+  return 'Evaluated live for this comparison — no published check for it'
+})
 const isPRAgainstTarget = computed(() => {
   const head = headRefObj.value
   if (!head || head.ref_type !== 'pull_request') return false
@@ -1530,6 +1608,130 @@ const vulnRows = computed<VulnRow[]>(() => {
     ...comparison.value.delta.resolved_vulnerabilities.map((vuln) => ({ ...vuln, change: 'resolved' as const })),
   ]
 })
+
+// ─── Security delta, grouped by CAUSE (ADR: the unit of action is the cause,
+// not the finding — 436 findings from one added base image is ONE decision).
+interface SecurityGroup {
+  key: string
+  kind: 'dependency' | 'code' | 'secret' | 'resolved'
+  label: string
+  // Why this group exists in the delta — e.g. the component was added by
+  // this change vs a finding in changed code.
+  context: string
+  rows: VulnRow[]
+  worst: number
+  fingerprints: string[]
+}
+
+const SEVERITY_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 }
+const securitySeverityFilter = ref('')
+
+const securityGroups = computed<SecurityGroup[]>(() => {
+  if (!comparison.value) return []
+  const addedPurls = new Set((comparison.value.component_diff.added ?? []).map((c) => c.purl).filter(Boolean))
+  const groups = new Map<string, SecurityGroup>()
+  const push = (key: string, kind: SecurityGroup['kind'], label: string, context: string, row: VulnRow) => {
+    let group = groups.get(key)
+    if (!group) {
+      group = { key, kind, label, context, rows: [], worst: 0, fingerprints: [] }
+      groups.set(key, group)
+    }
+    group.rows.push(row)
+    group.worst = Math.max(group.worst, SEVERITY_RANK[String(row.severity)] ?? 0)
+    if (row.fingerprint) group.fingerprints.push(row.fingerprint)
+  }
+
+  for (const row of vulnRows.value) {
+    if (securitySeverityFilter.value && String(row.severity) !== securitySeverityFilter.value) continue
+    if (row.change === 'resolved') {
+      push('resolved', 'resolved', 'Resolved', 'No longer reported by the head snapshot', row)
+      continue
+    }
+    if (row.type === 'dependency' || row.type === 'container' || row.type === 'malware') {
+      const component = row.component_name
+        ? `${row.component_name}${row.component_version ? '@' + row.component_version : ''}`
+        : 'unknown component'
+      const introduced = row.component_purl && addedPurls.has(row.component_purl)
+      push(`dep:${row.component_purl || component}`, 'dependency', component,
+        introduced ? 'Component added by this change' : 'Existing component', row)
+    } else if (row.type === 'secret') {
+      // Never grouped away — each leaked secret is its own incident.
+      push(`secret:${row.fingerprint || row.id}`, 'secret', row.secret_type || 'Secret', 'Leaked credential', row)
+    } else {
+      const rule = row.primary_identifier_value || row.scanner_name || 'rule'
+      push(`code:${row.scanner_name}:${rule}`, 'code', rule, `${row.scanner_name || 'scanner'} finding in changed code`, row)
+    }
+  }
+
+  return [...groups.values()].sort((a, b) => {
+    if ((a.kind === 'resolved') !== (b.kind === 'resolved')) return a.kind === 'resolved' ? 1 : -1
+    if (a.worst !== b.worst) return b.worst - a.worst
+    return b.rows.length - a.rows.length
+  })
+})
+
+const expandedGroups = ref<Set<string>>(new Set())
+function toggleGroup(key: string) {
+  const next = new Set(expandedGroups.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedGroups.value = next
+}
+
+// Blocking-first: small groups and every non-resolved group with critical/high
+// findings start expanded; the long tail stays behind its header.
+watch(securityGroups, (groups) => {
+  const next = new Set<string>()
+  for (const group of groups) {
+    if (group.kind !== 'resolved' && (group.worst >= 4 || group.rows.length <= 3)) next.add(group.key)
+  }
+  expandedGroups.value = next
+}, { immediate: true })
+
+// Gate reasons deep-link into the blocking subset: severity parsed from the
+// reason text pre-filters the security tab.
+function openSecurityForReason(reason: string) {
+  const match = reason.toLowerCase().match(/critical|high|medium|low/)
+  securitySeverityFilter.value = match ? match[0] : ''
+  activeTab.value = 'security'
+}
+
+// ─── Accept a whole cause (ADR §6): one decision for one component ──────────
+const groupDialog = ref<{ kind: AcceptanceReasonKind; group: SecurityGroup } | null>(null)
+const groupDialogError = ref('')
+const groupDialogSubmitting = ref(false)
+const groupAcceptedKeys = ref<Set<string>>(new Set())
+
+function openGroupAccept(kind: AcceptanceReasonKind, group: SecurityGroup) {
+  groupDialogError.value = ''
+  groupDialog.value = { kind, group }
+}
+
+async function confirmGroupAccept(payload: { reason: string; labels: string[]; expiresAt?: string }) {
+  if (!groupDialog.value) return
+  const { kind, group } = groupDialog.value
+  groupDialogSubmitting.value = true
+  groupDialogError.value = ''
+  try {
+    await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, {
+      fingerprints: [...new Set(group.fingerprints)],
+      status: 'accepted',
+      reason_kind: kind,
+      reason: payload.reason || undefined,
+      labels: payload.labels,
+      expires_at: payload.expiresAt,
+    })
+    groupAcceptedKeys.value = new Set([...groupAcceptedKeys.value, group.key])
+    groupDialog.value = null
+  } catch (err) {
+    groupDialogError.value = err instanceof Error ? err.message : 'Failed to accept the findings'
+  } finally {
+    groupDialogSubmitting.value = false
+  }
+}
 
 const componentRows = computed<ComponentRow[]>(() => {
   if (!comparison.value) return []

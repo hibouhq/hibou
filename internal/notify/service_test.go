@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,24 @@ type mockNotifyStore struct {
 	ref           *store.Ref
 	repo          *store.Repository
 	members       []store.OrgMember
+	// notified is the in-memory dedup ledger: event\x00repo\x00identifier.
+	notified map[string]struct{}
+}
+
+func (m *mockNotifyStore) MarkFindingsNotified(_ context.Context, eventType string, repoID uuid.UUID, identifiers []string) ([]string, error) {
+	if m.notified == nil {
+		m.notified = map[string]struct{}{}
+	}
+	fresh := []string{}
+	for _, identifier := range identifiers {
+		key := eventType + "\x00" + repoID.String() + "\x00" + identifier
+		if _, ok := m.notified[key]; ok {
+			continue
+		}
+		m.notified[key] = struct{}{}
+		fresh = append(fresh, identifier)
+	}
+	return fresh, nil
 }
 
 func (m *mockNotifyStore) CreateNotification(_ context.Context, arg dbgen.CreateNotificationParams) (dbgen.Notification, error) {
@@ -92,19 +111,28 @@ func (m *mockNotifyStore) ListOrgMembers(context.Context, uuid.UUID, int, int) (
 	return m.members, len(m.members), nil
 }
 
-func TestHandleScanCompletedCreatesNotifications(t *testing.T) {
+func TestHandleScanCompletedNotifiesOnlyTheTriggeringUser(t *testing.T) {
 	userID := uuid.New()
 	store := &mockNotifyStore{
 		snapshot: &store.Snapshot{ID: uuid.New(), RefID: uuid.New()},
 		ref:      &store.Ref{ID: uuid.New(), RepoID: uuid.New()},
 		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api", Slug: "api"},
-		members:  []store.OrgMember{{UserID: userID}},
+		members:  []store.OrgMember{{UserID: userID}, {UserID: uuid.New()}},
 	}
 	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())
 	service := NewService(store, fanout, events.New(zerolog.Nop()), zerolog.Nop())
 
+	// A scheduled/webhook scan carries no user: no bell at all.
 	service.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": store.snapshot.ID.String()})
+	if len(store.notifications) != 0 {
+		t.Fatalf("scheduled scan must not notify, got %d", len(store.notifications))
+	}
 
+	// A user-triggered scan pings that user only, never the whole org.
+	service.handleScanCompleted(context.Background(), map[string]any{
+		"snapshot_id":          store.snapshot.ID.String(),
+		"triggered_by_user_id": userID.String(),
+	})
 	if len(store.notifications) != 1 {
 		t.Fatalf("expected 1 notification, got %d", len(store.notifications))
 	}
@@ -119,7 +147,9 @@ func TestHandleScanCompletedCreatesNotifications(t *testing.T) {
 	}
 }
 
-func TestHandleVulnDiscoveredCreatesCriticalNotification(t *testing.T) {
+// The heart of the notification-spam fix: one bell entry per scan, only for
+// identifiers the repo has never been told about, silent when nothing is new.
+func TestHandleVulnerabilitiesFoundBatchesAndDedups(t *testing.T) {
 	userID := uuid.New()
 	store := &mockNotifyStore{
 		snapshot: &store.Snapshot{ID: uuid.New(), RefID: uuid.New()},
@@ -130,47 +160,34 @@ func TestHandleVulnDiscoveredCreatesCriticalNotification(t *testing.T) {
 	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())
 	service := NewService(store, fanout, events.New(zerolog.Nop()), zerolog.Nop())
 
-	service.handleVulnDiscovered(context.Background(), map[string]any{"snapshot_id": store.snapshot.ID.String(), "severity": "critical", "cve": "CVE-2026-0001"})
+	payload := map[string]any{
+		"snapshot_id": store.snapshot.ID.String(),
+		"identifiers": []any{"CVE-2026-0001", "CVE-2026-0002"},
+		"findings": []any{
+			map[string]any{"identifier": "CVE-2026-0001", "severity": "critical", "component": "lodash@4.17.11"},
+			map[string]any{"identifier": "CVE-2026-0002", "severity": "medium", "component": "yaml@2.2.2"},
+		},
+	}
+	service.handleVulnerabilitiesFound(context.Background(), payload)
 
 	if len(store.notifications) != 1 {
-		t.Fatalf("expected 1 notification, got %d", len(store.notifications))
+		t.Fatalf("expected ONE batched notification, got %d", len(store.notifications))
 	}
-	if !store.notifications[0].Severity.Valid || store.notifications[0].Severity.SeverityLevel != dbgen.SeverityLevelCritical {
-		t.Fatalf("expected critical severity, got %#v", store.notifications[0].Severity)
+	first := store.notifications[0]
+	if first.Type != string(events.VulnerabilitiesFound) || first.Title != "2 new vulnerabilities" {
+		t.Fatalf("unexpected notification: %q / %q", first.Type, first.Title)
 	}
-	if store.notifications[0].Type != string(events.VulnDiscovered) {
-		t.Fatalf("expected vuln discovered type, got %q", store.notifications[0].Type)
+	if !strings.Contains(first.Body, "CVE-2026-0001") || !strings.Contains(first.Body, "lodash@4.17.11") {
+		t.Fatalf("body must carry identifiers + components, got %q", first.Body)
 	}
-}
-
-// Regression: notifications used to render the internal advisory UUID and link
-// to ?search=<uuid>, which matched nothing. Body and link must both carry the
-// human identifier.
-func TestVulnerabilityNotificationUsesIdentifierNotUUID(t *testing.T) {
-	payload := map[string]any{
-		"advisory_id": uuid.NewString(),
-		"id":          uuid.NewString(),
-		"identifier":  "CVE-2019-10744",
-		"component":   "lodash@4.17.11",
-		"severity":    "high",
-	}
-	if got := vulnerabilityLabel(payload); got != "CVE-2019-10744 in lodash@4.17.11" {
-		t.Fatalf("label = %q", got)
-	}
-	if got := vulnSearchQuery(payload); got != "search=CVE-2019-10744" {
-		t.Fatalf("query = %q", got)
+	if !first.Severity.Valid || first.Severity.SeverityLevel != dbgen.SeverityLevelCritical {
+		t.Fatalf("batch severity must be the max (critical), got %#v", first.Severity)
 	}
 
-	// No identifier: never fall back to a UUID in either place.
-	bare := map[string]any{"advisory_id": uuid.NewString()}
-	if got := vulnerabilityLabel(bare); got != "unknown" {
-		t.Fatalf("label without identifier = %q", got)
-	}
-	if got := vulnSearchQuery(bare); got != "" {
-		t.Fatalf("query without identifier = %q, want empty", got)
-	}
-	// A UUID handed in as the identifier must still be rejected for the link.
-	if got := vulnSearchQuery(map[string]any{"identifier": uuid.NewString()}); got != "" {
-		t.Fatalf("uuid identifier leaked into link: %q", got)
+	// Re-running the same scan re-inserts the same rows: the ledger already
+	// knows every identifier, so the bell stays silent.
+	service.handleVulnerabilitiesFound(context.Background(), payload)
+	if len(store.notifications) != 1 {
+		t.Fatalf("re-notified already-known identifiers: %d notifications", len(store.notifications))
 	}
 }

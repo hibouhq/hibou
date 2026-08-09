@@ -225,6 +225,34 @@ func (s *Server) handleGetRefFindingFingerprints(w http.ResponseWriter, r *http.
 	})
 }
 
+// attachFixingPullRequests decorates rows with the open PRs whose last gate
+// run resolves them — "don't accept this, #12 already fixes it". One indexed
+// query per page, never per row.
+func (s *Server) attachFixingPullRequests(ctx context.Context, repoID uuid.UUID, vulnerabilities []store.Vulnerability) {
+	if len(vulnerabilities) == 0 {
+		return
+	}
+	fingerprints := make([]string, 0, len(vulnerabilities))
+	for i := range vulnerabilities {
+		if vulnerabilities[i].Fingerprint != "" {
+			fingerprints = append(fingerprints, vulnerabilities[i].Fingerprint)
+		}
+	}
+	fixes, err := s.queries.ListFixingPullRequests(ctx, repoID, fingerprints)
+	if err != nil || len(fixes) == 0 {
+		return
+	}
+	byFingerprint := make(map[string][]store.FixingPullRequest, len(fixes))
+	for _, fix := range fixes {
+		byFingerprint[fix.Fingerprint] = append(byFingerprint[fix.Fingerprint], fix)
+	}
+	for i := range vulnerabilities {
+		if matches, ok := byFingerprint[vulnerabilities[i].Fingerprint]; ok {
+			vulnerabilities[i].FixedInPRs = matches
+		}
+	}
+}
+
 func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	_, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
@@ -269,6 +297,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		s.attachFixingPullRequests(r.Context(), repo.ID, vulnerabilities)
 		api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 		return
 	}
@@ -279,6 +308,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.attachFixingPullRequests(r.Context(), repo.ID, vulnerabilities)
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 

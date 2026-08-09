@@ -51,6 +51,18 @@
       @confirm="confirmTriageDialog"
     />
 
+    <FindingDrawer
+      v-if="drawerFingerprint"
+      :provider="provider"
+      :slug="slug"
+      :repo-slug="repoSlug"
+      :fingerprint="drawerFingerprint"
+      @close="closeDrawer"
+      @accept="(kind, fingerprint) => { closeDrawer(); openTriageDialog(kind, [fingerprint], vulnerabilities.find(v => v.fingerprint === fingerprint)) }"
+      @reopen="(fingerprint) => { closeDrawer(); void reopenFindings([fingerprint]) }"
+      @navigate="navigateDrawer"
+    />
+
     <div
       v-if="selected.size > 0"
       class="flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5"
@@ -242,6 +254,17 @@
                     :class="triageFor(vulnerability).badgeClass"
                     :title="triageTitle(vulnerability)"
                   >{{ triageFor(vulnerability).label }}</span>
+                  <RouterLink
+                    v-if="vulnerability.fixed_in_prs?.length"
+                    :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: vulnerability.fixed_in_prs[0].ref_name } }"
+                    class="ml-1 inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300 transition hover:bg-emerald-500/20"
+                    :title="fixChipTitle(vulnerability)"
+                    @click.stop
+                  >
+                    ⤴ fix in #{{ vulnerability.fixed_in_prs[0].number }}<template v-if="vulnerability.fixed_in_prs.length > 1">
+                      +{{ vulnerability.fixed_in_prs.length - 1 }}
+                    </template>
+                  </RouterLink>
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   {{ formatDetected(vulnerability.detected_at) }}
@@ -348,6 +371,7 @@ import FilterBar from '@/components/FilterBar.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
+import FindingDrawer from '@/components/FindingDrawer.vue'
 import { triageState } from '@/lib/triage'
 
 const route = useRoute()
@@ -790,6 +814,39 @@ const selected = reactive(new Set<string>())
 // findings that are not on the current page, and keying off rows would have
 // silently triaged only the visible subset.
 const dialog = ref<{ kind: AcceptanceReasonKind; fingerprints: string[]; componentBacked: boolean; vulnID?: string } | null>(null)
+
+// ── Finding detail drawer: deep-linkable (?finding=<fingerprint>) so
+// notifications, gate comments, and search can land on it open.
+const drawerFingerprint = ref('')
+
+function openDrawer(fingerprint: string) {
+  if (!fingerprint) return
+  drawerFingerprint.value = fingerprint
+  void router.replace({ query: { ...route.query, finding: fingerprint } })
+}
+
+function closeDrawer() {
+  drawerFingerprint.value = ''
+  const next = { ...route.query }
+  delete next.finding
+  void router.replace({ query: next })
+}
+
+// j/k walks the loaded list while the drawer is open.
+function navigateDrawer(delta: number) {
+  const list = vulnerabilities.value
+  const index = list.findIndex((vulnerability) => vulnerability.fingerprint === drawerFingerprint.value)
+  const next = list[index + delta]
+  if (next?.fingerprint) openDrawer(next.fingerprint)
+}
+
+watch(
+  () => route.query.finding,
+  (finding) => {
+    drawerFingerprint.value = typeof finding === 'string' ? finding : ''
+  },
+  { immediate: true },
+)
 const bulkMenuOpen = ref(false)
 const rowMenuFor = ref('')
 const dialogError = ref('')
@@ -997,6 +1054,13 @@ async function markSecretRevoked(vulnerability: Vulnerability) {
   } catch (error) {
     secretScanError.value = error instanceof Error ? error.message : 'Failed to record revocation'
   }
+}
+
+// One chip, +N when several PRs resolve it; the tooltip lists them. Good
+// news, not an alarm — it changes the decision ("merge #12, don't accept").
+function fixChipTitle(vulnerability: Vulnerability): string {
+  const fixes = vulnerability.fixed_in_prs ?? []
+  return 'Already fixed by ' + fixes.map((fix) => `#${fix.number}${fix.title ? ' ' + fix.title : ''}`).join(', ')
 }
 
 function triageFor(vulnerability: Vulnerability) {

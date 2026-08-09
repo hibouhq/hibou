@@ -573,6 +573,54 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 	return i, err
 }
 
+const getLatestSnapshotByRepoAndSHA = `-- name: GetLatestSnapshotByRepoAndSHA :one
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id FROM snapshots
+WHERE repo_id = $1 AND commit_sha = $2
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestSnapshotByRepoAndSHAParams struct {
+	RepoID    uuid.UUID `json:"repo_id"`
+	CommitSha string    `json:"commit_sha"`
+}
+
+// Reachability results arrive after the upload; the commit names the snapshot.
+func (q *Queries) GetLatestSnapshotByRepoAndSHA(ctx context.Context, arg GetLatestSnapshotByRepoAndSHAParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getLatestSnapshotByRepoAndSHA, arg.RepoID, arg.CommitSha)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+		&i.Pinned,
+		&i.RetentionHold,
+		&i.ArtifactBytes,
+		&i.ArtifactProcessingClaimedBy,
+		&i.ArtifactProcessingClaimExpiresAt,
+		&i.ArtifactProcessingStartedAt,
+		&i.ArtifactProcessingFinishedAt,
+		&i.ArtifactProcessingAttempts,
+		&i.ArtifactProcessingLastError,
+		&i.OrgID,
+		&i.RepoID,
+	)
+	return i, err
+}
+
 const getLatestSnapshotForBuild = `-- name: GetLatestSnapshotForBuild :one
 SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id FROM snapshots
 WHERE ref_id = $1
@@ -812,6 +860,24 @@ func (q *Queries) GetSnapshotByRefCommit(ctx context.Context, arg GetSnapshotByR
 		&i.ArtifactProcessingLastError,
 		&i.OrgID,
 		&i.RepoID,
+	)
+	return i, err
+}
+
+const getSnapshotCodeRefs = `-- name: GetSnapshotCodeRefs :one
+SELECT snapshot_id, go_symbols, java_packages, rust_referenced, rust_present, updated_at FROM snapshot_code_refs WHERE snapshot_id = $1
+`
+
+func (q *Queries) GetSnapshotCodeRefs(ctx context.Context, snapshotID uuid.UUID) (SnapshotCodeRef, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotCodeRefs, snapshotID)
+	var i SnapshotCodeRef
+	err := row.Scan(
+		&i.SnapshotID,
+		pq.Array(&i.GoSymbols),
+		pq.Array(&i.JavaPackages),
+		pq.Array(&i.RustReferenced),
+		pq.Array(&i.RustPresent),
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -1521,6 +1587,38 @@ func (q *Queries) UpdateSnapshotStatus(ctx context.Context, arg UpdateSnapshotSt
 		&i.RepoID,
 	)
 	return i, err
+}
+
+const upsertSnapshotCodeRefs = `-- name: UpsertSnapshotCodeRefs :exec
+INSERT INTO snapshot_code_refs (snapshot_id, go_symbols, java_packages, rust_referenced, rust_present, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (snapshot_id) DO UPDATE SET
+    go_symbols = CASE WHEN cardinality(EXCLUDED.go_symbols) > 0 THEN EXCLUDED.go_symbols ELSE snapshot_code_refs.go_symbols END,
+    java_packages = CASE WHEN cardinality(EXCLUDED.java_packages) > 0 THEN EXCLUDED.java_packages ELSE snapshot_code_refs.java_packages END,
+    rust_referenced = CASE WHEN cardinality(EXCLUDED.rust_referenced) > 0 OR cardinality(EXCLUDED.rust_present) > 0 THEN EXCLUDED.rust_referenced ELSE snapshot_code_refs.rust_referenced END,
+    rust_present = CASE WHEN cardinality(EXCLUDED.rust_referenced) > 0 OR cardinality(EXCLUDED.rust_present) > 0 THEN EXCLUDED.rust_present ELSE snapshot_code_refs.rust_present END,
+    updated_at = NOW()
+`
+
+type UpsertSnapshotCodeRefsParams struct {
+	SnapshotID     uuid.UUID `json:"snapshot_id"`
+	GoSymbols      []string  `json:"go_symbols"`
+	JavaPackages   []string  `json:"java_packages"`
+	RustReferenced []string  `json:"rust_referenced"`
+	RustPresent    []string  `json:"rust_present"`
+}
+
+// Each language's inventory only overwrites itself: analyses for different
+// languages arrive as separate posts and must not clobber each other.
+func (q *Queries) UpsertSnapshotCodeRefs(ctx context.Context, arg UpsertSnapshotCodeRefsParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSnapshotCodeRefs,
+		arg.SnapshotID,
+		pq.Array(arg.GoSymbols),
+		pq.Array(arg.JavaPackages),
+		pq.Array(arg.RustReferenced),
+		pq.Array(arg.RustPresent),
+	)
+	return err
 }
 
 const upsertSnapshotForBuild = `-- name: UpsertSnapshotForBuild :one

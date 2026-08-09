@@ -12,9 +12,29 @@ import (
 	"github.com/lib/pq"
 )
 
+const clearFindingsNotified = `-- name: ClearFindingsNotified :exec
+DELETE FROM notification_dedup
+WHERE event_type = $1
+  AND repo_id = $2
+  AND identifier = ANY($3::text[])
+`
+
+type ClearFindingsNotifiedParams struct {
+	EventType   string    `json:"event_type"`
+	RepoID      uuid.UUID `json:"repo_id"`
+	Identifiers []string  `json:"identifiers"`
+}
+
+// Forgets resolved findings so a regression re-notifies.
+func (q *Queries) ClearFindingsNotified(ctx context.Context, arg ClearFindingsNotifiedParams) error {
+	_, err := q.db.ExecContext(ctx, clearFindingsNotified, arg.EventType, arg.RepoID, pq.Array(arg.Identifiers))
+	return err
+}
+
 const deleteResolvedNotifications = `-- name: DeleteResolvedNotifications :exec
 DELETE FROM notification_dedup
 WHERE event_type = $1
+  AND identifier = ''
   AND NOT (repo_id = ANY($2::uuid[]))
 `
 
@@ -30,10 +50,49 @@ func (q *Queries) DeleteResolvedNotifications(ctx context.Context, arg DeleteRes
 	return err
 }
 
+const markFindingsNotified = `-- name: MarkFindingsNotified :many
+INSERT INTO notification_dedup (event_type, repo_id, identifier)
+SELECT $1, $2, unnest($3::text[])
+ON CONFLICT (event_type, repo_id, identifier) DO NOTHING
+RETURNING identifier
+`
+
+type MarkFindingsNotifiedParams struct {
+	EventType   string    `json:"event_type"`
+	RepoID      uuid.UUID `json:"repo_id"`
+	Identifiers []string  `json:"identifiers"`
+}
+
+// Batch dedup for per-finding notifications: inserts the identifiers not yet
+// on the ledger for this repo and returns only those — the set genuinely
+// worth notifying about. Already-known identifiers return nothing.
+func (q *Queries) MarkFindingsNotified(ctx context.Context, arg MarkFindingsNotifiedParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, markFindingsNotified, arg.EventType, arg.RepoID, pq.Array(arg.Identifiers))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var identifier string
+		if err := rows.Scan(&identifier); err != nil {
+			return nil, err
+		}
+		items = append(items, identifier)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markNotificationSent = `-- name: MarkNotificationSent :execrows
-INSERT INTO notification_dedup (event_type, repo_id)
-VALUES ($1, $2)
-ON CONFLICT (event_type, repo_id) DO NOTHING
+INSERT INTO notification_dedup (event_type, repo_id, identifier)
+VALUES ($1, $2, '')
+ON CONFLICT (event_type, repo_id, identifier) DO NOTHING
 `
 
 type MarkNotificationSentParams struct {

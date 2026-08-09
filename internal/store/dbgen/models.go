@@ -952,16 +952,17 @@ type AdvisorySource struct {
 }
 
 type AffectedRange struct {
-	ID           uuid.UUID `json:"id"`
-	AdvisoryID   uuid.UUID `json:"advisory_id"`
-	Ecosystem    string    `json:"ecosystem"`
-	PackageName  string    `json:"package_name"`
-	Introduced   string    `json:"introduced"`
-	Fixed        string    `json:"fixed"`
-	LastAffected string    `json:"last_affected"`
-	Source       string    `json:"source"`
-	CreatedAt    time.Time `json:"created_at"`
-	Release      string    `json:"release"`
+	ID                uuid.UUID `json:"id"`
+	AdvisoryID        uuid.UUID `json:"advisory_id"`
+	Ecosystem         string    `json:"ecosystem"`
+	PackageName       string    `json:"package_name"`
+	Introduced        string    `json:"introduced"`
+	Fixed             string    `json:"fixed"`
+	LastAffected      string    `json:"last_affected"`
+	Source            string    `json:"source"`
+	CreatedAt         time.Time `json:"created_at"`
+	Release           string    `json:"release"`
+	VulnerableSymbols []string  `json:"vulnerable_symbols"`
 }
 
 type ApiKey struct {
@@ -1206,6 +1207,7 @@ type NotificationDedup struct {
 	EventType  string    `json:"event_type"`
 	RepoID     uuid.UUID `json:"repo_id"`
 	NotifiedAt time.Time `json:"notified_at"`
+	Identifier string    `json:"identifier"`
 }
 
 type NotificationRule struct {
@@ -1260,6 +1262,11 @@ type PrCheck struct {
 	LastError     string          `json:"last_error"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+type PrCheckResolvedFingerprint struct {
+	PrCheckID   uuid.UUID `json:"pr_check_id"`
+	Fingerprint string    `json:"fingerprint"`
 }
 
 type QualityGate struct {
@@ -1432,6 +1439,15 @@ type SnapshotArtifact struct {
 	ContentType sql.NullString `json:"content_type"`
 	CreatedAt   time.Time      `json:"created_at"`
 	Filename    string         `json:"filename"`
+}
+
+type SnapshotCodeRef struct {
+	SnapshotID     uuid.UUID `json:"snapshot_id"`
+	GoSymbols      []string  `json:"go_symbols"`
+	JavaPackages   []string  `json:"java_packages"`
+	RustReferenced []string  `json:"rust_referenced"`
+	RustPresent    []string  `json:"rust_present"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type SnapshotComponent struct {

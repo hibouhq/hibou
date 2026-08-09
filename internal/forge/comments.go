@@ -14,13 +14,13 @@ type markedComment struct {
 	Body string `json:"body"`
 }
 
-func commentIDWithMarker(comments []markedComment, marker string) int64 {
+func commentWithMarker(comments []markedComment, marker string) *markedComment {
 	for i := range comments {
 		if strings.Contains(comments[i].Body, marker) {
-			return comments[i].ID
+			return &comments[i]
 		}
 	}
-	return 0
+	return nil
 }
 
 // stickyCommentBody prepends the hidden marker so a later run can find and edit
@@ -58,8 +58,14 @@ func upsertViaJSON(
 	if err := doJSON(ctx, http.MethodGet, api.list, nil, &comments); err != nil {
 		return err
 	}
-	if id := commentIDWithMarker(comments, marker); id != 0 {
-		return doJSON(ctx, api.updateMethod, api.update(id), map[string]string{"body": fullBody}, nil)
+	if existing := commentWithMarker(comments, marker); existing != nil {
+		// The body is deterministic now (no timestamp): identical content
+		// means Hibou has nothing new to say — skip the edit so PR timelines
+		// stop filling with no-op "edited" entries every reconcile pass.
+		if strings.TrimSpace(existing.Body) == strings.TrimSpace(fullBody) {
+			return nil
+		}
+		return doJSON(ctx, api.updateMethod, api.update(existing.ID), map[string]string{"body": fullBody}, nil)
 	}
 	return doJSON(ctx, http.MethodPost, api.create, map[string]string{"body": fullBody}, nil)
 }

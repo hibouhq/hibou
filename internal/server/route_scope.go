@@ -209,6 +209,8 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute + "/vulnerabilities":              needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + repoRoute + "/vulnerabilities/facets":       needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + repoRoute + "/vulnerabilities/rules":        needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/findings/{fingerprint}":       needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"POST " + repoRoute + "/reachability":                needs(apitoken.CapUploads, apitoken.AccessWrite),
 	"GET " + repoRoute + "/vulnerabilities/fingerprints": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 
 	"PUT " + repoRoute + "/vulnerabilities/acceptance":           needs(apitoken.CapTriage, apitoken.AccessWrite),

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/vex"
 )
 
 func TestFindingAcceptanceTokenScope(t *testing.T) {
@@ -394,5 +396,146 @@ func TestListVulnerabilitiesAcceptanceFilter(t *testing.T) {
 	}
 	if facets.Severity["low"] != 1 {
 		t.Fatalf("facets severity[low] = %d, want 1 (acceptance filter respected)", facets.Severity["low"])
+	}
+}
+
+// The full loop of "getting rid of the problematic call fixes it": a finding
+// the call-graph analysis proved not_reachable exports as VEX not_affected /
+// vulnerable_code_not_in_execute_path — machine-verified, no human statement
+// needed. Acceptance-derived statements take precedence.
+func TestReachabilityVEXStatements(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, repo.DefaultBranch, store.RefTypeBranch, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, "reach-vex-sha", store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	advisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+		CanonicalID: "GO-2099-9999",
+		Title:       "unreachable fixture advisory",
+		Severity:    dbgen.SeverityLevelHigh,
+		CweIds:      []string{},
+	})
+	if err != nil {
+		t.Fatalf("UpsertAdvisory: %v", err)
+	}
+	purl := "pkg:golang/example.com/dep@v1.0.0"
+	if _, err := srv.queries.CreateVulnerability(context.Background(), dbgen.CreateVulnerabilityParams{
+		Type:                   "dependency",
+		SnapshotID:             snapshot.ID,
+		Title:                  "unreachable dep vuln",
+		PrimaryIdentifierKind:  "cve",
+		PrimaryIdentifierValue: "GO-2099-9999",
+		OriginalSeverity:       dbgen.SeverityLevelHigh,
+		Severity:               dbgen.SeverityLevelHigh,
+		Status:                 "detected",
+		ScannerName:            "osv",
+		Fingerprint:            uuid.NewString(),
+		AdvisoryID:             uuid.NullUUID{UUID: advisory.ID, Valid: true},
+		ComponentPurl:          sql.NullString{String: purl, Valid: true},
+		Reachability:           dbgen.NullReachability{Reachability: dbgen.ReachabilityNotReachable, Valid: true},
+	}); err != nil {
+		t.Fatalf("CreateVulnerability: %v", err)
+	}
+
+	statements, err := srv.reachabilityVEXStatements(context.Background(), repo, nil, nil)
+	if err != nil {
+		t.Fatalf("reachabilityVEXStatements: %v", err)
+	}
+	if len(statements) != 1 {
+		t.Fatalf("statements = %d, want 1", len(statements))
+	}
+	statement := statements[0]
+	if statement.VulnerabilityID != "GO-2099-9999" || statement.Status != "not_affected" || statement.Justification != "vulnerable_code_not_in_execute_path" {
+		t.Fatalf("unexpected statement: %+v", statement)
+	}
+
+	// A human decision for the same advisory silences the synthesized one.
+	already := []vex.Statement{{VulnerabilityID: "GO-2099-9999", Status: "affected"}}
+	statements, err = srv.reachabilityVEXStatements(context.Background(), repo, nil, already)
+	if err != nil {
+		t.Fatalf("reachabilityVEXStatements(covered): %v", err)
+	}
+	if len(statements) != 0 {
+		t.Fatalf("covered advisory must not be re-synthesized, got %d", len(statements))
+	}
+}
+
+// Safe-monotonic Go reclassification on a frozen ref (the enrichment case):
+// an inventory-based re-derivation promotes a stale not_reachable to
+// reachable when the advisory's symbols start matching, but never
+// auto-downgrades an existing reachable verdict.
+func TestApplyReachabilityGoSafeMonotonic(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, repo.DefaultBranch, store.RefTypeBranch, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("CreateRef: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, "go-monotonic-sha", store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	goAdvisory := func(canonical string, symbols []string) uuid.UUID {
+		advisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+			CanonicalID: canonical, Title: canonical, Severity: dbgen.SeverityLevelHigh, CweIds: []string{},
+		})
+		if err != nil {
+			t.Fatalf("UpsertAdvisory(%s): %v", canonical, err)
+		}
+		if _, err := srv.queries.CreateAffectedRange(context.Background(), dbgen.CreateAffectedRangeParams{
+			AdvisoryID: advisory.ID, Ecosystem: "go", PackageName: "example.com/dep", Introduced: "0", Source: "osv", VulnerableSymbols: symbols,
+		}); err != nil {
+			t.Fatalf("CreateAffectedRange(%s): %v", canonical, err)
+		}
+		return advisory.ID
+	}
+
+	goFinding := func(advisoryID uuid.UUID, reach dbgen.Reachability) uuid.UUID {
+		v, err := srv.queries.CreateVulnerability(context.Background(), dbgen.CreateVulnerabilityParams{
+			Type: "dependency", SnapshotID: snapshot.ID, Title: "dep", PrimaryIdentifierKind: "cve",
+			PrimaryIdentifierValue: "x", OriginalSeverity: dbgen.SeverityLevelHigh, Severity: dbgen.SeverityLevelHigh,
+			Status: "detected", ScannerName: "osv", Fingerprint: uuid.NewString(),
+			AdvisoryID:    uuid.NullUUID{UUID: advisoryID, Valid: true},
+			Ecosystem:     sql.NullString{String: "go", Valid: true},
+			ComponentName: sql.NullString{String: "example.com/dep", Valid: true},
+			Reachability:  dbgen.NullReachability{Reachability: reach, Valid: true},
+		})
+		if err != nil {
+			t.Fatalf("CreateVulnerability: %v", err)
+		}
+		return v.ID
+	}
+
+	reachID := goFinding(goAdvisory("GO-REACH", []string{"example.com/dep.Vuln"}), dbgen.ReachabilityReachable)
+	staleID := goFinding(goAdvisory("GO-STALE", []string{"example.com/dep.NotCalled"}), dbgen.ReachabilityNotReachable)
+
+	// Inventory reaches only NotCalled: GO-STALE must promote, GO-REACH stays.
+	if _, _, err := srv.queries.ApplyReachabilityFromCodeRefs(context.Background(), snapshot.ID, store.SnapshotCodeRefs{GoSymbols: []string{"example.com/dep.NotCalled"}}); err != nil {
+		t.Fatalf("ApplyReachabilityFromCodeRefs: %v", err)
+	}
+
+	reachOf := func(id uuid.UUID) string {
+		v, err := srv.queries.GetVulnerabilityByID(context.Background(), id)
+		if err != nil || v == nil || v.Reachability == nil {
+			t.Fatalf("GetVulnerabilityByID(%s): %v", id, err)
+		}
+		return *v.Reachability
+	}
+	if got := reachOf(reachID); got != "reachable" {
+		t.Fatalf("existing reachable must not downgrade, got %q", got)
+	}
+	if got := reachOf(staleID); got != "reachable" {
+		t.Fatalf("enrichment must promote not_reachable→reachable, got %q", got)
 	}
 }

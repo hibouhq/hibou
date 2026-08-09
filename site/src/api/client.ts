@@ -261,6 +261,11 @@ export interface Vulnerability {
   language?: string
   secret_type?: string
   has_remediation?: boolean
+  remediation_link?: string
+  // CI call-graph verdict (govulncheck): reachable | not_reachable | unknown.
+  reachability?: string
+  // Open PRs whose latest gate run resolves this fingerprint.
+  fixed_in_prs?: Array<{ fingerprint: string; ref_name: string; number?: string; title?: string }>
   solution?: string
   // Provenance (ADR-020): who produced this finding. 'scanner' is an ingested
   // tool report, 'human' a person, 'agent' an API token acting for an agent.
@@ -320,6 +325,24 @@ export interface ApiKey {
   // Creator's name; populated by the org key list so admins can see who
   // requested a pending token.
   created_by_display?: string
+}
+
+// Aggregated finding-detail payload (drawer): finding + advisory + decision +
+// VEX + where the fingerprint is currently detected.
+export interface FindingDetail {
+  finding: Vulnerability
+  advisory?: {
+    canonical_id: string
+    title?: string
+    description?: string
+    severity?: string
+    cvss_score?: string
+    cvss_vector?: string
+    cwes?: string[]
+  }
+  acceptance?: FindingAcceptance
+  vex?: Array<{ status: string; justification?: string; source: string; statement?: string }>
+  occurrences: Array<{ ref_name: string; ref_type: string; commit_sha: string; snapshot_at: string; status: string }>
 }
 
 export interface CreatedApiKey {
@@ -616,6 +639,9 @@ export interface CompareResult {
     configured: boolean
     reasons: string[]
   } | null
+  // 'persisted' = same verdict the forge check shows; 'computed' = live.
+  gate_source?: 'persisted' | 'computed'
+  gate_commit?: string
   pr?: {
     number: number
     title: string
@@ -1403,6 +1429,12 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<VulnerabilityFacets>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/facets${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  getFindingDetail(provider: string, slug: string, repoSlug: string, fingerprint: string) {
+    return this.request<ApiResponse<FindingDetail>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/findings/${encodeURIComponent(fingerprint)}`,
     )
   }
 

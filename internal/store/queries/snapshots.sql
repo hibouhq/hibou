@@ -310,3 +310,25 @@ RETURNING *;
 
 -- name: ListSnapshotsByRefWithLabels :many
 SELECT * FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4;
+
+-- name: GetLatestSnapshotByRepoAndSHA :one
+-- Reachability results arrive after the upload; the commit names the snapshot.
+SELECT * FROM snapshots
+WHERE repo_id = $1 AND commit_sha = $2
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: UpsertSnapshotCodeRefs :exec
+-- Each language's inventory only overwrites itself: analyses for different
+-- languages arrive as separate posts and must not clobber each other.
+INSERT INTO snapshot_code_refs (snapshot_id, go_symbols, java_packages, rust_referenced, rust_present, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (snapshot_id) DO UPDATE SET
+    go_symbols = CASE WHEN cardinality(EXCLUDED.go_symbols) > 0 THEN EXCLUDED.go_symbols ELSE snapshot_code_refs.go_symbols END,
+    java_packages = CASE WHEN cardinality(EXCLUDED.java_packages) > 0 THEN EXCLUDED.java_packages ELSE snapshot_code_refs.java_packages END,
+    rust_referenced = CASE WHEN cardinality(EXCLUDED.rust_referenced) > 0 OR cardinality(EXCLUDED.rust_present) > 0 THEN EXCLUDED.rust_referenced ELSE snapshot_code_refs.rust_referenced END,
+    rust_present = CASE WHEN cardinality(EXCLUDED.rust_referenced) > 0 OR cardinality(EXCLUDED.rust_present) > 0 THEN EXCLUDED.rust_present ELSE snapshot_code_refs.rust_present END,
+    updated_at = NOW();
+
+-- name: GetSnapshotCodeRefs :one
+SELECT * FROM snapshot_code_refs WHERE snapshot_id = $1;

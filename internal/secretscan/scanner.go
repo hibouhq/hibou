@@ -70,6 +70,8 @@ func (s *Scanner) RunFullScan(ctx context.Context, repoID, snapshotID uuid.UUID,
 }
 
 func (s *Scanner) RunIncrementalScan(ctx context.Context, repoID, snapshotID uuid.UUID, cloneURL, branch, fromCommit, toCommit, authToken string) (int, error) {
+	mode := "incremental"
+	source := "incremental_scan"
 	findings, err := s.collectDiffFindings(ctx, ScanDiffOptions{
 		CloneURL:   cloneURL,
 		Branch:     branch,
@@ -78,20 +80,39 @@ func (s *Scanner) RunIncrementalScan(ctx context.Context, repoID, snapshotID uui
 		AuthToken:  authToken,
 		TempDir:    s.tempDir,
 	})
+	if errors.Is(err, ErrBaseCommitUnreachable) {
+		// The diff base was rewritten away (force-push): there is no history
+		// to diff against, so only scanning the whole branch is correct —
+		// an incremental against unknown history would miss rewritten leaks.
+		// Loud on purpose: a repo doing this every run has a config problem.
+		s.log.Warn().
+			Str("repo_id", repoID.String()).
+			Str("from_commit", fromCommit).
+			Str("branch", branch).
+			Msg("incremental base unreachable (force-push?) — falling back to full-branch scan")
+		mode = "incremental_fallback_full"
+		source = "full_scan"
+		findings, err = s.collectRepoFindings(ctx, ScanRepoOptions{
+			CloneURL:  cloneURL,
+			Branch:    branch,
+			AuthToken: authToken,
+			TempDir:   s.tempDir,
+		})
+	}
 	if err != nil {
 		s.publishFailure(ctx, repoID, snapshotID, err)
 		return 0, err
 	}
 
 	ingester := NewIngester(s.store, s.log)
-	created, err := ingester.Ingest(ctx, snapshotID, findings, "incremental_scan")
+	created, err := ingester.Ingest(ctx, snapshotID, findings, source)
 	if err != nil {
 		s.publishFailure(ctx, repoID, snapshotID, err)
 		return created, err
 	}
 
-	s.publishScanEvents(ctx, repoID, snapshotID, findings, created, "incremental")
-	s.logDiscoveryAudit(ctx, snapshotID, created, "incremental_scan")
+	s.publishScanEvents(ctx, repoID, snapshotID, findings, created, mode)
+	s.logDiscoveryAudit(ctx, snapshotID, created, source)
 	return created, nil
 }
 

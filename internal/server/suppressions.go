@@ -250,6 +250,15 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to derive VEX from acceptances")
 		return
 	}
+	// Machine-proven unreachability speaks when no human has: a dependency
+	// whose vulnerable symbol the call graph provably never reaches exports
+	// as not_affected with the CISA justification made for exactly this.
+	reachabilityStatements, err := s.reachabilityVEXStatements(r.Context(), repo, rows, synthesized)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to derive VEX from reachability")
+		return
+	}
+	synthesized = append(synthesized, reachabilityStatements...)
 	payload, err := s.exportVEXDocument(r.Context(), rows, synthesized, org, user, format)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to export VEX document")
@@ -501,6 +510,64 @@ func (s *Server) acceptanceVEXStatements(ctx context.Context, repoID uuid.UUID, 
 			statement.ActionStatement = action
 		}
 		statements = append(statements, statement)
+	}
+	return statements, nil
+}
+
+// reachabilityVEXStatements synthesizes not_affected statements for
+// dependency advisories the call-graph analysis proved unreachable on the
+// default branch's latest analyzed snapshot. Precedence: stored statements
+// and acceptance-derived statements always win — this only fills what no
+// human has spoken for. The verdict already reflects code changes: removing
+// the problematic call produces a new snapshot whose analysis flips the
+// finding to not_reachable, and the next export says so.
+func (s *Server) reachabilityVEXStatements(ctx context.Context, repo *store.Repository, stored []dbgen.VexStatement, synthesized []vex.Statement) ([]vex.Statement, error) {
+	ref, err := s.queries.GetRefByRepoAndName(ctx, repo.ID, repo.DefaultBranch, store.RefTypeBranch)
+	if err != nil || ref == nil {
+		return nil, err
+	}
+	snapshot, err := s.queries.GetLatestSnapshotWithVulnerabilitiesByRef(ctx, ref.ID)
+	if err != nil || snapshot == nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListUnreachableDependencyAdvisories(ctx, snapshot.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	covered := make(map[uuid.UUID]struct{}, len(stored))
+	for _, statement := range stored {
+		covered[statement.AdvisoryID] = struct{}{}
+	}
+	coveredIDs := make(map[string]struct{}, len(synthesized))
+	for _, statement := range synthesized {
+		coveredIDs[statement.VulnerabilityID] = struct{}{}
+	}
+
+	statements := make([]vex.Statement, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if !row.AdvisoryID.Valid {
+			continue
+		}
+		if _, ok := covered[row.AdvisoryID.UUID]; ok {
+			continue
+		}
+		if _, ok := coveredIDs[row.CanonicalID]; ok {
+			continue
+		}
+		key := row.CanonicalID + "|" + row.ComponentPurl.String
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		statements = append(statements, vex.Statement{
+			VulnerabilityID: row.CanonicalID,
+			ComponentPURL:   row.ComponentPurl.String,
+			Status:          string(dbgen.VexStatusNotAffected),
+			Justification:   string(dbgen.VexJustificationVulnerableCodeNotInExecutePath),
+			ImpactStatement: "Static call-graph analysis found no execution path from this repository's code to the vulnerable symbol (machine-verified per build; re-evaluated on every push).",
+		})
 	}
 	return statements, nil
 }

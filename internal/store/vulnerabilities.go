@@ -105,6 +105,10 @@ type Vulnerability struct {
 	// Acceptance is the ADR-023 decision projection, joined server-side in the
 	// list queries. Nil = open.
 	Acceptance *VulnerabilityAcceptance `json:"acceptance,omitempty"`
+	// FixedInPRs lists open pull requests whose latest gate run resolves this
+	// fingerprint — it changes the triage decision ("merge #12 instead of
+	// accepting"). Attached by the list/detail handlers, never stored.
+	FixedInPRs []FixingPullRequest `json:"fixed_in_prs,omitempty"`
 }
 
 // VulnerabilityAcceptance is the accepted decision as projected onto a
@@ -572,11 +576,34 @@ func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, id uuid.UUID, s
 	return vulnerabilityFromRow(row), nil
 }
 
-func (q *Queries) MarkStaleVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) error {
+// MarkStaleVulnerabilities resolves findings the fresh scan no longer
+// reports and returns their identifiers (CVE/GHSA/rule) so the notification
+// dedup ledger can forget them.
+func (q *Queries) MarkStaleVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) ([]string, error) {
 	return q.db.MarkStaleVulnerabilities(ctx, dbgen.MarkStaleVulnerabilitiesParams{
 		SnapshotID: snapshotID,
 		VulnType:   vulnType,
 		FreshIds:   freshIDs,
+	})
+}
+
+// MarkFindingsNotified records identifiers on the per-repo notification
+// ledger and returns only the ones that were not already there.
+func (q *Queries) MarkFindingsNotified(ctx context.Context, eventType string, repoID uuid.UUID, identifiers []string) ([]string, error) {
+	return q.db.MarkFindingsNotified(ctx, dbgen.MarkFindingsNotifiedParams{
+		EventType:   eventType,
+		RepoID:      repoID,
+		Identifiers: identifiers,
+	})
+}
+
+// ClearFindingsNotified forgets resolved identifiers so regressions
+// re-notify.
+func (q *Queries) ClearFindingsNotified(ctx context.Context, eventType string, repoID uuid.UUID, identifiers []string) error {
+	return q.db.ClearFindingsNotified(ctx, dbgen.ClearFindingsNotifiedParams{
+		EventType:   eventType,
+		RepoID:      repoID,
+		Identifiers: identifiers,
 	})
 }
 
@@ -890,6 +917,332 @@ func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID
 	return out, nil
 }
 
+// GetActiveFindingAcceptance returns the repo's live decision for one
+// fingerprint, or nil when the finding is open.
+func (q *Queries) GetActiveFindingAcceptance(ctx context.Context, repoID uuid.UUID, fingerprint string) (*FindingAcceptance, error) {
+	row, err := q.db.GetActiveFindingAcceptance(ctx, dbgen.GetActiveFindingAcceptanceParams{RepoID: repoID, Fingerprint: fingerprint})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	acceptance := findingAcceptanceFromRow(row)
+	return &acceptance, nil
+}
+
+// GetLatestVulnerabilityByFingerprint returns the newest occurrence of a
+// fingerprint on a repo — the finding-detail anchor.
+func (q *Queries) GetLatestVulnerabilityByFingerprint(ctx context.Context, repoID uuid.UUID, fingerprint string) (*Vulnerability, error) {
+	row, err := q.db.GetLatestVulnerabilityByFingerprint(ctx, dbgen.GetLatestVulnerabilityByFingerprintParams{RepoID: repoID, Fingerprint: fingerprint})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return vulnerabilityFromRow(row), nil
+}
+
+// FindingOccurrence is one ref whose latest snapshot currently detects the
+// fingerprint.
+type FindingOccurrence struct {
+	RefName    string    `json:"ref_name"`
+	RefType    string    `json:"ref_type"`
+	CommitSHA  string    `json:"commit_sha"`
+	SnapshotAt time.Time `json:"snapshot_at"`
+	Status     string    `json:"status"`
+}
+
+func (q *Queries) ListFindingOccurrences(ctx context.Context, repoID uuid.UUID, fingerprint string) ([]FindingOccurrence, error) {
+	rows, err := q.db.ListFindingOccurrences(ctx, dbgen.ListFindingOccurrencesParams{RepoID: repoID, Fingerprint: fingerprint})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FindingOccurrence, len(rows))
+	for i, row := range rows {
+		out[i] = FindingOccurrence{
+			RefName:    row.RefName,
+			RefType:    row.RefType,
+			CommitSHA:  row.CommitSha,
+			SnapshotAt: row.SnapshotAt,
+			Status:     row.Status,
+		}
+	}
+	return out, nil
+}
+
+// SetVulnerabilityReachability applies a CI analyzer's verdict to every
+// matching dependency finding in the snapshot; returns rows updated.
+func (q *Queries) SetVulnerabilityReachability(ctx context.Context, snapshotID uuid.UUID, reachability string, identifiers []string) (int64, error) {
+	if len(identifiers) == 0 {
+		return 0, nil
+	}
+	return q.db.SetVulnerabilityReachability(ctx, dbgen.SetVulnerabilityReachabilityParams{
+		SnapshotID:   snapshotID,
+		Reachability: dbgen.NullReachability{Reachability: dbgen.Reachability(reachability), Valid: true},
+		Identifiers:  identifiers,
+	})
+}
+
+// GetLatestSnapshotByRepoAndSHA resolves the snapshot a CI analyzer's results
+// belong to.
+func (q *Queries) GetLatestSnapshotByRepoAndSHA(ctx context.Context, repoID uuid.UUID, commitSHA string) (*Snapshot, error) {
+	row, err := q.db.GetLatestSnapshotByRepoAndSHA(ctx, dbgen.GetLatestSnapshotByRepoAndSHAParams{RepoID: repoID, CommitSha: commitSHA})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return snapshotFromRow(row), nil
+}
+
+// SnapshotCodeRefs is the CI-posted reference inventory for one snapshot —
+// what the built code actually names, per language, at that language's
+// precision (Java: class-level packages, Rust: crate-level).
+type SnapshotCodeRefs struct {
+	// GoSymbols is the reachable third-party symbol set from the CI VTA call
+	// graph ("import/path.Func", "import/path.Type.Method") — matched against
+	// OSV-declared vulnerable symbols for SYMBOL-level verdicts on frozen refs.
+	GoSymbols      []string
+	JavaPackages   []string
+	RustReferenced []string
+	RustPresent    []string
+}
+
+func (r SnapshotCodeRefs) Empty() bool {
+	return len(r.GoSymbols) == 0 && len(r.JavaPackages) == 0 && len(r.RustReferenced) == 0 && len(r.RustPresent) == 0
+}
+
+func (q *Queries) UpsertSnapshotCodeRefs(ctx context.Context, snapshotID uuid.UUID, refs SnapshotCodeRefs) error {
+	return q.db.UpsertSnapshotCodeRefs(ctx, dbgen.UpsertSnapshotCodeRefsParams{
+		SnapshotID:     snapshotID,
+		GoSymbols:      nonNilStrings(refs.GoSymbols),
+		JavaPackages:   nonNilStrings(refs.JavaPackages),
+		RustReferenced: nonNilStrings(refs.RustReferenced),
+		RustPresent:    nonNilStrings(refs.RustPresent),
+	})
+}
+
+func (q *Queries) GetSnapshotCodeRefs(ctx context.Context, snapshotID uuid.UUID) (*SnapshotCodeRefs, error) {
+	row, err := q.db.GetSnapshotCodeRefs(ctx, snapshotID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &SnapshotCodeRefs{
+		GoSymbols:      row.GoSymbols,
+		JavaPackages:   row.JavaPackages,
+		RustReferenced: row.RustReferenced,
+		RustPresent:    row.RustPresent,
+	}, nil
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+// ApplyReachabilityFromCodeRefs classifies the snapshot's dependency findings
+// against a stored reference inventory. Shared by the reachability endpoint
+// (fresh CI results) and the advisory scanner (a NEWLY PUBLISHED CVE on
+// unchanged code gets classified from the stored refs immediately, instead of
+// waiting for the next CI run). Precision is the inventory's — class-level
+// for Java, crate-level for Rust — and anything unmatched stays untouched.
+func (q *Queries) ApplyReachabilityFromCodeRefs(ctx context.Context, snapshotID uuid.UUID, refs SnapshotCodeRefs) (reachableCount, unreachableCount int64, err error) {
+	// Narrow projection on purpose: this runs on every build's reachability
+	// post AND on every daily advisory pass that matched something — never
+	// load the full snapshot finding set for it.
+	rows, err := q.db.ListDependencyFindingHeadsBySnapshot(ctx, snapshotID)
+	if err != nil {
+		return 0, 0, err
+	}
+	vulnerabilities := make([]Vulnerability, 0, len(rows))
+	for _, row := range rows {
+		vulnerability := Vulnerability{ID: row.ID, Type: "dependency"}
+		if row.Ecosystem.Valid {
+			ecosystem := row.Ecosystem.String
+			vulnerability.Ecosystem = &ecosystem
+		}
+		if row.ComponentName.Valid {
+			name := row.ComponentName.String
+			vulnerability.ComponentName = &name
+		}
+		if row.AdvisoryID.Valid {
+			advisoryID := row.AdvisoryID.UUID
+			vulnerability.AdvisoryID = &advisoryID
+		}
+		vulnerability.Reachability = reachabilityPtrFromNull(row.Reachability)
+		vulnerabilities = append(vulnerabilities, vulnerability)
+	}
+
+	rustReferenced := stringSet(refs.RustReferenced)
+	rustPresent := stringSet(refs.RustPresent)
+	goSymbols := stringSet(refs.GoSymbols)
+
+	// Advisory-declared vulnerable symbols, loaded once for the Go findings.
+	symbolsByAdvisory := map[uuid.UUID][]string{}
+	if len(goSymbols) > 0 {
+		advisoryIDs := []uuid.UUID{}
+		seenAdvisories := map[uuid.UUID]struct{}{}
+		for _, vulnerability := range vulnerabilities {
+			if vulnerability.AdvisoryID == nil || vulnerability.Ecosystem == nil {
+				continue
+			}
+			if eco := strings.ToLower(strings.TrimSpace(*vulnerability.Ecosystem)); eco != "go" && eco != "golang" {
+				continue
+			}
+			if _, ok := seenAdvisories[*vulnerability.AdvisoryID]; ok {
+				continue
+			}
+			seenAdvisories[*vulnerability.AdvisoryID] = struct{}{}
+			advisoryIDs = append(advisoryIDs, *vulnerability.AdvisoryID)
+		}
+		if len(advisoryIDs) > 0 {
+			ranges, err := q.db.ListAffectedRangesByAdvisoryIDs(ctx, advisoryIDs)
+			if err != nil {
+				return 0, 0, err
+			}
+			for _, affectedRange := range ranges {
+				if len(affectedRange.VulnerableSymbols) > 0 {
+					symbolsByAdvisory[affectedRange.AdvisoryID] = append(symbolsByAdvisory[affectedRange.AdvisoryID], affectedRange.VulnerableSymbols...)
+				}
+			}
+		}
+	}
+
+	reachableIDs := []uuid.UUID{}
+	unreachableIDs := []uuid.UUID{}
+	for _, vulnerability := range vulnerabilities {
+		if vulnerability.Type != "dependency" && vulnerability.Type != "container" {
+			continue
+		}
+		if vulnerability.ComponentName == nil {
+			continue
+		}
+		name := strings.TrimSpace(*vulnerability.ComponentName)
+		ecosystem := ""
+		if vulnerability.Ecosystem != nil {
+			ecosystem = strings.ToLower(strings.TrimSpace(*vulnerability.Ecosystem))
+		}
+		switch {
+		case (ecosystem == "maven" || strings.Contains(name, ":")) && len(refs.JavaPackages) > 0:
+			// Maven components are group:artifact; the group id approximates
+			// the package root. Class-level: the app's bytecode references a
+			// package of this artifact, or provably never does.
+			group := name
+			if colon := strings.Index(name, ":"); colon > 0 {
+				group = name[:colon]
+			}
+			if javaPackageReferenced(refs.JavaPackages, group) {
+				reachableIDs = append(reachableIDs, vulnerability.ID)
+			} else {
+				unreachableIDs = append(unreachableIDs, vulnerability.ID)
+			}
+		case ecosystem == "cargo" || ecosystem == "crates.io":
+			if _, ok := rustReferenced[name]; ok {
+				reachableIDs = append(reachableIDs, vulnerability.ID)
+			} else if _, ok := rustPresent[name]; ok {
+				unreachableIDs = append(unreachableIDs, vulnerability.ID)
+			}
+		case (ecosystem == "go" || ecosystem == "golang") && vulnerability.AdvisoryID != nil:
+			// Symbol-level re-derivation. Safe-monotonic on purpose, because
+			// this runs repeatedly against a FROZEN snapshot as advisory data
+			// evolves (OSV enrichment adds vulnerable symbols after publish):
+			//   - reachable is asserted whenever the symbols now match — it
+			//     PROMOTES unknown or a stale not_reachable to reachable
+			//     (revealing risk is always the safe, correct direction);
+			//   - not_reachable is only used to FILL an unknown — it never
+			//     auto-downgrades an existing reachable verdict, so
+			//     incomplete symbol data can't hide real risk. A genuine
+			//     downgrade (a call removed) arrives as a fresh snapshot whose
+			//     rows start unknown, classified precisely on POST.
+			declared := symbolsByAdvisory[*vulnerability.AdvisoryID]
+			if len(declared) == 0 {
+				continue // advisory names no symbols — never guess
+			}
+			matched := false
+			for _, symbol := range declared {
+				if _, ok := goSymbols[symbol]; ok {
+					matched = true
+					break
+				}
+			}
+			current := ""
+			if vulnerability.Reachability != nil {
+				current = *vulnerability.Reachability
+			}
+			switch {
+			case matched && current != "reachable":
+				reachableIDs = append(reachableIDs, vulnerability.ID)
+			case !matched && current == "":
+				unreachableIDs = append(unreachableIDs, vulnerability.ID)
+			}
+		}
+	}
+
+	if len(reachableIDs) > 0 {
+		if reachableCount, err = q.db.SetVulnerabilityReachabilityByIDs(ctx, dbgen.SetVulnerabilityReachabilityByIDsParams{
+			Reachability: dbgen.NullReachability{Reachability: dbgen.ReachabilityReachable, Valid: true},
+			Ids:          reachableIDs,
+		}); err != nil {
+			return reachableCount, 0, err
+		}
+	}
+	if len(unreachableIDs) > 0 {
+		if unreachableCount, err = q.db.SetVulnerabilityReachabilityByIDs(ctx, dbgen.SetVulnerabilityReachabilityByIDsParams{
+			Reachability: dbgen.NullReachability{Reachability: dbgen.ReachabilityNotReachable, Valid: true},
+			Ids:          unreachableIDs,
+		}); err != nil {
+			return reachableCount, unreachableCount, err
+		}
+	}
+	return reachableCount, unreachableCount, nil
+}
+
+// knownJavaPackageRoots maps artifacts whose packages do NOT follow the
+// group-id convention. Without an entry, a used library would be wrongly
+// marked not_reachable — the one direction this heuristic must never err in.
+// TODO: make this external config ?
+var knownJavaPackageRoots = map[string][]string{
+	"com.google.guava":           {"com.google.common"},
+	"jakarta.platform":           {"jakarta"},
+	"org.projectlombok":          {"lombok"},
+	"mysql":                      {"com.mysql"},
+	"org.postgresql":             {"org.postgresql"},
+	"com.fasterxml.jackson.core": {"com.fasterxml.jackson"},
+}
+
+func javaPackageReferenced(referenced []string, group string) bool {
+	group = strings.ToLower(group)
+	roots := append([]string{group}, knownJavaPackageRoots[group]...)
+	for _, pkg := range referenced {
+		pkg = strings.ToLower(pkg)
+		for _, root := range roots {
+			// Either direction: group "org.apache.logging.log4j" vs referenced
+			// package "org.apache.logging.log4j.util", or a short group id vs
+			// a deeper reference.
+			if strings.HasPrefix(pkg, root) || strings.HasPrefix(root, pkg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stringSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		out[value] = struct{}{}
+	}
+	return out
+}
+
 // ListRepoFingerprints returns the subset of fingerprints that belongs to the
 // repository. Batch triage validates against it so a caller cannot write
 // acceptances for another repo's findings.
@@ -908,4 +1261,8 @@ func (q *Queries) ListRepoFingerprints(ctx context.Context, repoID uuid.UUID, fi
 // export time (ADR-023).
 func (q *Queries) ListAcceptedDependencyAdvisories(ctx context.Context, repoID uuid.UUID) ([]dbgen.ListAcceptedDependencyAdvisoriesRow, error) {
 	return q.db.ListAcceptedDependencyAdvisories(ctx, repoID)
+}
+
+func (q *Queries) ListUnreachableDependencyAdvisories(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListUnreachableDependencyAdvisoriesRow, error) {
+	return q.db.ListUnreachableDependencyAdvisories(ctx, snapshotID)
 }

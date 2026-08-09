@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -176,19 +177,22 @@ func TestDispatcherSubscribeHandlesPublishedEvents(t *testing.T) {
 	dispatcher := NewDispatcher(store, bus, "", zerolog.Nop(), sender)
 	dispatcher.Subscribe()
 
-	bus.Publish(context.Background(), events.Event{Type: events.VulnDiscovered, Payload: map[string]any{
+	bus.Publish(context.Background(), events.Event{Type: events.VulnerabilitiesFound, Payload: map[string]any{
 		"org_id":      orgID.String(),
 		"repo_name":   "api",
 		"severity":    "critical",
-		"advisory_id": "ADV-1",
+		"identifiers": []any{"CVE-2026-0001", "CVE-2026-0002"},
 	}})
 
 	payload := awaitPayload(t, sender.calledCh)
-	if payload.EventType != string(events.VulnDiscovered) {
-		t.Fatalf("expected vuln discovered event, got %q", payload.EventType)
+	if payload.EventType != string(events.VulnerabilitiesFound) {
+		t.Fatalf("expected vulnerabilities found event, got %q", payload.EventType)
 	}
 	if payload.Severity != "critical" {
 		t.Fatalf("expected critical severity, got %q", payload.Severity)
+	}
+	if !strings.Contains(payload.Body, "2 new vulnerabilities") || !strings.Contains(payload.Body, "CVE-2026-0001") {
+		t.Fatalf("batched body expected, got %q", payload.Body)
 	}
 }
 
@@ -203,7 +207,7 @@ func TestDispatcherRulesFilterIntegrationsBySeverityAndRepo(t *testing.T) {
 			ID:                uuid.New(),
 			OrgID:             orgID,
 			Name:              "high prod only",
-			EventType:         string(events.VulnDiscovered),
+			EventType:         string(events.VulnerabilitiesFound),
 			Conditions:        mustJSON(t, map[string]any{"min_severity": "high", "repo_ids": []string{repoID.String()}}),
 			DestinationType:   dbgen.NotificationDestinationTypeSlack,
 			DestinationConfig: mustJSON(t, map[string]any{"channel": "prod"}),
@@ -213,7 +217,7 @@ func TestDispatcherRulesFilterIntegrationsBySeverityAndRepo(t *testing.T) {
 	sender := &mockSender{typ: "slack", calledCh: make(chan Payload, 2)}
 	dispatcher := NewDispatcher(store, events.New(zerolog.Nop()), "", zerolog.Nop(), sender)
 
-	dispatcher.handleEvent(context.Background(), events.VulnDiscovered, map[string]any{
+	dispatcher.handleEvent(context.Background(), events.VulnerabilitiesFound, map[string]any{
 		"org_id":    orgID.String(),
 		"repo_id":   repoID.String(),
 		"repo_name": "api",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,7 @@ func (m *mockRepoConfigLoader) LoadEnforcement(_ context.Context, _, _, _, _, _ 
 }
 
 type gatePublisherStore struct {
+	resolvedFingerprints []string
 	*deltaTestStore
 	repos          map[uuid.UUID]dbgen.Repository
 	snapshots      map[uuid.UUID]dbgen.Snapshot
@@ -157,6 +159,10 @@ func (m *deltaTestStore) ListQualityGatesByRepo(_ context.Context, repoID uuid.U
 	return append([]dbgen.QualityGate(nil), m.repoGates[repoID]...), nil
 }
 
+func (m *deltaTestStore) GetOrganizationByID(_ context.Context, _ uuid.UUID) (*storepkg.Organization, error) {
+	return nil, nil
+}
+
 func (m *deltaTestStore) ListOrgWideQualityGates(_ context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error) {
 	return append([]dbgen.QualityGate(nil), m.orgGates[orgID]...), nil
 }
@@ -175,6 +181,11 @@ func (m *gatePublisherStore) GetRefByID(_ context.Context, id uuid.UUID) (dbgen.
 
 func (m *gatePublisherStore) GetLatestSnapshotByRef(_ context.Context, refID uuid.UUID) (dbgen.Snapshot, error) {
 	return m.latestSnapshot[refID], nil
+}
+
+func (m *gatePublisherStore) ReplacePRCheckResolvedFingerprints(_ context.Context, _ uuid.UUID, _ string, fingerprints []string) error {
+	m.resolvedFingerprints = fingerprints
+	return nil
 }
 
 func (m *gatePublisherStore) UpsertPRCheck(_ context.Context, in storepkg.UpsertPRCheckInput) error {
@@ -526,5 +537,50 @@ func TestGatePublisherRecomputeBySnapshotIDPublishesGate(t *testing.T) {
 	}
 	if len(store.prChecks) != 1 {
 		t.Fatalf("expected the verdict persisted, got %d pr_checks", len(store.prChecks))
+	}
+}
+
+// A verdict for a commit that is no longer the PR head is a lie: when the
+// webhook-tracked head moved past the snapshot, the publisher posts the
+// pending state on the CURRENT head, naming what it waits for.
+func TestGatePublisherStaleSnapshotPostsWaitingOnHead(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID := uuid.New()
+	repoID := uuid.New()
+	prRefID := uuid.New()
+	targetRefID := uuid.New()
+	prSnapshotID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{
+		ID: prRefID, RepoID: repoID, Name: "refs/pull/9", RefType: dbgen.RefTypePullRequest,
+		MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true},
+		// The PR head moved (push) but the new commit's upload has not arrived.
+		LatestCommitSha: sql.NullString{String: "54fae6d0000", Valid: true},
+	}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "417b4920000", CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "https://hibou.example.com", zerolog.Nop())
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(forgeProvider.statuses) != 1 {
+		t.Fatalf("expected 1 commit status, got %d", len(forgeProvider.statuses))
+	}
+	posted := forgeProvider.statuses[0]
+	if posted.sha != "54fae6d0000" {
+		t.Fatalf("check must attach to the CURRENT head, got %q", posted.sha)
+	}
+	if posted.status.State != "pending" {
+		t.Fatalf("stale snapshot must publish pending, got %q", posted.status.State)
+	}
+	if !strings.Contains(posted.status.Description, "54fae6d") {
+		t.Fatalf("pending description must name the awaited head, got %q", posted.status.Description)
+	}
+	if len(store.prChecks) != 0 {
+		t.Fatalf("no verdict may be persisted for a stale snapshot, got %d", len(store.prChecks))
 	}
 }

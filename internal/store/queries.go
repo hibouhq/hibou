@@ -111,6 +111,10 @@ func (q *Queries) ListSourcesByAdvisoryIDs(ctx context.Context, advisoryIDs []uu
 }
 
 func (q *Queries) CreateAffectedRange(ctx context.Context, arg dbgen.CreateAffectedRangeParams) (dbgen.AffectedRange, error) {
+	// nil slice would reach Postgres as NULL; the column is NOT NULL.
+	if arg.VulnerableSymbols == nil {
+		arg.VulnerableSymbols = []string{}
+	}
 	return q.db.CreateAffectedRange(ctx, arg)
 }
 

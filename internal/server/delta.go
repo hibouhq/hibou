@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -9,11 +10,19 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 type deltaResponse struct {
 	Delta *delta.DeltaResult `json:"delta"`
 	Gate  *delta.GateResult  `json:"gate"`
+	// GateSource says where the verdict came from: "persisted" is the exact
+	// check the forge shows (single source of truth for a PR head);
+	// "computed" is a live evaluation for comparisons no check was published
+	// for. Divergence between page and forge was dogfood bug #5.
+	GateSource string `json:"gate_source"`
+	// GateCommit is the commit the persisted verdict was evaluated for.
+	GateCommit string `json:"gate_commit,omitempty"`
 }
 
 func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +82,15 @@ func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to compute delta")
 		return
 	}
+
+	// Prefer the persisted verdict — the one the forge shows — whenever this
+	// comparison IS the published PR gate (head snapshot on a PR ref, target
+	// on its merge target). The two surfaces can then never disagree.
+	if gate, commit := s.persistedGateForComparison(r.Context(), repo.ID, prSnapshotID, targetSnapshotID); gate != nil {
+		api.JSON(w, http.StatusOK, deltaResponse{Delta: result, Gate: gate, GateSource: "persisted", GateCommit: commit})
+		return
+	}
+
 	gateConfig := s.resolveRepoGateConfig(r.Context(), repo.Provider, repo.DefaultBranch, repo.ProviderID, repo.Name, repo.Slug, targetSnapshotID)
 	if gateConfig == nil {
 		gateConfig = &delta.GateConfig{}
@@ -84,7 +102,34 @@ func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, deltaResponse{Delta: result, Gate: gate})
+	api.JSON(w, http.StatusOK, deltaResponse{Delta: result, Gate: gate, GateSource: "computed"})
+}
+
+// persistedGateForComparison returns the stored pr_checks verdict when the
+// requested comparison matches the published PR gate exactly; nil otherwise
+// (arbitrary comparisons fall back to a live evaluation).
+func (s *Server) persistedGateForComparison(ctx context.Context, repoID, prSnapshotID, targetSnapshotID uuid.UUID) (*delta.GateResult, string) {
+	snapshot, err := s.queries.GetSnapshotByID(ctx, prSnapshotID)
+	if err != nil || snapshot == nil || snapshot.CommitSHA == "" {
+		return nil, ""
+	}
+	ref, err := s.queries.GetRefByID(ctx, snapshot.RefID)
+	if err != nil || ref == nil || ref.RefType != store.RefTypePullRequest || ref.MergeTargetRefID == nil {
+		return nil, ""
+	}
+	targetSnapshot, err := s.queries.GetSnapshotByID(ctx, targetSnapshotID)
+	if err != nil || targetSnapshot == nil || targetSnapshot.RefID != *ref.MergeTargetRefID {
+		return nil, ""
+	}
+	check, err := s.queries.GetPRCheck(ctx, repoID, snapshot.CommitSHA, gateStatusContext)
+	if err != nil || check == nil || check.State == "pending" {
+		return nil, ""
+	}
+	reasons := []string{}
+	if len(check.Reasons) > 0 {
+		_ = json.Unmarshal(check.Reasons, &reasons)
+	}
+	return &delta.GateResult{Passed: check.Passed, Configured: true, Reasons: reasons}, check.HeadSha
 }
 
 func (s *Server) validateDeltaSnapshotOwnership(ctx context.Context, w http.ResponseWriter, repoID, snapshotID uuid.UUID) bool {

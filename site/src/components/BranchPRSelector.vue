@@ -5,24 +5,34 @@
     :class="block ? 'w-full' : ''"
   >
     <button
-      class="inline-flex items-center gap-2 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-200 transition hover:border-accent/50 hover:text-white"
-      :class="block ? 'min-w-0 flex-1 justify-between' : ''"
+      class="inline-flex items-center transition"
+      :class="[
+        hero
+          ? 'min-w-0 gap-2 rounded-lg px-1.5 py-0.5 text-xl font-semibold tracking-tight text-white hover:bg-white/5 sm:text-2xl'
+          : 'gap-2 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-200 hover:border-accent/50 hover:text-white',
+        block && !hero ? 'min-w-0 flex-1 justify-between' : '',
+      ]"
       type="button"
+      :title="hero ? 'Change ' + (align === 'right' ? 'base' : 'head') : undefined"
       @click.stop="isOpen = !isOpen"
     >
       <component
         :is="selectedIcon"
-        class="h-4 w-4 shrink-0 text-gray-400"
+        class="shrink-0 text-gray-400"
+        :class="hero ? 'h-5 w-5' : 'h-4 w-4'"
       />
       <span
         class="truncate"
-        :class="block ? 'flex-1 text-left' : 'max-w-[12rem]'"
+        :class="hero || block ? 'min-w-0 flex-1 text-left' : 'max-w-[12rem]'"
       >{{ selectedLabel }}</span>
-      <ChevronDown class="h-3.5 w-3.5 shrink-0 text-gray-400" />
+      <ChevronDown
+        class="shrink-0 text-gray-400"
+        :class="hero ? 'h-4 w-4' : 'h-3.5 w-3.5'"
+      />
     </button>
 
     <a
-      v-if="selectedForgeUrl"
+      v-if="selectedForgeUrl && !hero"
       :href="selectedForgeUrl"
       target="_blank"
       rel="noopener noreferrer"
@@ -36,7 +46,7 @@
     </a>
 
     <div
-      v-if="!compact"
+      v-if="!compact && !hero"
       class="flex items-center gap-3 text-xs text-gray-400"
     >
       <button
@@ -229,6 +239,9 @@ const props = defineProps<{
   compact?: boolean
   align?: 'left' | 'right'
   block?: boolean
+  // hero renders the trigger as the page title itself (ADR: the title IS the
+  // control) — big type, no chrome, dropdown unchanged.
+  hero?: boolean
   repoHtmlUrl?: string
   provider?: string
 }>()

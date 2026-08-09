@@ -135,10 +135,7 @@ func (d *Dispatcher) Subscribe() {
 	d.bus.Subscribe(events.ScanFailed, func(ctx context.Context, event events.Event) {
 		d.handleEvent(ctx, event.Type, event.Payload)
 	})
-	d.bus.Subscribe(events.VulnerabilityCreated, func(ctx context.Context, event events.Event) {
-		d.handleEvent(ctx, event.Type, event.Payload)
-	})
-	d.bus.Subscribe(events.VulnDiscovered, func(ctx context.Context, event events.Event) {
+	d.bus.Subscribe(events.VulnerabilitiesFound, func(ctx context.Context, event events.Event) {
 		d.handleEvent(ctx, event.Type, event.Payload)
 	})
 	d.bus.Subscribe(events.GatePassed, func(ctx context.Context, event events.Event) {
@@ -639,14 +636,17 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 		errMsg := stringValue(data, "error", "unknown error")
 		payload.Title = "Scan failed"
 		payload.Body = fmt.Sprintf("Scan failed for repo %s: %s", payload.RepoName, errMsg)
-	case events.VulnerabilityCreated:
-		vulnID := stringValue(data, "advisory_id", stringValue(data, "id", "unknown vulnerability"))
-		payload.Title = "New vulnerability created"
-		payload.Body = fmt.Sprintf("New %s vulnerability %s found in repo %s", payload.Severity, vulnID, payload.RepoName)
-	case events.VulnDiscovered:
-		vulnID := stringValue(data, "cve", stringValue(data, "advisory_id", "unknown advisory"))
-		payload.Title = "New vulnerability discovered"
-		payload.Body = fmt.Sprintf("New %s vulnerability %s found in repo %s", payload.Severity, vulnID, payload.RepoName)
+	case events.VulnerabilitiesFound:
+		identifiers := stringSliceValue(data["identifiers"])
+		payload.Title = fmt.Sprintf("%d new vulnerabilities", len(identifiers))
+		listed := identifiers
+		if len(listed) > 5 {
+			listed = listed[:5]
+		}
+		payload.Body = fmt.Sprintf("%d new vulnerabilities found in repo %s: %s", len(identifiers), payload.RepoName, strings.Join(listed, ", "))
+		if extra := len(identifiers) - len(listed); extra > 0 {
+			payload.Body += fmt.Sprintf(" (+%d more)", extra)
+		}
 	case events.GateFailed:
 		reason := stringValue(data, "reason", stringValue(data, "description", "quality gate threshold exceeded"))
 		payload.Title = "Quality gate failed"

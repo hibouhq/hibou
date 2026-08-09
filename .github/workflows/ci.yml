@@ -93,7 +93,7 @@ jobs:
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: |
-                gosec -fmt sarif -out gosec.sarif ./... || true
+                gosec -track-suppressions -fmt sarif -out gosec.sarif ./... || true
                 trivy fs --format sarif --output trivy-fs.sarif .
                 trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
                 trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/

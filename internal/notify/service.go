@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -25,6 +24,7 @@ type Service struct {
 
 type NotifyStore interface {
 	CreateNotification(ctx context.Context, arg dbgen.CreateNotificationParams) (dbgen.Notification, error)
+	MarkFindingsNotified(ctx context.Context, eventType string, repoID uuid.UUID, identifiers []string) ([]string, error)
 	ListNotificationsByUser(ctx context.Context, arg dbgen.ListNotificationsByUserParams) ([]dbgen.Notification, error)
 	CountNotificationsByUser(ctx context.Context, userID uuid.UUID) (int64, error)
 	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int64, error)
@@ -58,11 +58,8 @@ func (s *Service) Subscribe() {
 	s.bus.Subscribe(events.ScanStale, func(ctx context.Context, event events.Event) {
 		s.handleScanStale(ctx, event.Payload)
 	})
-	s.bus.Subscribe(events.VulnDiscovered, func(ctx context.Context, event events.Event) {
-		s.handleVulnDiscovered(ctx, event.Payload)
-	})
-	s.bus.Subscribe(events.VulnerabilityCreated, func(ctx context.Context, event events.Event) {
-		s.handleVulnerabilityCreated(ctx, event.Payload)
+	s.bus.Subscribe(events.VulnerabilitiesFound, func(ctx context.Context, event events.Event) {
+		s.handleVulnerabilitiesFound(ctx, event.Payload)
 	})
 	s.bus.Subscribe(events.RetentionWarnAt, func(ctx context.Context, event events.Event) {
 		s.handleRetentionWarnAt(ctx, event.Payload)
@@ -79,13 +76,21 @@ func (s *Service) Subscribe() {
 }
 
 func (s *Service) handleScanCompleted(ctx context.Context, payload any) {
-	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	// A completed scan only pings the human who explicitly asked for it —
+	// scheduled and webhook scans stay out of the bell (their results surface
+	// on the dashboard). Failures still notify (handleScanFailed).
+	data, _ := payload.(map[string]any)
+	triggeredBy := uuidFromPayload(data, "triggered_by_user_id")
+	if triggeredBy == uuid.Nil {
+		return
+	}
+	repoName, repoID, _, err := s.resolveRecipients(ctx, payload)
 	if err != nil {
 		s.log.Debug().Err(err).Msg("resolve recipients for scan completed")
 		return
 	}
 	body := "Scan completed for repo " + repoName
-	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+	s.createForRecipients(ctx, []uuid.UUID{triggeredBy}, dbgen.CreateNotificationParams{
 		Type:     string(events.ScanCompleted),
 		Title:    "Scan completed",
 		Body:     body,
@@ -128,50 +133,133 @@ func (s *Service) handleScanStale(ctx context.Context, payload any) {
 	})
 }
 
-func (s *Service) handleVulnDiscovered(ctx context.Context, payload any) {
+// handleVulnerabilitiesFound turns a scan's batch of inserted findings into
+// at most ONE notification: identifiers already on the per-repo dedup ledger
+// are dropped (the same CVE row is re-inserted every snapshot), and whatever
+// remains is summarized — never one bell entry per CVE.
+func (s *Service) handleVulnerabilitiesFound(ctx context.Context, payload any) {
 	data, _ := payload.(map[string]any)
 	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
 	if err != nil {
-		s.log.Debug().Err(err).Msg("resolve recipients for vulnerability discovered")
+		s.log.Debug().Err(err).Msg("resolve recipients for vulnerabilities found")
 		return
 	}
-	severity := strings.ToLower(stringValue(data, "severity", "critical"))
-	severityLevel := dbgen.SeverityLevelCritical
-	if severity != "critical" {
-		severityLevel = dbgen.SeverityLevelHigh
+	identifiers := uniqueStrings(stringSliceValue(data["identifiers"]))
+	if len(identifiers) == 0 || repoID == uuid.Nil {
+		return
 	}
-	vulnID := vulnerabilityLabel(data)
-	body := fmt.Sprintf("New %s vulnerability %s found in repo %s", severity, vulnID, repoName)
+
+	fresh, err := s.store.MarkFindingsNotified(ctx, string(events.VulnerabilitiesFound), repoID, identifiers)
+	if err != nil {
+		s.log.Error().Err(err).Str("repo_id", repoID.String()).Msg("dedup vulnerabilities notification")
+		return
+	}
+	if len(fresh) == 0 {
+		return
+	}
+
+	freshSet := make(map[string]struct{}, len(fresh))
+	for _, identifier := range fresh {
+		freshSet[identifier] = struct{}{}
+	}
+	summary, maxSeverity := summarizeFreshFindings(data, freshSet)
+
+	title := fmt.Sprintf("%d new vulnerabilities", len(fresh))
+	if len(fresh) == 1 {
+		title = "New vulnerability"
+	}
+	body := fmt.Sprintf("%s in repo %s", summary, repoName)
 	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
-		Type:     string(events.VulnDiscovered),
-		Title:    "New vulnerability discovered",
+		Type:     string(events.VulnerabilitiesFound),
+		Title:    title,
 		Body:     body,
-		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(data)),
-		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
+		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", ""),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: maxSeverity, Valid: true},
 	})
 }
 
-func (s *Service) handleVulnerabilityCreated(ctx context.Context, payload any) {
-	data, _ := payload.(map[string]any)
-	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
-	if err != nil {
-		s.log.Debug().Err(err).Msg("resolve recipients for vulnerability created")
-		return
+// summarizeFreshFindings renders "CVE-1 (critical, pkg), CVE-2 … (+K more)"
+// for the first-time identifiers only, and returns the batch's max severity.
+func summarizeFreshFindings(data map[string]any, fresh map[string]struct{}) (string, dbgen.SeverityLevel) {
+	const maxListed = 5
+	rank := map[string]int{"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+	maxSeverity := "info"
+	parts := []string{}
+	total := 0
+	rawFindings, _ := data["findings"].([]map[string]any)
+	if rawFindings == nil {
+		if anyList, ok := data["findings"].([]any); ok {
+			for _, item := range anyList {
+				if entry, ok := item.(map[string]any); ok {
+					rawFindings = append(rawFindings, entry)
+				}
+			}
+		}
 	}
-	severity := strings.ToLower(stringValue(data, "severity", "critical"))
-	severityLevel := dbgen.SeverityLevelCritical
-	if severity != "critical" {
-		severityLevel = dbgen.SeverityLevelHigh
+	for _, finding := range rawFindings {
+		identifier := stringValue(finding, "identifier", "")
+		if _, ok := fresh[identifier]; !ok {
+			continue
+		}
+		total++
+		severity := strings.ToLower(stringValue(finding, "severity", "info"))
+		if rank[severity] > rank[maxSeverity] {
+			maxSeverity = severity
+		}
+		if len(parts) < maxListed {
+			label := identifier
+			if component := stringValue(finding, "component", ""); component != "" {
+				label += " (" + severity + ", " + component + ")"
+			} else {
+				label += " (" + severity + ")"
+			}
+			parts = append(parts, label)
+		}
 	}
-	vulnID := vulnerabilityLabel(data)
-	body := fmt.Sprintf("New %s vulnerability %s found in repo %s", severity, vulnID, repoName)
-	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
-		Type:     string(events.VulnerabilityCreated),
-		Title:    "New vulnerability created",
-		Body:     body,
-		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", vulnSearchQuery(data)),
-		Severity: dbgen.NullSeverityLevel{SeverityLevel: severityLevel, Valid: true},
-	})
+	if total == 0 {
+		// identifiers were fresh but carried no detail rows — count them.
+		total = len(fresh)
+		parts = make([]string, 0, maxListed)
+		for identifier := range fresh {
+			if len(parts) == maxListed {
+				break
+			}
+			parts = append(parts, identifier)
+		}
+	}
+	summary := strings.Join(parts, ", ")
+	if extra := total - len(parts); extra > 0 {
+		summary += fmt.Sprintf(" (+%d more)", extra)
+	}
+	level := dbgen.SeverityLevelInfo
+	switch maxSeverity {
+	case "critical":
+		level = dbgen.SeverityLevelCritical
+	case "high":
+		level = dbgen.SeverityLevelHigh
+	case "medium":
+		level = dbgen.SeverityLevelMedium
+	case "low":
+		level = dbgen.SeverityLevelLow
+	}
+	return summary, level
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func (s *Service) handleRetentionWarnAt(ctx context.Context, payload any) {
@@ -363,39 +451,6 @@ func (s *Service) repoTabLink(ctx context.Context, repoID uuid.UUID, tab, rawQue
 		link += "?" + rawQuery
 	}
 	return link
-}
-
-// vulnerabilityLabel picks the human-facing identifier for a notification:
-// the advisory/rule id (CVE-…, GHSA-…, G101) plus the affected component.
-// advisory_id and id are internal UUIDs and are deliberately NOT used — they
-// mean nothing to a reader and match nothing when searched.
-func vulnerabilityLabel(data map[string]any) string {
-	label := stringValue(data, "identifier", stringValue(data, "cve", ""))
-	if label == "" {
-		return "unknown"
-	}
-	if component := stringValue(data, "component", ""); component != "" {
-		return label + " in " + component
-	}
-	return label
-}
-
-// vulnSearchQuery pre-fills the vulnerabilities tab's free-text search. Only a
-// real identifier is linkable: a UUID would return an empty list, which is
-// worse than landing on the unfiltered tab.
-func vulnSearchQuery(data map[string]any) string {
-	identifier := strings.TrimSpace(stringValue(data, "identifier", stringValue(data, "cve", "")))
-	if identifier == "" || isUUIDLike(identifier) {
-		return ""
-	}
-	return "search=" + url.QueryEscape(identifier)
-}
-
-// isUUIDLike guards against regressions that put an internal id back into a
-// user-facing search link.
-func isUUIDLike(value string) bool {
-	_, err := uuid.Parse(strings.TrimSpace(value))
-	return err == nil
 }
 
 func stringValue(data map[string]any, key, fallback string) string {

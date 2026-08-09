@@ -44,6 +44,10 @@ func (m *mockStore) ListQualityGatesByRepo(_ context.Context, repoID uuid.UUID) 
 	return append([]dbgen.QualityGate(nil), m.repoGates[repoID]...), nil
 }
 
+func (m *mockStore) GetOrganizationByID(_ context.Context, _ uuid.UUID) (*storepkg.Organization, error) {
+	return nil, nil
+}
+
 func (m *mockStore) ListOrgWideQualityGates(_ context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error) {
 	return append([]dbgen.QualityGate(nil), m.orgGates[orgID]...), nil
 }

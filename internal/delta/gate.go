@@ -2,6 +2,7 @@ package delta
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +25,7 @@ type GateResult struct {
 type GateStore interface {
 	ListQualityGatesByRepo(ctx context.Context, repoID uuid.UUID) ([]dbgen.QualityGate, error)
 	ListOrgWideQualityGates(ctx context.Context, orgID uuid.UUID) ([]dbgen.QualityGate, error)
+	GetOrganizationByID(ctx context.Context, id uuid.UUID) (*store.Organization, error)
 }
 
 // GateConfig carries every file-managed gate section matched for the PR's
@@ -91,6 +93,25 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	if err != nil {
 		return nil, err
 	}
+
+	// Reachability-aware gating (org opt-in): a finding whose vulnerable
+	// symbol is provably never called (govulncheck) is not merge-blocking
+	// risk. Only `not_reachable` is exempt — unknown stays counted.
+	if s.reachabilityGateEnabled(ctx, orgID) {
+		filtered := make([]store.Vulnerability, 0, len(delta.New))
+		for _, vulnerability := range delta.New {
+			if vulnerability.Reachability != nil && *vulnerability.Reachability == "not_reachable" {
+				continue
+			}
+			filtered = append(filtered, vulnerability)
+		}
+		if len(filtered) != len(delta.New) {
+			shallow := *delta
+			shallow.New = filtered
+			delta = &shallow
+		}
+	}
+
 	var weaknessGate *WeaknessGate
 	if cfg != nil {
 		weaknessGate = cfg.Weakness
@@ -118,6 +139,26 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 
 // evaluateNewVulnerabilityGate caps the vulnerabilities a PR introduces,
 // counting only dependency-type rows (weakness gates own SAST findings).
+// reachabilityGateEnabled reads the org's vex_reachability_analysis setting.
+// Fail closed to counting everything: a settings read error must never make
+// the gate more permissive.
+func (s *Service) reachabilityGateEnabled(ctx context.Context, orgID uuid.UUID) bool {
+	if s.gateStore == nil || orgID == uuid.Nil {
+		return false
+	}
+	org, err := s.gateStore.GetOrganizationByID(ctx, orgID)
+	if err != nil || org == nil || len(org.Settings) == 0 {
+		return false
+	}
+	var settings struct {
+		VEXReachabilityAnalysis bool `json:"vex_reachability_analysis"`
+	}
+	if err := json.Unmarshal(org.Settings, &settings); err != nil {
+		return false
+	}
+	return settings.VEXReachabilityAnalysis
+}
+
 func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *VulnerabilityGate) []string {
 	counts := map[store.SeverityLevel]int{}
 	total := 0

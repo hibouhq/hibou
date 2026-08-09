@@ -55,3 +55,26 @@ LIMIT $1;
 UPDATE pr_checks
 SET forge_synced_at = NOW(), last_error = '', external_id = CASE WHEN sqlc.arg(external_id)::text <> '' THEN sqlc.arg(external_id)::text ELSE external_id END, updated_at = NOW()
 WHERE id = $1;
+
+-- name: ReplacePRCheckResolvedFingerprints :exec
+-- The set of findings this PR resolves versus its base, refreshed on every
+-- gate publish. Persisted so the findings list can answer "a PR already fixes
+-- this" with a join instead of recomputing deltas per render.
+WITH cleared AS (
+    DELETE FROM pr_check_resolved_fingerprints WHERE pr_check_id = $1
+)
+INSERT INTO pr_check_resolved_fingerprints (pr_check_id, fingerprint)
+SELECT $1, unnest(sqlc.arg(fingerprints)::text[])
+ON CONFLICT DO NOTHING;
+
+-- name: ListFixingPullRequests :many
+-- Open PRs whose latest published gate resolves the given fingerprints.
+SELECT f.fingerprint, r.name AS ref_name, r.pr_number, r.pr_title
+FROM pr_check_resolved_fingerprints f
+JOIN pr_checks c ON c.id = f.pr_check_id
+JOIN refs r ON r.id = c.ref_id
+WHERE c.repo_id = $1
+  AND f.fingerprint = ANY(sqlc.arg(fingerprints)::text[])
+  AND r.ref_type = 'pull_request'
+  AND COALESCE(r.pr_state, 'open') = 'open'
+ORDER BY r.pr_number;

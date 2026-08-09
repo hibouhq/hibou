@@ -2,8 +2,68 @@
 
 ## Status
 
-Proposed (2026-08-05). Supersedes the three-way triage actions in the
+Accepted — implemented (2026-08-05). Supersedes the three-way triage actions in the
 vulnerabilities views; feeds [TODO-FIX-gate-triage-notifications.md](../../TODO-FIX-gate-triage-notifications.md).
+
+Implementation notes (alpha, no compat window):
+
+- Migration `00013`: `acceptance_reason_kind` enum, `reason_kind` (backfilled
+  from the old `status`, then `status` **dropped** — row existence = accepted),
+  `labels text[]` with a GIN index, `vex_justification`. Down/up rehearsed.
+- Acceptance rides the findings list server-side: both list paths (sqlc query
+  via `sqlc.embed`, dynamic filterquery path) LEFT JOIN `finding_acceptances`
+  on the `(repo_id, fingerprint)` unique index; `Vulnerability.acceptance` is
+  in the payload — the UI no longer fetches or joins acceptances client-side.
+- Filters: discrete `acceptance=open|accepted|risk_accepted|false_positive`
+  param on list/count/facets, plus `acceptance:`/`label:` qualifiers in the
+  filterquery grammar (`q`).
+- VEX is synthesized at export from acceptances (FP → `not_affected` +
+  justification, risk → `affected` + action statement); never materialized.
+  `vex_justification` is accepted only for FP on component-backed findings
+  (dependency|container), single-finding endpoint only, validated against the
+  5 CISA values.
+- Secrets: `POST .../vulnerabilities/{vulnID}/revocation` is the only way a
+  secret resolves — a human attestation of revocation+rotation (422 on
+  non-secrets), audited as `secret.revoked`, gate recomputed.
+- UI: Accept ▾ split button (Accept risk / False positive / Mark revoked… for
+  secrets), reason-kind chips ("Risk accepted" amber, "False positive" gray),
+  labels input, VEX justification select, Triage filter. Accept/reopen patch
+  the rows in place (no list refetch, except under an active acceptance
+  filter); the accept popover shows the one-line "VEX not applicable"
+  explainer on single non-component findings.
+- Scanner suppressions (second pass, same day): migration `00015` adds the
+  `suppressed` observation status; `internal/sarif` parses `suppressions[]`
+  (non-empty, non-rejected → suppressed; empty array = active; classification
+  keys on the field, never on level — the checkov downgrade); the ingester
+  writes status `suppressed` with kind + justification in metadata; every
+  open-risk consumer (`org_aggregates`, clients, snapshots components, org
+  counts) excludes it like `dismissed`; CI gosec runs `-track-suppressions`.
+- Gate override deleted (second pass, same day): migration `00016` drops the
+  `pr_checks.override_*` columns; the `POST …/gate/override` endpoint, the
+  publisher's override application, `PRGateView.vue` and its route are gone
+  (`/pulls/:pr` redirects to compare); gate comments link to the compare page
+  with base/head; `quality_gates:write` keeps only gate-definition CRUD;
+  `gate.override` audit rows remain as history.
+- Compliance export carries `acceptance_reason_kind`/`reason`/`labels` per
+  finding plus `risk_accepted`/`false_positives` summary counts; a false
+  positive is excluded from `is_affected` (never was a vulnerability), an
+  accepted risk stays affected.
+- Risk reporting implements the semantics table (2026-08-06): every risk
+  count — org dashboard entries/totals, ref summaries, trends, org/malware/
+  client-exposure/component SQL counts — excludes findings with an active
+  `false_positive` acceptance (`NOT EXISTS` on the unique index) and flags
+  accepted risk via a `accepted_risk` counter in `severityCounts`; an
+  accepted risk still counts in the severity buckets.
+- Status axes collapsed (third pass, 2026-08-06): `vulnerability_status` is
+  now exactly the observation axis — `detected | resolved | suppressed`.
+  Migration `00017` folds old `dismissed` rows into acceptance rows
+  (`false_positive` dismissal reason keeps its kind, every other reason →
+  `risk_accepted`, actor/comment preserved) and both old decision statuses
+  back to `detected`; the `confirmed_*`/`dismissed_*` columns and the
+  `dismissal_reason` type are dropped. Nothing had been able to write either
+  value since the rework. The secret-scan provider verdict `false_positive`
+  now maps to `suppressed` (a scanner judgment, not a Hibou decision).
+  Data-fold rehearsed against seeded pre-migration rows.
 
 ## Context
 
@@ -299,6 +359,102 @@ all 5k rows on every page load.
   token via ADR-020); `triage:write` continues to gate the transition.
 - Compliance export includes `reason_kind`, so "how much accepted risk are we
   carrying vs how noisy are our scanners" is a GROUP BY, not archaeology.
+
+### Performance addendum: reachability pipeline, CI → DB → frontend (2026-08-09)
+
+The reachability feature (per-language call-graph analyses feeding
+`vulnerabilities.reachability` and the gate) is held to the same
+O(decisions)-style contract as acceptances. Guarantees are stated against a
+deliberately hostile reference workload:
+
+**Reference workload (large monorepo, busy org):**
+- one monorepo: ~10M LOC — 40 Go modules, 150 Java modules (mixed
+  Maven/Gradle), one Rust workspace with 60 crates
+- ~3,000 third-party components; a monorepo snapshot carries ~50k finding
+  rows, ~3k of them dependency/container findings
+- ~300 open PRs, **~2,000 builds/day** (every push uploads + posts
+  reachability), daily advisory pass over the latest snapshot of ~200 refs
+
+**CI (where all graph compute lives — the server never builds a call graph):**
+- Go: govulncheck (source mode, SSA+VTA) ≈ the cost of `go build` per module
+  against a warm CI cache. The symbol-inventory pass is a second SSA build —
+  a known, accepted duplication (govulncheck is an external binary; its SSA
+  cannot be shared). Mitigation at monorepo scale: one `--lang go` entry per
+  module, run only for modules the push touched, parallel in the CI matrix.
+- Java: constant-pool parsing is IO-bound and trivially cheap — a repo-root
+  recursive scan over ~100k `.class` files finishes in seconds; no
+  per-module path list to maintain (test-classes/unpacked deps skipped).
+- Rust: `cargo metadata` (~1s) + a regex pass over workspace sources.
+
+**Payload & storage (the inventory, sized honestly):**
+- The Go reachable-symbol inventory is the big one: a monorepo service can
+  reach 5k–50k third-party symbols ≈ 0.2–2 MB of JSON per post. Java/Rust
+  inventories are hundreds of entries — noise.
+- Stored as ONE `snapshot_code_refs` row per snapshot (never per finding);
+  Postgres TOAST compresses the symbol arrays ~4–6× (shared path prefixes),
+  so worst case ≈ 0.5 MB/row. At 2,000 builds/day that is ≤ 1 GB/day raw
+  ingress and far less at rest — and the rows die with their snapshots via
+  `ON DELETE CASCADE`, so the retention policy that already bounds snapshot
+  storage bounds this too. Forbidden: per-finding symbol rows, or keeping
+  inventories past their snapshot's lifetime.
+- Per-language upserts never clobber each other (COALESCE per column), so
+  the three analyses can post from parallel CI jobs.
+
+**Write path (every build):**
+- The reachability endpoint does: one snapshot lookup by (repo, commit SHA),
+  two batch UPDATEs bounded by the advisory-identifier list (hundreds at
+  most, index-matched), one inventory upsert, and one classification pass.
+- The classification pass reads a **narrow projection** — dependency/
+  container rows only, five columns (`ListDependencyFindingHeadsBySnapshot`)
+  — ~3k rows on the reference monorepo, not the 50k-row snapshot. In-memory
+  set intersection, then batch UPDATE by ids. No per-finding queries; no
+  per-advisory queries (symbols load once via
+  `ListAffectedRangesByAdvisoryIDs`).
+
+**Daily advisory scan (the new-CVE-on-frozen-ref path):**
+- Runs over the latest snapshot per ref (~200/day on the reference org) and
+  classifies from the stored inventory on **every** pass — deliberately not
+  gated on "new findings created", because OSV advisories are routinely
+  ENRICHED after publication (vulnerable symbols added days later), which
+  changes verdicts without creating a single finding row. Correctness first;
+  the pass stays cheap because it reads the narrow dependency projection
+  (~3k rows on the reference monorepo) and is idempotent — Go fills only
+  unknown verdicts (CI govulncheck stays authoritative), Java/Rust re-derive
+  the same answers.
+- Net effect: a new Go CVE with declared symbols — or an old one that just
+  gained them — gets a symbol-level verdict on every maintained release
+  **without any rebuild or CI involvement**.
+- Direction matters, and the two are handled by different paths:
+  - **Code change** (a call to a vulnerable symbol added OR removed) →
+    a new commit → a new snapshot with a fresh inventory and fresh
+    govulncheck verdicts; its rows start `unknown` and are classified
+    precisely on POST, in whichever direction the new call graph says. The
+    daily path is not involved.
+  - **Frozen ref, advisory data changes** (publish or OSV enrichment) →
+    the daily classification re-derives, **safe-monotonic**: it promotes to
+    `reachable` whenever the symbols now match (revealing risk is always
+    correct) but never auto-downgrades an existing `reachable` from
+    possibly-incomplete symbol data — a genuine downgrade only ever comes
+    from a fresh snapshot's CI run.
+
+**Gate (every PR build + every triage change):**
+- Reachability-aware gating is one in-memory filter over `delta.New`
+  (already loaded) plus one org-settings read — no additional queries. The
+  org setting is read per evaluation, not cached, because a policy flip must
+  take effect on the next publish.
+
+**API → frontend (the cheap end, by construction):**
+- `reachability` is one enum column on rows the list/compare/drawer queries
+  already fetch — zero extra queries, zero extra round trips, bytes of
+  payload. Chips and filters derive from row data; the filter is a SQL
+  predicate. The frontend never sees, downloads, or intersects an inventory.
+
+**Forbidden by this addendum** (the patterns that would break the contract at
+monorepo scale): computing call graphs server-side; storing graphs rather
+than projections (verdicts + inventory); per-finding or per-advisory queries
+in classification; loading full snapshot finding sets on the build hot path;
+inventories that outlive their snapshot; any frontend work proportional to
+inventory size.
 
 ## Consequences
 

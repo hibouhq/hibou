@@ -95,6 +95,47 @@ func (q *Queries) GetPRCheck(ctx context.Context, repoID uuid.UUID, headSha, con
 	return &row, nil
 }
 
+// ReplacePRCheckResolvedFingerprints records which findings this PR's latest
+// gate run resolves versus its base.
+func (q *Queries) ReplacePRCheckResolvedFingerprints(ctx context.Context, prCheckID uuid.UUID, fingerprints []string) error {
+	return q.db.ReplacePRCheckResolvedFingerprints(ctx, dbgen.ReplacePRCheckResolvedFingerprintsParams{
+		PrCheckID:    prCheckID,
+		Fingerprints: fingerprints,
+	})
+}
+
+// FixingPullRequest is an open PR whose gate run resolves a fingerprint —
+// "don't accept this, #12 already fixes it".
+type FixingPullRequest struct {
+	Fingerprint string `json:"fingerprint"`
+	RefName     string `json:"ref_name"`
+	Number      string `json:"number,omitempty"`
+	Title       string `json:"title,omitempty"`
+}
+
+func (q *Queries) ListFixingPullRequests(ctx context.Context, repoID uuid.UUID, fingerprints []string) ([]FixingPullRequest, error) {
+	if len(fingerprints) == 0 {
+		return nil, nil
+	}
+	rows, err := q.db.ListFixingPullRequests(ctx, dbgen.ListFixingPullRequestsParams{
+		RepoID:       repoID,
+		Fingerprints: fingerprints,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FixingPullRequest, len(rows))
+	for i, row := range rows {
+		out[i] = FixingPullRequest{
+			Fingerprint: row.Fingerprint,
+			RefName:     row.RefName,
+			Number:      row.PrNumber.String,
+			Title:       row.PrTitle,
+		}
+	}
+	return out, nil
+}
+
 // ListUnsyncedPRChecks returns gate outcomes whose forge post has not succeeded
 // yet, for the reconcile/retry loop.
 func (q *Queries) ListUnsyncedPRChecks(ctx context.Context, limit int32) ([]PrCheck, error) {

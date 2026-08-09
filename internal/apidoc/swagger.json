@@ -4125,6 +4125,169 @@
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "One aggregated view of a finding by fingerprint: latest occurrence, advisory data, triage decision, VEX statements, and the refs currently detecting it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Finding detail",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Finding fingerprint",
+                        "name": "fingerprint",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.findingDetailResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/reachability": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Applies CI-side reachability verdicts (e.g. govulncheck call-graph analysis) to the snapshot identified by the commit SHA. Findings named in `reachable` are marked reachable, `unreachable` ones not_reachable; anything unmentioned stays unknown. With the org's reachability setting on, unreachable findings stop counting toward gate severity ceilings.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Submit reachability analysis",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Analyzer verdicts",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.reachabilityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.reachabilityResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/refs": {
             "get": {
                 "security": [
@@ -6793,6 +6956,61 @@
                 }
             }
         },
+        "server.findingAdvisoryResponse": {
+            "type": "object",
+            "properties": {
+                "canonical_id": {
+                    "type": "string"
+                },
+                "cvss_score": {
+                    "type": "string"
+                },
+                "cvss_vector": {
+                    "type": "string"
+                },
+                "cwes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "description": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.findingDetailResponse": {
+            "type": "object",
+            "properties": {
+                "acceptance": {
+                    "$ref": "#/definitions/store.FindingAcceptance"
+                },
+                "advisory": {
+                    "$ref": "#/definitions/server.findingAdvisoryResponse"
+                },
+                "finding": {
+                    "$ref": "#/definitions/store.Vulnerability"
+                },
+                "occurrences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.FindingOccurrence"
+                    }
+                },
+                "vex": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.findingVEXResponse"
+                    }
+                }
+            }
+        },
         "server.findingFingerprintsResponse": {
             "type": "object",
             "properties": {
@@ -6808,6 +7026,23 @@
                 "truncated": {
                     "description": "Truncated is true when the filter matched more than the cap, so the UI can\nsay \"first 500 of N\" instead of implying it selected everything.",
                     "type": "boolean"
+                }
+            }
+        },
+        "server.findingVEXResponse": {
+            "type": "object",
+            "properties": {
+                "justification": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "statement": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
                 }
             }
         },
@@ -6906,6 +7141,69 @@
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "server.reachabilityRequest": {
+            "type": "object",
+            "properties": {
+                "analyzer": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "go_symbols": {
+                    "description": "Reference-inventory mode (Java class-level, Rust crate-level): what the\nbuilt code names. Persisted per snapshot so a NEWLY PUBLISHED CVE on\nunchanged code is classified by the daily advisory scan immediately,\nwithout waiting for the next CI run.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "java_packages": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reachable": {
+                    "description": "Identifier mode (Go / govulncheck, symbol-level): advisory ids.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rust_present": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rust_referenced": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "unreachable": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "server.reachabilityResponse": {
+            "type": "object",
+            "properties": {
+                "reachable_updated": {
+                    "type": "integer"
+                },
+                "snapshot_id": {
+                    "type": "string"
+                },
+                "unreachable_updated": {
+                    "type": "integer"
                 }
             }
         },
@@ -7548,6 +7846,43 @@
                 }
             }
         },
+        "store.FindingOccurrence": {
+            "type": "object",
+            "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
+                "ref_name": {
+                    "type": "string"
+                },
+                "ref_type": {
+                    "type": "string"
+                },
+                "snapshot_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.FixingPullRequest": {
+            "type": "object",
+            "properties": {
+                "fingerprint": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "string"
+                },
+                "ref_name": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "store.Integration": {
             "type": "object",
             "properties": {
@@ -8033,6 +8368,13 @@
                 },
                 "first_seen_at": {
                     "type": "string"
+                },
+                "fixed_in_prs": {
+                    "description": "FixedInPRs lists open pull requests whose latest gate run resolves this\nfingerprint — it changes the triage decision (\"merge #12 instead of\naccepting\"). Attached by the list/detail handlers, never stored.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.FixingPullRequest"
+                    }
                 },
                 "has_remediation": {
                     "type": "boolean"

@@ -240,7 +240,9 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 
 	// A new head push (synchronize) or reopen changes the PR delta, so re-evaluate
 	// and re-post the gate check for this ref — no CI re-run. Skip closed/merged.
-	// A no-op when the new head has no analyzed snapshot yet (CI upload covers that).
+	// When the new head has no analyzed snapshot yet, the publisher posts a
+	// pending "waiting for scan of <head>" check on it, so the PR always
+	// shows Hibou state for its current commit.
 	if !event.Merged && !strings.Contains(strings.ToLower(event.Action), "clos") {
 		s.bus.Publish(r.Context(), events.Event{
 			Type:    events.GateRecomputeRequested,

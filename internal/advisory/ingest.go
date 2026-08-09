@@ -38,6 +38,13 @@ type Ingester struct {
 	log     zerolog.Logger
 }
 
+func nonNilSymbols(symbols []string) []string {
+	if symbols == nil {
+		return []string{}
+	}
+	return symbols
+}
+
 type IngestResult struct {
 	ProviderID     string
 	Aliases        []string
@@ -211,14 +218,15 @@ func (ing *Ingester) replaceAffectedRanges(ctx context.Context, queries Ingester
 	}
 	for _, affectedRange := range ranges {
 		if _, err := queries.CreateAffectedRange(ctx, dbgen.CreateAffectedRangeParams{
-			AdvisoryID:   advisoryID,
-			Ecosystem:    affectedRange.Ecosystem,
-			PackageName:  affectedRange.PackageName,
-			Introduced:   affectedRange.Introduced,
-			Fixed:        affectedRange.Fixed,
-			LastAffected: affectedRange.LastAffected,
-			Source:       providerName,
-			Release:      affectedRange.Release,
+			AdvisoryID:        advisoryID,
+			Ecosystem:         affectedRange.Ecosystem,
+			PackageName:       affectedRange.PackageName,
+			Introduced:        affectedRange.Introduced,
+			Fixed:             affectedRange.Fixed,
+			LastAffected:      affectedRange.LastAffected,
+			Source:            providerName,
+			Release:           affectedRange.Release,
+			VulnerableSymbols: nonNilSymbols(affectedRange.VulnerableSymbols),
 		}); err != nil {
 			return fmt.Errorf("create affected range for %s/%s: %w", providerName, advisoryID, err)
 		}

@@ -2,6 +2,7 @@ package secretscan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -144,6 +145,11 @@ func cloneRepositoryOptions(ctx context.Context, parentDir, cloneURL, branch, au
 	return repoDir, cleanup, nil
 }
 
+// ErrBaseCommitUnreachable marks an incremental scan whose diff base no
+// longer exists (force-push rewrote it away) — full history no longer
+// contains the anchor, so only a full-branch scan is correct.
+var ErrBaseCommitUnreachable = errors.New("diff base commit unreachable")
+
 // ensureCommitPresent deepens a shallow clone until the commit exists locally.
 func ensureCommitPresent(ctx context.Context, repoDir, sha string) error {
 	sha = strings.TrimSpace(sha)
@@ -159,14 +165,14 @@ func ensureCommitPresent(ctx context.Context, repoDir, sha string) error {
 		return fmt.Errorf("inspect clone for %s: %w", sha, err)
 	}
 	if strings.TrimSpace(string(shallow)) != "true" {
-		return fmt.Errorf("commit %s not found in repository", sha)
+		return fmt.Errorf("%w: commit %s not found in repository", ErrBaseCommitUnreachable, sha)
 	}
 
 	if output, err := exec.CommandContext(ctx, "git", "-C", repoDir, "fetch", "--unshallow", "origin").CombinedOutput(); err != nil {
 		return fmt.Errorf("deepen clone for %s: %w: %s", sha, err, string(output))
 	}
 	if exec.CommandContext(ctx, "git", "-C", repoDir, "cat-file", "-e", sha+"^{commit}").Run() != nil {
-		return fmt.Errorf("commit %s not found after unshallow", sha)
+		return fmt.Errorf("%w: commit %s not found after unshallow", ErrBaseCommitUnreachable, sha)
 	}
 	return nil
 }

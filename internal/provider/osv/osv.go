@@ -102,8 +102,20 @@ type severityEntry struct {
 }
 
 type affectedPackage struct {
-	Package queryPackage    `json:"package"`
-	Ranges  []affectedRange `json:"ranges"`
+	Package           queryPackage       `json:"package"`
+	Ranges            []affectedRange    `json:"ranges"`
+	EcosystemSpecific *ecosystemSpecific `json:"ecosystem_specific"`
+}
+
+// ecosystemSpecific carries Go's vulnerable-symbol declarations
+// (affected[].ecosystem_specific.imports[].symbols in the OSV schema).
+type ecosystemSpecific struct {
+	Imports []ecosystemImport `json:"imports"`
+}
+
+type ecosystemImport struct {
+	Path    string   `json:"path"`
+	Symbols []string `json:"symbols"`
 }
 
 type affectedRange struct {
@@ -535,6 +547,23 @@ func mapAffectedPackageRanges(pkg affectedPackage) []advisory.AffectedRange {
 		// into a match for every version).
 		return nil
 	}
+	// Vulnerable symbols, qualified by import path ("gopkg.in/yaml.v2.Unmarshal",
+	// "path.Type.Method") — the key the reachability inventory also speaks.
+	symbols := []string{}
+	if pkg.EcosystemSpecific != nil {
+		for _, imported := range pkg.EcosystemSpecific.Imports {
+			path := strings.TrimSpace(imported.Path)
+			if path == "" {
+				path = pkg.Package.Name
+			}
+			for _, symbol := range imported.Symbols {
+				if symbol = strings.TrimSpace(symbol); symbol != "" {
+					symbols = append(symbols, path+"."+symbol)
+				}
+			}
+		}
+	}
+
 	ranges := make([]advisory.AffectedRange, 0)
 	for _, osvRange := range pkg.Ranges {
 		// ECOSYSTEM and SEMVER both carry introduced/fixed version events; GHSA
@@ -554,6 +583,7 @@ func mapAffectedPackageRanges(pkg affectedPackage) []advisory.AffectedRange {
 				continue
 			}
 			mapped.Release = release
+			mapped.VulnerableSymbols = symbols
 			ranges = append(ranges, mapped)
 		}
 	}

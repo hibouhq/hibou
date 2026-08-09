@@ -125,7 +125,27 @@ func (m *mockScannerStore) CreateVulnerability(_ context.Context, arg dbgen.Crea
 	return vulnerability, nil
 }
 
-func (m *mockScannerStore) MarkStaleVulnerabilities(_ context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) error {
+func (m *mockScannerStore) GetSnapshotByID(_ context.Context, _ uuid.UUID) (*store.Snapshot, error) {
+	return nil, nil
+}
+
+func (m *mockScannerStore) GetRefByID(_ context.Context, _ uuid.UUID) (*store.Ref, error) {
+	return nil, nil
+}
+
+func (m *mockScannerStore) ClearFindingsNotified(_ context.Context, _ string, _ uuid.UUID, _ []string) error {
+	return nil
+}
+
+func (m *mockScannerStore) GetSnapshotCodeRefs(_ context.Context, _ uuid.UUID) (*store.SnapshotCodeRefs, error) {
+	return nil, nil
+}
+
+func (m *mockScannerStore) ApplyReachabilityFromCodeRefs(_ context.Context, _ uuid.UUID, _ store.SnapshotCodeRefs) (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (m *mockScannerStore) MarkStaleVulnerabilities(_ context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) ([]string, error) {
 	m.markStaleCalls = append(m.markStaleCalls, struct {
 		SnapshotID uuid.UUID
 		VulnType   string
@@ -135,7 +155,7 @@ func (m *mockScannerStore) MarkStaleVulnerabilities(_ context.Context, snapshotI
 		VulnType:   vulnType,
 		FreshIDs:   append([]uuid.UUID(nil), freshIDs...),
 	})
-	return nil
+	return nil, nil
 }
 
 func (m *mockScannerStore) CreateAuditLog(_ context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error) {

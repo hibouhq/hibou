@@ -554,6 +554,8 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/vulnerabilities/facets", s.handleGetRefFindingFacets)
 						r.Get("/{repoSlug}/vulnerabilities/rules", s.handleGetRefRules)
 						r.Get("/{repoSlug}/vulnerabilities/fingerprints", s.handleGetRefFindingFingerprints)
+						r.Get("/{repoSlug}/findings/{fingerprint}", s.handleGetFindingDetail)
+						r.Post("/{repoSlug}/reachability", s.handleSubmitReachability)
 						r.Put("/{repoSlug}/vulnerabilities/acceptance", s.handleBatchFindingAcceptance)
 						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/acceptance", s.handleSetFindingAcceptance)
 						r.Post("/{repoSlug}/vulnerabilities/{vulnID}/revocation", s.handleAttestSecretRevocation)

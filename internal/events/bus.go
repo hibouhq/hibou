@@ -18,12 +18,16 @@ import (
 type Type string
 
 const (
-	ScanRequested        Type = "scan.requested"
-	ScanCompleted        Type = "scan.completed"
-	ScanFailed           Type = "scan.failed"
-	ScanStale            Type = "scan.stale"
-	VulnDiscovered       Type = "vuln.discovered"
-	VulnerabilityCreated Type = "vulnerability.created"
+	ScanRequested Type = "scan.requested"
+	ScanCompleted Type = "scan.completed"
+	ScanFailed    Type = "scan.failed"
+	ScanStale     Type = "scan.stale"
+	// VulnerabilitiesFound is the per-scan batch: every vulnerability row a
+	// scan inserted, in one event. Payload: snapshot_id, identifiers []string
+	// (human-facing CVE/GHSA ids), findings []{identifier, severity,
+	// component}. The notify layer dedups identifiers per repo, so only
+	// genuinely never-notified findings ring the bell — and only once.
+	VulnerabilitiesFound Type = "vulnerabilities.found"
 	SecretScanCompleted  Type = "secret.scan.completed"
 	SecretScanFailed     Type = "secret.scan.failed"
 	SecretDiscovered     Type = "secret.discovered"

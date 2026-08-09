@@ -168,12 +168,15 @@ SET status = $2,
 WHERE id = $1
 RETURNING *;
 
--- name: MarkStaleVulnerabilities :exec
+-- name: MarkStaleVulnerabilities :many
+-- Returns the resolved identifiers so the notification dedup ledger can
+-- forget them — a regression then re-notifies.
 UPDATE vulnerabilities SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(), last_seen_at = NOW()
 WHERE snapshot_id = sqlc.arg(snapshot_id)
   AND type = sqlc.arg(vuln_type)
   AND status != 'resolved'
-  AND id NOT IN (SELECT unnest(sqlc.arg(fresh_ids)::uuid[]));
+  AND id NOT IN (SELECT unnest(sqlc.arg(fresh_ids)::uuid[]))
+RETURNING primary_identifier_value;
 
 -- name: CreateStateTransition :one
 INSERT INTO vulnerability_state_transitions (vulnerability_id, state, changed_by, comment)
@@ -271,3 +274,78 @@ JOIN vulnerabilities v ON v.repo_id = fa.repo_id AND v.fingerprint = fa.fingerpr
 JOIN advisories a ON a.id = v.advisory_id
 WHERE fa.repo_id = $1 AND (fa.expires_at IS NULL OR fa.expires_at > now())
   AND v.advisory_id IS NOT NULL AND v.type IN ('dependency', 'container');
+
+-- name: GetLatestVulnerabilityByFingerprint :one
+-- The newest occurrence of a fingerprint on a repo — the finding-detail
+-- drawer's anchor row.
+SELECT * FROM vulnerabilities
+WHERE repo_id = $1 AND fingerprint = $2
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: ListFindingOccurrences :many
+-- Where a fingerprint is currently detected: each ref's latest usable
+-- snapshot, joined to the finding. Answers "is this everywhere or just on
+-- one branch" in one indexed pass per ref.
+SELECT r.name AS ref_name, r.ref_type::text AS ref_type, s.commit_sha, s.created_at AS snapshot_at, v.status::text AS status
+FROM refs r
+JOIN LATERAL (
+    SELECT s.id, s.commit_sha, s.created_at
+    FROM snapshots s
+    WHERE s.ref_id = r.id AND s.status IN ('complete', 'active')
+    ORDER BY s.created_at DESC
+    LIMIT 1
+) s ON TRUE
+JOIN vulnerabilities v ON v.snapshot_id = s.id AND v.fingerprint = sqlc.arg(fingerprint)
+WHERE r.repo_id = $1
+ORDER BY s.created_at DESC;
+
+-- name: GetActiveFindingAcceptance :one
+SELECT * FROM finding_acceptances
+WHERE repo_id = $1 AND fingerprint = $2
+  AND (expires_at IS NULL OR expires_at > now());
+
+-- name: SetVulnerabilityReachability :execrows
+-- CI-side reachability analysis (govulncheck): match on the human identifier
+-- or any advisory alias — analyzers speak GO-/CVE-/GHSA- interchangeably.
+UPDATE vulnerabilities v
+SET reachability = sqlc.arg(reachability), updated_at = NOW()
+WHERE v.snapshot_id = $1
+  AND v.type IN ('dependency', 'malware')
+  AND (
+    v.primary_identifier_value = ANY(sqlc.arg(identifiers)::text[])
+    OR EXISTS (
+      SELECT 1 FROM advisories a
+      WHERE a.id = v.advisory_id AND a.canonical_id = ANY(sqlc.arg(identifiers)::text[])
+    )
+    OR EXISTS (
+      SELECT 1 FROM advisory_aliases aa
+      WHERE aa.advisory_id = v.advisory_id AND aa.alias = ANY(sqlc.arg(identifiers)::text[])
+    )
+  );
+
+-- name: SetVulnerabilityReachabilityByIDs :execrows
+UPDATE vulnerabilities
+SET reachability = sqlc.arg(reachability), updated_at = NOW()
+WHERE id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: ListDependencyFindingHeadsBySnapshot :many
+-- The reachability classification's working set: dependency/container rows
+-- only, and only the columns the classifier reads. On a large monorepo this
+-- is thousands of rows instead of the snapshot's tens of thousands, and it
+-- runs on EVERY build's reachability post — the projection matters.
+SELECT id, ecosystem, component_name, advisory_id, reachability
+FROM vulnerabilities
+WHERE snapshot_id = $1 AND type IN ('dependency', 'container');
+
+-- name: ListUnreachableDependencyAdvisories :many
+-- Machine-proven not_reachable dependency findings on one snapshot — the
+-- source for synthesized VEX not_affected/vulnerable_code_not_in_execute_path
+-- statements. Human statements and acceptances take precedence at export.
+SELECT DISTINCT a.canonical_id, v.advisory_id, v.component_purl
+FROM vulnerabilities v
+JOIN advisories a ON a.id = v.advisory_id
+WHERE v.snapshot_id = $1
+  AND v.type IN ('dependency', 'container')
+  AND v.reachability = 'not_reachable'
+  AND v.advisory_id IS NOT NULL;

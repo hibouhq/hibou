@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -507,6 +508,119 @@ func (q *Queries) DeleteFindingAcceptance(ctx context.Context, arg DeleteFinding
 	return result.RowsAffected()
 }
 
+const getActiveFindingAcceptance = `-- name: GetActiveFindingAcceptance :one
+SELECT id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification FROM finding_acceptances
+WHERE repo_id = $1 AND fingerprint = $2
+  AND (expires_at IS NULL OR expires_at > now())
+`
+
+type GetActiveFindingAcceptanceParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+func (q *Queries) GetActiveFindingAcceptance(ctx context.Context, arg GetActiveFindingAcceptanceParams) (FindingAcceptance, error) {
+	row := q.db.QueryRowContext(ctx, getActiveFindingAcceptance, arg.RepoID, arg.Fingerprint)
+	var i FindingAcceptance
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.Fingerprint,
+		&i.Reason,
+		&i.AcceptedBy,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.ReasonKind,
+		pq.Array(&i.Labels),
+		&i.VexJustification,
+	)
+	return i, err
+}
+
+const getLatestVulnerabilityByFingerprint = `-- name: GetLatestVulnerabilityByFingerprint :one
+SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
+WHERE repo_id = $1 AND fingerprint = $2
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestVulnerabilityByFingerprintParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+// The newest occurrence of a fingerprint on a repo — the finding-detail
+// drawer's anchor row.
+func (q *Queries) GetLatestVulnerabilityByFingerprint(ctx context.Context, arg GetLatestVulnerabilityByFingerprintParams) (Vulnerability, error) {
+	row := q.db.QueryRowContext(ctx, getLatestVulnerabilityByFingerprint, arg.RepoID, arg.Fingerprint)
+	var i Vulnerability
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.SnapshotID,
+		&i.Title,
+		&i.Description,
+		&i.OriginalSeverity,
+		&i.Severity,
+		&i.SeverityOverrideReason,
+		&i.SeverityOverrideBy,
+		&i.Status,
+		&i.StateComment,
+		&i.DetectedAt,
+		&i.ResolvedAt,
+		&i.ResolvedBy,
+		&i.ScannerName,
+		&i.ScannerVendor,
+		&i.ScannerVersion,
+		&i.ScannerExternalID,
+		&i.FilePath,
+		&i.StartLine,
+		&i.EndLine,
+		&i.LocationHash,
+		&i.Fingerprint,
+		&i.ComponentID,
+		&i.ComponentName,
+		&i.ComponentVersion,
+		&i.ComponentPurl,
+		&i.Ecosystem,
+		&i.AdvisoryID,
+		&i.AffectedRangeID,
+		&i.Language,
+		&i.Confidence,
+		&i.Solution,
+		&i.HasRemediation,
+		&i.RemediationLink,
+		&i.Reachability,
+		&i.OwaspTop10,
+		&i.DueDate,
+		&i.PresentOnDefaultBranch,
+		&i.ResolvedOnDefaultBranch,
+		&i.SecretType,
+		&i.SecretHash,
+		&i.CommitSha,
+		&i.AuthorEmail,
+		&i.Verified,
+		&i.CreatedBy,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FirstSeenAt,
+		&i.LastSeenAt,
+		&i.SeverityRank,
+		&i.RuleRefID,
+		&i.PrimaryIdentifierKind,
+		&i.PrimaryIdentifierValue,
+		&i.OrgID,
+		&i.RepoID,
+		&i.Origin,
+		&i.OriginApiKeyID,
+		&i.OriginTokenName,
+		&i.OriginOwnerType,
+		&i.OriginOwnerID,
+	)
+	return i, err
+}
+
 const getVulnerabilityByID = `-- name: GetVulnerabilityByID :one
 SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities WHERE id = $1
 `
@@ -771,6 +885,53 @@ func (q *Queries) ListAllVulnerabilitiesBySnapshot(ctx context.Context, snapshot
 	return items, nil
 }
 
+const listDependencyFindingHeadsBySnapshot = `-- name: ListDependencyFindingHeadsBySnapshot :many
+SELECT id, ecosystem, component_name, advisory_id, reachability
+FROM vulnerabilities
+WHERE snapshot_id = $1 AND type IN ('dependency', 'container')
+`
+
+type ListDependencyFindingHeadsBySnapshotRow struct {
+	ID            uuid.UUID        `json:"id"`
+	Ecosystem     sql.NullString   `json:"ecosystem"`
+	ComponentName sql.NullString   `json:"component_name"`
+	AdvisoryID    uuid.NullUUID    `json:"advisory_id"`
+	Reachability  NullReachability `json:"reachability"`
+}
+
+// The reachability classification's working set: dependency/container rows
+// only, and only the columns the classifier reads. On a large monorepo this
+// is thousands of rows instead of the snapshot's tens of thousands, and it
+// runs on EVERY build's reachability post — the projection matters.
+func (q *Queries) ListDependencyFindingHeadsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]ListDependencyFindingHeadsBySnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDependencyFindingHeadsBySnapshot, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDependencyFindingHeadsBySnapshotRow{}
+	for rows.Next() {
+		var i ListDependencyFindingHeadsBySnapshotRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ecosystem,
+			&i.ComponentName,
+			&i.AdvisoryID,
+			&i.Reachability,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listExternalIssues = `-- name: ListExternalIssues :many
 SELECT id, vulnerability_id, tracker_type, external_id, url, created_at FROM vulnerability_external_issues WHERE vulnerability_id = $1
 `
@@ -791,6 +952,66 @@ func (q *Queries) ListExternalIssues(ctx context.Context, vulnerabilityID uuid.U
 			&i.ExternalID,
 			&i.Url,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFindingOccurrences = `-- name: ListFindingOccurrences :many
+SELECT r.name AS ref_name, r.ref_type::text AS ref_type, s.commit_sha, s.created_at AS snapshot_at, v.status::text AS status
+FROM refs r
+JOIN LATERAL (
+    SELECT s.id, s.commit_sha, s.created_at
+    FROM snapshots s
+    WHERE s.ref_id = r.id AND s.status IN ('complete', 'active')
+    ORDER BY s.created_at DESC
+    LIMIT 1
+) s ON TRUE
+JOIN vulnerabilities v ON v.snapshot_id = s.id AND v.fingerprint = $2
+WHERE r.repo_id = $1
+ORDER BY s.created_at DESC
+`
+
+type ListFindingOccurrencesParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+type ListFindingOccurrencesRow struct {
+	RefName    string    `json:"ref_name"`
+	RefType    string    `json:"ref_type"`
+	CommitSha  string    `json:"commit_sha"`
+	SnapshotAt time.Time `json:"snapshot_at"`
+	Status     string    `json:"status"`
+}
+
+// Where a fingerprint is currently detected: each ref's latest usable
+// snapshot, joined to the finding. Answers "is this everywhere or just on
+// one branch" in one indexed pass per ref.
+func (q *Queries) ListFindingOccurrences(ctx context.Context, arg ListFindingOccurrencesParams) ([]ListFindingOccurrencesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFindingOccurrences, arg.RepoID, arg.Fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFindingOccurrencesRow{}
+	for rows.Next() {
+		var i ListFindingOccurrencesRow
+		if err := rows.Scan(
+			&i.RefName,
+			&i.RefType,
+			&i.CommitSha,
+			&i.SnapshotAt,
+			&i.Status,
 		); err != nil {
 			return nil, err
 		}
@@ -868,6 +1089,48 @@ func (q *Queries) ListStateTransitions(ctx context.Context, vulnerabilityID uuid
 			&i.ChangedAt,
 			&i.Comment,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnreachableDependencyAdvisories = `-- name: ListUnreachableDependencyAdvisories :many
+SELECT DISTINCT a.canonical_id, v.advisory_id, v.component_purl
+FROM vulnerabilities v
+JOIN advisories a ON a.id = v.advisory_id
+WHERE v.snapshot_id = $1
+  AND v.type IN ('dependency', 'container')
+  AND v.reachability = 'not_reachable'
+  AND v.advisory_id IS NOT NULL
+`
+
+type ListUnreachableDependencyAdvisoriesRow struct {
+	CanonicalID   string         `json:"canonical_id"`
+	AdvisoryID    uuid.NullUUID  `json:"advisory_id"`
+	ComponentPurl sql.NullString `json:"component_purl"`
+}
+
+// Machine-proven not_reachable dependency findings on one snapshot — the
+// source for synthesized VEX not_affected/vulnerable_code_not_in_execute_path
+// statements. Human statements and acceptances take precedence at export.
+func (q *Queries) ListUnreachableDependencyAdvisories(ctx context.Context, snapshotID uuid.UUID) ([]ListUnreachableDependencyAdvisoriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnreachableDependencyAdvisories, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnreachableDependencyAdvisoriesRow{}
+	for rows.Next() {
+		var i ListUnreachableDependencyAdvisoriesRow
+		if err := rows.Scan(&i.CanonicalID, &i.AdvisoryID, &i.ComponentPurl); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1232,12 +1495,13 @@ func (q *Queries) ListVulnerabilityToolStats(ctx context.Context, orgID uuid.UUI
 	return items, nil
 }
 
-const markStaleVulnerabilities = `-- name: MarkStaleVulnerabilities :exec
+const markStaleVulnerabilities = `-- name: MarkStaleVulnerabilities :many
 UPDATE vulnerabilities SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(), last_seen_at = NOW()
 WHERE snapshot_id = $1
   AND type = $2
   AND status != 'resolved'
   AND id NOT IN (SELECT unnest($3::uuid[]))
+RETURNING primary_identifier_value
 `
 
 type MarkStaleVulnerabilitiesParams struct {
@@ -1246,9 +1510,29 @@ type MarkStaleVulnerabilitiesParams struct {
 	FreshIds   []uuid.UUID `json:"fresh_ids"`
 }
 
-func (q *Queries) MarkStaleVulnerabilities(ctx context.Context, arg MarkStaleVulnerabilitiesParams) error {
-	_, err := q.db.ExecContext(ctx, markStaleVulnerabilities, arg.SnapshotID, arg.VulnType, pq.Array(arg.FreshIds))
-	return err
+// Returns the resolved identifiers so the notification dedup ledger can
+// forget them — a regression then re-notifies.
+func (q *Queries) MarkStaleVulnerabilities(ctx context.Context, arg MarkStaleVulnerabilitiesParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, markStaleVulnerabilities, arg.SnapshotID, arg.VulnType, pq.Array(arg.FreshIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var primary_identifier_value string
+		if err := rows.Scan(&primary_identifier_value); err != nil {
+			return nil, err
+		}
+		items = append(items, primary_identifier_value)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const searchVulnerabilities = `-- name: SearchVulnerabilities :many
@@ -1355,6 +1639,59 @@ func (q *Queries) SearchVulnerabilities(ctx context.Context, arg SearchVulnerabi
 		return nil, err
 	}
 	return items, nil
+}
+
+const setVulnerabilityReachability = `-- name: SetVulnerabilityReachability :execrows
+UPDATE vulnerabilities v
+SET reachability = $2, updated_at = NOW()
+WHERE v.snapshot_id = $1
+  AND v.type IN ('dependency', 'malware')
+  AND (
+    v.primary_identifier_value = ANY($3::text[])
+    OR EXISTS (
+      SELECT 1 FROM advisories a
+      WHERE a.id = v.advisory_id AND a.canonical_id = ANY($3::text[])
+    )
+    OR EXISTS (
+      SELECT 1 FROM advisory_aliases aa
+      WHERE aa.advisory_id = v.advisory_id AND aa.alias = ANY($3::text[])
+    )
+  )
+`
+
+type SetVulnerabilityReachabilityParams struct {
+	SnapshotID   uuid.UUID        `json:"snapshot_id"`
+	Reachability NullReachability `json:"reachability"`
+	Identifiers  []string         `json:"identifiers"`
+}
+
+// CI-side reachability analysis (govulncheck): match on the human identifier
+// or any advisory alias — analyzers speak GO-/CVE-/GHSA- interchangeably.
+func (q *Queries) SetVulnerabilityReachability(ctx context.Context, arg SetVulnerabilityReachabilityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setVulnerabilityReachability, arg.SnapshotID, arg.Reachability, pq.Array(arg.Identifiers))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setVulnerabilityReachabilityByIDs = `-- name: SetVulnerabilityReachabilityByIDs :execrows
+UPDATE vulnerabilities
+SET reachability = $1, updated_at = NOW()
+WHERE id = ANY($2::uuid[])
+`
+
+type SetVulnerabilityReachabilityByIDsParams struct {
+	Reachability NullReachability `json:"reachability"`
+	Ids          []uuid.UUID      `json:"ids"`
+}
+
+func (q *Queries) SetVulnerabilityReachabilityByIDs(ctx context.Context, arg SetVulnerabilityReachabilityByIDsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setVulnerabilityReachabilityByIDs, arg.Reachability, pq.Array(arg.Ids))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateVulnerabilityStatus = `-- name: UpdateVulnerabilityStatus :one

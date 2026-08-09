@@ -1,0 +1,1 @@
+DROP TABLE pr_check_resolved_fingerprints;
