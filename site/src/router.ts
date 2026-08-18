@@ -21,14 +21,30 @@ const router = createRouter({
           children: [
             { path: '', name: 'org-detail', redirect: to => ({ name: 'org-overview', params: to.params }) },
             { path: 'overview', name: 'org-overview', component: () => import('@/views/org/OverviewTab.vue') },
+            { path: 'insights', name: 'org-insights', component: () => import('@/views/org/InsightsTab.vue') },
             { path: 'vulnerabilities', name: 'org-vulnerabilities', component: () => import('@/views/org/VulnerabilitiesTab.vue') },
             { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
-            { path: 'access', name: 'org-access', component: () => import('@/views/org/AccessTab.vue') },
+            { path: 'clients', name: 'org-clients', component: () => import('@/views/org/ClientsTab.vue') },
+            // The Access tab moved under Settings.
+            { path: 'access', redirect: to => ({ name: 'org-settings-access', params: to.params }) },
+            {
+              path: 'settings',
+              component: () => import('@/views/org/SettingsTab.vue'),
+              children: [
+                { path: '', name: 'org-settings', redirect: to => ({ name: 'org-settings-general', params: to.params }) },
+                { path: 'general', name: 'org-settings-general', component: () => import('@/views/org/settings/GeneralSettings.vue') },
+                { path: 'access', name: 'org-settings-access', component: () => import('@/views/org/settings/AccessSettings.vue') },
+                { path: 'members', name: 'org-settings-members', component: () => import('@/views/org/settings/MembersSettings.vue') },
+                { path: 'quality-gates', name: 'org-settings-gates', component: () => import('@/views/org/settings/GatesSettings.vue') },
+                { path: 'integrations', name: 'org-settings-integrations', component: () => import('@/views/org/settings/IntegrationsSettings.vue') },
+                { path: 'notifications', name: 'org-settings-notifications', component: () => import('@/views/org/settings/NotificationsSettings.vue') },
+                { path: 'audit', name: 'org-settings-audit', component: () => import('@/views/org/settings/AuditSettings.vue') },
+              ],
+            },
           ],
         },
         { path: 'orgs/:provider/:slug/search', name: 'search', component: () => import('@/views/SearchView.vue') },
         { path: 'orgs/:provider/:slug/repos', name: 'repos', component: () => import('@/views/ReposView.vue') },
-        { path: 'orgs/:provider/:slug/clients', name: 'clients', component: () => import('@/views/ClientsView.vue') },
         {
           path: 'orgs/:provider/:slug/clients/:clientSlug',
           name: 'client-detail',
@@ -72,6 +88,19 @@ const router = createRouter({
               component: () => import('@/views/repo/DependenciesTab.vue'),
             },
             {
+              // Not ref-scoped like the analysis tabs: releases span tags and
+              // pinned snapshots and bring their own filters (ADR-024).
+              path: 'releases',
+              name: 'repo-releases',
+              component: () => import('@/views/repo/ReleasesTab.vue'),
+            },
+            {
+              // Placeholder for the ADR-024 §8 phase; fenced with Releases.
+              path: 'deployments',
+              name: 'repo-deployments',
+              component: () => import('@/views/repo/DeploymentsTab.vue'),
+            },
+            {
               path: 'coverage',
               name: 'repo-coverage',
               component: () => import('@/views/repo/CoverageTab.vue'),
@@ -81,10 +110,26 @@ const router = createRouter({
               name: 'repo-tests',
               component: () => import('@/views/repo/TestsTab.vue'),
             },
+            {
+              path: 'insights',
+              name: 'repo-insights',
+              component: () => import('@/views/repo/InsightsTab.vue'),
+            },
+            {
+              path: 'settings',
+              component: () => import('@/views/repo/SettingsTab.vue'),
+              children: [
+                { path: '', name: 'repo-settings', redirect: to => ({ name: 'repo-settings-general', params: to.params }) },
+                { path: 'general', name: 'repo-settings-general', component: () => import('@/views/repo/settings/GeneralSettings.vue') },
+                { path: 'configuration', name: 'repo-settings-config', component: () => import('@/views/repo/settings/ConfigSettings.vue') },
+                { path: 'audit', name: 'repo-settings-audit', component: () => import('@/views/repo/settings/AuditSettings.vue') },
+              ],
+            },
           ],
         },
         { path: 'orgs/:provider/:slug/teams', name: 'teams', component: () => import('@/views/TeamsView.vue') },
-        { path: 'orgs/:provider/:slug/audit', name: 'audit', component: () => import('@/views/AuditLogsView.vue') },
+        // The standalone audit page moved under org Settings → Audit log.
+        { path: 'orgs/:provider/:slug/audit', redirect: to => ({ name: 'org-settings-audit', params: to.params, query: to.query }) },
         {
           path: 'settings',
           component: () => import('@/views/SettingsView.vue'),

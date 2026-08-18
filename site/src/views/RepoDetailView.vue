@@ -138,36 +138,76 @@
         </div>
       </div>
 
-      <!-- Tabs (GitHub-style) -->
+      <!-- Tabs (GitHub-style); the Releases tab is a different species —
+           shipped artifacts, not ref-scoped analysis — fenced by dividers and
+           rendered as a pill (ADR-024 §1). -->
       <div class="mt-4 border-b border-surface-border px-2">
-        <nav class="flex gap-0.5 overflow-x-auto">
-          <RouterLink
-            v-for="tab in tabs"
+        <nav class="flex items-center gap-0.5 overflow-x-auto">
+          <template
+            v-for="(tab, tabIndex) in tabs"
             :key="tab.name"
-            :to="tab.to"
-            class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
-            :class="isActiveTab(tab.name)
-              ? 'border-accent font-semibold text-white'
-              : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
           >
-            <component
-              :is="tab.icon"
-              class="h-4 w-4 shrink-0"
-              :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
-            />
-            {{ tab.label }}
-            <span
-              v-if="tabCount(tab.name) !== null"
-              class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
-              :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
+            <template v-if="tab.fenced">
+              <span
+                v-if="!tabs[tabIndex - 1]?.fenced"
+                aria-hidden="true"
+                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
+              />
+              <RouterLink
+                :to="tab.to"
+                class="group mb-2 flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition"
+                :class="isActiveTab(tab.name)
+                  ? 'border-accent/60 bg-accent/15 font-semibold text-accent'
+                  : 'border-surface-border bg-surface-overlay text-gray-400 hover:border-accent/40 hover:text-gray-200'"
+              >
+                <component
+                  :is="tab.icon"
+                  class="h-4 w-4 shrink-0"
+                  :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+                />
+                {{ tab.label }}
+                <span
+                  v-if="tab.badge"
+                  class="rounded-full border border-accent/40 px-1.5 py-0.5 text-[10px] font-medium leading-none"
+                  :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+                >{{ tab.badge }}</span>
+              </RouterLink>
+              <span
+                v-if="!tabs[tabIndex + 1]?.fenced"
+                aria-hidden="true"
+                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
+              />
+            </template>
+            <RouterLink
+              v-else
+              :to="tab.to"
+              class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
+              :class="isActiveTab(tab.name)
+                ? 'border-accent font-semibold text-white'
+                : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
             >
-              {{ tabCount(tab.name) }}
-            </span>
-          </RouterLink>
+              <component
+                :is="tab.icon"
+                class="h-4 w-4 shrink-0"
+                :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
+              />
+              {{ tab.label }}
+              <span
+                v-if="tabCount(tab.name) !== null"
+                class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
+                :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
+              >
+                {{ tabCount(tab.name) }}
+              </span>
+            </RouterLink>
+          </template>
         </nav>
       </div>
 
-      <div class="px-4 pt-3">
+      <div
+        v-if="!isReleaseTabActive"
+        class="px-4 pt-3"
+      >
         <BranchPRSelector
           :refs="refs"
           :selected-ref-name="selectedRefName"
@@ -180,7 +220,7 @@
       </div>
 
       <div
-        v-if="snapshots.length > 0 || snapshotsLoading"
+        v-if="!isReleaseTabActive && (snapshots.length > 0 || snapshotsLoading)"
         class="flex items-center gap-2 overflow-x-auto border-b border-surface-border-subtle px-4 py-2"
       >
         <span class="shrink-0 text-[11px] uppercase tracking-[0.14em] text-gray-500">Snapshot</span>
@@ -226,12 +266,16 @@
 import {
   Activity,
   BookMarked,
+  Container,
   ExternalLink,
   FlaskConical,
   GitCompareArrows,
   GitPullRequest,
   LayoutDashboard,
+  LineChart,
   Package,
+  Rocket,
+  Settings,
   ShieldAlert,
 } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
@@ -239,6 +283,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { api, type EnhancedRef, type RefSummary, type Repository, type Snapshot } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import { relativeTime } from '@/lib/datetime'
 import { useOrgStore } from '@/stores/org'
 
 const route = useRoute()
@@ -455,6 +500,13 @@ const tabs = computed(() => {
     { label: 'Coverage', name: 'repo-coverage', icon: Activity, to: { name: 'repo-coverage', params: route.params, query } },
     { label: 'Tests', name: 'repo-tests', icon: FlaskConical, to: { name: 'repo-tests', params: route.params, query } },
     { label: 'Dependencies', name: 'repo-dependencies', icon: Package, to: { name: 'repo-dependencies', params: route.params, query } },
+    // Fenced tab (ADR-024 §1): releases are not scoped to the ref/snapshot
+    // selector, so the tab renders as a pill between dividers and the
+    // selector strip disappears while it is active.
+    { label: 'Releases', name: 'repo-releases', icon: Rocket, fenced: true, to: { name: 'repo-releases', params: route.params } },
+    { label: 'Deployments', name: 'repo-deployments', icon: Container, fenced: true, badge: 'Soon', to: { name: 'repo-deployments', params: route.params } },
+    { label: 'Insights', name: 'repo-insights', icon: LineChart, to: { name: 'repo-insights', params: route.params } },
+    { label: 'Settings', name: 'repo-settings', icon: Settings, to: { name: 'repo-settings', params: route.params } },
   ]
 })
 
@@ -500,7 +552,12 @@ watch(
   },
 )
 
+const isReleaseTabActive = computed(() => route.name === 'repo-releases' || route.name === 'repo-deployments')
+
 function isActiveTab(name: string) {
+  if (name === 'repo-settings') {
+    return typeof route.name === 'string' && route.name.startsWith('repo-settings')
+  }
   return route.name === name
 }
 
@@ -768,22 +825,6 @@ function extractPullRequestNumber(refName: string) {
   return ''
 }
 
-function relativeTime(input: string) {
-  const target = new Date(input)
-  const diffSeconds = Math.round((target.getTime() - Date.now()) / 1000)
-  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-
-  if (Math.abs(diffSeconds) >= 86400) {
-    return formatter.format(Math.round(diffSeconds / 86400), 'day')
-  }
-  if (Math.abs(diffSeconds) >= 3600) {
-    return formatter.format(Math.round(diffSeconds / 3600), 'hour')
-  }
-  if (Math.abs(diffSeconds) >= 60) {
-    return formatter.format(Math.round(diffSeconds / 60), 'minute')
-  }
-  return formatter.format(diffSeconds, 'second')
-}
 </script>
 
 <style scoped>

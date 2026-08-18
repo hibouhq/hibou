@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -242,6 +243,7 @@ func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *ar
 	if componentsIngested > 0 {
 		s.enqueueAdvisoryScan(snapshotID, "system")
 	}
+	s.reconcileReleasesForSnapshot(ctx, snapshotID)
 	// The gate must not depend on the advisory scan happening. ScanCompleted is
 	// published only by the advisory scanner, and that only runs when components
 	// were ingested — so a coverage-only or SARIF-only PR never got a gate check
@@ -255,6 +257,172 @@ func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *ar
 		})
 	}
 	return nil
+}
+
+// defaultReleaseTagPattern decides which tags are releases (ADR-024 §5) when
+// the repo does not configure its own: semver-ish versions with an optional v
+// prefix (v1.2.3, 1.2, v2.0.0-rc.1). Repos override it as code via
+// `releases.tag_pattern` in .hibou.yaml.
+var defaultReleaseTagPattern = regexp.MustCompile(`^v?\d+\.\d+(\.\d+)?([-+][0-9A-Za-z.-]+)?$`)
+
+// releaseTagPatternForRepo resolves the repo's release tag pattern from its
+// .hibou.yaml. Config-as-code: devs own the pattern.
+//
+// "File absent" and "file unreadable" are different facts: an absent file (or
+// section, or loader) means the repo uses the platform default; a transport
+// error (forge partially down) means we don't know the repo's intent — the
+// caller must NOT guess with the default, or an outage could silently derive
+// a release a custom pattern excludes, or miss one it requires. It returns
+// ok=false in that case; the periodic reconcile sweep retries once the forge
+// answers again.
+func (s *Server) releaseTagPatternForRepo(ctx context.Context, repoID uuid.UUID) (*regexp.Regexp, bool) {
+	if s.repoConfigLoader == nil {
+		return defaultReleaseTagPattern, true
+	}
+	repo, err := s.queries.GetRepositoryByID(ctx, repoID)
+	if err != nil || repo == nil {
+		return nil, false
+	}
+	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	if !ok {
+		return defaultReleaseTagPattern, true
+	}
+	cfg, err := s.repoConfigLoader.Load(ctx, repo.Provider, owner, name, repo.DefaultBranch)
+	if err != nil {
+		return nil, false
+	}
+	if cfg == nil {
+		// No .hibou.yaml (or an invalid one, which the loader ignores by
+		// contract): the platform default is the repo's configuration.
+		return defaultReleaseTagPattern, true
+	}
+	if custom := cfg.Releases.CompiledTagPattern(); custom != nil {
+		return custom, true
+	}
+	return defaultReleaseTagPattern, true
+}
+
+// reconcileReleasesForSnapshot derives release state from a freshly completed
+// snapshot (ADR-024 §5). Releases are never hand-created:
+//   - a snapshot-less release of this ref (forge webhook landed before the
+//     upload) adopts the snapshot;
+//   - a version tag with no release row derives one;
+//   - a re-tagged version (same tag, different commit) repoints silently only
+//     while no client runs the release — otherwise it flags a divergence for a
+//     release manager to adopt or keep.
+func (s *Server) reconcileReleasesForSnapshot(ctx context.Context, snapshotID uuid.UUID) {
+	snapshot, err := s.queries.GetSnapshotByID(ctx, snapshotID)
+	if err != nil || snapshot == nil {
+		return
+	}
+	attached, err := s.queries.AttachSnapshotToReleasesByRef(ctx, snapshot.RefID, snapshotID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("failed to attach snapshot to releases")
+		return
+	}
+	if attached > 0 {
+		if err := s.pinReleaseSnapshot(ctx, snapshotID); err != nil {
+			s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("failed to pin release snapshot; retention may prune it")
+		}
+	}
+
+	ref, err := s.queries.GetRefByID(ctx, snapshot.RefID)
+	if err != nil || ref == nil {
+		return
+	}
+	if ref.RefType != store.RefTypeTag {
+		return
+	}
+	pattern, ok := s.releaseTagPatternForRepo(ctx, ref.RepoID)
+	if !ok {
+		// Forge unreachable: don't guess the repo's release intent. The
+		// periodic reconcile sweep re-runs this once the config is readable.
+		s.log.Warn().Str("tag", ref.Name).Str("snapshot_id", snapshotID.String()).Msg("release derivation deferred: repo config unreadable (forge down?)")
+		return
+	}
+	if !pattern.MatchString(ref.Name) {
+		return
+	}
+
+	release, err := s.queries.GetReleaseByRepoVersion(ctx, ref.RepoID, ref.Name)
+	if err != nil {
+		s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to load release for tag snapshot")
+		return
+	}
+
+	if release == nil {
+		if _, err := s.queries.UpsertRelease(ctx, store.UpsertReleaseParams{
+			RepoID:      ref.RepoID,
+			RefID:       ref.ID,
+			SnapshotID:  &snapshotID,
+			Version:     ref.Name,
+			Source:      store.ReleaseSourceTag,
+			PublishedAt: &snapshot.CreatedAt,
+		}); err != nil {
+			s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to derive release from tag snapshot")
+			return
+		}
+		s.log.Info().Str("tag", ref.Name).Str("snapshot_id", snapshotID.String()).Msg("release derived from version tag")
+		s.pinAfterRepoint(ctx, snapshotID, nil, uuid.Nil)
+		return
+	}
+
+	if release.SnapshotID == nil || *release.SnapshotID == snapshotID {
+		// attach above covered the nil case; identical snapshot needs nothing.
+		return
+	}
+
+	current, err := s.queries.GetSnapshotByID(ctx, *release.SnapshotID)
+	if err != nil {
+		return
+	}
+	if current == nil || current.CommitSHA == snapshot.CommitSHA {
+		// Same code, newer analysis — follow it.
+		if _, err := s.queries.SetReleaseSnapshot(ctx, release.ID, snapshotID); err != nil {
+			s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to refresh release snapshot")
+			return
+		}
+		s.pinAfterRepoint(ctx, snapshotID, release.SnapshotID, release.ID)
+		return
+	}
+
+	// The tag moved to another commit.
+	if release.DismissedCommitSHA == snapshot.CommitSHA {
+		return
+	}
+	activeDeployments, err := s.queries.CountActiveDeploymentsByRelease(ctx, release.ID)
+	if err != nil {
+		return
+	}
+	if activeDeployments == 0 {
+		// Nobody runs it: the re-tag is a correction, follow it silently.
+		if _, err := s.queries.SetReleaseSnapshot(ctx, release.ID, snapshotID); err != nil {
+			s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to repoint re-tagged release")
+			return
+		}
+		s.log.Info().Str("tag", ref.Name).Str("old_commit", current.CommitSHA).Str("new_commit", snapshot.CommitSHA).Msg("release repointed after re-tag (no active deployments)")
+		s.pinAfterRepoint(ctx, snapshotID, release.SnapshotID, release.ID)
+		return
+	}
+	if release.PendingSnapshotID != nil && *release.PendingSnapshotID == snapshotID {
+		return
+	}
+	if _, err := s.queries.SetReleaseDivergence(ctx, release.ID, snapshotID); err != nil {
+		s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to flag release divergence")
+		return
+	}
+	s.log.Warn().Str("tag", ref.Name).Str("shipped_commit", current.CommitSHA).Str("tag_commit", snapshot.CommitSHA).Int64("active_deployments", activeDeployments).Msg("release diverged: tag recreated on another commit while clients run it")
+}
+
+// pinAfterRepoint pins the snapshot a release now references and unpins the
+// one it left, when no other release still needs it.
+func (s *Server) pinAfterRepoint(ctx context.Context, newSnapshotID uuid.UUID, previousSnapshotID *uuid.UUID, releaseID uuid.UUID) {
+	if err := s.pinReleaseSnapshot(ctx, newSnapshotID); err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", newSnapshotID.String()).Msg("failed to pin release snapshot; retention may prune it")
+	}
+	if previousSnapshotID != nil && releaseID != uuid.Nil {
+		s.unpinSnapshotIfUnreferenced(ctx, *previousSnapshotID, releaseID)
+	}
 }
 
 func (s *Server) artifactProcessingLeaseDuration() time.Duration {

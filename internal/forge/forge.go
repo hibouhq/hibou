@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -187,6 +188,24 @@ type PullRequestEvent struct {
 
 func (PullRequestEvent) EventType() string {
 	return "pull_request"
+}
+
+// ReleaseEvent is a forge release lifecycle event (GitHub/Gitea/Forgejo
+// "release", GitLab "Release Hook"), normalized across providers (ADR-024 §5).
+type ReleaseEvent struct {
+	Action      string
+	TagName     string
+	Name        string
+	HTMLURL     string
+	Draft       bool
+	Prerelease  bool
+	PublishedAt *time.Time
+	Repo        Repository
+	Sender      UserInfo
+}
+
+func (ReleaseEvent) EventType() string {
+	return "release"
 }
 
 type InstallationEvent struct {

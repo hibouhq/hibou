@@ -341,12 +341,48 @@
       <aside
         v-if="isDrawerOpen"
         ref="drawerRef"
-        class="fixed bottom-0 left-0 top-0 z-[61] flex w-[18rem] max-w-[85vw] flex-col border-r border-surface-border bg-surface-raised"
+        class="fixed bottom-0 left-0 top-0 z-[61] flex w-[19rem] max-w-[85vw] flex-col rounded-r-xl border-r border-surface-border bg-surface-raised"
       >
-        <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-3">
-          <span class="text-sm font-semibold text-white">Menu</span>
+        <!-- GitHub-style drawer header: brand left, close right -->
+        <div class="flex items-center justify-between px-4 pb-2 pt-4">
+          <RouterLink
+            to="/orgs"
+            class="flex items-center gap-2 text-sm font-semibold text-white"
+            @click="isDrawerOpen = false"
+          >
+            <svg
+              viewBox="0 0 32 32"
+              class="h-6 w-6 text-gray-200"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M8 24V12L12 8L16 12L20 8L24 12V24L16 28L8 24Z"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linejoin="round"
+              />
+              <circle
+                cx="13"
+                cy="16"
+                r="2"
+                fill="currentColor"
+              />
+              <circle
+                cx="19"
+                cy="16"
+                r="2"
+                fill="currentColor"
+              />
+              <path
+                d="M16 18L14.5 20H17.5L16 18Z"
+                fill="currentColor"
+              />
+            </svg>
+            Hibou
+          </RouterLink>
           <button
-            class="rounded-md p-1 text-gray-500 transition hover:bg-surface-overlay hover:text-white"
+            class="rounded-md p-1.5 text-gray-400 transition hover:bg-surface-overlay hover:text-white"
             type="button"
             aria-label="Close navigation menu"
             @click="isDrawerOpen = false"
@@ -355,40 +391,43 @@
           </button>
         </div>
 
-        <nav class="flex-1 overflow-y-auto px-2 py-3">
-          <div
+        <nav class="flex-1 overflow-y-auto px-2 pb-4">
+          <template
             v-for="(section, sectionIndex) in navSections"
             :key="sectionIndex"
-            class="mb-3"
           >
             <div
+              v-if="sectionIndex > 0"
+              class="mx-2 my-2 border-t border-surface-border-subtle"
+            />
+            <div
               v-if="section.title"
-              class="px-3 pb-1 pt-2"
+              class="flex items-center gap-2 px-2 pb-1 pt-1.5"
             >
-              <div class="truncate text-xs font-semibold text-gray-200">
-                {{ section.title }}
-              </div>
-              <div
-                v-if="section.subtitle"
-                class="text-[10px] uppercase tracking-[0.16em] text-gray-600"
-              >
-                {{ section.subtitle }}
-              </div>
+              <component
+                :is="section.titleIcon"
+                v-if="section.titleIcon"
+                class="h-3.5 w-3.5 shrink-0 text-gray-500"
+              />
+              <span class="truncate text-xs font-semibold text-gray-500">{{ section.title }}</span>
             </div>
             <RouterLink
               v-for="item in section.items"
               :key="item.label"
               :to="item.to"
-              class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-gray-400 transition hover:bg-white/5 hover:text-gray-100"
-              :class="isActive(item) ? 'bg-accent-muted text-accent' : ''"
+              class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition"
+              :class="isActive(item)
+                ? 'bg-surface-overlay font-medium text-white'
+                : 'font-normal text-gray-300 hover:bg-surface-overlay/60 hover:text-white'"
             >
               <component
                 :is="item.icon"
-                class="h-4.5 w-4.5 shrink-0"
+                class="h-4 w-4 shrink-0"
+                :class="isActive(item) ? 'text-gray-300' : 'text-gray-500'"
               />
               <span class="truncate">{{ item.label }}</span>
             </RouterLink>
-          </div>
+          </template>
         </nav>
       </aside>
     </Transition>
@@ -412,14 +451,16 @@ import {
   Bell,
   Building2,
   BookOpen,
+  Container,
   ChevronDown,
   FlaskConical,
   LayoutDashboard,
+  LineChart,
   Lock,
   Menu,
   Package,
+  Rocket,
   Search,
-  ScrollText,
   Settings,
   ShieldAlert,
   Users,
@@ -563,17 +604,22 @@ const userInitials = computed(() => {
 })
 
 interface NavItem { label: string; icon: unknown; to: string }
-interface NavSection { title: string; subtitle: string; items: NavItem[] }
+interface NavSection { title?: string; titleIcon?: unknown; items: NavItem[] }
 
 const navSections = computed<NavSection[]>(() => {
   const sections: NavSection[] = []
   const hasOrg = Boolean(currentOrgSlug.value && currentOrgProvider.value)
 
+  // Global destinations first, GitHub-drawer style.
+  sections.push({
+    items: [{ label: 'Organizations', icon: Building2, to: '/orgs' }],
+  })
+
   if (hasOrg) {
     const orgBase = `/orgs/${currentOrgProvider.value}/${currentOrgSlug.value}`
     sections.push({
       title: currentOrgName.value,
-      subtitle: 'Organization',
+      titleIcon: Building2,
       items: [
         { label: 'Overview', icon: LayoutDashboard, to: `${orgBase}/overview` },
         { label: 'Vulnerabilities', icon: ShieldAlert, to: `${orgBase}/vulnerabilities` },
@@ -581,7 +627,8 @@ const navSections = computed<NavSection[]>(() => {
         { label: 'Repositories', icon: BookOpen, to: `${orgBase}/repos` },
         { label: 'Clients', icon: Users, to: `${orgBase}/clients` },
         { label: 'Teams', icon: Users, to: `${orgBase}/teams` },
-        { label: 'Audit Logs', icon: ScrollText, to: `${orgBase}/audit` },
+        { label: 'Insights', icon: LineChart, to: `${orgBase}/insights` },
+        { label: 'Settings', icon: Settings, to: `${orgBase}/settings` },
       ],
     })
 
@@ -589,25 +636,23 @@ const navSections = computed<NavSection[]>(() => {
       const repoBase = `${orgBase}/repos/${currentRepoSlug.value}`
       sections.push({
         title: currentRepoSlug.value,
-        subtitle: 'Repository',
+        titleIcon: BookOpen,
         items: [
           { label: 'Overview', icon: LayoutDashboard, to: `${repoBase}/overview` },
           { label: 'Vulnerabilities', icon: ShieldAlert, to: `${repoBase}/vulnerabilities` },
           { label: 'Coverage', icon: Activity, to: `${repoBase}/coverage` },
           { label: 'Tests', icon: FlaskConical, to: `${repoBase}/tests` },
           { label: 'Dependencies', icon: Package, to: `${repoBase}/dependencies` },
+          { label: 'Releases', icon: Rocket, to: `${repoBase}/releases` },
+          { label: 'Deployments', icon: Container, to: `${repoBase}/deployments` },
+          { label: 'Insights', icon: LineChart, to: `${repoBase}/insights` },
+          { label: 'Settings', icon: Settings, to: `${repoBase}/settings` },
         ],
       })
     }
-  } else {
-    sections.push({
-      title: 'Hibou',
-      subtitle: '',
-      items: [{ label: 'Organizations', icon: Building2, to: '/orgs' }],
-    })
   }
 
-  sections.push({ title: '', subtitle: '', items: [{ label: 'Settings', icon: Settings, to: '/settings' }] })
+  sections.push({ items: [{ label: 'API keys', icon: Settings, to: '/settings' }] })
   return sections
 })
 

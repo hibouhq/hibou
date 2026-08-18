@@ -397,7 +397,13 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	// Repository visibility lives on the forge_repositories sync record, not the
 	// core repositories table, so join it onto the detail response. Without this
 	// the frontend never receives `private` and renders every repo as Public.
-	api.JSON(w, http.StatusOK, s.repoDetailResponse(r.Context(), repo))
+	resp := s.repoDetailResponse(r.Context(), repo)
+	// Tell the UI whether the viewer may open the repo-scoped audit log (org
+	// admin or admin of the owning team); the endpoint enforces it regardless.
+	if canAudit, auditErr := s.canViewRepoAudit(r, role, repo); auditErr == nil {
+		resp.ViewerCanAudit = canAudit
+	}
+	api.JSON(w, http.StatusOK, resp)
 }
 
 // repoVisibilityResponse augments store.Repository with the forge visibility.
@@ -405,8 +411,9 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 // the forge_repositories sync record.
 type repoVisibilityResponse struct {
 	*store.Repository
-	Private    bool   `json:"private"`
-	Visibility string `json:"visibility"`
+	Private        bool   `json:"private"`
+	Visibility     string `json:"visibility"`
+	ViewerCanAudit bool   `json:"viewer_can_audit"`
 }
 
 func (s *Server) repoDetailResponse(ctx context.Context, repo *store.Repository) repoVisibilityResponse {

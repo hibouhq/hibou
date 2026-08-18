@@ -74,6 +74,7 @@ import { useRouter } from 'vue-router'
 
 import type { Notification } from '@/api/client'
 import { useNotificationsStore } from '@/stores/notifications'
+import { relativeTime } from '@/lib/datetime'
 
 const emit = defineEmits<{ (event: 'close'): void }>()
 
@@ -109,25 +110,5 @@ function severityDot(severity: string | undefined, status: string): string {
     default:
       return 'bg-accent'
   }
-}
-
-function relativeTime(input: string): string {
-  const target = new Date(input)
-  if (Number.isNaN(target.getTime())) {
-    return ''
-  }
-  const diffSeconds = Math.round((target.getTime() - Date.now()) / 1000)
-  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-  const abs = Math.abs(diffSeconds)
-  if (abs >= 86400) {
-    return formatter.format(Math.round(diffSeconds / 86400), 'day')
-  }
-  if (abs >= 3600) {
-    return formatter.format(Math.round(diffSeconds / 3600), 'hour')
-  }
-  if (abs >= 60) {
-    return formatter.format(Math.round(diffSeconds / 60), 'minute')
-  }
-  return formatter.format(diffSeconds, 'second')
 }
 </script>

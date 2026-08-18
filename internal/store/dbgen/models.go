@@ -1304,18 +1304,23 @@ type Ref struct {
 }
 
 type Release struct {
-	ID            uuid.UUID       `json:"id"`
-	RepoID        uuid.UUID       `json:"repo_id"`
-	RefID         uuid.UUID       `json:"ref_id"`
-	SnapshotID    uuid.NullUUID   `json:"snapshot_id"`
-	Version       string          `json:"version"`
-	BuildMetadata json.RawMessage `json:"build_metadata"`
-	ArtifactIds   json.RawMessage `json:"artifact_ids"`
-	Provenance    json.RawMessage `json:"provenance"`
-	ImageDigests  []string        `json:"image_digests"`
-	PublishedAt   sql.NullTime    `json:"published_at"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	ID                 uuid.UUID       `json:"id"`
+	RepoID             uuid.UUID       `json:"repo_id"`
+	RefID              uuid.UUID       `json:"ref_id"`
+	SnapshotID         uuid.NullUUID   `json:"snapshot_id"`
+	Version            string          `json:"version"`
+	BuildMetadata      json.RawMessage `json:"build_metadata"`
+	ArtifactIds        json.RawMessage `json:"artifact_ids"`
+	Provenance         json.RawMessage `json:"provenance"`
+	ImageDigests       []string        `json:"image_digests"`
+	PublishedAt        sql.NullTime    `json:"published_at"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	HtmlUrl            sql.NullString  `json:"html_url"`
+	Source             string          `json:"source"`
+	PendingSnapshotID  uuid.NullUUID   `json:"pending_snapshot_id"`
+	DivergedAt         sql.NullTime    `json:"diverged_at"`
+	DismissedCommitSha sql.NullString  `json:"dismissed_commit_sha"`
 }
 
 type Repository struct {

@@ -1,0 +1,286 @@
+package server
+
+import (
+	"encoding/json"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/store"
+)
+
+// A finding's timeline has two sources that must stay distinguishable: what the
+// scanners observed (derived from the snapshot series) and what a human or a
+// token decided (the audit log). Both are capped so one long-lived finding on a
+// busy repository cannot return an unbounded response.
+const (
+	maxFindingScanEvents     = 100
+	maxFindingActivityEvents = 100
+)
+
+// findingActivityActions is the closed set of audit actions this endpoint may
+// surface. It exists because the endpoint is NOT the org audit log: that one is
+// admin-only precisely because its entries carry member changes, token
+// provenance and settings diffs. Here anyone who can read the repository's
+// findings can read the history of ONE finding, so only actions that are about
+// a finding are eligible — and the query additionally binds org, repository and
+// fingerprint, so an entry from another repo or another finding cannot appear
+// even if it carried one of these actions.
+var findingActivityActions = []string{
+	audit.ActionFindingAcceptance,
+	audit.ActionFindingCreate,
+	audit.ActionSecretRevoked,
+}
+
+// findingActivityContextKeys is the allowlist projected out of an audit entry's
+// context. Everything else is dropped, including the ADR-020 token provenance
+// (token_id, token_owner_id, acting_user_id) and the request's IP and user
+// agent, which the org-wide log shows to admins only. Adding a key here widens
+// what a plain member can read — do it deliberately.
+var findingActivityContextKeys = []string{
+	"status",
+	"reason",
+	"reason_kind",
+	"labels",
+	"expires_at",
+	"vex_justification",
+	"comment",
+	"severity",
+	"origin",
+}
+
+// findingHistoryEvent is one entry of the merged timeline. Source separates the
+// two origins; Kind is the display verb.
+type findingHistoryEvent struct {
+	// Source is "scan" (observed by a scanner) or "activity" (decided by a
+	// human or a token).
+	Source string    `json:"source"`
+	Kind   string    `json:"kind"`
+	At     time.Time `json:"at"`
+
+	// Scan events: where the change was observed.
+	RefName   string `json:"ref_name,omitempty"`
+	RefType   string `json:"ref_type,omitempty"`
+	CommitSHA string `json:"commit_sha,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
+
+	// Activity events: who did what.
+	Action       string         `json:"action,omitempty"`
+	ActorType    string         `json:"actor_type,omitempty"`
+	ActorDisplay string         `json:"actor_display,omitempty"`
+	Detail       map[string]any `json:"detail,omitempty"`
+}
+
+type findingHistoryResponse struct {
+	Events []findingHistoryEvent `json:"events"`
+	// Truncated says a cap was hit, so the UI never implies the timeline is
+	// complete when it is not.
+	Truncated bool `json:"truncated"`
+}
+
+// @Summary      Finding history
+// @Description  The timeline of one finding: every scan-observed state change (detected, resolved, reintroduced) merged with the triage decisions recorded against its fingerprint. Readable by anyone who can read the repository's findings — unlike the organization audit log, which is admin-only; entries are restricted to finding actions on this repository and this fingerprint, and their context is projected to triage fields.
+// @Tags         vulnerabilities
+// @Produce      json
+// @Param        provider     path  string  true  "Forge provider"
+// @Param        slug         path  string  true  "Organization slug"
+// @Param        repoSlug     path  string  true  "Repository slug"
+// @Param        fingerprint  path  string  true  "Finding fingerprint"
+// @Success      200  {object}  api.Response{data=server.findingHistoryResponse}
+// @Failure      400  {object}  api.Response
+// @Failure      401  {object}  api.Response
+// @Failure      404  {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/history [get]
+func (s *Server) handleGetFindingHistory(w http.ResponseWriter, r *http.Request) {
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+	fingerprint := pathFingerprint(r)
+	if fingerprint == "" {
+		api.JSONError(w, http.StatusBadRequest, "fingerprint is required")
+		return
+	}
+
+	// The fingerprint must exist on this repository. Without this the endpoint
+	// would answer "no events" for a foreign fingerprint the caller has no
+	// business asking about, and 404 for one that never existed — a difference
+	// worth not leaking.
+	finding, err := s.queries.GetLatestVulnerabilityByFingerprint(r.Context(), repo.ID, fingerprint)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding")
+		return
+	}
+	if finding == nil {
+		api.JSONError(w, http.StatusNotFound, "finding not found")
+		return
+	}
+
+	response := findingHistoryResponse{Events: []findingHistoryEvent{}}
+
+	// The creation point is the one date a reader always wants, so it is read
+	// separately and anchored to the bottom of the timeline: capping the
+	// transition list must never be able to cut off "when did this appear".
+	first, err := s.queries.GetFindingFirstObservation(r.Context(), repo.ID, fingerprint)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+
+	transitions, err := s.queries.ListFindingTransitions(r.Context(), repo.ID, fingerprint, maxFindingScanEvents+1)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+	if len(transitions) > maxFindingScanEvents {
+		transitions = transitions[:maxFindingScanEvents]
+		response.Truncated = true
+	}
+	anchored := false
+	for _, transition := range transitions {
+		event := scanHistoryEvent(transition)
+		// The oldest detection on the ref the finding was born on IS the
+		// creation point; promote it instead of repeating it underneath.
+		if !anchored && first != nil && event.Kind == "detected" && event.RefName == first.RefName && event.CommitSHA == first.CommitSHA {
+			event.Kind = "first_detected"
+			event.At = first.ObservedAt
+			anchored = true
+		}
+		response.Events = append(response.Events, event)
+	}
+	if first != nil && !anchored {
+		anchor := scanHistoryEvent(*first)
+		anchor.Kind = "first_detected"
+		anchor.From = ""
+		response.Events = append(response.Events, anchor)
+	}
+
+	entries, err := s.queries.ListFindingActivity(r.Context(), org.ID, repo.ID, fingerprint, findingActivityActions, maxFindingActivityEvents+1)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+	if len(entries) > maxFindingActivityEvents {
+		entries = entries[:maxFindingActivityEvents]
+		response.Truncated = true
+	}
+	for _, entry := range entries {
+		response.Events = append(response.Events, activityHistoryEvent(entry))
+	}
+
+	// Newest first, with activity ahead of the scan that observed its effect
+	// when both land in the same instant.
+	sort.SliceStable(response.Events, func(i, j int) bool {
+		if response.Events[i].At.Equal(response.Events[j].At) {
+			return response.Events[i].Source == "activity" && response.Events[j].Source != "activity"
+		}
+		return response.Events[i].At.After(response.Events[j].At)
+	})
+
+	api.JSON(w, http.StatusOK, response)
+}
+
+func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
+	return findingHistoryEvent{
+		Source:    "scan",
+		Kind:      scanEventKind(transition.PreviousStatus, transition.Status),
+		At:        transition.ObservedAt,
+		RefName:   transition.RefName,
+		RefType:   transition.RefType,
+		CommitSHA: transition.CommitSHA,
+		Severity:  transition.Severity,
+		From:      transition.PreviousStatus,
+		To:        transition.Status,
+	}
+}
+
+// scanEventKind names the transition the way a reader thinks about it: the
+// first sighting on a ref is "detected", a return after a fix is
+// "reintroduced", and everything else is described by its destination.
+func scanEventKind(previous, current string) string {
+	switch {
+	case previous == "":
+		return "detected"
+	case current == "resolved":
+		return "resolved"
+	case previous == "resolved":
+		return "reintroduced"
+	case current == "suppressed":
+		return "suppressed"
+	default:
+		return "status_change"
+	}
+}
+
+func activityHistoryEvent(entry store.FindingActivityEntry) findingHistoryEvent {
+	detail := projectFindingActivityContext(entry.Context)
+	status, _ := detail["status"].(string)
+	return findingHistoryEvent{
+		Source:       "activity",
+		Kind:         activityEventKind(entry.Action, status),
+		At:           entry.CreatedAt,
+		Action:       entry.Action,
+		ActorType:    entry.ActorType,
+		ActorDisplay: entry.ActorDisplay,
+		Detail:       detail,
+	}
+}
+
+// activityEventKind collapses (action, status) into one verb. The acceptance
+// endpoint records its decision in the status field — "open" is a reopen — so
+// the timeline reads as decisions rather than as endpoint names.
+func activityEventKind(action, status string) string {
+	switch action {
+	case audit.ActionFindingCreate:
+		return "reported"
+	case audit.ActionSecretRevoked:
+		return "revoked"
+	case audit.ActionFindingAcceptance:
+		switch status {
+		case "open":
+			return "reopened"
+		case "false_positive":
+			return "false_positive"
+		case "risk_accepted", "accepted":
+			return "accepted"
+		default:
+			return "triaged"
+		}
+	default:
+		return "triaged"
+	}
+}
+
+// projectFindingActivityContext copies the allowlisted keys out of an audit
+// entry's context and drops everything else. A malformed context yields no
+// detail rather than an error: the event itself is still worth showing.
+func projectFindingActivityContext(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var context map[string]any
+	if err := json.Unmarshal(raw, &context); err != nil {
+		return nil
+	}
+	detail := make(map[string]any, len(findingActivityContextKeys))
+	for _, key := range findingActivityContextKeys {
+		value, ok := context[key]
+		if !ok || value == nil {
+			continue
+		}
+		if text, isString := value.(string); isString && strings.TrimSpace(text) == "" {
+			continue
+		}
+		detail[key] = value
+	}
+	if len(detail) == 0 {
+		return nil
+	}
+	return detail
+}

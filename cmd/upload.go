@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -252,7 +253,40 @@ func detectGitHubFamilyCIContext() (uploadCIContext, bool) {
 	if strings.HasPrefix(ctx.ref, "refs/tags/") {
 		ctx.tag = strings.TrimSpace(os.Getenv("GITHUB_REF_NAME"))
 	}
+	// On pull_request events GITHUB_SHA is the EPHEMERAL MERGE COMMIT
+	// (refs/pull/N/merge), not the PR head. Checks and comments posted against
+	// it never show on the PR, and the server sees a head it can't match. The
+	// event payload carries the real head.
+	if ctx.prNumber != "" {
+		if head := gitHubEventPRHeadSHA(os.Getenv("GITHUB_EVENT_PATH")); head != "" {
+			ctx.commitSHA = head
+		}
+	}
 	return ctx, true
+}
+
+// gitHubEventPRHeadSHA reads .pull_request.head.sha from the Actions event
+// payload file. Empty on any error — the caller keeps GITHUB_SHA then.
+func gitHubEventPRHeadSHA(eventPath string) string {
+	eventPath = strings.TrimSpace(eventPath)
+	if eventPath == "" {
+		return ""
+	}
+	payload, err := os.ReadFile(eventPath)
+	if err != nil {
+		return ""
+	}
+	var event struct {
+		PullRequest struct {
+			Head struct {
+				SHA string `json:"sha"`
+			} `json:"head"`
+		} `json:"pull_request"`
+	}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(event.PullRequest.Head.SHA)
 }
 
 func detectGitLabCIContext() (uploadCIContext, bool) {
@@ -268,10 +302,16 @@ func detectGitLabCIContext() (uploadCIContext, bool) {
 	if buildURL == "" {
 		buildURL = strings.TrimSpace(os.Getenv("CI_JOB_URL"))
 	}
+	commitSHA := strings.TrimSpace(os.Getenv("CI_COMMIT_SHA"))
+	// Merged-results pipelines run on an internal merge commit; the MR head is
+	// what the forge shows and what checks must attach to.
+	if headSHA := strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA")); headSHA != "" {
+		commitSHA = headSHA
+	}
 	return uploadCIContext{
 		org:            "gitlab/" + repoOwner(strings.TrimSpace(os.Getenv("CI_PROJECT_PATH")), os.Getenv("CI_PROJECT_ROOT_NAMESPACE")),
 		repo:           strings.TrimSpace(os.Getenv("CI_PROJECT_NAME")),
-		commitSHA:      strings.TrimSpace(os.Getenv("CI_COMMIT_SHA")),
+		commitSHA:      commitSHA,
 		ref:            ref,
 		prTargetBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")),
 		prSourceBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")),

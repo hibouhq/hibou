@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -279,6 +280,25 @@ func (g *GitLab) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			TargetBranch: event.ObjectAttributes.TargetBranch,
 			HeadSHA:      event.ObjectAttributes.LastCommit.ID,
 			Repo:         event.Project.toRepository(),
+		}, nil
+	case "Release Hook":
+		var event gitlabReleaseEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode gitlab release event: %w", err)
+		}
+		// GitLab has no draft/prerelease axes; "create" is the publication
+		// action, normalized to the GitHub vocabulary.
+		action := event.Action
+		if action == "create" {
+			action = "published"
+		}
+		return ReleaseEvent{
+			Action:      action,
+			TagName:     event.Tag,
+			Name:        event.Name,
+			HTMLURL:     event.URL,
+			PublishedAt: event.ReleasedAt,
+			Repo:        event.Project.toRepository(),
 		}, nil
 	default:
 		return nil, fmt.Errorf("%w: gitlab webhook event %q", ErrUnsupportedWebhookEvent, eventType)
@@ -549,6 +569,15 @@ type gitlabMergeRequest struct {
 	IID    int    `json:"iid"`
 	Title  string `json:"title"`
 	WebURL string `json:"web_url"`
+}
+
+type gitlabReleaseEvent struct {
+	Action     string        `json:"action"`
+	Tag        string        `json:"tag"`
+	Name       string        `json:"name"`
+	URL        string        `json:"url"`
+	ReleasedAt *time.Time    `json:"released_at"`
+	Project    gitlabProject `json:"project"`
 }
 
 type gitlabPushEvent struct {

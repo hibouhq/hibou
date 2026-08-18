@@ -188,7 +188,10 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute + "/refs/enhanced": anyGrantRoute(),
 	"GET " + repoRoute + "/snapshots":     anyGrantRoute(),
 	"GET " + repoRoute + "/releases":      anyGrantRoute(),
-	"POST " + repoRoute + "/releases":     needs(apitoken.CapUploads, apitoken.AccessWrite),
+
+	"POST " + repoRoute + "/releases/{releaseID}/divergence":               needs(apitoken.CapUploads, apitoken.AccessWrite),
+	"POST " + repoRoute + "/releases/{releaseID}/clients":                  needs(apitoken.CapUploads, apitoken.AccessWrite),
+	"DELETE " + repoRoute + "/releases/{releaseID}/clients/{deploymentID}": needs(apitoken.CapUploads, apitoken.AccessWrite),
 
 	"GET " + repoRoute + "/snapshots/{snapshotID}/files":              needs(apitoken.CapUploads, apitoken.AccessRead),
 	"GET " + repoRoute + "/snapshots/{snapshotID}/files.zip":          needs(apitoken.CapUploads, apitoken.AccessRead),
@@ -203,15 +206,18 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute + "/summary": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + repoRoute + "/delta/":  needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 
-	"GET " + repoRoute + "/findings":                     needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
-	"POST " + repoRoute + "/findings":                    needs(apitoken.CapVulnerabilities, apitoken.AccessWrite),
-	"GET " + repoRoute + "/findings/facets":              needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
-	"GET " + repoRoute + "/vulnerabilities":              needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
-	"GET " + repoRoute + "/vulnerabilities/facets":       needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
-	"GET " + repoRoute + "/vulnerabilities/rules":        needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
-	"GET " + repoRoute + "/findings/{fingerprint}":       needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
-	"POST " + repoRoute + "/reachability":                needs(apitoken.CapUploads, apitoken.AccessWrite),
-	"GET " + repoRoute + "/vulnerabilities/fingerprints": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/findings":               needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"POST " + repoRoute + "/findings":              needs(apitoken.CapVulnerabilities, apitoken.AccessWrite),
+	"GET " + repoRoute + "/findings/facets":        needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/vulnerabilities":        needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/vulnerabilities/facets": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/vulnerabilities/rules":  needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/findings/{fingerprint}": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	// Same capability as the detail it belongs to: the history says what
+	// happened to this one finding, which is what reading the finding means.
+	"GET " + repoRoute + "/findings/{fingerprint}/history": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"POST " + repoRoute + "/reachability":                  needs(apitoken.CapUploads, apitoken.AccessWrite),
+	"GET " + repoRoute + "/vulnerabilities/fingerprints":   needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 
 	"PUT " + repoRoute + "/vulnerabilities/acceptance":           needs(apitoken.CapTriage, apitoken.AccessWrite),
 	"PUT " + repoRoute + "/vulnerabilities/{vulnID}/acceptance":  needs(apitoken.CapTriage, apitoken.AccessWrite),

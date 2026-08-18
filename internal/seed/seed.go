@@ -486,6 +486,11 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 			teams[teamSlug] = team
 		}
 
+		clientIDs, err := seedClients(ctx, queries, org.ID)
+		if err != nil {
+			return fmt.Errorf("seeding clients for %s: %w", orgSeed.slug, err)
+		}
+
 		for repoIndex, repoSeed := range orgSeed.repos {
 			team := teams[repoSeed.team]
 			if team == nil {
@@ -529,6 +534,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 				repoSeed:         repoSeed,
 				orgIndex:         orgIndex,
 				repoIndex:        repoIndex,
+				clientIDs:        clientIDs,
 			}); err != nil {
 				return fmt.Errorf("seeding history for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
@@ -746,6 +752,7 @@ type historyParams struct {
 	repoSeed         seededRepo
 	orgIndex         int
 	repoIndex        int
+	clientIDs        []uuid.UUID
 }
 
 var historySteps = []struct {
@@ -872,6 +879,14 @@ func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p hi
 		return err
 	}
 	if err := seedCoverage(ctx, tx, tagSnapshotID, tagCreatedAt, coverageSpecForRepo(p.repoSeed, 0.74)); err != nil {
+		return err
+	}
+	// The shipped tag still carries most of the branch findings so the release
+	// shows a real risk posture on the Releases tab.
+	if err := seedFindings(ctx, queries, tagSnapshotID, subsetFindings(p.repoSeed.findings, len(p.repoSeed.findings)-1)); err != nil {
+		return err
+	}
+	if err := seedReleases(ctx, queries, p, tagRef.ID, tagSnapshotID, tagName, tagCreatedAt, tx); err != nil {
 		return err
 	}
 
@@ -1208,7 +1223,10 @@ func normalizeSeedFindingStatus(status string) string {
 	case "fixed", "revoked", "rotating":
 		return "resolved"
 	case "ignored", "false_positive":
-		return "dismissed"
+		// Migration 00017 collapsed the status axes: a tool reporting a finding
+		// as ignored is a scanner-side suppression, not a Hibou decision
+		// (those live in finding_acceptances, ADR-023).
+		return "suppressed"
 	default:
 		return "detected"
 	}
@@ -1260,4 +1278,118 @@ func nullSeedUUID(value any) uuid.NullUUID {
 
 func dependencySeedFingerprint(advisoryID, componentID uuid.UUID) string {
 	return advisoryID.String() + ":" + componentID.String()
+}
+
+// seedClients creates the org's downstream clients (ADR-024): the parties the
+// Releases tab assigns releases to.
+func seedClients(ctx context.Context, queries *store.Queries, orgID uuid.UUID) ([]uuid.UUID, error) {
+	specs := []struct {
+		name       string
+		slug       string
+		clientType string
+		labels     string
+		contact    string
+		email      string
+	}{
+		{"Globex Corporation", "globex", "external", `{"region":"eu-west","tier":"gold"}`, "Hank Scorpio", "hank@globex.example"},
+		{"Initech", "initech", "external", `{"region":"us-east","tier":"silver"}`, "Bill Lumbergh", "bill@initech.example"},
+		{"Internal Platform", "internal-platform", "internal", `{"region":"eu-central"}`, "", ""},
+	}
+
+	ids := make([]uuid.UUID, 0, len(specs))
+	for _, spec := range specs {
+		var contactName, contactEmail *string
+		if spec.contact != "" {
+			contactName = &spec.contact
+		}
+		if spec.email != "" {
+			contactEmail = &spec.email
+		}
+		client, err := queries.CreateClient(ctx, orgID, spec.name, spec.slug, json.RawMessage(spec.labels), spec.clientType, contactEmail, contactName, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, client.ID)
+	}
+	return ids, nil
+}
+
+// seedReleases derives the demo releases the way production does (ADR-024):
+// the current tag plus an older shipped version, snapshots pinned, clients on
+// them via deployments — current rollout on the latest, a laggard client on
+// the old build, and superseded history from the rollout that moved forward.
+func seedReleases(ctx context.Context, queries *store.Queries, p historyParams, tagRefID, tagSnapshotID uuid.UUID, tagName string, tagCreatedAt time.Time, tx *sql.Tx) error {
+	forgeURL := fmt.Sprintf("https://github.com/acme/%s/releases/tag/%s", p.repoSeed.slug, tagName)
+	current, err := queries.UpsertRelease(ctx, store.UpsertReleaseParams{
+		RepoID:      p.repoID,
+		RefID:       tagRefID,
+		SnapshotID:  &tagSnapshotID,
+		Version:     tagName,
+		HTMLURL:     &forgeURL,
+		Source:      store.ReleaseSourceForge,
+		PublishedAt: &tagCreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := queries.UpdateSnapshotRetentionFlags(ctx, tagSnapshotID, true, false); err != nil {
+		return err
+	}
+
+	// Older shipped version: its own tag, snapshot, and the full finding set —
+	// the laggard client is visibly worse off than the current rollout.
+	oldTagName := "v0.9.0"
+	oldCommit := fakeHistorySHA(p.orgIndex, p.repoIndex, 91)
+	oldCreatedAt := p.latestCreatedAt.AddDate(0, 0, -30)
+	oldRef, err := queries.CreateRef(ctx, p.repoID, oldTagName, store.RefTypeTag, nil, nil, &oldCommit)
+	if err != nil {
+		return err
+	}
+	oldSnapshotID, err := insertSnapshotRaw(ctx, tx, oldRef.ID, oldCommit, store.SnapshotStatusComplete, snapshotMeta{tag: &oldTagName, createdAt: oldCreatedAt})
+	if err != nil {
+		return err
+	}
+	if _, err := seedComponentsForSnapshot(ctx, tx, oldSnapshotID, p.repoSeed.components); err != nil {
+		return err
+	}
+	if err := seedFindings(ctx, queries, oldSnapshotID, p.repoSeed.findings); err != nil {
+		return err
+	}
+	previous, err := queries.UpsertRelease(ctx, store.UpsertReleaseParams{
+		RepoID:      p.repoID,
+		RefID:       oldRef.ID,
+		SnapshotID:  &oldSnapshotID,
+		Version:     oldTagName,
+		Source:      store.ReleaseSourceTag,
+		PublishedAt: &oldCreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := queries.UpdateSnapshotRetentionFlags(ctx, oldSnapshotID, true, false); err != nil {
+		return err
+	}
+
+	if len(p.clientIDs) < 2 {
+		return nil
+	}
+	deployedBy := "release-bot"
+	// Client 0 moved forward: superseded on the old release, active on the new.
+	if _, err := queries.CreateDeployment(ctx, p.clientIDs[0], previous.ID, "production", store.DeploymentStatusSuperseded, oldCreatedAt.Add(2*time.Hour), &deployedBy, nil, nil); err != nil {
+		return err
+	}
+	if _, err := queries.CreateDeployment(ctx, p.clientIDs[0], current.ID, "production", store.DeploymentStatusActive, tagCreatedAt.Add(90*time.Minute), &deployedBy, nil, nil); err != nil {
+		return err
+	}
+	// Client 1 lags on the old build.
+	if _, err := queries.CreateDeployment(ctx, p.clientIDs[1], previous.ID, "production", store.DeploymentStatusActive, oldCreatedAt.Add(26*time.Hour), &deployedBy, nil, nil); err != nil {
+		return err
+	}
+	// The internal platform runs the new build in staging.
+	if len(p.clientIDs) > 2 {
+		if _, err := queries.CreateDeployment(ctx, p.clientIDs[2], current.ID, "staging", store.DeploymentStatusActive, tagCreatedAt.Add(30*time.Minute), &deployedBy, nil, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

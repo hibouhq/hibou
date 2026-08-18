@@ -178,3 +178,43 @@ func deploymentFromRow(row dbgen.Deployment) *Deployment {
 		CreatedAt:        row.CreatedAt,
 	}
 }
+
+// SupersedeActiveDeployments marks a client's active deployments of *other*
+// releases of the same repo in the same environment as superseded — the
+// release-side rollout semantics of ADR-024 §4. Returns the number of rows
+// superseded.
+func (q *Queries) SupersedeActiveDeployments(ctx context.Context, repoID, clientID uuid.UUID, environment string, newReleaseID uuid.UUID) (int64, error) {
+	return q.db.SupersedeActiveDeployments(ctx, dbgen.SupersedeActiveDeploymentsParams{
+		RepoID:      repoID,
+		ClientID:    clientID,
+		Environment: environment,
+		ReleaseID:   newReleaseID,
+	})
+}
+
+// CountActiveDeploymentsByRelease reports how many clients currently run a
+// release — the guard deciding whether a re-tag can repoint silently.
+func (q *Queries) CountActiveDeploymentsByRelease(ctx context.Context, releaseID uuid.UUID) (int64, error) {
+	return q.db.CountActiveDeploymentsByRelease(ctx, releaseID)
+}
+
+// GetDeploymentByReleaseAndID scopes a deployment lookup to a release, for
+// the release-side removal path.
+func (q *Queries) GetDeploymentByReleaseAndID(ctx context.Context, releaseID, id uuid.UUID) (*Deployment, error) {
+	row, err := q.db.GetDeploymentByReleaseAndID(ctx, dbgen.GetDeploymentByReleaseAndIDParams{ReleaseID: releaseID, ID: id})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return deploymentFromRow(row), nil
+}
+
+// CountDeploymentsByRelease counts every deployment ever recorded for a
+// release, whatever its status — the guard that keeps a release with rollout
+// history from being removed (ADR-024 §5b).
+func (q *Queries) CountDeploymentsByRelease(ctx context.Context, releaseID uuid.UUID) (int64, error) {
+	return q.db.CountDeploymentsByRelease(ctx, releaseID)
+}

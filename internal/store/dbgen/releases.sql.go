@@ -9,10 +9,32 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
+
+const attachSnapshotToReleasesByRef = `-- name: AttachSnapshotToReleasesByRef :execrows
+UPDATE releases SET snapshot_id = $2, updated_at = NOW()
+WHERE ref_id = $1 AND snapshot_id IS NULL
+`
+
+type AttachSnapshotToReleasesByRefParams struct {
+	RefID      uuid.UUID     `json:"ref_id"`
+	SnapshotID uuid.NullUUID `json:"snapshot_id"`
+}
+
+// Closes the webhook-before-upload race (ADR-024 §5): when a tag ref's
+// analysis lands after the forge release event, adopt it on the snapshot-less
+// releases of that ref.
+func (q *Queries) AttachSnapshotToReleasesByRef(ctx context.Context, arg AttachSnapshotToReleasesByRefParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, attachSnapshotToReleasesByRef, arg.RefID, arg.SnapshotID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const countReleasesByOrg = `-- name: CountReleasesByOrg :one
 SELECT COUNT(*)::bigint FROM releases r
@@ -38,34 +60,95 @@ func (q *Queries) CountReleasesByRepo(ctx context.Context, repoID uuid.UUID) (in
 	return column_1, err
 }
 
-const createRelease = `-- name: CreateRelease :one
-INSERT INTO releases (repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, published_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at
+const countReleasesBySnapshotExcluding = `-- name: CountReleasesBySnapshotExcluding :one
+SELECT COUNT(*)::bigint FROM releases WHERE snapshot_id = $1 AND id <> $2
 `
 
-type CreateReleaseParams struct {
-	RepoID        uuid.UUID       `json:"repo_id"`
-	RefID         uuid.UUID       `json:"ref_id"`
-	SnapshotID    uuid.NullUUID   `json:"snapshot_id"`
-	Version       string          `json:"version"`
-	BuildMetadata json.RawMessage `json:"build_metadata"`
-	ArtifactIds   json.RawMessage `json:"artifact_ids"`
-	Provenance    json.RawMessage `json:"provenance"`
-	PublishedAt   sql.NullTime    `json:"published_at"`
+type CountReleasesBySnapshotExcludingParams struct {
+	SnapshotID uuid.NullUUID `json:"snapshot_id"`
+	ID         uuid.UUID     `json:"id"`
 }
 
-func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (Release, error) {
-	row := q.db.QueryRowContext(ctx, createRelease,
+// Snapshot unpin guard: how many *other* releases still pin this snapshot.
+func (q *Queries) CountReleasesBySnapshotExcluding(ctx context.Context, arg CountReleasesBySnapshotExcludingParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countReleasesBySnapshotExcluding, arg.SnapshotID, arg.ID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countReleasesWithRiskByRepo = `-- name: CountReleasesWithRiskByRepo :one
+SELECT COUNT(*)::bigint
+FROM releases rel
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS total_count
+    FROM vulnerabilities v
+    WHERE v.snapshot_id = rel.snapshot_id
+      AND v.status NOT IN ('resolved', 'suppressed')
+      AND NOT EXISTS (
+        SELECT 1 FROM finding_acceptances fa
+        WHERE fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+          AND fa.reason_kind = 'false_positive'
+          AND (fa.expires_at IS NULL OR fa.expires_at > now())
+      )
+) risk ON true
+WHERE rel.repo_id = $1
+  AND ($2::text = '' OR position(lower($2) IN lower(rel.version)) > 0)
+  AND ($3::text = '' OR EXISTS (
+    SELECT 1 FROM deployments d2
+    JOIN clients c2 ON c2.id = d2.client_id
+    WHERE d2.release_id = rel.id AND d2.status = 'active' AND c2.slug = $3
+  ))
+  AND (NOT $4::boolean OR COALESCE(risk.total_count, 0) > 0)
+`
+
+type CountReleasesWithRiskByRepoParams struct {
+	RepoID         uuid.UUID `json:"repo_id"`
+	VersionQuery   string    `json:"version_query"`
+	ClientSlug     string    `json:"client_slug"`
+	VulnerableOnly bool      `json:"vulnerable_only"`
+}
+
+func (q *Queries) CountReleasesWithRiskByRepo(ctx context.Context, arg CountReleasesWithRiskByRepoParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countReleasesWithRiskByRepo,
 		arg.RepoID,
-		arg.RefID,
-		arg.SnapshotID,
-		arg.Version,
-		arg.BuildMetadata,
-		arg.ArtifactIds,
-		arg.Provenance,
-		arg.PublishedAt,
+		arg.VersionQuery,
+		arg.ClientSlug,
+		arg.VulnerableOnly,
 	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const deleteRelease = `-- name: DeleteRelease :exec
+DELETE FROM releases WHERE id = $1
+`
+
+func (q *Queries) DeleteRelease(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, deleteRelease, id)
+	return err
+}
+
+const dismissReleaseDivergence = `-- name: DismissReleaseDivergence :one
+UPDATE releases
+SET pending_snapshot_id = NULL,
+    diverged_at = NULL,
+    dismissed_commit_sha = $2,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha
+`
+
+type DismissReleaseDivergenceParams struct {
+	ID                 uuid.UUID      `json:"id"`
+	DismissedCommitSha sql.NullString `json:"dismissed_commit_sha"`
+}
+
+// "Keep old build": clear the divergence and remember the dismissed commit so
+// the same candidate does not re-flag on the next scan of that tag.
+func (q *Queries) DismissReleaseDivergence(ctx context.Context, arg DismissReleaseDivergenceParams) (Release, error) {
+	row := q.db.QueryRowContext(ctx, dismissReleaseDivergence, arg.ID, arg.DismissedCommitSha)
 	var i Release
 	err := row.Scan(
 		&i.ID,
@@ -80,21 +163,17 @@ func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (R
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
 	)
 	return i, err
 }
 
-const deleteRelease = `-- name: DeleteRelease :exec
-DELETE FROM releases WHERE id = $1
-`
-
-func (q *Queries) DeleteRelease(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, deleteRelease, id)
-	return err
-}
-
 const getReleaseByID = `-- name: GetReleaseByID :one
-SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at FROM releases WHERE id = $1
+SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha FROM releases WHERE id = $1
 `
 
 func (q *Queries) GetReleaseByID(ctx context.Context, id uuid.UUID) (Release, error) {
@@ -113,12 +192,116 @@ func (q *Queries) GetReleaseByID(ctx context.Context, id uuid.UUID) (Release, er
 		&i.PublishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
 	)
 	return i, err
 }
 
+const getReleaseByRepoAndID = `-- name: GetReleaseByRepoAndID :one
+SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha FROM releases WHERE repo_id = $1 AND id = $2
+`
+
+type GetReleaseByRepoAndIDParams struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	ID     uuid.UUID `json:"id"`
+}
+
+func (q *Queries) GetReleaseByRepoAndID(ctx context.Context, arg GetReleaseByRepoAndIDParams) (Release, error) {
+	row := q.db.QueryRowContext(ctx, getReleaseByRepoAndID, arg.RepoID, arg.ID)
+	var i Release
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.RefID,
+		&i.SnapshotID,
+		&i.Version,
+		&i.BuildMetadata,
+		&i.ArtifactIds,
+		&i.Provenance,
+		pq.Array(&i.ImageDigests),
+		&i.PublishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
+	)
+	return i, err
+}
+
+const getReleaseByRepoVersion = `-- name: GetReleaseByRepoVersion :one
+SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha FROM releases WHERE repo_id = $1 AND version = $2
+`
+
+type GetReleaseByRepoVersionParams struct {
+	RepoID  uuid.UUID `json:"repo_id"`
+	Version string    `json:"version"`
+}
+
+func (q *Queries) GetReleaseByRepoVersion(ctx context.Context, arg GetReleaseByRepoVersionParams) (Release, error) {
+	row := q.db.QueryRowContext(ctx, getReleaseByRepoVersion, arg.RepoID, arg.Version)
+	var i Release
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.RefID,
+		&i.SnapshotID,
+		&i.Version,
+		&i.BuildMetadata,
+		&i.ArtifactIds,
+		&i.Provenance,
+		pq.Array(&i.ImageDigests),
+		&i.PublishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
+	)
+	return i, err
+}
+
+const listReleasePinnedSnapshotIDs = `-- name: ListReleasePinnedSnapshotIDs :many
+SELECT DISTINCT rel.snapshot_id
+FROM releases rel
+WHERE rel.snapshot_id IS NOT NULL
+`
+
+// Distinct snapshots referenced by any release, oldest-scanned first, for the
+// advisory refresh worker (ADR-024 §6).
+func (q *Queries) ListReleasePinnedSnapshotIDs(ctx context.Context) ([]uuid.NullUUID, error) {
+	rows, err := q.db.QueryContext(ctx, listReleasePinnedSnapshotIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.NullUUID{}
+	for rows.Next() {
+		var snapshot_id uuid.NullUUID
+		if err := rows.Scan(&snapshot_id); err != nil {
+			return nil, err
+		}
+		items = append(items, snapshot_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReleasesByOrg = `-- name: ListReleasesByOrg :many
-SELECT r.id, r.repo_id, r.ref_id, r.snapshot_id, r.version, r.build_metadata, r.artifact_ids, r.provenance, r.image_digests, r.published_at, r.created_at, r.updated_at FROM releases r
+SELECT r.id, r.repo_id, r.ref_id, r.snapshot_id, r.version, r.build_metadata, r.artifact_ids, r.provenance, r.image_digests, r.published_at, r.created_at, r.updated_at, r.html_url, r.source, r.pending_snapshot_id, r.diverged_at, r.dismissed_commit_sha FROM releases r
 JOIN repositories repo ON repo.id = r.repo_id
 WHERE repo.org_id = $1
 ORDER BY r.created_at DESC
@@ -153,6 +336,11 @@ func (q *Queries) ListReleasesByOrg(ctx context.Context, arg ListReleasesByOrgPa
 			&i.PublishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlUrl,
+			&i.Source,
+			&i.PendingSnapshotID,
+			&i.DivergedAt,
+			&i.DismissedCommitSha,
 		); err != nil {
 			return nil, err
 		}
@@ -168,7 +356,7 @@ func (q *Queries) ListReleasesByOrg(ctx context.Context, arg ListReleasesByOrgPa
 }
 
 const listReleasesByRepo = `-- name: ListReleasesByRepo :many
-SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at FROM releases WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha FROM releases WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListReleasesByRepoParams struct {
@@ -199,6 +387,11 @@ func (q *Queries) ListReleasesByRepo(ctx context.Context, arg ListReleasesByRepo
 			&i.PublishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HtmlUrl,
+			&i.Source,
+			&i.PendingSnapshotID,
+			&i.DivergedAt,
+			&i.DismissedCommitSha,
 		); err != nil {
 			return nil, err
 		}
@@ -211,4 +404,321 @@ func (q *Queries) ListReleasesByRepo(ctx context.Context, arg ListReleasesByRepo
 		return nil, err
 	}
 	return items, nil
+}
+
+const listReleasesWithRiskByRepo = `-- name: ListReleasesWithRiskByRepo :many
+SELECT
+    rel.id, rel.repo_id, rel.ref_id, rel.snapshot_id, rel.version, rel.build_metadata, rel.artifact_ids, rel.provenance, rel.image_digests, rel.published_at, rel.created_at, rel.updated_at, rel.html_url, rel.source, rel.pending_snapshot_id, rel.diverged_at, rel.dismissed_commit_sha,
+    ref.name AS ref_name,
+    COALESCE(risk.critical_count, 0)::bigint AS critical_count,
+    COALESCE(risk.high_count, 0)::bigint AS high_count,
+    COALESCE(risk.medium_count, 0)::bigint AS medium_count,
+    COALESCE(risk.low_count, 0)::bigint AS low_count,
+    COALESCE(risk.total_count, 0)::bigint AS open_finding_count,
+    COALESCE(scan.last_scanned_at, '1970-01-01T00:00:00Z'::timestamptz)::timestamptz AS last_scanned_at,
+    COALESCE(dep.clients, '[]'::jsonb) AS clients,
+    snap.commit_sha AS commit_sha,
+    pending_snap.commit_sha AS pending_commit_sha
+FROM releases rel
+JOIN refs ref ON ref.id = rel.ref_id
+LEFT JOIN snapshots snap ON snap.id = rel.snapshot_id
+LEFT JOIN snapshots pending_snap ON pending_snap.id = rel.pending_snapshot_id
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*) FILTER (WHERE v.severity = 'critical') AS critical_count,
+        COUNT(*) FILTER (WHERE v.severity = 'high') AS high_count,
+        COUNT(*) FILTER (WHERE v.severity = 'medium') AS medium_count,
+        COUNT(*) FILTER (WHERE v.severity = 'low') AS low_count,
+        COUNT(*) AS total_count
+    FROM vulnerabilities v
+    WHERE v.snapshot_id = rel.snapshot_id
+      AND v.status NOT IN ('resolved', 'suppressed')
+      AND NOT EXISTS (
+        SELECT 1 FROM finding_acceptances fa
+        WHERE fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+          AND fa.reason_kind = 'false_positive'
+          AND (fa.expires_at IS NULL OR fa.expires_at > now())
+      )
+) risk ON true
+LEFT JOIN LATERAL (
+    SELECT MAX(sc.completed_at) AS last_scanned_at
+    FROM scans sc
+    WHERE sc.snapshot_id = rel.snapshot_id AND sc.status = 'complete'
+) scan ON true
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(jsonb_build_object(
+        'deployment_id', d.id,
+        'client_id', c.id,
+        'slug', c.slug,
+        'name', c.name,
+        'environment', d.environment,
+        'deployed_at', d.deployed_at
+    ) ORDER BY c.name, d.environment) AS clients
+    FROM deployments d
+    JOIN clients c ON c.id = d.client_id
+    WHERE d.release_id = rel.id AND d.status = 'active'
+) dep ON true
+WHERE rel.repo_id = $1
+  AND ($2::text = '' OR position(lower($2) IN lower(rel.version)) > 0)
+  AND ($3::text = '' OR EXISTS (
+    SELECT 1 FROM deployments d2
+    JOIN clients c2 ON c2.id = d2.client_id
+    WHERE d2.release_id = rel.id AND d2.status = 'active' AND c2.slug = $3
+  ))
+  AND (NOT $4::boolean OR COALESCE(risk.total_count, 0) > 0)
+ORDER BY rel.created_at DESC
+LIMIT $6 OFFSET $5
+`
+
+type ListReleasesWithRiskByRepoParams struct {
+	RepoID         uuid.UUID `json:"repo_id"`
+	VersionQuery   string    `json:"version_query"`
+	ClientSlug     string    `json:"client_slug"`
+	VulnerableOnly bool      `json:"vulnerable_only"`
+	RowOffset      int32     `json:"row_offset"`
+	RowLimit       int32     `json:"row_limit"`
+}
+
+type ListReleasesWithRiskByRepoRow struct {
+	ID                 uuid.UUID       `json:"id"`
+	RepoID             uuid.UUID       `json:"repo_id"`
+	RefID              uuid.UUID       `json:"ref_id"`
+	SnapshotID         uuid.NullUUID   `json:"snapshot_id"`
+	Version            string          `json:"version"`
+	BuildMetadata      json.RawMessage `json:"build_metadata"`
+	ArtifactIds        json.RawMessage `json:"artifact_ids"`
+	Provenance         json.RawMessage `json:"provenance"`
+	ImageDigests       []string        `json:"image_digests"`
+	PublishedAt        sql.NullTime    `json:"published_at"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	HtmlUrl            sql.NullString  `json:"html_url"`
+	Source             string          `json:"source"`
+	PendingSnapshotID  uuid.NullUUID   `json:"pending_snapshot_id"`
+	DivergedAt         sql.NullTime    `json:"diverged_at"`
+	DismissedCommitSha sql.NullString  `json:"dismissed_commit_sha"`
+	RefName            string          `json:"ref_name"`
+	CriticalCount      int64           `json:"critical_count"`
+	HighCount          int64           `json:"high_count"`
+	MediumCount        int64           `json:"medium_count"`
+	LowCount           int64           `json:"low_count"`
+	OpenFindingCount   int64           `json:"open_finding_count"`
+	LastScannedAt      time.Time       `json:"last_scanned_at"`
+	Clients            json.RawMessage `json:"clients"`
+	CommitSha          sql.NullString  `json:"commit_sha"`
+	PendingCommitSha   sql.NullString  `json:"pending_commit_sha"`
+}
+
+// Enriched listing for the Releases tab: per release, the open-risk severity
+// counts of its pinned snapshot (platform-wide semantics: resolved/suppressed
+// out, active false-positive acceptances out — ADR-023), the clients currently
+// on it via active deployments, and the snapshot's last completed scan.
+func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, arg ListReleasesWithRiskByRepoParams) ([]ListReleasesWithRiskByRepoRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReleasesWithRiskByRepo,
+		arg.RepoID,
+		arg.VersionQuery,
+		arg.ClientSlug,
+		arg.VulnerableOnly,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReleasesWithRiskByRepoRow{}
+	for rows.Next() {
+		var i ListReleasesWithRiskByRepoRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RepoID,
+			&i.RefID,
+			&i.SnapshotID,
+			&i.Version,
+			&i.BuildMetadata,
+			&i.ArtifactIds,
+			&i.Provenance,
+			pq.Array(&i.ImageDigests),
+			&i.PublishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HtmlUrl,
+			&i.Source,
+			&i.PendingSnapshotID,
+			&i.DivergedAt,
+			&i.DismissedCommitSha,
+			&i.RefName,
+			&i.CriticalCount,
+			&i.HighCount,
+			&i.MediumCount,
+			&i.LowCount,
+			&i.OpenFindingCount,
+			&i.LastScannedAt,
+			&i.Clients,
+			&i.CommitSha,
+			&i.PendingCommitSha,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setReleaseDivergence = `-- name: SetReleaseDivergence :one
+UPDATE releases
+SET pending_snapshot_id = $2,
+    diverged_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha
+`
+
+type SetReleaseDivergenceParams struct {
+	ID                uuid.UUID     `json:"id"`
+	PendingSnapshotID uuid.NullUUID `json:"pending_snapshot_id"`
+}
+
+// The tag was recreated on another commit while clients run this release:
+// record the candidate and surface it instead of silently repointing.
+func (q *Queries) SetReleaseDivergence(ctx context.Context, arg SetReleaseDivergenceParams) (Release, error) {
+	row := q.db.QueryRowContext(ctx, setReleaseDivergence, arg.ID, arg.PendingSnapshotID)
+	var i Release
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.RefID,
+		&i.SnapshotID,
+		&i.Version,
+		&i.BuildMetadata,
+		&i.ArtifactIds,
+		&i.Provenance,
+		pq.Array(&i.ImageDigests),
+		&i.PublishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
+	)
+	return i, err
+}
+
+const setReleaseSnapshot = `-- name: SetReleaseSnapshot :one
+UPDATE releases
+SET snapshot_id = $2,
+    pending_snapshot_id = NULL,
+    diverged_at = NULL,
+    dismissed_commit_sha = NULL,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha
+`
+
+type SetReleaseSnapshotParams struct {
+	ID         uuid.UUID     `json:"id"`
+	SnapshotID uuid.NullUUID `json:"snapshot_id"`
+}
+
+// Repoint a release to a snapshot (initial derivation refresh, or a release
+// manager adopting a re-tagged build). Clears any pending divergence.
+func (q *Queries) SetReleaseSnapshot(ctx context.Context, arg SetReleaseSnapshotParams) (Release, error) {
+	row := q.db.QueryRowContext(ctx, setReleaseSnapshot, arg.ID, arg.SnapshotID)
+	var i Release
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.RefID,
+		&i.SnapshotID,
+		&i.Version,
+		&i.BuildMetadata,
+		&i.ArtifactIds,
+		&i.Provenance,
+		pq.Array(&i.ImageDigests),
+		&i.PublishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
+	)
+	return i, err
+}
+
+const upsertRelease = `-- name: UpsertRelease :one
+INSERT INTO releases (repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, published_at, html_url, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (repo_id, version) DO UPDATE SET
+    ref_id = EXCLUDED.ref_id,
+    snapshot_id = COALESCE(EXCLUDED.snapshot_id, releases.snapshot_id),
+    build_metadata = CASE WHEN EXCLUDED.build_metadata = '{}'::jsonb THEN releases.build_metadata ELSE EXCLUDED.build_metadata END,
+    artifact_ids = CASE WHEN EXCLUDED.artifact_ids = '[]'::jsonb THEN releases.artifact_ids ELSE EXCLUDED.artifact_ids END,
+    provenance = CASE WHEN EXCLUDED.provenance = '{}'::jsonb THEN releases.provenance ELSE EXCLUDED.provenance END,
+    published_at = COALESCE(EXCLUDED.published_at, releases.published_at),
+    html_url = COALESCE(EXCLUDED.html_url, releases.html_url),
+    updated_at = NOW()
+RETURNING id, repo_id, ref_id, snapshot_id, version, build_metadata, artifact_ids, provenance, image_digests, published_at, created_at, updated_at, html_url, source, pending_snapshot_id, diverged_at, dismissed_commit_sha
+`
+
+type UpsertReleaseParams struct {
+	RepoID        uuid.UUID       `json:"repo_id"`
+	RefID         uuid.UUID       `json:"ref_id"`
+	SnapshotID    uuid.NullUUID   `json:"snapshot_id"`
+	Version       string          `json:"version"`
+	BuildMetadata json.RawMessage `json:"build_metadata"`
+	ArtifactIds   json.RawMessage `json:"artifact_ids"`
+	Provenance    json.RawMessage `json:"provenance"`
+	PublishedAt   sql.NullTime    `json:"published_at"`
+	HtmlUrl       sql.NullString  `json:"html_url"`
+	Source        string          `json:"source"`
+}
+
+// Release identity is (repo_id, version): API/CLI creates and forge release
+// webhooks converge on the same row (ADR-024 §5). Later writers fill what the
+// earlier one couldn't know without clobbering it — empty JSON payloads and
+// NULLs keep the stored value, and the row keeps the source that created it.
+func (q *Queries) UpsertRelease(ctx context.Context, arg UpsertReleaseParams) (Release, error) {
+	row := q.db.QueryRowContext(ctx, upsertRelease,
+		arg.RepoID,
+		arg.RefID,
+		arg.SnapshotID,
+		arg.Version,
+		arg.BuildMetadata,
+		arg.ArtifactIds,
+		arg.Provenance,
+		arg.PublishedAt,
+		arg.HtmlUrl,
+		arg.Source,
+	)
+	var i Release
+	err := row.Scan(
+		&i.ID,
+		&i.RepoID,
+		&i.RefID,
+		&i.SnapshotID,
+		&i.Version,
+		&i.BuildMetadata,
+		&i.ArtifactIds,
+		&i.Provenance,
+		pq.Array(&i.ImageDigests),
+		&i.PublishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlUrl,
+		&i.Source,
+		&i.PendingSnapshotID,
+		&i.DivergedAt,
+		&i.DismissedCommitSha,
+	)
+	return i, err
 }

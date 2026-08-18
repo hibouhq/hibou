@@ -972,6 +972,67 @@ func (q *Queries) ListFindingOccurrences(ctx context.Context, repoID uuid.UUID, 
 	return out, nil
 }
 
+// FindingTransition is one scan-observed state change of a fingerprint on one
+// ref: the snapshot that first reported it (PreviousStatus empty) or a later
+// snapshot that reported it differently.
+type FindingTransition struct {
+	RefName        string    `json:"ref_name"`
+	RefType        string    `json:"ref_type"`
+	CommitSHA      string    `json:"commit_sha"`
+	ObservedAt     time.Time `json:"observed_at"`
+	Status         string    `json:"status"`
+	PreviousStatus string    `json:"previous_status,omitempty"`
+	Severity       string    `json:"severity,omitempty"`
+}
+
+// GetFindingFirstObservation returns the oldest observation of a fingerprint on
+// a repository — the finding's creation point. Nil when the repository has no
+// usable snapshot carrying it.
+func (q *Queries) GetFindingFirstObservation(ctx context.Context, repoID uuid.UUID, fingerprint string) (*FindingTransition, error) {
+	row, err := q.db.GetFindingFirstObservation(ctx, dbgen.GetFindingFirstObservationParams{RepoID: repoID, Fingerprint: fingerprint})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &FindingTransition{
+		RefName:    row.RefName,
+		RefType:    row.RefType,
+		CommitSHA:  row.CommitSha,
+		ObservedAt: row.ObservedAt,
+		Status:     "detected",
+		Severity:   row.Severity,
+	}, nil
+}
+
+// ListFindingTransitions returns the fingerprint's scan history, newest first,
+// capped at limit rows so a long-lived finding on a busy repo cannot pull an
+// unbounded timeline into one response.
+func (q *Queries) ListFindingTransitions(ctx context.Context, repoID uuid.UUID, fingerprint string, limit int) ([]FindingTransition, error) {
+	rows, err := q.db.ListFindingTransitions(ctx, dbgen.ListFindingTransitionsParams{
+		RepoID:      repoID,
+		Fingerprint: fingerprint,
+		RowLimit:    int32(limit), //nolint:gosec // G115: limit is a small server-side constant.
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FindingTransition, len(rows))
+	for i, row := range rows {
+		out[i] = FindingTransition{
+			RefName:        row.RefName,
+			RefType:        row.RefType,
+			CommitSHA:      row.CommitSha,
+			ObservedAt:     row.ObservedAt,
+			Status:         row.Status,
+			PreviousStatus: row.PreviousStatus,
+			Severity:       row.Severity,
+		}
+	}
+	return out, nil
+}
+
 // SetVulnerabilityReachability applies a CI analyzer's verdict to every
 // matching dependency finding in the snapshot; returns rows updated.
 func (q *Queries) SetVulnerabilityReachability(ctx context.Context, snapshotID uuid.UUID, reachability string, identifiers []string) (int64, error) {

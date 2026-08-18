@@ -60,6 +60,15 @@ definitions:
       status:
         type: string
     type: object
+  server.addReleaseClientRequest:
+    properties:
+      client_slug:
+        type: string
+      environment:
+        type: string
+      notes:
+        type: string
+    type: object
   server.auditLogEntryResponse:
     properties:
       action:
@@ -413,29 +422,6 @@ definitions:
       repo_id:
         type: string
     type: object
-  server.createReleaseRequest:
-    properties:
-      artifact_ids:
-        items:
-          type: integer
-        type: array
-      build_metadata:
-        items:
-          type: integer
-        type: array
-      provenance:
-        items:
-          type: integer
-        type: array
-      published_at:
-        type: string
-      ref:
-        type: string
-      snapshot_id:
-        type: string
-      version:
-        type: string
-    type: object
   server.createTeamRequest:
     properties:
       name:
@@ -505,6 +491,10 @@ definitions:
     type: object
   server.findingAdvisoryResponse:
     properties:
+      aliases:
+        items:
+          type: string
+        type: array
       canonical_id:
         type: string
       cvss_score:
@@ -517,6 +507,18 @@ definitions:
         type: array
       description:
         type: string
+      fixed_versions:
+        description: |-
+          The three fields a dependency finding is actually triaged on: what to
+          upgrade to, where to read the details, and which other identifier the
+          same advisory travels under. Same enrichment the components view uses.
+        items:
+          type: string
+        type: array
+      references:
+        items:
+          type: string
+        type: array
       severity:
         type: string
       title:
@@ -551,6 +553,53 @@ definitions:
         description: |-
           Truncated is true when the filter matched more than the cap, so the UI can
           say "first 500 of N" instead of implying it selected everything.
+        type: boolean
+    type: object
+  server.findingHistoryEvent:
+    properties:
+      action:
+        description: 'Activity events: who did what.'
+        type: string
+      actor_display:
+        type: string
+      actor_type:
+        type: string
+      at:
+        type: string
+      commit_sha:
+        type: string
+      detail:
+        additionalProperties: {}
+        type: object
+      from:
+        type: string
+      kind:
+        type: string
+      ref_name:
+        description: 'Scan events: where the change was observed.'
+        type: string
+      ref_type:
+        type: string
+      severity:
+        type: string
+      source:
+        description: |-
+          Source is "scan" (observed by a scanner) or "activity" (decided by a
+          human or a token).
+        type: string
+      to:
+        type: string
+    type: object
+  server.findingHistoryResponse:
+    properties:
+      events:
+        items:
+          $ref: '#/definitions/server.findingHistoryEvent'
+        type: array
+      truncated:
+        description: |-
+          Truncated says a cap was hit, so the UI never implies the timeline is
+          complete when it is not.
         type: boolean
     type: object
   server.findingVEXResponse:
@@ -741,6 +790,11 @@ definitions:
       status:
         $ref: '#/definitions/server.repoLifecycleStatus'
       sync_state:
+        type: string
+    type: object
+  server.resolveReleaseDivergenceRequest:
+    properties:
+      action:
         type: string
     type: object
   server.searchResponse:
@@ -1068,6 +1122,29 @@ definitions:
       updated_at:
         type: string
     type: object
+  store.Deployment:
+    properties:
+      client_id:
+        type: string
+      created_at:
+        type: string
+      deployed_at:
+        type: string
+      deployed_by:
+        type: string
+      environment:
+        type: string
+      id:
+        type: string
+      notes:
+        type: string
+      release_id:
+        type: string
+      rollback_target_id:
+        type: string
+      status:
+        $ref: '#/definitions/store.DeploymentStatus'
+    type: object
   store.DeploymentStatus:
     enum:
     - active
@@ -1294,7 +1371,16 @@ definitions:
         type: array
       created_at:
         type: string
+      diverged_at:
+        type: string
+      html_url:
+        type: string
       id:
+        type: string
+      pending_snapshot_id:
+        description: |-
+          Re-tag divergence (ADR-024 §5): the tag now points at a different commit
+          than the analyzed build clients run. Nil = aligned.
         type: string
       provenance:
         items:
@@ -1307,6 +1393,87 @@ definitions:
       repo_id:
         type: string
       snapshot_id:
+        type: string
+      source:
+        type: string
+      updated_at:
+        type: string
+      version:
+        type: string
+    type: object
+  store.ReleaseClient:
+    properties:
+      client_id:
+        type: string
+      deployed_at:
+        type: string
+      deployment_id:
+        type: string
+      environment:
+        type: string
+      name:
+        type: string
+      slug:
+        type: string
+    type: object
+  store.ReleaseWithRisk:
+    properties:
+      artifact_ids:
+        items:
+          type: integer
+        type: array
+      build_metadata:
+        items:
+          type: integer
+        type: array
+      clients:
+        items:
+          $ref: '#/definitions/store.ReleaseClient'
+        type: array
+      commit_sha:
+        type: string
+      created_at:
+        type: string
+      critical_count:
+        type: integer
+      diverged_at:
+        type: string
+      high_count:
+        type: integer
+      html_url:
+        type: string
+      id:
+        type: string
+      last_scanned_at:
+        type: string
+      low_count:
+        type: integer
+      medium_count:
+        type: integer
+      open_finding_count:
+        type: integer
+      pending_commit_sha:
+        type: string
+      pending_snapshot_id:
+        description: |-
+          Re-tag divergence (ADR-024 §5): the tag now points at a different commit
+          than the analyzed build clients run. Nil = aligned.
+        type: string
+      provenance:
+        items:
+          type: integer
+        type: array
+      published_at:
+        type: string
+      ref_id:
+        type: string
+      ref_name:
+        type: string
+      repo_id:
+        type: string
+      snapshot_id:
+        type: string
+      source:
         type: string
       updated_at:
         type: string
@@ -2355,8 +2522,8 @@ paths:
       - api-keys
   /orgs/{provider}/{slug}/audit-logs:
     get:
-      description: List audit log entries for an organization visible to organization
-        members
+      description: List audit log entries for an organization. Restricted to organization
+        admins; audit context can carry admin-only detail.
       parameters:
       - description: Forge provider
         in: path
@@ -2375,6 +2542,10 @@ paths:
       - description: Resource type filter
         in: query
         name: resource_type
+        type: string
+      - description: Repository slug; limits entries to that repository
+        in: query
+        name: repo
         type: string
       - description: Page number
         in: query
@@ -4142,6 +4313,64 @@ paths:
       summary: Finding detail
       tags:
       - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/history:
+    get:
+      description: 'The timeline of one finding: every scan-observed state change
+        (detected, resolved, reintroduced) merged with the triage decisions recorded
+        against its fingerprint. Readable by anyone who can read the repository''s
+        findings — unlike the organization audit log, which is admin-only; entries
+        are restricted to finding actions on this repository and this fingerprint,
+        and their context is projected to triage fields.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Finding fingerprint
+        in: path
+        name: fingerprint
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.findingHistoryResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Finding history
+      tags:
+      - vulnerabilities
   /orgs/{provider}/{slug}/repos/{repoSlug}/reachability:
     post:
       consumes:
@@ -4258,7 +4487,8 @@ paths:
       - repositories
   /orgs/{provider}/{slug}/repos/{repoSlug}/releases:
     get:
-      description: List releases for a repository visible to organization members
+      description: List releases with the open-risk posture of their pinned snapshot
+        and the clients currently on them (active deployments)
       parameters:
       - description: Forge provider
         in: path
@@ -4275,6 +4505,19 @@ paths:
         name: repoSlug
         required: true
         type: string
+      - description: Version substring filter
+        in: query
+        name: q
+        type: string
+      - description: Only releases an org client (by slug) has an active deployment
+          of
+        in: query
+        name: client
+        type: string
+      - description: Only releases with at least one open finding
+        in: query
+        name: vulnerable
+        type: boolean
       - description: Page number
         in: query
         name: page
@@ -4294,7 +4537,7 @@ paths:
             - properties:
                 data:
                   items:
-                    $ref: '#/definitions/store.Release'
+                    $ref: '#/definitions/store.ReleaseWithRisk'
                   type: array
               type: object
         "401":
@@ -4314,11 +4557,14 @@ paths:
       summary: List releases
       tags:
       - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/releases/{releaseID}/clients:
     post:
       consumes:
       - application/json
-      description: Create a release for a repository when the caller is an organization
-        admin
+      description: 'Record that an org client runs this release: creates an active
+        deployment and supersedes the client''s active deployment of any other release
+        of this repository in the same environment. Requires the admin or release_manager
+        org role.'
       parameters:
       - description: Forge provider
         in: path
@@ -4335,12 +4581,17 @@ paths:
         name: repoSlug
         required: true
         type: string
-      - description: Release details
+      - description: Release ID
+        in: path
+        name: releaseID
+        required: true
+        type: string
+      - description: Client assignment
         in: body
         name: payload
         required: true
         schema:
-          $ref: '#/definitions/server.createReleaseRequest'
+          $ref: '#/definitions/server.addReleaseClientRequest'
       produces:
       - application/json
       responses:
@@ -4351,7 +4602,7 @@ paths:
             - $ref: '#/definitions/api.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/store.Release'
+                  $ref: '#/definitions/store.Deployment'
               type: object
         "400":
           description: Bad Request
@@ -4375,7 +4626,149 @@ paths:
             $ref: '#/definitions/api.Response'
       security:
       - BearerAuth: []
-      summary: Create release
+      summary: Add client to release
+      tags:
+      - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/releases/{releaseID}/clients/{deploymentID}:
+    delete:
+      description: Mark a release's deployment as rolled back. Requires the admin
+        or release_manager org role.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Release ID
+        in: path
+        name: releaseID
+        required: true
+        type: string
+      - description: Deployment ID
+        in: path
+        name: deploymentID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Deployment'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Remove client from release
+      tags:
+      - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/releases/{releaseID}/divergence:
+    post:
+      consumes:
+      - application/json
+      description: A released tag was recreated on another commit (ADR-024 §5). "adopt"
+        repoints the release to the new build; "keep" keeps the shipped build and
+        stops flagging that commit. Requires the admin or release_manager org role.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Release ID
+        in: path
+        name: releaseID
+        required: true
+        type: string
+      - description: adopt or keep
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.resolveReleaseDivergenceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Release'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Resolve release divergence
       tags:
       - releases
   /orgs/{provider}/{slug}/repos/{repoSlug}/snapshots/{snapshotID}/coverage-source:

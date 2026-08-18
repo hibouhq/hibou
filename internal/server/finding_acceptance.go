@@ -133,7 +133,7 @@ func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Reque
 			api.JSONError(w, http.StatusInternalServerError, "failed to reopen finding")
 			return
 		}
-		s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, "open", "")
+		s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, acceptanceAudit{Fingerprint: fingerprint, Status: "open"})
 		s.publishGateRecompute(r.Context(), repo.ID)
 		api.JSON(w, http.StatusOK, map[string]string{"status": "open"})
 		return
@@ -172,7 +172,14 @@ func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, reasonKind, input.Reason)
+	s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, acceptanceAudit{
+		Fingerprint:      fingerprint,
+		Status:           reasonKind,
+		Reason:           strings.TrimSpace(input.Reason),
+		Labels:           acceptance.Labels,
+		VEXJustification: input.VEXJustification,
+		ExpiresAt:        input.ExpiresAt,
+	})
 	// The gate must reflect the decision immediately, without a CI re-run.
 	s.publishGateRecompute(r.Context(), repo.ID)
 	api.JSON(w, http.StatusOK, acceptance)
@@ -318,11 +325,13 @@ func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Req
 		applied++
 		// One audit entry per finding: a batch decision must stay individually
 		// auditable, otherwise the trail cannot answer "who suppressed this one".
-		auditKind := status
+		auditEntry := acceptanceAudit{Fingerprint: fingerprint, Status: status, Reason: reason}
 		if status == "accepted" {
-			auditKind = reasonKind
+			auditEntry.Status = reasonKind
+			auditEntry.Labels = normalizeAcceptanceLabels(input.Labels)
+			auditEntry.ExpiresAt = input.ExpiresAt
 		}
-		s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, fingerprint, auditKind, reason)
+		s.writeAcceptanceAuditLog(r, user, org.ID, repo.ID, auditEntry)
 	}
 
 	// One recompute for the whole batch, not one per finding.
@@ -391,12 +400,34 @@ func (s *Server) vulnerabilityBelongsToRepo(r *http.Request, repo *store.Reposit
 	return ref.RepoID == repo.ID
 }
 
-func (s *Server) writeAcceptanceAuditLog(r *http.Request, user *store.User, orgID, repoID uuid.UUID, fingerprint, status, reason string) {
-	s.writeRepositoryAuditLog(r, user, orgID, repoID, audit.ActionFindingAcceptance, map[string]any{
-		"fingerprint": fingerprint,
-		"status":      status,
-		"reason":      reason,
-	})
+// acceptanceAudit is the decision as recorded, not merely that one was taken:
+// the finding-history timeline reads these fields back, and "who suppressed
+// this, why, with what expiry" is unanswerable if the write drops them.
+type acceptanceAudit struct {
+	Fingerprint      string
+	Status           string
+	Reason           string
+	Labels           []string
+	VEXJustification string
+	ExpiresAt        *time.Time
+}
+
+func (s *Server) writeAcceptanceAuditLog(r *http.Request, user *store.User, orgID, repoID uuid.UUID, entry acceptanceAudit) {
+	context := map[string]any{
+		"fingerprint": entry.Fingerprint,
+		"status":      entry.Status,
+		"reason":      entry.Reason,
+	}
+	if len(entry.Labels) > 0 {
+		context["labels"] = entry.Labels
+	}
+	if entry.VEXJustification != "" {
+		context["vex_justification"] = entry.VEXJustification
+	}
+	if entry.ExpiresAt != nil {
+		context["expires_at"] = entry.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	s.writeRepositoryAuditLog(r, user, orgID, repoID, audit.ActionFindingAcceptance, context)
 }
 
 type secretRevocationRequest struct {

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -275,6 +276,22 @@ func (f *Forgejo) ParseWebhookEvent(eventType string, payload []byte) (WebhookEv
 			HeadSHA:      event.PullRequest.Head.SHA,
 			Repo:         event.Repository.toRepository(),
 		}, nil
+	case "release":
+		var event forgejoReleaseEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode forgejo release event: %w", err)
+		}
+		return ReleaseEvent{
+			Action:      event.Action,
+			TagName:     event.Release.TagName,
+			Name:        event.Release.Name,
+			HTMLURL:     event.Release.HTMLURL,
+			Draft:       event.Release.Draft,
+			Prerelease:  event.Release.Prerelease,
+			PublishedAt: event.Release.PublishedAt,
+			Repo:        event.Repository.toRepository(),
+			Sender:      event.Sender.toUserInfo(),
+		}, nil
 	default:
 		return nil, fmt.Errorf("%w: forgejo webhook event %q", ErrUnsupportedWebhookEvent, eventType)
 	}
@@ -489,6 +506,23 @@ type forgejoPushEvent struct {
 	Ref        string            `json:"ref"`
 	Before     string            `json:"before"`
 	After      string            `json:"after"`
+	Repository forgejoRepository `json:"repository"`
+	Sender     forgejoUser       `json:"sender"`
+}
+
+// Gitea/Forgejo release webhook payload. Gitea's release object exposes the
+// release page as html_url; older versions only carry the API url, in which
+// case the link is simply absent.
+type forgejoReleaseEvent struct {
+	Action  string `json:"action"`
+	Release struct {
+		TagName     string     `json:"tag_name"`
+		Name        string     `json:"name"`
+		HTMLURL     string     `json:"html_url"`
+		Draft       bool       `json:"draft"`
+		Prerelease  bool       `json:"prerelease"`
+		PublishedAt *time.Time `json:"published_at"`
+	} `json:"release"`
 	Repository forgejoRepository `json:"repository"`
 	Sender     forgejoUser       `json:"sender"`
 }

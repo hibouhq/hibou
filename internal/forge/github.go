@@ -462,6 +462,22 @@ func (g *GitHub) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			Repo:         event.Repository.toRepository(),
 		}
 		return parsed, nil
+	case "release":
+		var event githubReleaseEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode github release event: %w", err)
+		}
+		return ReleaseEvent{
+			Action:      event.Action,
+			TagName:     event.Release.TagName,
+			Name:        event.Release.Name,
+			HTMLURL:     event.Release.HTMLURL,
+			Draft:       event.Release.Draft,
+			Prerelease:  event.Release.Prerelease,
+			PublishedAt: event.Release.PublishedAt,
+			Repo:        event.Repository.toRepository(),
+			Sender:      event.Sender.toUserInfo(),
+		}, nil
 	case "installation":
 		var event githubInstallationEvent
 		if err := json.Unmarshal(payload, &event); err != nil {
@@ -1208,6 +1224,20 @@ type githubPushEvent struct {
 	Ref        string           `json:"ref"`
 	Before     string           `json:"before"`
 	After      string           `json:"after"`
+	Repository githubRepository `json:"repository"`
+	Sender     githubUser       `json:"sender"`
+}
+
+type githubReleaseEvent struct {
+	Action  string `json:"action"`
+	Release struct {
+		TagName     string     `json:"tag_name"`
+		Name        string     `json:"name"`
+		HTMLURL     string     `json:"html_url"`
+		Draft       bool       `json:"draft"`
+		Prerelease  bool       `json:"prerelease"`
+		PublishedAt *time.Time `json:"published_at"`
+	} `json:"release"`
 	Repository githubRepository `json:"repository"`
 	Sender     githubUser       `json:"sender"`
 }

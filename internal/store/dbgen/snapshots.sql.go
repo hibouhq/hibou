@@ -39,6 +39,85 @@ func (q *Queries) AddSnapshotArtifactBytes(ctx context.Context, arg AddSnapshotA
 	return err
 }
 
+const adoptPlaceholderSnapshot = `-- name: AdoptPlaceholderSnapshot :one
+UPDATE snapshots SET
+	build_url = COALESCE($3, build_url),
+	run_id = $4,
+	run_attempt = $5,
+	run_number = $6,
+	pr_number = COALESCE($7, pr_number),
+	pr_target_branch = COALESCE($8, pr_target_branch),
+	tag = COALESCE($9, tag),
+	expected_uploads = COALESCE($10, expected_uploads)
+WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL AND status = 'pending'
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id
+`
+
+type AdoptPlaceholderSnapshotParams struct {
+	RefID           uuid.UUID      `json:"ref_id"`
+	CommitSha       string         `json:"commit_sha"`
+	BuildUrl        sql.NullString `json:"build_url"`
+	RunID           sql.NullString `json:"run_id"`
+	RunAttempt      sql.NullString `json:"run_attempt"`
+	RunNumber       sql.NullString `json:"run_number"`
+	PrNumber        sql.NullString `json:"pr_number"`
+	PrTargetBranch  sql.NullString `json:"pr_target_branch"`
+	Tag             sql.NullString `json:"tag"`
+	ExpectedUploads sql.NullInt32  `json:"expected_uploads"`
+}
+
+// A CI upload claims the webhook's placeholder row for its build. The
+// placeholder is created by the PR webhook, which fires on push BEFORE any CI
+// run exists (the webhook payload has no run info), so it is keyed with
+// run_id IS NULL — an upload carrying a run_id would miss the upsert's
+// conflict key and insert a duplicate. A second run for the same commit finds
+// no placeholder left and takes the normal upsert path.
+func (q *Queries) AdoptPlaceholderSnapshot(ctx context.Context, arg AdoptPlaceholderSnapshotParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, adoptPlaceholderSnapshot,
+		arg.RefID,
+		arg.CommitSha,
+		arg.BuildUrl,
+		arg.RunID,
+		arg.RunAttempt,
+		arg.RunNumber,
+		arg.PrNumber,
+		arg.PrTargetBranch,
+		arg.Tag,
+		arg.ExpectedUploads,
+	)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+		&i.Pinned,
+		&i.RetentionHold,
+		&i.ArtifactBytes,
+		&i.ArtifactProcessingClaimedBy,
+		&i.ArtifactProcessingClaimExpiresAt,
+		&i.ArtifactProcessingStartedAt,
+		&i.ArtifactProcessingFinishedAt,
+		&i.ArtifactProcessingAttempts,
+		&i.ArtifactProcessingLastError,
+		&i.OrgID,
+		&i.RepoID,
+	)
+	return i, err
+}
+
 const archiveSnapshot = `-- name: ArchiveSnapshot :exec
 WITH target AS (
 	SELECT s.id, s.ref_id, s.artifact_bytes
@@ -332,6 +411,58 @@ func (q *Queries) CountSnapshotsForBuild(ctx context.Context, arg CountSnapshots
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const createPlaceholderSnapshot = `-- name: CreatePlaceholderSnapshot :one
+INSERT INTO snapshots (ref_id, commit_sha, status)
+SELECT $1, $2, 'pending'
+WHERE NOT EXISTS (
+	SELECT 1 FROM snapshots WHERE ref_id = $1 AND commit_sha = $2
+)
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id
+`
+
+type CreatePlaceholderSnapshotParams struct {
+	RefID     uuid.UUID `json:"ref_id"`
+	CommitSha string    `json:"commit_sha"`
+}
+
+// Webhook-created pending snapshot for a PR head that has no snapshot yet, so
+// the UI shows the head as awaited and the CI upload adopts the row instead of
+// racing it. No-op (no row) when any snapshot already exists for the commit.
+func (q *Queries) CreatePlaceholderSnapshot(ctx context.Context, arg CreatePlaceholderSnapshotParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, createPlaceholderSnapshot, arg.RefID, arg.CommitSha)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.RefID,
+		&i.CommitSha,
+		&i.Status,
+		&i.Labels,
+		&i.ImageDigest,
+		&i.CreatedAt,
+		&i.BuildUrl,
+		&i.RunID,
+		&i.RunNumber,
+		&i.PrNumber,
+		&i.PrTargetBranch,
+		&i.Tag,
+		&i.ExpectedUploads,
+		&i.ReceivedUploads,
+		&i.RunAttempt,
+		&i.Pinned,
+		&i.RetentionHold,
+		&i.ArtifactBytes,
+		&i.ArtifactProcessingClaimedBy,
+		&i.ArtifactProcessingClaimExpiresAt,
+		&i.ArtifactProcessingStartedAt,
+		&i.ArtifactProcessingFinishedAt,
+		&i.ArtifactProcessingAttempts,
+		&i.ArtifactProcessingLastError,
+		&i.OrgID,
+		&i.RepoID,
+	)
+	return i, err
 }
 
 const createSnapshot = `-- name: CreateSnapshot :one

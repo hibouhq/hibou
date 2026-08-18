@@ -57,7 +57,7 @@
 
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Bell, KeyRound, Plug, User, Users } from 'lucide-vue-next'
+import { KeyRound, User } from 'lucide-vue-next'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 interface NavItem {
@@ -76,13 +76,7 @@ const nav: { title: string; items: NavItem[] }[] = [
       { label: 'Profile', icon: User },
     ],
   },
-  {
-    title: 'Organization',
-    items: [
-      { label: 'Members', icon: Users },
-      { label: 'Integrations', icon: Plug },
-      { label: 'Notifications', icon: Bell },
-    ],
-  },
 ]
+// Org-scoped settings (members, integrations, notifications, gates) live under
+// each organization's Settings tab, not here.
 </script>

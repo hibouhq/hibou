@@ -26,30 +26,59 @@
         </p>
       </div>
 
-      <!-- Tabs -->
+      <!-- Tabs; Clients is the rollout side, not an analysis lens — fenced
+           pill, matching the repo-level Releases tab (ADR-024 §1/§7). -->
       <div class="mt-4 border-b border-surface-border px-2">
-        <nav class="flex gap-0.5 overflow-x-auto">
-          <RouterLink
+        <nav class="flex items-center gap-0.5 overflow-x-auto">
+          <template
             v-for="tab in tabs"
             :key="tab.name"
-            :to="{ name: tab.name, params: route.params }"
-            class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
-            :class="isActiveTab(tab.name)
-              ? 'border-accent font-semibold text-white'
-              : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
           >
-            <component
-              :is="tab.icon"
-              class="h-4 w-4 shrink-0"
-              :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
-            />
-            {{ tab.label }}
-            <span
-              v-if="tab.count !== null"
-              class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
-              :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
-            >{{ tab.count }}</span>
-          </RouterLink>
+            <template v-if="tab.fenced">
+              <span
+                aria-hidden="true"
+                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
+              />
+              <RouterLink
+                :to="{ name: tab.name, params: route.params }"
+                class="group mb-2 flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition"
+                :class="isActiveTab(tab.name)
+                  ? 'border-accent/60 bg-accent/15 font-semibold text-accent'
+                  : 'border-surface-border bg-surface-overlay text-gray-400 hover:border-accent/40 hover:text-gray-200'"
+              >
+                <component
+                  :is="tab.icon"
+                  class="h-4 w-4 shrink-0"
+                  :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+                />
+                {{ tab.label }}
+              </RouterLink>
+              <span
+                aria-hidden="true"
+                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
+              />
+            </template>
+            <RouterLink
+              v-else
+              :to="{ name: tab.name, params: route.params }"
+              class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
+              :class="isActiveTab(tab.name)
+                ? 'border-accent font-semibold text-white'
+                : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
+            >
+              <component
+                :is="tab.icon"
+                class="h-4 w-4 shrink-0"
+                :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
+              />
+              {{ tab.label }}
+              <span
+                v-if="tab.count !== null"
+                class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
+                :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
+              >{{ tab.count }}</span>
+            </RouterLink>
+          </template>
         </nav>
       </div>
 
@@ -68,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { KeyRound, LayoutDashboard, Package, ShieldAlert } from 'lucide-vue-next'
+import { LayoutDashboard, LineChart, Package, Settings, ShieldAlert, Users } from 'lucide-vue-next'
 import { computed, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
@@ -97,10 +126,15 @@ const tabs = computed(() => [
   { label: 'Overview', name: 'org-overview', icon: LayoutDashboard, count: null },
   { label: 'Vulnerabilities', name: 'org-vulnerabilities', icon: ShieldAlert, count: vulnTotal.value },
   { label: 'Dependencies', name: 'org-dependencies', icon: Package, count: componentsTotal.value },
-  { label: 'Access', name: 'org-access', icon: KeyRound, count: null },
+  { label: 'Clients', name: 'org-clients', icon: Users, count: null, fenced: true },
+  { label: 'Insights', name: 'org-insights', icon: LineChart, count: null },
+  { label: 'Settings', name: 'org-settings', icon: Settings, count: null },
 ])
 
 function isActiveTab(name: string) {
+  if (name === 'org-settings') {
+    return typeof route.name === 'string' && route.name.startsWith('org-settings')
+  }
   return route.name === name
 }
 

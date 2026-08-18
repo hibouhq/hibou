@@ -144,6 +144,13 @@ func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uui
 
 	switch ref.RefType {
 	case dbgen.RefTypePullRequest:
+		if snapshot.Status != dbgen.SnapshotStatusComplete && snapshot.Status != dbgen.SnapshotStatusActive {
+			// Only analyzed snapshots may be gate input — a pending/failed one
+			// evaluates as empty ("0 findings — passed"). Show the waiting
+			// state on the current head instead.
+			a.publishGateWaitingForUpload(ctx, ref)
+			return
+		}
 		if head, stale := snapshotBehindHead(snapshot, ref); stale {
 			// The PR moved past this snapshot (push before CI uploaded, or a
 			// force-push): a verdict for a stale commit is a lie. Post the
@@ -311,20 +318,80 @@ func (a *GatePublisher) recomputeOpenPRsForRepo(ctx context.Context, repoID uuid
 
 // PublishGateForRef re-evaluates and re-publishes the gate check for a PR ref's
 // current head snapshot. Safe to call from any gate-affecting code path; a no-op
-// for non-PR refs or refs without a scanned head/target snapshot.
+// for non-PR refs. A PR head with no analyzed snapshot gets the in-progress
+// "waiting for upload" check — same context, so branch protection blocks the
+// merge until the real verdict replaces it.
 func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) {
 	if a == nil || a.store == nil || a.delta == nil || refID == uuid.Nil {
 		return
 	}
-	annotation, ok := a.loadGateContextFromRef(ctx, refID)
-	if !ok {
+	ref, err := a.store.GetRefByID(ctx, refID)
+	if err != nil {
+		a.log.Error().Err(err).Str("ref_id", refID.String()).Msg("load ref for gate recompute")
 		return
 	}
-	if head, stale := snapshotBehindHead(annotation.snapshot, annotation.prRef); stale {
-		a.publishGateWaitingForHead(ctx, annotation.snapshot, annotation.prRef, head)
+	if ref.ID == uuid.Nil || ref.RefType != dbgen.RefTypePullRequest {
+		return
+	}
+	snapshot, err := a.store.GetLatestSnapshotByRef(ctx, ref.ID)
+	if err != nil || snapshot.ID == uuid.Nil {
+		// No analyzed head snapshot yet (PR opened / pushed, CI not uploaded):
+		// post the pending check on the webhook-tracked head so the PR is
+		// blocked-and-informative instead of blank.
+		a.publishGateWaitingForUpload(ctx, ref)
+		return
+	}
+	if head, stale := snapshotBehindHead(snapshot, ref); stale {
+		a.publishGateWaitingForHead(ctx, snapshot, ref, head)
+		return
+	}
+	annotation, ok := a.buildGateContext(ctx, snapshot, ref)
+	if !ok {
+		// Head is analyzed but the comparison is not computable yet (target
+		// branch has no snapshot / merge target unknown).
+		a.publishGatePendingForRef(ctx, snapshot, ref)
 		return
 	}
 	a.evaluateAndPublish(ctx, annotation)
+}
+
+// publishGateWaitingForUpload posts the in-progress check for a PR whose
+// current head has NO analyzed snapshot at all. Same check context as the
+// verdict ("hibou/security") — forges cannot delete checks, so the pending
+// state is later updated in place rather than removed.
+func (a *GatePublisher) publishGateWaitingForUpload(ctx context.Context, ref dbgen.Ref) {
+	head := ""
+	if ref.LatestCommitSha.Valid {
+		head = strings.TrimSpace(ref.LatestCommitSha.String)
+	}
+	if head == "" {
+		// Nothing to attach a check to.
+		return
+	}
+	repo, provider, owner, name, ok := a.loadGateRepository(ctx, ref)
+	if !ok {
+		return
+	}
+	orgSlug, err := a.store.GetOrgSlug(ctx, repo.OrgID)
+	if err != nil {
+		a.log.Debug().Err(err).Str("org_id", repo.OrgID.String()).Msg("load org slug for waiting-for-upload gate check")
+	}
+	annotation := &gateContext{
+		snapshot: dbgen.Snapshot{RefID: ref.ID, CommitSha: head},
+		prRef:    ref,
+		repo:     repo,
+		provider: provider,
+		owner:    owner,
+		name:     name,
+		orgSlug:  orgSlug,
+	}
+	status := gatePendingStatus()
+	status.description = "Waiting for upload for " + shortCommit(head)
+	status.title = "Quality gate — waiting for upload"
+	status.summary = fmt.Sprintf(
+		"Hibou has not received an analysis upload (SBOM/SARIF/coverage) for commit %s yet. CI's upload publishes the real verdict here; if branch protection requires this check, the merge stays blocked until then.",
+		shortCommit(head))
+	a.publishGateStatusOnly(ctx, annotation, status)
 }
 
 // ReconcileUnsynced retries publishing gate checks whose last forge post failed
@@ -493,23 +560,6 @@ type gateContext struct {
 func snapshotIDFromPayload(payload any) uuid.UUID {
 	data, _ := payload.(map[string]any)
 	return uuidFromString(valueString(data, "snapshot_id"))
-}
-
-func (a *GatePublisher) loadGateContextFromRef(ctx context.Context, refID uuid.UUID) (*gateContext, bool) {
-	ref, err := a.store.GetRefByID(ctx, refID)
-	if err != nil {
-		a.log.Error().Err(err).Str("ref_id", refID.String()).Msg("load ref for gate recompute")
-		return nil, false
-	}
-	if ref.ID == uuid.Nil || ref.RefType != dbgen.RefTypePullRequest {
-		return nil, false
-	}
-	snapshot, err := a.store.GetLatestSnapshotByRef(ctx, ref.ID)
-	if err != nil || snapshot.ID == uuid.Nil {
-		// No scanned head snapshot yet (e.g. PR opened but CI not uploaded).
-		return nil, false
-	}
-	return a.buildGateContext(ctx, snapshot, ref)
 }
 
 func (a *GatePublisher) buildGateContext(ctx context.Context, snapshot dbgen.Snapshot, ref dbgen.Ref) (*gateContext, bool) {
@@ -1059,8 +1109,11 @@ func (a *GatePublisherStoreAdapter) UpsertPRCheck(ctx context.Context, in store.
 	return err
 }
 
+// GetLatestSnapshotByRef returns the latest ANALYZED (complete/active)
+// snapshot. Pending placeholders and in-flight uploads must never be gate
+// input: evaluating an empty snapshot reads as "0 findings — passed".
 func (a *GatePublisherStoreAdapter) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (dbgen.Snapshot, error) {
-	snapshot, err := a.queries.GetLatestSnapshotByRef(ctx, refID)
+	snapshot, err := a.queries.GetLatestCompleteSnapshotByRef(ctx, refID)
 	if err != nil || snapshot == nil {
 		return dbgen.Snapshot{}, err
 	}

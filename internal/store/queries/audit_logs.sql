@@ -29,3 +29,21 @@ LIMIT $2 OFFSET $3;
 
 -- name: CountAuditLogsByOrg :one
 SELECT COUNT(*)::bigint FROM audit_logs WHERE org_id = $1;
+
+-- name: ListFindingActivity :many
+-- Audit entries recorded against ONE fingerprint of ONE repository. The
+-- finding-history endpoint is readable by anyone who can read the repository's
+-- findings — unlike the org-wide log, which is admin-only — so the scoping
+-- lives here rather than in the caller: org, repository, fingerprint, and a
+-- caller-supplied action allowlist all bind before a row is returned.
+SELECT id, actor_type, actor_display, action, context, created_at
+FROM audit_logs
+WHERE org_id = $1
+  AND context->>'fingerprint' = sqlc.arg(fingerprint)::text
+  AND action = ANY(sqlc.arg(actions)::text[])
+  AND (
+    (resource_type = 'repository' AND resource_id = sqlc.arg(repo_id))
+    OR context->>'repo_id' = sqlc.arg(repo_id)
+  )
+ORDER BY created_at DESC
+LIMIT sqlc.arg(row_limit);

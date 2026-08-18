@@ -8,6 +8,108 @@ export interface User {
   provider: string
 }
 
+// Postgres nullable columns serialize as {…, Valid} wrappers on some legacy
+// endpoints; helpers below unwrap them.
+export interface SqlNullTime {
+  Time: string
+  Valid: boolean
+}
+
+export interface SqlNullInt32 {
+  Int32: number
+  Valid: boolean
+}
+
+export interface SqlNullUUID {
+  UUID: string
+  Valid: boolean
+}
+
+export interface OrgMember {
+  org_id: string
+  user_id: string
+  role: string
+  created_at: string
+  user?: User
+}
+
+export const ORG_MEMBER_ROLES = ['admin', 'developer', 'release_manager', 'auditor', 'viewer'] as const
+
+export interface OrgIntegration {
+  id: string
+  org_id: string
+  name: string
+  integration_type: string
+  config: Record<string, unknown>
+  enabled: boolean
+  last_success_at: SqlNullTime
+  last_failure_at: SqlNullTime
+  failure_count: number
+  created_at: string
+  updated_at: string
+}
+
+export const INTEGRATION_TYPES = ['webhook', 'slack', 'teams', 'discord', 'email'] as const
+
+export interface IntegrationReplayResult {
+  integration_id: string
+  requested: number
+  replayed: number
+  skipped: number
+}
+
+export interface NotificationRule {
+  id: string
+  org_id: string
+  name: string
+  event_type: string
+  conditions: Record<string, unknown>
+  destination_type: string
+  destination_config: Record<string, unknown>
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+// Event types emitted on the internal bus that notification rules can match.
+export const NOTIFICATION_EVENT_TYPES = [
+  'vulnerabilities.found',
+  'gate.failed',
+  'gate.passed',
+  'scan.completed',
+  'scan.failed',
+  'scan.stale',
+  'secret.discovered',
+  'token.expiring',
+] as const
+
+export interface QualityGate {
+  id: string
+  org_id: string
+  repo_id: SqlNullUUID
+  name: string
+  description: string
+  max_critical: number
+  max_high: number
+  max_medium: SqlNullInt32
+  max_new_findings: SqlNullInt32
+  finding_severities: string[]
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface QualityGateInput {
+  repo_id?: string
+  name: string
+  description: string
+  max_critical: number
+  max_high: number
+  max_medium?: number
+  max_new_findings?: number
+  enabled: boolean
+}
+
 export interface Organization {
   id: string
   name: string
@@ -52,6 +154,8 @@ export interface Repository {
   status?: RepoLifecycleStatus
   last_scanned?: string | null
   outdated?: boolean
+  // Viewer may open the repo-scoped audit log (org admin or owning-team admin).
+  viewer_can_audit?: boolean
 }
 
 export interface Client {
@@ -81,8 +185,38 @@ export interface Release {
   build_metadata?: Record<string, unknown>
   artifact_ids?: unknown[]
   provenance?: Record<string, unknown>
+  html_url?: string
+  // Releases are derived (ADR-024): from a version tag's analysis or a forge release event.
+  source: 'tag' | 'forge'
   published_at?: string
   created_at: string
+  // Re-tag divergence: the tag moved to another commit while clients run this build.
+  pending_snapshot_id?: string
+  diverged_at?: string
+}
+
+// One client currently on a release, via an active deployment (ADR-024).
+export interface ReleaseClient {
+  deployment_id: string
+  client_id: string
+  slug: string
+  name: string
+  environment: string
+  deployed_at: string
+}
+
+// Release enriched with its pinned snapshot's open-risk posture (ADR-024).
+export interface ReleaseWithRisk extends Release {
+  ref_name: string
+  commit_sha?: string
+  pending_commit_sha?: string
+  critical_count: number
+  high_count: number
+  medium_count: number
+  low_count: number
+  open_finding_count: number
+  last_scanned_at?: string
+  clients: ReleaseClient[]
 }
 
 export interface Deployment {
@@ -226,6 +360,30 @@ export interface AuditLogEntry {
   created_at: string
 }
 
+export interface OrgSettings {
+  vex_auto_propagate: boolean
+  vex_reachability_analysis: boolean
+  default_tlp_label: string
+}
+
+// Effective .hibou.yml configuration (or its DB-backed fallback) as the
+// server resolved it for the default branch.
+export interface RepoConfigGate {
+  branches: string[]
+  weaknesses?: { enforcement?: string; max_critical?: number | null; max_high?: number | null; max_medium?: number | null }
+  vulnerabilities?: { enabled?: boolean | null; max_critical?: number | null; max_high?: number | null; max_medium?: number | null; max_new_total?: number | null }
+  licenses?: { deny_categories?: string[]; deny?: string[]; allow?: string[]; deny_unknown?: boolean | null }
+  secrets?: { max_new?: number | null }
+  coverage?: { min_coverage?: number | null; grace?: number | null; diff_minimum?: number | null }
+}
+
+export interface RepoConfig {
+  version: number
+  quality_gates?: RepoConfigGate[]
+  coverage?: { exclude?: string[] }
+  upload?: { window?: string }
+}
+
 export interface Ref {
   id: string
   repo_id: string
@@ -259,7 +417,16 @@ export interface Vulnerability {
   ecosystem?: string
   advisory_id?: string
   language?: string
+  confidence?: string
+  owasp_top_10?: string
   secret_type?: string
+  // Secret findings: the commit that introduced the leak and its author, so a
+  // reader knows which credential to rotate and who to ask.
+  commit_sha?: string
+  author_email?: string
+  verified?: boolean
+  first_seen_at?: string
+  last_seen_at?: string
   has_remediation?: boolean
   remediation_link?: string
   // CI call-graph verdict (govulncheck): reachable | not_reachable | unknown.
@@ -329,17 +496,46 @@ export interface ApiKey {
 
 // Aggregated finding-detail payload (drawer): finding + advisory + decision +
 // VEX + where the fingerprint is currently detected.
+export interface FindingAdvisory {
+  canonical_id: string
+  title?: string
+  description?: string
+  severity?: string
+  cvss_score?: string
+  cvss_vector?: string
+  cwes?: string[]
+  fixed_versions?: string[]
+  references?: string[]
+  aliases?: string[]
+}
+
+// One entry of a finding's timeline. `scan` events are what the scanners
+// observed across snapshots; `activity` events are decisions a human or a token
+// recorded — the audit log, narrowed to this one finding.
+export interface FindingHistoryEvent {
+  source: 'scan' | 'activity'
+  kind: string
+  at: string
+  ref_name?: string
+  ref_type?: string
+  commit_sha?: string
+  severity?: string
+  from?: string
+  to?: string
+  action?: string
+  actor_type?: string
+  actor_display?: string
+  detail?: Record<string, unknown>
+}
+
+export interface FindingHistory {
+  events: FindingHistoryEvent[]
+  truncated: boolean
+}
+
 export interface FindingDetail {
   finding: Vulnerability
-  advisory?: {
-    canonical_id: string
-    title?: string
-    description?: string
-    severity?: string
-    cvss_score?: string
-    cvss_vector?: string
-    cwes?: string[]
-  }
+  advisory?: FindingAdvisory
   acceptance?: FindingAcceptance
   vex?: Array<{ status: string; justification?: string; source: string; statement?: string }>
   occurrences: Array<{ ref_name: string; ref_type: string; commit_sha: string; snapshot_at: string; status: string }>
@@ -999,6 +1195,138 @@ class ApiClient {
     return this.request<PaginatedResponse<Team>>(`/orgs/${provider}/${slug}/teams`)
   }
 
+  // Org members are forge-synced (permission sync / first login); the UI only
+  // manages roles and removal. Mutations are admin-enforced server-side.
+  listOrgMembers(provider: string, slug: string) {
+    return this.request<PaginatedResponse<OrgMember>>(`/orgs/${provider}/${slug}/members?per_page=100`)
+  }
+
+  updateOrgMemberRole(provider: string, slug: string, userID: string, role: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/members/${userID}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    })
+  }
+
+  removeOrgMember(provider: string, slug: string, userID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/members/${userID}`, { method: 'DELETE' })
+  }
+
+  // Integrations: config is redacted for non-admins by the server.
+  listIntegrations(provider: string, slug: string) {
+    return this.request<PaginatedResponse<OrgIntegration>>(`/orgs/${provider}/${slug}/integrations?per_page=100`)
+  }
+
+  createIntegration(
+    provider: string,
+    slug: string,
+    body: { name: string; integration_type: string; config: Record<string, unknown>; enabled: boolean },
+  ) {
+    return this.request<ApiResponse<OrgIntegration>>(`/orgs/${provider}/${slug}/integrations`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateIntegration(
+    provider: string,
+    slug: string,
+    integrationID: string,
+    body: { name: string; config: Record<string, unknown>; enabled: boolean },
+  ) {
+    return this.request<ApiResponse<OrgIntegration>>(`/orgs/${provider}/${slug}/integrations/${integrationID}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  }
+
+  deleteIntegration(provider: string, slug: string, integrationID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/integrations/${integrationID}`, { method: 'DELETE' })
+  }
+
+  replayIntegration(provider: string, slug: string, integrationID: string) {
+    return this.request<ApiResponse<IntegrationReplayResult>>(
+      `/orgs/${provider}/${slug}/integrations/${integrationID}/replay`,
+      { method: 'POST', body: JSON.stringify({}) },
+    )
+  }
+
+  listNotificationRules(provider: string, slug: string) {
+    return this.request<PaginatedResponse<NotificationRule>>(`/orgs/${provider}/${slug}/notification-rules?per_page=100`)
+  }
+
+  createNotificationRule(
+    provider: string,
+    slug: string,
+    body: {
+      name: string
+      event_type: string
+      conditions: Record<string, unknown>
+      destination_type: string
+      destination_config: Record<string, unknown>
+      enabled: boolean
+    },
+  ) {
+    return this.request<ApiResponse<NotificationRule>>(`/orgs/${provider}/${slug}/notification-rules`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateNotificationRule(
+    provider: string,
+    slug: string,
+    ruleID: string,
+    body: {
+      name: string
+      event_type: string
+      conditions: Record<string, unknown>
+      destination_type: string
+      destination_config: Record<string, unknown>
+      enabled: boolean
+    },
+  ) {
+    return this.request<ApiResponse<NotificationRule>>(`/orgs/${provider}/${slug}/notification-rules/${ruleID}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  }
+
+  deleteNotificationRule(provider: string, slug: string, ruleID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/notification-rules/${ruleID}`, { method: 'DELETE' })
+  }
+
+  // DB-backed quality gates: the fallback when a repo has no .hibou.yml.
+  listQualityGates(provider: string, slug: string) {
+    return this.request<PaginatedResponse<QualityGate>>(`/orgs/${provider}/${slug}/quality-gates?per_page=100`)
+  }
+
+  createQualityGate(provider: string, slug: string, body: QualityGateInput) {
+    return this.request<ApiResponse<QualityGate>>(`/orgs/${provider}/${slug}/quality-gates`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateQualityGate(provider: string, slug: string, gateID: string, body: QualityGateInput) {
+    return this.request<ApiResponse<QualityGate>>(`/orgs/${provider}/${slug}/quality-gates/${gateID}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  }
+
+  deleteQualityGate(provider: string, slug: string, gateID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/quality-gates/${gateID}`, { method: 'DELETE' })
+  }
+
+  deleteOrg(provider: string, slug: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}`, { method: 'DELETE' })
+  }
+
+  removeRepo(provider: string, slug: string, repoSlug: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}`, { method: 'DELETE' })
+  }
+
   listRepos(provider: string, slug: string) {
     return this.request<PaginatedResponse<Repository>>(`/orgs/${provider}/${slug}/repos`)
   }
@@ -1022,6 +1350,35 @@ class ApiClient {
 
   getRepo(provider: string, slug: string, repoSlug: string) {
     return this.request<ApiResponse<Repository>>(`/orgs/${provider}/${slug}/repos/${repoSlug}`)
+  }
+
+  updateRepo(provider: string, slug: string, repoSlug: string, body: { name?: string; default_branch?: string }) {
+    return this.request<ApiResponse<Repository>>(`/orgs/${provider}/${slug}/repos/${repoSlug}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  }
+
+  getRepoConfig(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<RepoConfig>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/config`)
+  }
+
+  onboardRepo(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<{ number: number; html_url: string; title: string }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/onboard`,
+      { method: 'POST' },
+    )
+  }
+
+  getOrgSettings(provider: string, slug: string) {
+    return this.request<ApiResponse<OrgSettings>>(`/orgs/${provider}/${slug}/settings`)
+  }
+
+  updateOrgSettings(provider: string, slug: string, body: OrgSettings) {
+    return this.request<ApiResponse<OrgSettings>>(`/orgs/${provider}/${slug}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
   }
 
   listClients(provider: string, slug: string, params?: { page?: number; per_page?: number }) {
@@ -1137,7 +1494,7 @@ class ApiClient {
     provider: string,
     slug: string,
     repoSlug: string,
-    params?: { page?: number; per_page?: number },
+    params?: { page?: number; per_page?: number; q?: string; client?: string; vulnerable?: boolean },
   ) {
     const query = new URLSearchParams()
     if (params?.page) {
@@ -1146,31 +1503,53 @@ class ApiClient {
     if (params?.per_page) {
       query.set('per_page', String(params.per_page))
     }
+    if (params?.q) {
+      query.set('q', params.q)
+    }
+    if (params?.client) {
+      query.set('client', params.client)
+    }
+    if (params?.vulnerable) {
+      query.set('vulnerable', 'true')
+    }
 
     const qs = query.toString()
-    return this.request<PaginatedResponse<Release>>(
+    return this.request<PaginatedResponse<ReleaseWithRisk>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/releases${qs ? `?${qs}` : ''}`,
     )
   }
 
-  createRelease(
+  resolveReleaseDivergence(
     provider: string,
     slug: string,
     repoSlug: string,
-    body: {
-      version: string
-      ref: string
-      snapshot_id?: string
-      build_metadata?: Record<string, unknown>
-      artifact_ids?: unknown[]
-      provenance?: Record<string, unknown>
-      published_at?: string
-    },
+    releaseId: string,
+    action: 'adopt' | 'keep',
   ) {
-    return this.request<ApiResponse<Release>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
+    return this.request<ApiResponse<Release>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseId}/divergence`,
+      { method: 'POST', body: JSON.stringify({ action }) },
+    )
+  }
+
+  addReleaseClient(
+    provider: string,
+    slug: string,
+    repoSlug: string,
+    releaseId: string,
+    body: { client_slug: string; environment?: string; notes?: string },
+  ) {
+    return this.request<ApiResponse<Deployment>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseId}/clients`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )
+  }
+
+  removeReleaseClient(provider: string, slug: string, repoSlug: string, releaseId: string, deploymentId: string) {
+    return this.request<ApiResponse<Deployment>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseId}/clients/${deploymentId}`,
+      { method: 'DELETE' },
+    )
   }
 
   search(
@@ -1198,7 +1577,7 @@ class ApiClient {
   listAuditLogs(
     provider: string,
     slug: string,
-    params?: { action?: string; resource_type?: string; page?: number; per_page?: number },
+    params?: { action?: string; resource_type?: string; repo?: string; page?: number; per_page?: number },
   ) {
     const query = new URLSearchParams()
 
@@ -1207,6 +1586,9 @@ class ApiClient {
     }
     if (params?.resource_type) {
       query.set('resource_type', params.resource_type)
+    }
+    if (params?.repo) {
+      query.set('repo', params.repo)
     }
     if (params?.page) {
       query.set('page', String(params.page))
@@ -1322,7 +1704,7 @@ class ApiClient {
     }
 
     const qs = query.toString()
-    return this.request<TrendPoint[]>(
+    return this.request<ApiResponse<TrendPoint[]>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/trends${qs ? `?${qs}` : ''}`,
     )
   }
@@ -1435,6 +1817,15 @@ class ApiClient {
   getFindingDetail(provider: string, slug: string, repoSlug: string, fingerprint: string) {
     return this.request<ApiResponse<FindingDetail>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/findings/${encodeURIComponent(fingerprint)}`,
+    )
+  }
+
+  // The finding's own history. Unlike listAuditLogs (org admins only) this is
+  // readable by anyone who can read the repository's findings: the server
+  // restricts it to this fingerprint and to finding actions.
+  getFindingHistory(provider: string, slug: string, repoSlug: string, fingerprint: string) {
+    return this.request<ApiResponse<FindingHistory>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/findings/${encodeURIComponent(fingerprint)}/history`,
     )
   }
 

@@ -332,3 +332,33 @@ ON CONFLICT (snapshot_id) DO UPDATE SET
 
 -- name: GetSnapshotCodeRefs :one
 SELECT * FROM snapshot_code_refs WHERE snapshot_id = $1;
+
+-- name: CreatePlaceholderSnapshot :one
+-- Webhook-created pending snapshot for a PR head that has no snapshot yet, so
+-- the UI shows the head as awaited and the CI upload adopts the row instead of
+-- racing it. No-op (no row) when any snapshot already exists for the commit.
+INSERT INTO snapshots (ref_id, commit_sha, status)
+SELECT $1, $2, 'pending'
+WHERE NOT EXISTS (
+	SELECT 1 FROM snapshots WHERE ref_id = $1 AND commit_sha = $2
+)
+RETURNING *;
+
+-- name: AdoptPlaceholderSnapshot :one
+-- A CI upload claims the webhook's placeholder row for its build. The
+-- placeholder is created by the PR webhook, which fires on push BEFORE any CI
+-- run exists (the webhook payload has no run info), so it is keyed with
+-- run_id IS NULL — an upload carrying a run_id would miss the upsert's
+-- conflict key and insert a duplicate. A second run for the same commit finds
+-- no placeholder left and takes the normal upsert path.
+UPDATE snapshots SET
+	build_url = COALESCE($3, build_url),
+	run_id = $4,
+	run_attempt = $5,
+	run_number = $6,
+	pr_number = COALESCE($7, pr_number),
+	pr_target_branch = COALESCE($8, pr_target_branch),
+	tag = COALESCE($9, tag),
+	expected_uploads = COALESCE($10, expected_uploads)
+WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL AND status = 'pending'
+RETURNING *;

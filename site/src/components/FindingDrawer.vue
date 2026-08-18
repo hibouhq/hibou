@@ -1,12 +1,12 @@
 <template>
   <!-- Side drawer: keeps the list context; ESC or backdrop closes. -->
-  <div class="fixed inset-0 z-40">
+  <div class="fixed inset-0 z-[70]">
     <div
-      class="absolute inset-0 bg-black/50"
+      class="absolute inset-0 bg-black/60 backdrop-blur-[1px]"
       @click="emit('close')"
     />
     <aside
-      class="absolute inset-y-0 right-0 flex w-full max-w-xl flex-col overflow-y-auto border-l border-surface-border bg-surface-raised shadow-2xl"
+      class="absolute inset-y-0 right-0 flex w-full max-w-2xl flex-col border-l border-surface-border bg-surface-raised shadow-2xl"
       role="dialog"
       aria-label="Finding detail"
     >
@@ -22,37 +22,56 @@
       >
         {{ error }}
       </div>
+
       <template v-else-if="detail?.finding">
-        <!-- Header: identity + state in one glance -->
-        <div class="sticky top-0 z-10 border-b border-surface-border-subtle bg-surface-raised/95 px-6 py-4 backdrop-blur">
+        <!-- Header: identity, state, and the two dates that frame everything
+             below it — when it appeared, when it was last seen. -->
+        <header class="border-b border-surface-border-subtle px-6 pb-3 pt-4">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-2">
+              <div class="flex flex-wrap items-center gap-1.5">
                 <span :class="severityBadgeClass(detail.finding.severity)">{{ detail.finding.severity }}</span>
-                <span class="rounded-full bg-surface-overlay px-2 py-0.5 text-[11px] text-gray-400">{{ detail.finding.type }}</span>
+                <span :class="findingTypeBadgeClass(detail.finding.type)">{{ detail.finding.type }}</span>
+                <span
+                  class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium"
+                  :class="state.badgeClass"
+                  :title="state.description"
+                >{{ state.label }}</span>
                 <span
                   v-if="detail.finding.reachability === 'not_reachable'"
                   class="rounded-full border border-surface-border bg-surface-overlay px-2 py-0.5 text-[11px] text-gray-500"
-                  title="Call-graph analysis (govulncheck) proved the vulnerable symbol is never called from this code"
+                  title="Call-graph analysis proved the vulnerable symbol is never called from this code"
                 >unreachable</span>
                 <span
                   v-else-if="detail.finding.reachability === 'reachable'"
                   class="rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[11px] text-danger"
                   title="Call-graph analysis found the vulnerable symbol on this code's call path"
                 >reachable</span>
-                <span
-                  class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium"
-                  :class="state.badgeClass"
-                  :title="state.description"
-                >{{ state.label }}</span>
+                <FindingOriginBadge :finding="detail.finding" />
               </div>
-              <h2 class="mt-2 truncate text-base font-semibold text-white">
+
+              <h2 class="mt-2 text-base font-semibold leading-snug text-white">
                 {{ detail.finding.title }}
               </h2>
-              <p class="mt-0.5 font-mono text-xs text-accent">
-                {{ detail.finding.primary_identifier_value || detail.finding.scanner_name }}
-              </p>
+
+              <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                <span class="font-mono text-accent">{{ identifier }}</span>
+                <span v-if="firstSeen">
+                  first detected <span
+                    class="text-gray-400"
+                    :title="formatDateTime(firstSeen)"
+                  >{{ formatDate(firstSeen) }}</span>
+                </span>
+                <span v-if="lastSeen">
+                  last seen <span
+                    class="text-gray-400"
+                    :title="formatDateTime(lastSeen)"
+                  >{{ relativeTime(lastSeen) }}</span>
+                </span>
+                <span v-if="detail.occurrences.length > 0">on {{ detail.occurrences.length }} {{ detail.occurrences.length === 1 ? 'ref' : 'refs' }}</span>
+              </div>
             </div>
+
             <button
               type="button"
               class="shrink-0 rounded-lg border border-surface-border p-1.5 text-gray-400 transition hover:text-white"
@@ -62,217 +81,184 @@
               <X class="h-4 w-4" />
             </button>
           </div>
-        </div>
 
-        <div class="flex-1 space-y-5 px-6 py-5">
-          <!-- Description -->
-          <section v-if="detail.finding.description">
-            <p class="whitespace-pre-wrap text-sm text-gray-300">
-              {{ detail.finding.description }}
-            </p>
-          </section>
+          <!-- Tabs: the evidence, then the story. -->
+          <nav class="-mb-3 mt-3 flex gap-4 text-sm">
+            <button
+              v-for="tabOption in tabs"
+              :key="tabOption.key"
+              type="button"
+              class="border-b-2 pb-2 transition"
+              :class="tab === tabOption.key ? 'border-accent text-white' : 'border-transparent text-gray-400 hover:text-gray-200'"
+              @click="tab = tabOption.key"
+            >
+              {{ tabOption.label }}
+            </button>
+          </nav>
+        </header>
 
-          <!-- Advisory (dependency findings) -->
-          <section
-            v-if="detail.advisory"
-            class="rounded-xl border border-surface-border-subtle bg-surface-overlay/50 p-4"
-          >
-            <h3 class="text-xs uppercase tracking-[0.18em] text-gray-500">
-              Advisory
-            </h3>
-            <p class="mt-2 font-mono text-sm text-white">
-              {{ detail.advisory.canonical_id }}
-            </p>
-            <p
-              v-if="detail.advisory.title"
-              class="mt-1 text-sm text-gray-300"
-            >
-              {{ detail.advisory.title }}
-            </p>
-            <p
-              v-if="detail.advisory.cvss_score"
-              class="mt-1 text-xs text-gray-400"
-            >
-              CVSS {{ detail.advisory.cvss_score }}
-              <span
-                v-if="detail.advisory.cvss_vector"
-                class="font-mono text-gray-500"
-              > · {{ detail.advisory.cvss_vector }}</span>
-            </p>
-            <p
-              v-if="detail.advisory.cwes?.length"
-              class="mt-1 text-xs text-gray-500"
-            >
-              {{ detail.advisory.cwes.join(', ') }}
-            </p>
-            <p
-              v-if="detail.finding.has_remediation"
-              class="mt-2 text-xs text-emerald-300"
-            >
-              <a
-                v-if="detail.finding.remediation_link"
-                :href="detail.finding.remediation_link"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="underline"
-              >Fix available</a>
-              <template v-else>
-                Fix available
-              </template>
-              <span v-if="detail.finding.solution"> — {{ detail.finding.solution }}</span>
-            </p>
-          </section>
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+          <template v-if="tab === 'details'">
+            <!-- Kind-specific body: a CVE on a package and a rule hit in source
+                 are different objects, and one generic renderer serves neither. -->
+            <component
+              :is="detailsComponent"
+              :detail="detail"
+              :provider="provider"
+              :slug="slug"
+              :repo-slug="repoSlug"
+              :repo-html-url="repoHtmlUrl"
+              :forge-provider="forgeProvider"
+            />
 
-          <!-- Location: kind-specific -->
-          <section class="text-sm text-gray-300">
-            <h3 class="text-xs uppercase tracking-[0.18em] text-gray-500">
-              Location
-            </h3>
-            <p class="mt-2">
-              <template v-if="detail.finding.component_name">
-                <span class="font-mono">{{ detail.finding.component_name }}<template v-if="detail.finding.component_version">@{{ detail.finding.component_version }}</template></span>
-                <span
-                  v-if="detail.finding.ecosystem"
-                  class="ml-2 text-xs text-gray-500"
-                >{{ detail.finding.ecosystem }}</span>
-              </template>
-              <template v-else-if="detail.finding.file_path">
-                <span class="font-mono">{{ detail.finding.file_path }}<template v-if="detail.finding.start_line">:{{ detail.finding.start_line }}</template></span>
-              </template>
-              <template v-else>
-                <span class="text-gray-500">n/a</span>
-              </template>
-            </p>
-            <p
-              v-if="detail.finding.type === 'secret'"
-              class="mt-1 text-xs text-amber-300"
-            >
-              A leaked credential stays open until revocation is attested — deleting the line does not fix it.
-            </p>
-          </section>
-
-          <!-- Triage decision -->
-          <section
-            v-if="detail.acceptance"
-            class="rounded-xl border border-surface-border-subtle bg-surface-overlay/50 p-4"
-          >
-            <h3 class="text-xs uppercase tracking-[0.18em] text-gray-500">
-              Decision
-            </h3>
-            <p class="mt-2 text-sm text-gray-200">
-              <span class="font-medium">{{ detail.acceptance.reason_kind === 'false_positive' ? 'False positive' : 'Risk accepted' }}</span>
-              <span v-if="detail.acceptance.reason"> — {{ detail.acceptance.reason }}</span>
-            </p>
-            <p class="mt-1 text-xs text-gray-500">
-              <template v-if="detail.acceptance.expires_at">
-                expires {{ formatDate(detail.acceptance.expires_at) }} ·
-              </template>
-              <template v-if="detail.acceptance.created_at">
-                decided {{ formatDate(detail.acceptance.created_at) }}
-              </template>
-            </p>
-            <div
-              v-if="detail.acceptance.labels?.length"
-              class="mt-2 flex flex-wrap gap-1"
-            >
-              <span
-                v-for="label in detail.acceptance.labels"
-                :key="label"
-                class="rounded-full bg-surface-overlay px-2 py-0.5 text-[11px] text-gray-400"
-              >{{ label }}</span>
-            </div>
-          </section>
-
-          <!-- VEX statements -->
-          <section v-if="detail.vex?.length">
-            <h3 class="text-xs uppercase tracking-[0.18em] text-gray-500">
-              VEX
-            </h3>
-            <ul class="mt-2 space-y-2">
-              <li
-                v-for="(statement, index) in detail.vex"
-                :key="index"
-                class="rounded-lg border border-surface-border-subtle px-3 py-2 text-xs text-gray-300"
+            <div class="mt-5 space-y-5">
+              <!-- Fix availability: open PRs that already resolve this -->
+              <FindingSection
+                v-if="detail.finding.fixed_in_prs?.length"
+                title="Fix already in flight"
+                boxed
+                class="!border-ok/30 !bg-ok/5"
               >
-                <span class="font-medium text-white">{{ statement.status }}</span>
-                <span
-                  v-if="statement.justification"
-                  class="text-gray-400"
-                > · {{ statement.justification }}</span>
-                <span class="text-gray-500"> · {{ statement.source }}</span>
-                <p
-                  v-if="statement.statement"
-                  class="mt-1 text-gray-400"
-                >
-                  {{ statement.statement }}
+                <ul class="space-y-1 text-sm text-gray-200">
+                  <li
+                    v-for="fix in detail.finding.fixed_in_prs"
+                    :key="fix.ref_name"
+                  >
+                    <RouterLink
+                      :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: fix.ref_name } }"
+                      class="underline decoration-ok/40 underline-offset-2 transition hover:decoration-ok"
+                    >
+                      #{{ fix.number }}<template v-if="fix.title">
+                        — {{ fix.title }}
+                      </template>
+                    </RouterLink>
+                  </li>
+                </ul>
+                <p class="mt-2 text-xs text-gray-500">
+                  Merging it resolves this finding — usually better than accepting the risk.
                 </p>
-              </li>
-            </ul>
-          </section>
-          <p
-            v-else-if="!componentBacked"
-            class="text-xs text-gray-600"
-          >
-            VEX not applicable — VEX describes third-party component exploitability; this is a first-party code finding.
-          </p>
+              </FindingSection>
 
-          <!-- Fix availability: open PRs that already resolve this -->
-          <section
-            v-if="detail.finding.fixed_in_prs?.length"
-            class="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4"
-          >
-            <h3 class="text-xs uppercase tracking-[0.18em] text-emerald-300">
-              Fix already in flight
-            </h3>
-            <ul class="mt-2 space-y-1 text-sm text-gray-200">
-              <li
-                v-for="fix in detail.finding.fixed_in_prs"
-                :key="fix.ref_name"
+              <!-- Triage decision -->
+              <FindingSection
+                v-if="detail.acceptance"
+                title="Decision"
+                boxed
               >
-                <RouterLink
-                  :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: fix.ref_name } }"
-                  class="underline decoration-emerald-500/40 underline-offset-2 transition hover:decoration-emerald-300"
-                >
-                  #{{ fix.number }}<template v-if="fix.title">
-                    — {{ fix.title }}
+                <p class="text-sm text-gray-200">
+                  <span class="font-medium">{{ detail.acceptance.reason_kind === 'false_positive' ? 'False positive' : 'Risk accepted' }}</span>
+                  <span v-if="detail.acceptance.reason"> — {{ detail.acceptance.reason }}</span>
+                </p>
+                <p class="mt-1 text-xs text-gray-500">
+                  <template v-if="detail.acceptance.created_at">
+                    decided {{ formatDate(detail.acceptance.created_at) }}
                   </template>
-                </RouterLink>
-              </li>
-            </ul>
-            <p class="mt-2 text-xs text-gray-500">
-              Merging it resolves this finding — usually better than accepting the risk.
-            </p>
-          </section>
+                  <template v-if="detail.acceptance.expires_at">
+                    · expires {{ formatDate(detail.acceptance.expires_at) }}
+                  </template>
+                </p>
+                <div
+                  v-if="detail.acceptance.labels?.length"
+                  class="mt-2 flex flex-wrap gap-1"
+                >
+                  <span
+                    v-for="label in detail.acceptance.labels"
+                    :key="label"
+                    class="rounded-full bg-surface-overlay px-2 py-0.5 text-[11px] text-gray-400"
+                  >{{ label }}</span>
+                </div>
+              </FindingSection>
 
-          <!-- Occurrences across refs -->
-          <section v-if="detail.occurrences.length > 0">
-            <h3 class="text-xs uppercase tracking-[0.18em] text-gray-500">
-              Detected on
-            </h3>
-            <ul class="mt-2 divide-y divide-surface-border-subtle rounded-xl border border-surface-border-subtle">
-              <li
-                v-for="occurrence in detail.occurrences"
-                :key="occurrence.ref_name"
-                class="flex items-center gap-3 px-3 py-2 text-xs"
+              <!-- VEX statements -->
+              <FindingSection
+                v-if="detail.vex?.length"
+                title="VEX"
               >
-                <span class="min-w-0 flex-1 truncate font-mono text-gray-300">{{ occurrence.ref_name }}</span>
-                <span class="font-mono text-gray-500">{{ occurrence.commit_sha.slice(0, 7) }}</span>
-                <span
-                  class="rounded-full px-2 py-0.5 text-[10px]"
-                  :class="occurrence.status === 'resolved' ? 'bg-emerald-500/10 text-emerald-300' : occurrence.status === 'suppressed' ? 'bg-surface-overlay text-gray-500' : 'bg-amber-500/10 text-amber-300'"
-                >{{ occurrence.status }}</span>
-              </li>
-            </ul>
-          </section>
+                <ul class="space-y-2">
+                  <li
+                    v-for="(statement, index) in detail.vex"
+                    :key="index"
+                    class="rounded-lg border border-surface-border-subtle px-3 py-2 text-xs text-gray-300"
+                  >
+                    <span class="font-medium text-white">{{ statement.status }}</span>
+                    <span
+                      v-if="statement.justification"
+                      class="text-gray-400"
+                    > · {{ statement.justification }}</span>
+                    <span class="text-gray-500"> · {{ statement.source }}</span>
+                    <p
+                      v-if="statement.statement"
+                      class="mt-1 text-gray-400"
+                    >
+                      {{ statement.statement }}
+                    </p>
+                  </li>
+                </ul>
+              </FindingSection>
+              <p
+                v-else-if="!componentBacked"
+                class="text-xs text-gray-600"
+              >
+                VEX not applicable — VEX describes third-party component exploitability; this is a first-party code finding.
+              </p>
+
+              <!-- Occurrences across refs -->
+              <FindingSection
+                v-if="detail.occurrences.length > 0"
+                title="Detected on"
+              >
+                <ul class="divide-y divide-surface-border-subtle rounded-xl border border-surface-border-subtle">
+                  <li
+                    v-for="occurrence in detail.occurrences"
+                    :key="occurrence.ref_name"
+                    class="flex items-center gap-3 px-3 py-2 text-xs"
+                  >
+                    <a
+                      v-if="refUrl(occurrence.ref_name, occurrence.ref_type)"
+                      :href="refUrl(occurrence.ref_name, occurrence.ref_type) ?? undefined"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="min-w-0 flex-1 truncate font-mono text-gray-300 underline decoration-transparent underline-offset-2 transition hover:decoration-gray-500"
+                    >{{ shortRef(occurrence.ref_name) }}</a>
+                    <span
+                      v-else
+                      class="min-w-0 flex-1 truncate font-mono text-gray-300"
+                    >{{ shortRef(occurrence.ref_name) }}</span>
+                    <span
+                      class="font-mono text-gray-500"
+                      :title="occurrence.commit_sha"
+                    >{{ occurrence.commit_sha.slice(0, 7) }}</span>
+                    <span
+                      class="text-gray-600"
+                      :title="formatDateTime(occurrence.snapshot_at)"
+                    >{{ relativeTime(occurrence.snapshot_at) }}</span>
+                    <span
+                      class="rounded-full px-2 py-0.5 text-[10px]"
+                      :class="occurrence.status === 'resolved' ? 'bg-ok/10 text-ok' : occurrence.status === 'suppressed' ? 'bg-surface-overlay text-gray-500' : 'bg-amber-500/10 text-amber-300'"
+                    >{{ occurrence.status }}</span>
+                  </li>
+                </ul>
+              </FindingSection>
+            </div>
+          </template>
+
+          <FindingTimeline
+            v-else
+            :provider="provider"
+            :slug="slug"
+            :repo-slug="repoSlug"
+            :fingerprint="fingerprint"
+          />
         </div>
 
         <!-- Actions: the same Accept ▾ / Reopen as the row — one implementation -->
-        <div class="sticky bottom-0 border-t border-surface-border-subtle bg-surface-raised/95 px-6 py-3 backdrop-blur">
-          <div class="flex items-center gap-2">
+        <footer class="border-t border-surface-border-subtle bg-surface-raised/95 px-6 py-3">
+          <div class="flex flex-wrap items-center gap-2">
             <template v-if="detail.acceptance">
               <button
                 type="button"
                 class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                title="Remove the suppression: this counts against the gate again"
                 @click="emit('reopen', fingerprint)"
               >
                 Reopen
@@ -282,32 +268,52 @@
               <button
                 type="button"
                 class="rounded-l-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
-                @click="emit('accept', 'risk_accepted', fingerprint)"
+                title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
+                @click="emit('accept', 'risk_accepted', detail.finding)"
               >
-                Accept
+                Accept risk…
               </button>
               <button
                 type="button"
                 class="-ml-2 rounded-r-lg border border-l-0 border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
-                @click="emit('accept', 'false_positive', fingerprint)"
+                @click="emit('accept', 'false_positive', detail.finding)"
               >
                 False positive…
               </button>
             </template>
-            <span class="ml-auto text-[11px] text-gray-600">j/k to walk findings · esc closes</span>
+            <button
+              v-if="detail.finding.type === 'secret' && detail.finding.status !== 'resolved'"
+              type="button"
+              class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 transition hover:bg-amber-500/20"
+              title="Attest that the credential was revoked and rotated — the only way a secret resolves"
+              @click="emit('revoke', detail.finding)"
+            >
+              Mark revoked…
+            </button>
+            <span class="ml-auto text-[11px] text-gray-600">j/k walks findings · esc closes</span>
           </div>
-        </div>
+        </footer>
       </template>
     </aside>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 
 import { X } from 'lucide-vue-next'
 
-import { api, type AcceptanceReasonKind, type FindingDetail } from '@/api/client'
+import { api, type AcceptanceReasonKind, type FindingDetail, type Repository, type Vulnerability } from '@/api/client'
+import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
+import CodeFindingDetails from '@/components/finding/CodeFindingDetails.vue'
+import DependencyFindingDetails from '@/components/finding/DependencyFindingDetails.vue'
+import FindingSection from '@/components/finding/FindingSection.vue'
+import FindingTimeline from '@/components/finding/FindingTimeline.vue'
+import GenericFindingDetails from '@/components/finding/GenericFindingDetails.vue'
+import SecretFindingDetails from '@/components/finding/SecretFindingDetails.vue'
+import { formatDateTime, relativeTime } from '@/lib/datetime'
+import { findingShape, findingTypeBadgeClass, isComponentBacked, severityBadgeClass } from '@/lib/findingDisplay'
+import { forgeRefUrl } from '@/lib/forgeLinks'
 import { triageState } from '@/lib/triage'
 
 const props = defineProps<{
@@ -315,23 +321,52 @@ const props = defineProps<{
   slug: string
   repoSlug: string
   fingerprint: string
+  // Repository coordinates for forge deep links. Optional: the repo views get
+  // them from the injected repository, the org-wide view passes them in.
+  repoHtmlUrl?: string
+  forgeProvider?: string
 }>()
 
 const emit = defineEmits<{
   close: []
-  accept: [kind: AcceptanceReasonKind, fingerprint: string]
+  // The finding travels with the event: the drawer is deep-linkable, so the
+  // list behind it may not hold this row, and a parent-side lookup would
+  // silently drop the VEX option (or do nothing at all on revoke).
+  accept: [kind: AcceptanceReasonKind, finding: Vulnerability]
   reopen: [fingerprint: string]
+  revoke: [finding: Vulnerability]
   navigate: [delta: number]
 }>()
+
+// RepoDetailView provides the repository; the org-wide findings view does not,
+// hence the prop fallback.
+const injectedRepo = inject<Ref<Repository | null> | null>('repo', null)
+const repoHtmlUrl = computed(() => props.repoHtmlUrl || injectedRepo?.value?.html_url || '')
+const forgeProvider = computed(() => props.forgeProvider || injectedRepo?.value?.provider || props.provider)
 
 const detail = ref<FindingDetail | null>(null)
 const loading = ref(true)
 const error = ref('')
+const tab = ref<'details' | 'history'>('details')
+
+const tabs = [
+  { key: 'details', label: 'Details' },
+  { key: 'history', label: 'History' },
+] as const
 
 const state = computed(() => triageState(detail.value?.finding ?? { status: '' }, detail.value?.acceptance))
-const componentBacked = computed(() => {
-  const type = detail.value?.finding?.type
-  return type === 'dependency' || type === 'container'
+const componentBacked = computed(() => isComponentBacked(detail.value?.finding?.type))
+const identifier = computed(() => detail.value?.finding.primary_identifier_value || detail.value?.finding.scanner_name || '')
+const firstSeen = computed(() => detail.value?.finding.first_seen_at || detail.value?.finding.detected_at || '')
+const lastSeen = computed(() => detail.value?.finding.last_seen_at || '')
+
+const detailsComponent = computed(() => {
+  switch (findingShape(detail.value?.finding.type ?? '')) {
+    case 'component': return DependencyFindingDetails
+    case 'code': return CodeFindingDetails
+    case 'secret': return SecretFindingDetails
+    default: return GenericFindingDetails
+  }
 })
 
 async function load() {
@@ -347,7 +382,12 @@ async function load() {
   }
 }
 
-watch(() => props.fingerprint, load, { immediate: true })
+watch(() => props.fingerprint, () => {
+  // Walking to the next finding should land on its evidence, not on whichever
+  // tab the previous one was left open at.
+  tab.value = 'details'
+  void load()
+}, { immediate: true })
 
 function onKeydown(event: KeyboardEvent) {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
@@ -359,15 +399,12 @@ function onKeydown(event: KeyboardEvent) {
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
-function severityBadgeClass(severity: unknown): string {
-  const base = 'rounded-full px-2 py-0.5 text-[11px] font-medium '
-  switch (String(severity)) {
-    case 'critical': return base + 'bg-danger/15 text-danger'
-    case 'high': return base + 'bg-orange-500/15 text-orange-300'
-    case 'medium': return base + 'bg-amber-500/15 text-amber-300'
-    case 'low': return base + 'bg-sky-500/15 text-sky-300'
-    default: return base + 'bg-surface-overlay text-gray-400'
-  }
+function shortRef(refName: string): string {
+  return refName.replace(/^refs\/(heads|tags)\//, '')
+}
+
+function refUrl(refName: string, refType: string): string | null {
+  return forgeRefUrl(repoHtmlUrl.value, forgeProvider.value, refName, refType)
 }
 
 function formatDate(value?: string): string {

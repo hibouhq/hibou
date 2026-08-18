@@ -13,6 +13,17 @@ import (
 	"github.com/google/uuid"
 )
 
+const countActiveDeploymentsByRelease = `-- name: CountActiveDeploymentsByRelease :one
+SELECT COUNT(*)::bigint FROM deployments WHERE release_id = $1 AND status = 'active'
+`
+
+func (q *Queries) CountActiveDeploymentsByRelease(ctx context.Context, releaseID uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActiveDeploymentsByRelease, releaseID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countDeploymentsByClient = `-- name: CountDeploymentsByClient :one
 SELECT COUNT(*)::bigint FROM deployments WHERE client_id = $1
 `
@@ -85,6 +96,33 @@ SELECT id, client_id, release_id, environment, status, deployed_at, deployed_by,
 
 func (q *Queries) GetDeploymentByID(ctx context.Context, id uuid.UUID) (Deployment, error) {
 	row := q.db.QueryRowContext(ctx, getDeploymentByID, id)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.ClientID,
+		&i.ReleaseID,
+		&i.Environment,
+		&i.Status,
+		&i.DeployedAt,
+		&i.DeployedBy,
+		&i.RollbackTargetID,
+		&i.Notes,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getDeploymentByReleaseAndID = `-- name: GetDeploymentByReleaseAndID :one
+SELECT id, client_id, release_id, environment, status, deployed_at, deployed_by, rollback_target_id, notes, created_at FROM deployments WHERE release_id = $1 AND id = $2
+`
+
+type GetDeploymentByReleaseAndIDParams struct {
+	ReleaseID uuid.UUID `json:"release_id"`
+	ID        uuid.UUID `json:"id"`
+}
+
+func (q *Queries) GetDeploymentByReleaseAndID(ctx context.Context, arg GetDeploymentByReleaseAndIDParams) (Deployment, error) {
+	row := q.db.QueryRowContext(ctx, getDeploymentByReleaseAndID, arg.ReleaseID, arg.ID)
 	var i Deployment
 	err := row.Scan(
 		&i.ID,
@@ -291,6 +329,41 @@ func (q *Queries) ListDeploymentsWithReleaseByClient(ctx context.Context, arg Li
 		return nil, err
 	}
 	return items, nil
+}
+
+const supersedeActiveDeployments = `-- name: SupersedeActiveDeployments :execrows
+UPDATE deployments d
+SET status = 'superseded'
+FROM releases r
+WHERE d.release_id = r.id
+  AND r.repo_id = $1
+  AND d.client_id = $2
+  AND d.environment = $3
+  AND d.status = 'active'
+  AND d.release_id <> $4
+`
+
+type SupersedeActiveDeploymentsParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	ClientID    uuid.UUID `json:"client_id"`
+	Environment string    `json:"environment"`
+	ReleaseID   uuid.UUID `json:"release_id"`
+}
+
+// Release-side rollout semantics (ADR-024 §4): giving a client a new release
+// of a repo supersedes its active deployment of any other release of that
+// repo in the same environment.
+func (q *Queries) SupersedeActiveDeployments(ctx context.Context, arg SupersedeActiveDeploymentsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, supersedeActiveDeployments,
+		arg.RepoID,
+		arg.ClientID,
+		arg.Environment,
+		arg.ReleaseID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateDeploymentStatus = `-- name: UpdateDeploymentStatus :one

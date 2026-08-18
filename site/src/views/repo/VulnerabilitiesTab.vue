@@ -58,8 +58,9 @@
       :repo-slug="repoSlug"
       :fingerprint="drawerFingerprint"
       @close="closeDrawer"
-      @accept="(kind, fingerprint) => { closeDrawer(); openTriageDialog(kind, [fingerprint], vulnerabilities.find(v => v.fingerprint === fingerprint)) }"
+      @accept="(kind, finding) => { closeDrawer(); openTriageDialog(kind, [finding.fingerprint], finding) }"
       @reopen="(fingerprint) => { closeDrawer(); void reopenFindings([fingerprint]) }"
+      @revoke="(finding) => { closeDrawer(); void markSecretRevoked(finding) }"
       @navigate="navigateDrawer"
     />
 
@@ -201,8 +202,10 @@
               <tr
                 v-for="vulnerability in vulnerabilities"
                 :key="vulnerability.id"
-                class="transition hover:bg-white/5"
+                class="cursor-pointer transition hover:bg-white/5"
                 :class="[rowClass(vulnerability.type), selected.has(vulnerability.fingerprint) ? 'bg-accent/10' : '']"
+                :title="'Open detail'"
+                @click="openDrawer(vulnerability.fingerprint)"
               >
                 <td class="px-3 py-2.5">
                   <input
@@ -230,10 +233,16 @@
                   </span>
                 </td>
                 <td class="px-3 py-2.5">
-                  <LinkedText
-                    :text="vulnerability.title"
-                    class="text-gray-300"
-                  />
+                  <button
+                    type="button"
+                    class="block text-left transition hover:text-white focus:outline-none focus-visible:underline"
+                    @click.stop="openDrawer(vulnerability.fingerprint)"
+                  >
+                    <LinkedText
+                      :text="vulnerability.title"
+                      class="text-gray-300"
+                    />
+                  </button>
 
                   <div
                     v-if="formatLocation(vulnerability) !== 'n/a'"

@@ -233,3 +233,33 @@ func TestMatchGateNoMatchReturnsNil(t *testing.T) {
 		t.Fatalf("expected no match, got %#v", gate)
 	}
 }
+
+func TestParseReleasesTagPattern(t *testing.T) {
+	cfg, err := Parse([]byte("version: 1\nreleases:\n  tag_pattern: \"^payments-v\\\\d+\\\\.\\\\d+$\"\n"))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	pattern := cfg.Releases.CompiledTagPattern()
+	if pattern == nil {
+		t.Fatal("expected a compiled tag pattern")
+	}
+	if !pattern.MatchString("payments-v7.5") {
+		t.Error("configured pattern should match payments-v7.5")
+	}
+	if pattern.MatchString("v7.5.0") {
+		t.Error("configured pattern replaces the default; v7.5.0 must not match")
+	}
+}
+
+func TestParseRejectsInvalidReleasesTagPattern(t *testing.T) {
+	if _, err := Parse([]byte("version: 1\nreleases:\n  tag_pattern: \"([\"\n")); err == nil {
+		t.Fatal("expected an error for an invalid tag_pattern regex")
+	}
+}
+
+func TestCompiledTagPatternNilReceiver(t *testing.T) {
+	var releases *ReleasesConfig
+	if releases.CompiledTagPattern() != nil {
+		t.Error("nil ReleasesConfig must yield no pattern (platform default applies)")
+	}
+}

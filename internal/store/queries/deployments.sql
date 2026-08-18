@@ -33,3 +33,23 @@ UPDATE deployments SET status = $2 WHERE id = $1 RETURNING *;
 
 -- name: ListActiveDeploymentsByClient :many
 SELECT * FROM deployments WHERE client_id = $1 AND status = 'active' ORDER BY deployed_at DESC;
+
+-- name: SupersedeActiveDeployments :execrows
+-- Release-side rollout semantics (ADR-024 §4): giving a client a new release
+-- of a repo supersedes its active deployment of any other release of that
+-- repo in the same environment.
+UPDATE deployments d
+SET status = 'superseded'
+FROM releases r
+WHERE d.release_id = r.id
+  AND r.repo_id = $1
+  AND d.client_id = $2
+  AND d.environment = $3
+  AND d.status = 'active'
+  AND d.release_id <> $4;
+
+-- name: CountActiveDeploymentsByRelease :one
+SELECT COUNT(*)::bigint FROM deployments WHERE release_id = $1 AND status = 'active';
+
+-- name: GetDeploymentByReleaseAndID :one
+SELECT * FROM deployments WHERE release_id = $1 AND id = $2;

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -156,6 +157,46 @@ func (q *Queries) UpdateScanProvider(ctx context.Context, arg dbgen.UpdateScanPr
 
 func (q *Queries) CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error) {
 	return q.db.CreateAuditLog(ctx, arg)
+}
+
+// FindingActivityEntry is one audited action on a finding, already narrowed to
+// the fields the finding timeline may show. The raw audit row is deliberately
+// not returned: it carries IP, user agent and token identifiers that only org
+// admins may see.
+type FindingActivityEntry struct {
+	ID           uuid.UUID       `json:"id"`
+	ActorType    string          `json:"actor_type"`
+	ActorDisplay string          `json:"actor_display"`
+	Action       string          `json:"action"`
+	Context      json.RawMessage `json:"-"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// ListFindingActivity returns audit entries for one fingerprint of one
+// repository, restricted to the given actions, newest first.
+func (q *Queries) ListFindingActivity(ctx context.Context, orgID uuid.UUID, repoID uuid.UUID, fingerprint string, actions []string, limit int) ([]FindingActivityEntry, error) {
+	rows, err := q.db.ListFindingActivity(ctx, dbgen.ListFindingActivityParams{
+		OrgID:       uuid.NullUUID{UUID: orgID, Valid: true},
+		RepoID:      repoID.String(),
+		Fingerprint: fingerprint,
+		Actions:     actions,
+		RowLimit:    int32(limit), //nolint:gosec // G115: limit is a small server-side constant.
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FindingActivityEntry, len(rows))
+	for i, row := range rows {
+		out[i] = FindingActivityEntry{
+			ID:           row.ID,
+			ActorType:    row.ActorType,
+			ActorDisplay: row.ActorDisplay,
+			Action:       row.Action,
+			Context:      row.Context,
+			CreatedAt:    row.CreatedAt,
+		}
+	}
+	return out, nil
 }
 
 func (q *Queries) CreateNotification(ctx context.Context, arg dbgen.CreateNotificationParams) (dbgen.Notification, error) {

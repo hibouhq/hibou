@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -221,7 +222,49 @@ func (q *Queries) MarkSnapshotFailedIfPending(ctx context.Context, id uuid.UUID)
 	return q.db.MarkSnapshotFailedIfPending(ctx, id)
 }
 
+// CreatePlaceholderSnapshot inserts a pending snapshot for a webhook-observed
+// PR head that has no snapshot yet. Returns nil (no error) when any snapshot
+// already exists for the (ref, commit) pair.
+func (q *Queries) CreatePlaceholderSnapshot(ctx context.Context, refID uuid.UUID, commitSHA string) (*Snapshot, error) {
+	row, err := q.db.CreatePlaceholderSnapshot(ctx, dbgen.CreatePlaceholderSnapshotParams{
+		RefID:     refID,
+		CommitSha: commitSHA,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshotFromRow(row), nil
+}
+
 func (q *Queries) UpsertSnapshotForBuild(ctx context.Context, refID uuid.UUID, commitSHA string, status SnapshotStatus, meta SnapshotBuildMeta) (*Snapshot, error) {
+	// A webhook may have pre-created a placeholder (pending, run_id NULL) for
+	// this head. A CI build carrying a run_id would not hit the upsert's
+	// conflict key, so it adopts the placeholder first to avoid a duplicate.
+	if meta.RunID != nil && strings.TrimSpace(*meta.RunID) != "" {
+		row, err := q.db.AdoptPlaceholderSnapshot(ctx, dbgen.AdoptPlaceholderSnapshotParams{
+			RefID:           refID,
+			CommitSha:       commitSHA,
+			BuildUrl:        nullStringFromPtr(meta.BuildURL),
+			RunID:           nullStringFromPtr(meta.RunID),
+			RunAttempt:      nullStringFromPtr(meta.RunAttempt),
+			RunNumber:       nullStringFromPtr(meta.RunNumber),
+			PrNumber:        nullStringFromPtr(meta.PRNumber),
+			PrTargetBranch:  nullStringFromPtr(meta.PRTargetBranch),
+			Tag:             nullStringFromPtr(meta.Tag),
+			ExpectedUploads: nullInt32FromPtr(meta.ExpectedUploads),
+		})
+		if err == nil {
+			return snapshotFromRow(row), nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
+
 	row, err := q.db.UpsertSnapshotForBuild(ctx, dbgen.UpsertSnapshotForBuildParams{
 		RefID:           refID,
 		CommitSha:       commitSHA,

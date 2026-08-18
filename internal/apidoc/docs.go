@@ -1295,7 +1295,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "List audit log entries for an organization visible to organization members",
+                "description": "List audit log entries for an organization. Restricted to organization admins; audit context can carry admin-only detail.",
                 "produces": [
                     "application/json"
                 ],
@@ -1328,6 +1328,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Resource type filter",
                         "name": "resource_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug; limits entries to that repository",
+                        "name": "repo",
                         "in": "query"
                     },
                     {
@@ -4210,6 +4216,91 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/history": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The timeline of one finding: every scan-observed state change (detected, resolved, reintroduced) merged with the triage decisions recorded against its fingerprint. Readable by anyone who can read the repository's findings — unlike the organization audit log, which is admin-only; entries are restricted to finding actions on this repository and this fingerprint, and their context is projected to triage fields.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Finding history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Finding fingerprint",
+                        "name": "fingerprint",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.findingHistoryResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/reachability": {
             "post": {
                 "security": [
@@ -4394,7 +4485,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "List releases for a repository visible to organization members",
+                "description": "List releases with the open-risk posture of their pinned snapshot and the clients currently on them (active deployments)",
                 "produces": [
                     "application/json"
                 ],
@@ -4425,6 +4516,24 @@ const docTemplate = `{
                         "required": true
                     },
                     {
+                        "type": "string",
+                        "description": "Version substring filter",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Only releases an org client (by slug) has an active deployment of",
+                        "name": "client",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only releases with at least one open finding",
+                        "name": "vulnerable",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Page number",
                         "name": "page",
@@ -4451,7 +4560,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/store.Release"
+                                                "$ref": "#/definitions/store.ReleaseWithRisk"
                                             }
                                         }
                                     }
@@ -4478,14 +4587,16 @@ const docTemplate = `{
                         }
                     }
                 }
-            },
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/releases/{releaseID}/clients": {
             "post": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a release for a repository when the caller is an organization admin",
+                "description": "Record that an org client runs this release: creates an active deployment and supersedes the client's active deployment of any other release of this repository in the same environment. Requires the admin or release_manager org role.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4495,7 +4606,7 @@ const docTemplate = `{
                 "tags": [
                     "releases"
                 ],
-                "summary": "Create release",
+                "summary": "Add client to release",
                 "parameters": [
                     {
                         "type": "string",
@@ -4519,18 +4630,238 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Release details",
+                        "type": "string",
+                        "description": "Release ID",
+                        "name": "releaseID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Client assignment",
                         "name": "payload",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/server.createReleaseRequest"
+                            "$ref": "#/definitions/server.addReleaseClientRequest"
                         }
                     }
                 ],
                 "responses": {
                     "201": {
                         "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.Deployment"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/releases/{releaseID}/clients/{deploymentID}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Mark a release's deployment as rolled back. Requires the admin or release_manager org role.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "releases"
+                ],
+                "summary": "Remove client from release",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Release ID",
+                        "name": "releaseID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Deployment ID",
+                        "name": "deploymentID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.Deployment"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/releases/{releaseID}/divergence": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "A released tag was recreated on another commit (ADR-024 §5). \"adopt\" repoints the release to the new build; \"keep\" keeps the shipped build and stops flagging that commit. Requires the admin or release_manager org role.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "releases"
+                ],
+                "summary": "Resolve release divergence",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Release ID",
+                        "name": "releaseID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "adopt or keep",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.resolveReleaseDivergenceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "allOf": [
                                 {
@@ -4567,6 +4898,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -6310,6 +6647,20 @@ const docTemplate = `{
                 }
             }
         },
+        "server.addReleaseClientRequest": {
+            "type": "object",
+            "properties": {
+                "client_slug": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                }
+            }
+        },
         "server.auditLogEntryResponse": {
             "type": "object",
             "properties": {
@@ -6829,41 +7180,6 @@ const docTemplate = `{
                 }
             }
         },
-        "server.createReleaseRequest": {
-            "type": "object",
-            "properties": {
-                "artifact_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "build_metadata": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "provenance": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "published_at": {
-                    "type": "string"
-                },
-                "ref": {
-                    "type": "string"
-                },
-                "snapshot_id": {
-                    "type": "string"
-                },
-                "version": {
-                    "type": "string"
-                }
-            }
-        },
         "server.createTeamRequest": {
             "type": "object",
             "properties": {
@@ -6965,6 +7281,12 @@ const docTemplate = `{
         "server.findingAdvisoryResponse": {
             "type": "object",
             "properties": {
+                "aliases": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "canonical_id": {
                     "type": "string"
                 },
@@ -6982,6 +7304,19 @@ const docTemplate = `{
                 },
                 "description": {
                     "type": "string"
+                },
+                "fixed_versions": {
+                    "description": "The three fields a dependency finding is actually triaged on: what to\nupgrade to, where to read the details, and which other identifier the\nsame advisory travels under. Same enrichment the components view uses.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "references": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "severity": {
                     "type": "string"
@@ -7031,6 +7366,69 @@ const docTemplate = `{
                 },
                 "truncated": {
                     "description": "Truncated is true when the filter matched more than the cap, so the UI can\nsay \"first 500 of N\" instead of implying it selected everything.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.findingHistoryEvent": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "description": "Activity events: who did what.",
+                    "type": "string"
+                },
+                "actor_display": {
+                    "type": "string"
+                },
+                "actor_type": {
+                    "type": "string"
+                },
+                "at": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "from": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "ref_name": {
+                    "description": "Scan events: where the change was observed.",
+                    "type": "string"
+                },
+                "ref_type": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source is \"scan\" (observed by a scanner) or \"activity\" (decided by a\nhuman or a token).",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.findingHistoryResponse": {
+            "type": "object",
+            "properties": {
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.findingHistoryEvent"
+                    }
+                },
+                "truncated": {
+                    "description": "Truncated says a cap was hit, so the UI never implies the timeline is\ncomplete when it is not.",
                     "type": "boolean"
                 }
             }
@@ -7308,6 +7706,14 @@ const docTemplate = `{
                     "$ref": "#/definitions/server.repoLifecycleStatus"
                 },
                 "sync_state": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.resolveReleaseDivergenceRequest": {
+            "type": "object",
+            "properties": {
+                "action": {
                     "type": "string"
                 }
             }
@@ -7798,6 +8204,41 @@ const docTemplate = `{
                 }
             }
         },
+        "store.Deployment": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deployed_at": {
+                    "type": "string"
+                },
+                "deployed_by": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "release_id": {
+                    "type": "string"
+                },
+                "rollback_target_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/store.DeploymentStatus"
+                }
+            }
+        },
         "store.DeploymentStatus": {
             "type": "string",
             "enum": [
@@ -8134,7 +8575,17 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "diverged_at": {
+                    "type": "string"
+                },
+                "html_url": {
+                    "type": "string"
+                },
                 "id": {
+                    "type": "string"
+                },
+                "pending_snapshot_id": {
+                    "description": "Re-tag divergence (ADR-024 §5): the tag now points at a different commit\nthan the analyzed build clients run. Nil = aligned.",
                     "type": "string"
                 },
                 "provenance": {
@@ -8153,6 +8604,125 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "snapshot_id": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.ReleaseClient": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "deployed_at": {
+                    "type": "string"
+                },
+                "deployment_id": {
+                    "type": "string"
+                },
+                "environment": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.ReleaseWithRisk": {
+            "type": "object",
+            "properties": {
+                "artifact_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "build_metadata": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "clients": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ReleaseClient"
+                    }
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "critical_count": {
+                    "type": "integer"
+                },
+                "diverged_at": {
+                    "type": "string"
+                },
+                "high_count": {
+                    "type": "integer"
+                },
+                "html_url": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_scanned_at": {
+                    "type": "string"
+                },
+                "low_count": {
+                    "type": "integer"
+                },
+                "medium_count": {
+                    "type": "integer"
+                },
+                "open_finding_count": {
+                    "type": "integer"
+                },
+                "pending_commit_sha": {
+                    "type": "string"
+                },
+                "pending_snapshot_id": {
+                    "description": "Re-tag divergence (ADR-024 §5): the tag now points at a different commit\nthan the analyzed build clients run. Nil = aligned.",
+                    "type": "string"
+                },
+                "provenance": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "ref_id": {
+                    "type": "string"
+                },
+                "ref_name": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "snapshot_id": {
+                    "type": "string"
+                },
+                "source": {
                     "type": "string"
                 },
                 "updated_at": {

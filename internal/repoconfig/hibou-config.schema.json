@@ -28,6 +28,10 @@
     "upload": {
       "$ref": "#/$defs/uploadConfig",
       "description": "Optional upload behavior configuration for snapshot grouping."
+    },
+    "releases": {
+      "$ref": "#/$defs/releasesConfig",
+      "description": "Optional release derivation settings (ADR-024): which tags count as releases when their analysis snapshot is uploaded."
     }
   },
   "$defs": {
@@ -70,7 +74,10 @@
         },
         "enforcement": {
           "type": "string",
-          "enum": ["advisory", "blocking"],
+          "enum": [
+            "advisory",
+            "blocking"
+          ],
           "description": "Whether a failing gate blocks the PR. 'advisory' (default) publishes an informational, non-blocking forge check; 'blocking' posts a real failure so a required check blocks the merge. Hibou never breaks the CI build itself."
         }
       },
@@ -187,23 +194,37 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["permissive", "weak-copyleft", "copyleft", "network-copyleft", "source-available", "public-domain", "unknown"]
+            "enum": [
+              "permissive",
+              "weak-copyleft",
+              "copyleft",
+              "network-copyleft",
+              "source-available",
+              "public-domain",
+              "unknown"
+            ]
           },
           "description": "License categories to deny wholesale."
         },
         "deny": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "SPDX license ids or globs to deny (e.g. GPL-3.0-only, LGPL-*)."
         },
         "allow": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "SPDX license ids or globs allowed even when a deny rule matches. Allow always wins."
         },
         "deny_unknown": {
           "type": "boolean",
-          "description": "Whether components with unknown or missing license metadata fail the gate. Defaults to true — an unreviewed license is a legal risk until someone looks at it."
+          "description": "Whether components with unknown or missing license metadata fail the gate. Defaults to true \u2014 an unreviewed license is a legal risk until someone looks at it."
         }
       },
       "description": "License policy evaluated against every component of the head snapshot."
@@ -219,6 +240,17 @@
         }
       },
       "description": "Cap on NEW secret findings introduced by a PR."
+    },
+    "releasesConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tag_pattern": {
+          "type": "string",
+          "format": "regex",
+          "description": "Go regular expression a tag name must match to derive a release. Empty uses the platform default (v-prefixed semver-ish tags: v1.2.3, 1.2, v2.0.0-rc.1)."
+        }
+      }
     }
   }
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const countAuditLogsByOrg = `-- name: CountAuditLogsByOrg :one
@@ -212,6 +213,78 @@ func (q *Queries) ListAuditLogsByResource(ctx context.Context, arg ListAuditLogs
 			&i.Context,
 			&i.IpAddress,
 			&i.UserAgent,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFindingActivity = `-- name: ListFindingActivity :many
+SELECT id, actor_type, actor_display, action, context, created_at
+FROM audit_logs
+WHERE org_id = $1
+  AND context->>'fingerprint' = $2::text
+  AND action = ANY($3::text[])
+  AND (
+    (resource_type = 'repository' AND resource_id = $4)
+    OR context->>'repo_id' = $4
+  )
+ORDER BY created_at DESC
+LIMIT $5
+`
+
+type ListFindingActivityParams struct {
+	OrgID       uuid.NullUUID `json:"org_id"`
+	Fingerprint string        `json:"fingerprint"`
+	Actions     []string      `json:"actions"`
+	RepoID      string        `json:"repo_id"`
+	RowLimit    int32         `json:"row_limit"`
+}
+
+type ListFindingActivityRow struct {
+	ID           uuid.UUID       `json:"id"`
+	ActorType    string          `json:"actor_type"`
+	ActorDisplay string          `json:"actor_display"`
+	Action       string          `json:"action"`
+	Context      json.RawMessage `json:"context"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// Audit entries recorded against ONE fingerprint of ONE repository. The
+// finding-history endpoint is readable by anyone who can read the repository's
+// findings — unlike the org-wide log, which is admin-only — so the scoping
+// lives here rather than in the caller: org, repository, fingerprint, and a
+// caller-supplied action allowlist all bind before a row is returned.
+func (q *Queries) ListFindingActivity(ctx context.Context, arg ListFindingActivityParams) ([]ListFindingActivityRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFindingActivity,
+		arg.OrgID,
+		arg.Fingerprint,
+		pq.Array(arg.Actions),
+		arg.RepoID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFindingActivityRow{}
+	for rows.Next() {
+		var i ListFindingActivityRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorType,
+			&i.ActorDisplay,
+			&i.Action,
+			&i.Context,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

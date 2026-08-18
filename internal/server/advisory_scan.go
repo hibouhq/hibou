@@ -77,6 +77,10 @@ func (s *Server) advisoryScanPass(ctx context.Context) error {
 			continue
 		}
 		succeeded++
+		// Idempotent release reconciliation (ADR-024 §5): heals derivations
+		// deferred while the forge (repo config) was unreachable at snapshot
+		// completion. Early-exits for non-tag refs before any forge call.
+		s.reconcileReleasesForSnapshot(ctx, snapshotID)
 	}
 	s.log.Info().Int("snapshots", len(snapshotIDs)).Int("succeeded", succeeded).Int("failed", failed).Msg("finished advisory scan pass")
 	return nil
@@ -109,6 +113,27 @@ func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid
 			if offset >= total || len(refs) == 0 {
 				break
 			}
+		}
+	}
+
+	// Release-pinned snapshots (ADR-024 §6): a release can pin an older
+	// snapshot of its ref than the latest one collected above, and shipped
+	// state must keep lighting up when new advisories land. The shared
+	// advisory cache dedupes the package queries across all of these, so the
+	// marginal provider cost of a release that shares dependencies with a
+	// scanned branch is zero.
+	pinned, err := s.queries.ListReleasePinnedSnapshotIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]struct{}, len(snapshotIDs))
+	for _, id := range snapshotIDs {
+		seen[id] = struct{}{}
+	}
+	for _, id := range pinned {
+		if _, ok := seen[id]; !ok {
+			snapshotIDs = append(snapshotIDs, id)
+			seen[id] = struct{}{}
 		}
 	}
 

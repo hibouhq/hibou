@@ -537,6 +537,53 @@ func (q *Queries) GetActiveFindingAcceptance(ctx context.Context, arg GetActiveF
 	return i, err
 }
 
+const getFindingFirstObservation = `-- name: GetFindingFirstObservation :one
+SELECT r.name AS ref_name,
+       r.ref_type::text AS ref_type,
+       s.commit_sha,
+       LEAST(v.first_seen_at, s.created_at)::timestamptz AS observed_at,
+       v.severity::text AS severity
+FROM vulnerabilities v
+JOIN snapshots s ON s.id = v.snapshot_id
+JOIN refs r ON r.id = s.ref_id
+WHERE v.repo_id = $1
+  AND v.fingerprint = $2
+  AND s.status IN ('complete', 'active')
+ORDER BY LEAST(v.first_seen_at, s.created_at) ASC, s.created_at ASC
+LIMIT 1
+`
+
+type GetFindingFirstObservationParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+type GetFindingFirstObservationRow struct {
+	RefName    string    `json:"ref_name"`
+	RefType    string    `json:"ref_type"`
+	CommitSha  string    `json:"commit_sha"`
+	ObservedAt time.Time `json:"observed_at"`
+	Severity   string    `json:"severity"`
+}
+
+// The birth of a fingerprint on a repository: the oldest observation of it,
+// dated by first_seen_at (which the ingest carries forward across snapshots)
+// rather than by the snapshot that happens to be the oldest one still stored.
+// The timeline anchors on this, so "when did this appear" survives even when
+// the transition list is capped.
+func (q *Queries) GetFindingFirstObservation(ctx context.Context, arg GetFindingFirstObservationParams) (GetFindingFirstObservationRow, error) {
+	row := q.db.QueryRowContext(ctx, getFindingFirstObservation, arg.RepoID, arg.Fingerprint)
+	var i GetFindingFirstObservationRow
+	err := row.Scan(
+		&i.RefName,
+		&i.RefType,
+		&i.CommitSha,
+		&i.ObservedAt,
+		&i.Severity,
+	)
+	return i, err
+}
+
 const getLatestVulnerabilityByFingerprint = `-- name: GetLatestVulnerabilityByFingerprint :one
 SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
 WHERE repo_id = $1 AND fingerprint = $2
@@ -1012,6 +1059,82 @@ func (q *Queries) ListFindingOccurrences(ctx context.Context, arg ListFindingOcc
 			&i.CommitSha,
 			&i.SnapshotAt,
 			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFindingTransitions = `-- name: ListFindingTransitions :many
+WITH observations AS (
+    SELECT r.id AS ref_id,
+           r.name AS ref_name,
+           r.ref_type::text AS ref_type,
+           s.commit_sha,
+           s.created_at AS observed_at,
+           v.status::text AS status,
+           v.severity::text AS severity,
+           LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status
+    FROM vulnerabilities v
+    JOIN snapshots s ON s.id = v.snapshot_id
+    JOIN refs r ON r.id = s.ref_id
+    WHERE v.repo_id = $1
+      AND v.fingerprint = $2
+      AND s.status IN ('complete', 'active')
+)
+SELECT ref_name, ref_type, commit_sha, observed_at, status, severity,
+       COALESCE(previous_status, '')::text AS previous_status
+FROM observations
+WHERE previous_status IS DISTINCT FROM status
+ORDER BY observed_at DESC, ref_name
+LIMIT $3
+`
+
+type ListFindingTransitionsParams struct {
+	RepoID      uuid.UUID `json:"repo_id"`
+	Fingerprint string    `json:"fingerprint"`
+	RowLimit    int32     `json:"row_limit"`
+}
+
+type ListFindingTransitionsRow struct {
+	RefName        string    `json:"ref_name"`
+	RefType        string    `json:"ref_type"`
+	CommitSha      string    `json:"commit_sha"`
+	ObservedAt     time.Time `json:"observed_at"`
+	Status         string    `json:"status"`
+	Severity       string    `json:"severity"`
+	PreviousStatus string    `json:"previous_status"`
+}
+
+// The scan-observed life of a fingerprint, per ref: the snapshot that first
+// reported it and every later snapshot whose status differs from the previous
+// one. The snapshot series already is the history, so the timeline needs no
+// separate event table — only the rows where something actually changed.
+func (q *Queries) ListFindingTransitions(ctx context.Context, arg ListFindingTransitionsParams) ([]ListFindingTransitionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFindingTransitions, arg.RepoID, arg.Fingerprint, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFindingTransitionsRow{}
+	for rows.Next() {
+		var i ListFindingTransitionsRow
+		if err := rows.Scan(
+			&i.RefName,
+			&i.RefType,
+			&i.CommitSha,
+			&i.ObservedAt,
+			&i.Status,
+			&i.Severity,
+			&i.PreviousStatus,
 		); err != nil {
 			return nil, err
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ type RepoConfig struct {
 	QualityGates []QualityGate   `yaml:"quality_gates,omitempty" json:"quality_gates,omitempty"`
 	Coverage     *CoverageConfig `yaml:"coverage,omitempty" json:"coverage,omitempty"`
 	Upload       *UploadConfig   `yaml:"upload,omitempty" json:"upload,omitempty"`
+	Releases     *ReleasesConfig `yaml:"releases,omitempty" json:"releases,omitempty"`
 }
 
 type QualityGate struct {
@@ -103,6 +105,28 @@ type UploadConfig struct {
 	Window string `yaml:"window,omitempty" json:"window,omitempty"`
 }
 
+// ReleasesConfig tunes release derivation (ADR-024 §5): which tags count as
+// releases when they carry an analysis snapshot.
+type ReleasesConfig struct {
+	// TagPattern is a Go regular expression a tag name must match to derive a
+	// release. Empty means the platform default (v-prefixed semver-ish tags).
+	TagPattern string `yaml:"tag_pattern,omitempty" json:"tag_pattern,omitempty"`
+}
+
+// CompiledTagPattern returns the configured tag pattern, nil when unset.
+// Parse validated it, so a compile failure here cannot happen for configs
+// that came through Parse.
+func (r *ReleasesConfig) CompiledTagPattern() *regexp.Regexp {
+	if r == nil || strings.TrimSpace(r.TagPattern) == "" {
+		return nil
+	}
+	compiled, err := regexp.Compile(r.TagPattern)
+	if err != nil {
+		return nil
+	}
+	return compiled
+}
+
 func Parse(data []byte) (*RepoConfig, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
@@ -159,6 +183,11 @@ func DefaultYAML() []byte {
 		"# upload:",
 		"#   window: 10m",
 		"",
+		"# Which tags derive releases when their analysis is uploaded (ADR-024).",
+		"# Default matches v-prefixed semver-ish tags (v1.2.3, 1.2, v2.0.0-rc.1):",
+		"# releases:",
+		"#   tag_pattern: \"^payments-v\\\\d+\\\\.\\\\d+\\\\.\\\\d+$\"",
+		"",
 	}, "\n"))
 }
 
@@ -202,6 +231,20 @@ func (c *RepoConfig) validate() error {
 		return err
 	}
 
+	if err := validateReleasesConfig(c.Releases); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateReleasesConfig(releases *ReleasesConfig) error {
+	if releases == nil || strings.TrimSpace(releases.TagPattern) == "" {
+		return nil
+	}
+	if _, err := regexp.Compile(releases.TagPattern); err != nil {
+		return fmt.Errorf("releases.tag_pattern is not a valid regular expression: %w", err)
+	}
 	return nil
 }
 

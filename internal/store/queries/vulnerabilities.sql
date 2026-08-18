@@ -349,3 +349,51 @@ WHERE v.snapshot_id = $1
   AND v.type IN ('dependency', 'container')
   AND v.reachability = 'not_reachable'
   AND v.advisory_id IS NOT NULL;
+
+-- name: ListFindingTransitions :many
+-- The scan-observed life of a fingerprint, per ref: the snapshot that first
+-- reported it and every later snapshot whose status differs from the previous
+-- one. The snapshot series already is the history, so the timeline needs no
+-- separate event table — only the rows where something actually changed.
+WITH observations AS (
+    SELECT r.id AS ref_id,
+           r.name AS ref_name,
+           r.ref_type::text AS ref_type,
+           s.commit_sha,
+           s.created_at AS observed_at,
+           v.status::text AS status,
+           v.severity::text AS severity,
+           LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status
+    FROM vulnerabilities v
+    JOIN snapshots s ON s.id = v.snapshot_id
+    JOIN refs r ON r.id = s.ref_id
+    WHERE v.repo_id = $1
+      AND v.fingerprint = $2
+      AND s.status IN ('complete', 'active')
+)
+SELECT ref_name, ref_type, commit_sha, observed_at, status, severity,
+       COALESCE(previous_status, '')::text AS previous_status
+FROM observations
+WHERE previous_status IS DISTINCT FROM status
+ORDER BY observed_at DESC, ref_name
+LIMIT sqlc.arg(row_limit);
+
+-- name: GetFindingFirstObservation :one
+-- The birth of a fingerprint on a repository: the oldest observation of it,
+-- dated by first_seen_at (which the ingest carries forward across snapshots)
+-- rather than by the snapshot that happens to be the oldest one still stored.
+-- The timeline anchors on this, so "when did this appear" survives even when
+-- the transition list is capped.
+SELECT r.name AS ref_name,
+       r.ref_type::text AS ref_type,
+       s.commit_sha,
+       LEAST(v.first_seen_at, s.created_at)::timestamptz AS observed_at,
+       v.severity::text AS severity
+FROM vulnerabilities v
+JOIN snapshots s ON s.id = v.snapshot_id
+JOIN refs r ON r.id = s.ref_id
+WHERE v.repo_id = $1
+  AND v.fingerprint = $2
+  AND s.status IN ('complete', 'active')
+ORDER BY LEAST(v.first_seen_at, s.created_at) ASC, s.created_at ASC
+LIMIT 1;

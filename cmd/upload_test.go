@@ -207,3 +207,79 @@ func TestResolveUploadBaseUsesDetectedOrgRepoWhenFlagsAbsent(t *testing.T) {
 		t.Fatalf("base = %+v, want {github acme api-gateway}", base)
 	}
 }
+
+// On pull_request events GITHUB_SHA is the ephemeral merge commit; the true
+// PR head comes from the event payload and is what checks must attach to.
+func TestResolveUploadContextGitHubPRUsesEventHeadSHA(t *testing.T) {
+	eventFile := t.TempDir() + "/event.json"
+	if err := os.WriteFile(eventFile, []byte(`{"pull_request":{"head":{"sha":"headsha7777"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "mergesha0000")
+	t.Setenv("GITHUB_REF", "refs/pull/42/merge")
+	t.Setenv("GITHUB_EVENT_PATH", eventFile)
+	t.Cleanup(resetUploadFlags)
+
+	ctx := resolveUploadContext()
+
+	if ctx.commitSHA != "headsha7777" {
+		t.Fatalf("commitSHA = %q, want the PR head from the event payload", ctx.commitSHA)
+	}
+}
+
+// Outside a PR (branch push), GITHUB_SHA is already the right commit — the
+// event payload must not override it even if it carries a pull_request block.
+func TestResolveUploadContextGitHubBranchKeepsGithubSHA(t *testing.T) {
+	eventFile := t.TempDir() + "/event.json"
+	if err := os.WriteFile(eventFile, []byte(`{"pull_request":{"head":{"sha":"headsha7777"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "branchsha111")
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	t.Setenv("GITHUB_EVENT_PATH", eventFile)
+	t.Cleanup(resetUploadFlags)
+
+	ctx := resolveUploadContext()
+
+	if ctx.commitSHA != "branchsha111" {
+		t.Fatalf("commitSHA = %q, want GITHUB_SHA on a branch ref", ctx.commitSHA)
+	}
+}
+
+// A missing or malformed event file must fall back to GITHUB_SHA, never fail.
+func TestResolveUploadContextGitHubPRBrokenEventFileFallsBack(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_SHA", "mergesha0000")
+	t.Setenv("GITHUB_REF", "refs/pull/42/merge")
+	t.Setenv("GITHUB_EVENT_PATH", t.TempDir()+"/missing.json")
+	t.Cleanup(resetUploadFlags)
+
+	ctx := resolveUploadContext()
+
+	if ctx.commitSHA != "mergesha0000" {
+		t.Fatalf("commitSHA = %q, want the GITHUB_SHA fallback", ctx.commitSHA)
+	}
+}
+
+// GitLab merged-results pipelines run on an internal merge commit; the MR head
+// (CI_MERGE_REQUEST_SOURCE_BRANCH_SHA) is what the forge shows.
+func TestResolveUploadContextGitLabMergedResultsUsesSourceBranchSHA(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "")
+	t.Setenv("GITHUB_SHA", "")
+	t.Setenv("GITHUB_RUN_ID", "")
+	t.Setenv("GITLAB_CI", "true")
+	t.Setenv("CI_PROJECT_PATH", "group/project")
+	t.Setenv("CI_PROJECT_NAME", "project")
+	t.Setenv("CI_COMMIT_SHA", "internalmerge99")
+	t.Setenv("CI_COMMIT_REF_NAME", "feature")
+	t.Setenv("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "realhead4242")
+	t.Cleanup(resetUploadFlags)
+
+	ctx := resolveUploadContext()
+
+	if ctx.commitSHA != "realhead4242" {
+		t.Fatalf("commitSHA = %q, want the MR source branch head", ctx.commitSHA)
+	}
+}

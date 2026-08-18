@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 const defaultAuditLogsPerPage = 50
@@ -29,13 +30,14 @@ type auditLogEntryResponse struct {
 }
 
 // @Summary      List audit logs
-// @Description  List audit log entries for an organization visible to organization members
+// @Description  List audit log entries for an organization. Restricted to organization admins; audit context can carry admin-only detail.
 // @Tags         audit
 // @Produce      json
 // @Param        provider       path      string  true   "Forge provider"
 // @Param        slug           path      string  true   "Organization slug"
 // @Param        action         query     string  false  "Action filter"
 // @Param        resource_type  query     string  false  "Resource type filter"
+// @Param        repo           query     string  false  "Repository slug; limits entries to that repository"
 // @Param        page           query     int     false  "Page number"
 // @Param        per_page       query     int     false  "Items per page"
 // @Success      200            {object}  api.ListResponse{data=[]server.auditLogEntryResponse}
@@ -60,6 +62,10 @@ func (s *Server) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit entries carry admin-scoped context (token provenance, member/role
+	// changes, settings diffs), so the log is admin-only — a member must not be
+	// able to tell the log apart from a missing org. Exception: the repo-scoped
+	// listing is also open to admins of the team owning that repository.
 	role, err := s.principalOrgRole(r, org.ID)
 	if err != nil || role == "" {
 		api.JSONError(w, http.StatusNotFound, "organization not found")
@@ -70,27 +76,63 @@ func (s *Server) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	action := strings.TrimSpace(r.URL.Query().Get("action"))
 	resourceType := strings.TrimSpace(r.URL.Query().Get("resource_type"))
 
-	var entries []auditLogEntryResponse
-	var total int
+	repoID := ""
+	if repoSlug := strings.TrimSpace(r.URL.Query().Get("repo")); repoSlug != "" {
+		repo, repoErr := s.queries.GetRepositoryBySlug(r.Context(), org.ID, repoSlug)
+		if repoErr != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to load repository")
+			return
+		}
+		if repo == nil {
+			api.JSONError(w, http.StatusNotFound, "repository not found")
+			return
+		}
+		allowed, adminErr := s.canViewRepoAudit(r, role, repo)
+		if adminErr != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to resolve permissions")
+			return
+		}
+		if !allowed {
+			api.JSONError(w, http.StatusNotFound, "organization not found")
+			return
+		}
+		repoID = repo.ID.String()
+	} else if role != "admin" {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return
+	}
 
-	if action == "" && resourceType == "" {
-		entries, total, err = s.listFilteredAuditLogs(r.Context(), org.ID, "", "", pagination.PerPage, pagination.Offset)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to list audit logs")
-			return
-		}
-	} else {
-		entries, total, err = s.listFilteredAuditLogs(r.Context(), org.ID, action, resourceType, pagination.PerPage, pagination.Offset)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to list audit logs")
-			return
-		}
+	entries, total, err := s.listFilteredAuditLogs(r.Context(), org.ID, action, resourceType, repoID, pagination.PerPage, pagination.Offset)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list audit logs")
+		return
 	}
 
 	api.JSONList(w, entries, pagination.Page, pagination.PerPage, total)
 }
 
-func (s *Server) listFilteredAuditLogs(ctx context.Context, orgID uuid.UUID, action, resourceType string, limit, offset int) ([]auditLogEntryResponse, int, error) {
+// canViewRepoAudit reports whether the requesting principal may read the
+// repo-scoped audit log: org admins always, and users who are admins of the
+// team owning the repository (the closest thing to a repo-level admin).
+func (s *Server) canViewRepoAudit(r *http.Request, orgRole string, repo *store.Repository) (bool, error) {
+	if orgRole == "admin" {
+		return true, nil
+	}
+	user := UserFromContext(r.Context())
+	if user == nil || repo.TeamID == nil {
+		return false, nil
+	}
+	teamRole, err := s.queries.GetTeamMemberRole(r.Context(), *repo.TeamID, user.ID)
+	if err != nil {
+		return false, err
+	}
+	return teamRole == "admin", nil
+}
+
+// buildAuditLogFilter assembles the WHERE clause for audit-log listing from
+// fixed predicates and positional placeholders only; every user-supplied value
+// travels as a bound argument.
+func buildAuditLogFilter(orgID uuid.UUID, action, resourceType, repoID string) (string, []any) {
 	whereParts := []string{"org_id = $1"}
 	args := []any{orgID}
 
@@ -102,12 +144,22 @@ func (s *Server) listFilteredAuditLogs(ctx context.Context, orgID uuid.UUID, act
 		whereParts = append(whereParts, fmt.Sprintf("resource_type = $%d", len(args)+1))
 		args = append(args, resourceType)
 	}
+	if repoID != "" {
+		// Repository actions land either as the resource itself or with the
+		// repo carried in the context (suppressions, finding acceptance, ...).
+		whereParts = append(whereParts, fmt.Sprintf("((resource_type = 'repository' AND resource_id = $%d) OR context->>'repo_id' = $%d)", len(args)+1, len(args)+1))
+		args = append(args, repoID)
+	}
 
-	whereClause := strings.Join(whereParts, " AND ")
+	return strings.Join(whereParts, " AND "), args
+}
+
+func (s *Server) listFilteredAuditLogs(ctx context.Context, orgID uuid.UUID, action, resourceType, repoID string, limit, offset int) ([]auditLogEntryResponse, int, error) {
+	whereClause, args := buildAuditLogFilter(orgID, action, resourceType, repoID)
 
 	countQuery := "SELECT COUNT(*) FROM audit_logs WHERE " + whereClause
 	var total int
-	//nolint:gosec // G701: countQuery only contains trusted SQL fragments and bound parameters.
+	// countQuery only contains trusted SQL fragments and bound parameters.
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
@@ -122,7 +174,7 @@ ORDER BY created_at DESC
 LIMIT $%d OFFSET $%d
 `, whereClause, len(args)+1, len(args)+2)
 
-	//nolint:gosec // G701: listQuery only contains trusted SQL fragments and bound parameters.
+	// listQuery only contains trusted SQL fragments and bound parameters.
 	rows, err := s.db.QueryContext(ctx, listQuery, listArgs...)
 	if err != nil {
 		return nil, 0, err

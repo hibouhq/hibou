@@ -222,8 +222,8 @@ func TestGatePublisherPostsFailureStatusForPRSnapshot(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
-	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-1234", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-gatePublisher"}}
 	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 0, MaxHigh: 0, MaxMedium: sql.NullInt32{Int32: 0, Valid: true}, Enabled: true}}
 
@@ -276,8 +276,8 @@ func TestGatePublisherAdvisoryDefaultNeverBlocks(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/7", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
-	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.orgSlugs[orgID] = "acme-org"
 	store.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Title: "CVE-2026-1234", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-advisory"}}
 	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 0, MaxHigh: 0, MaxMedium: sql.NullInt32{Int32: 0, Valid: true}, Enabled: true}}
@@ -320,9 +320,9 @@ func TestGatePublisherRecomputeForRef(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/9", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "head99", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "head99", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.latestSnapshot[prRefID] = store.snapshots[prSnapshotID]
-	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.orgSlugs[orgID] = "acme-org"
 	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 0, Enabled: true}}
 
@@ -347,7 +347,7 @@ func TestGatePublisherSkipsNonPRSnapshots(t *testing.T) {
 	snapshotID := uuid.New()
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: uuid.New(), Name: "acme/api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[refID] = dbgen.Ref{ID: refID, RepoID: repoID, RefType: dbgen.RefTypeBranch}
-	store.snapshots[snapshotID] = dbgen.Snapshot{ID: snapshotID, RefID: refID, CommitSha: "abc123"}
+	store.snapshots[snapshotID] = dbgen.Snapshot{ID: snapshotID, RefID: refID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete}
 	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
 	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "", zerolog.Nop())
 
@@ -372,8 +372,8 @@ func TestGatePublisherUsesRepoConfigWeaknessGateWhenAvailable(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api", DefaultBranch: "main"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "release/1.0", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
-	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.vulnsBySnapshot[prSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "sast", Title: "new", Severity: storepkg.SeverityLevelCritical, Fingerprint: "fp-1"}}
 	store.repoGates[repoID] = []dbgen.QualityGate{{ID: uuid.New(), OrgID: orgID, RepoID: uuid.NullUUID{UUID: repoID, Valid: true}, Name: "strict", MaxCritical: 10, MaxHigh: 10, MaxMedium: sql.NullInt32{Int32: 10, Valid: true}, MaxNewFindings: sql.NullInt32{Int32: 0, Valid: true}, Enabled: true}}
 
@@ -414,11 +414,11 @@ func TestGatePublisherBranchScanRecomputesTargetingPRs(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	// The scanned snapshot is on the base branch "main".
 	store.refs[baseRefID] = dbgen.Ref{ID: baseRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[baseSnapshotID] = dbgen.Snapshot{ID: baseSnapshotID, RefID: baseRefID, CommitSha: "base-new", CreatedAt: time.Now().UTC()}
+	store.snapshots[baseSnapshotID] = dbgen.Snapshot{ID: baseSnapshotID, RefID: baseRefID, CommitSha: "base-new", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.latestSnapshot[baseRefID] = store.snapshots[baseSnapshotID]
 	// An open PR targeting main.
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/12", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: baseRefID, Valid: true}}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "pr-head", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "pr-head", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.latestSnapshot[prRefID] = store.snapshots[prSnapshotID]
 	store.orgSlugs[orgID] = "acme-org"
 	store.openPRRefs[repoID] = []dbgen.Ref{{ID: prRefID, MergeTargetRefID: uuid.NullUUID{UUID: baseRefID, Valid: true}}}
@@ -485,7 +485,7 @@ func TestGatePublisherPostsPendingWhenTargetSnapshotMissing(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	// Deliberately no latestSnapshot[targetRefID]: nothing to compare against.
 	store.orgSlugs[orgID] = "acme-org"
 
@@ -521,8 +521,8 @@ func TestGatePublisherRecomputeBySnapshotIDPublishesGate(t *testing.T) {
 	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
 	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "pr-1", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", CreatedAt: time.Now().UTC()}
-	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.orgSlugs[orgID] = "acme-org"
 
 	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
@@ -560,7 +560,7 @@ func TestGatePublisherStaleSnapshotPostsWaitingOnHead(t *testing.T) {
 		LatestCommitSha: sql.NullString{String: "54fae6d0000", Valid: true},
 	}
 	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
-	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "417b4920000", CreatedAt: time.Now().UTC()}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "417b4920000", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
 	store.orgSlugs[orgID] = "acme-org"
 
 	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
@@ -582,5 +582,107 @@ func TestGatePublisherStaleSnapshotPostsWaitingOnHead(t *testing.T) {
 	}
 	if len(store.prChecks) != 0 {
 		t.Fatalf("no verdict may be persisted for a stale snapshot, got %d", len(store.prChecks))
+	}
+}
+
+// A PR whose current head has NO analyzed snapshot at all (opened / pushed,
+// CI upload not arrived) must still show a check: the in-progress
+// "waiting for upload" state on the webhook-tracked head. Same context as the
+// verdict, so branch protection blocks the merge until the upload lands.
+func TestGatePublisherNoSnapshotPostsWaitingForUpload(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID := uuid.New()
+	repoID := uuid.New()
+	prRefID := uuid.New()
+	targetRefID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{
+		ID: prRefID, RepoID: repoID, Name: "refs/pull/12", RefType: dbgen.RefTypePullRequest,
+		MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true},
+		LatestCommitSha:  sql.NullString{String: "aa11bb22cc3", Valid: true},
+	}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.orgSlugs[orgID] = "acme-org"
+	// No snapshot for the PR ref at all.
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "https://hibou.example.com", zerolog.Nop())
+	gatePublisher.PublishGateForRef(context.Background(), prRefID)
+
+	if len(forgeProvider.statuses) != 1 {
+		t.Fatalf("expected 1 commit status, got %d", len(forgeProvider.statuses))
+	}
+	posted := forgeProvider.statuses[0]
+	if posted.sha != "aa11bb22cc3" {
+		t.Fatalf("check must attach to the webhook head, got %q", posted.sha)
+	}
+	if posted.status.State != "pending" {
+		t.Fatalf("waiting-for-upload must post pending, got %q", posted.status.State)
+	}
+	if !strings.Contains(posted.status.Description, "Waiting for upload") {
+		t.Fatalf("description must say what is awaited, got %q", posted.status.Description)
+	}
+	if len(store.prChecks) != 0 {
+		t.Fatalf("no verdict may be persisted before the upload, got %d", len(store.prChecks))
+	}
+}
+
+// A ref with no webhook-tracked head and no snapshot has nothing to attach a
+// check to — the publisher must stay silent, not panic or post garbage.
+func TestGatePublisherNoSnapshotNoHeadStaysSilent(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	repoID := uuid.New()
+	prRefID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: uuid.New(), Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/13", RefType: dbgen.RefTypePullRequest}
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "https://hibou.example.com", zerolog.Nop())
+	gatePublisher.PublishGateForRef(context.Background(), prRefID)
+
+	if len(forgeProvider.statuses) != 0 {
+		t.Fatalf("expected no status without a head SHA, got %d", len(forgeProvider.statuses))
+	}
+}
+
+// A scan-completed event for a snapshot that is not analyzed (pending
+// placeholder, failed) must never be gate-evaluated — an empty snapshot reads
+// as "0 findings — passed". The publisher posts the waiting state instead.
+func TestGatePublisherPendingSnapshotNeverEvaluated(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID := uuid.New()
+	repoID := uuid.New()
+	prRefID := uuid.New()
+	targetRefID := uuid.New()
+	prSnapshotID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{
+		ID: prRefID, RepoID: repoID, Name: "refs/pull/14", RefType: dbgen.RefTypePullRequest,
+		MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true},
+		LatestCommitSha:  sql.NullString{String: "dd44ee55ff6", Valid: true},
+	}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "dd44ee55ff6", Status: dbgen.SnapshotStatusPending, CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "https://hibou.example.com", zerolog.Nop())
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(forgeProvider.statuses) != 1 {
+		t.Fatalf("expected 1 commit status, got %d", len(forgeProvider.statuses))
+	}
+	posted := forgeProvider.statuses[0]
+	if posted.status.State != "pending" {
+		t.Fatalf("a pending snapshot must publish the waiting state, got %q", posted.status.State)
+	}
+	if len(store.prChecks) != 0 {
+		t.Fatalf("no verdict may be persisted for a pending snapshot, got %d", len(store.prChecks))
 	}
 }
