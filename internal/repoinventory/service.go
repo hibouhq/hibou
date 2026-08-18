@@ -106,6 +106,24 @@ func (s *Service) SeedInstallation(ctx context.Context, providerID string, inst 
 func (s *Service) ApplyInstallation(ctx context.Context, providerID string, ev forge.InstallationEvent) error {
 	switch strings.ToLower(strings.TrimSpace(ev.Action)) {
 	case "created", "new_permissions_accepted", "unsuspend":
+		if len(ev.Repositories) == 0 {
+			// GitHub omits (or truncates) the repositories array on some
+			// installation actions, e.g. new_permissions_accepted. Seeding
+			// from an empty payload would soft-delete the whole account
+			// inventory, so re-list from the forge API instead; when the
+			// forge cannot list (no App credentials), leave the existing
+			// inventory untouched.
+			outcome, err := s.Sync(ctx, providerID, ev.Installation.AccountName)
+			if err == nil && outcome != SyncOutcomeSynced {
+				s.log.Warn().
+					Str("provider", strings.TrimSpace(providerID)).
+					Str("account", strings.TrimSpace(ev.Installation.AccountName)).
+					Str("action", ev.Action).
+					Str("outcome", string(outcome)).
+					Msg("installation event carried no repositories and forge listing was unavailable; inventory left unchanged")
+			}
+			return err
+		}
 		return s.SeedInstallation(ctx, providerID, ev.Installation, ev.Repositories)
 	case "deleted", "suspend":
 		if ev.Installation.ID <= 0 || s.store == nil {
@@ -219,25 +237,38 @@ func (s *Service) upsertAndRetirePreviousKey(ctx context.Context, providerID str
 	return nil
 }
 
-func (s *Service) Sync(ctx context.Context, providerID, account string) error {
+// SyncOutcome explains why a Sync did or did not reconcile anything. A
+// non-synced outcome is not an error: it distinguishes "nothing to do" cases
+// (forge not configured, no App installations, account not covered by any
+// installation) that previously all looked like a successful empty sync.
+type SyncOutcome string
+
+const (
+	SyncOutcomeSynced           SyncOutcome = "synced"
+	SyncOutcomeProviderUnknown  SyncOutcome = "provider_not_configured"
+	SyncOutcomeNoInstallations  SyncOutcome = "no_installations"
+	SyncOutcomeAccountUnmatched SyncOutcome = "no_matching_installation"
+)
+
+func (s *Service) Sync(ctx context.Context, providerID, account string) (SyncOutcome, error) {
 	provider := s.forges[strings.TrimSpace(providerID)]
 	if provider == nil {
-		return nil
+		return SyncOutcomeProviderUnknown, nil
 	}
 	installations, err := provider.Installations(ctx)
 	if err != nil {
-		return err
+		return SyncOutcomeNoInstallations, err
 	}
 	if len(installations) == 0 {
-		return nil
+		return SyncOutcomeNoInstallations, nil
 	}
 	matched, ok := matchInstallationAccount(installations, account)
 	if !ok {
-		return nil
+		return SyncOutcomeAccountUnmatched, nil
 	}
 	repositories, err := provider.ListRepositories(ctx, forge.ListReposOptions{})
 	if err != nil {
-		return err
+		return SyncOutcomeSynced, err
 	}
 	filtered := make([]forge.Repository, 0, len(repositories))
 	for _, repo := range repositories {
@@ -246,17 +277,17 @@ func (s *Service) Sync(ctx context.Context, providerID, account string) error {
 		}
 	}
 	if err := s.SeedInstallation(ctx, providerID, matched, filtered); err != nil {
-		return err
+		return SyncOutcomeSynced, err
 	}
 	if s.store == nil {
-		return nil
+		return SyncOutcomeSynced, nil
 	}
 	for _, repo := range filtered {
 		if err := s.setRepositoryArchived(ctx, providerID, matched.AccountName, normalizeRepositoryKey(repo.FullName), repo.FullName, repo.Archived); err != nil {
-			return err
+			return SyncOutcomeSynced, err
 		}
 	}
-	return nil
+	return SyncOutcomeSynced, nil
 }
 
 func (s *Service) upsertRepository(ctx context.Context, providerID string, inst *forge.Installation, repo forge.Repository, archived bool) (*store.ForgeRepositoryUpsertResult, error) {

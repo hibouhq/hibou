@@ -1001,6 +1001,7 @@ export interface OrgDashboard {
 
 export interface SyncReposResponse {
   synced: boolean
+  outcome: 'synced' | 'provider_not_configured' | 'no_installations' | 'no_matching_installation'
   provider: string
   account: string
   repo_count: number

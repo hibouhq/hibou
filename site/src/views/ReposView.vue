@@ -294,7 +294,11 @@ async function syncNow() {
   try {
     const response = await api.syncRepos(provider.value, slug.value)
     await reloadRepos()
-    actionMessage.value = formatSyncSummary(response.data)
+    if (response.data.synced) {
+      actionMessage.value = formatSyncSummary(response.data)
+    } else {
+      actionError.value = formatSyncOutcome(response.data.outcome)
+    }
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : 'Failed to sync repositories'
   } finally {
@@ -309,6 +313,19 @@ async function reloadRepos() {
 
 function formatSyncSummary(response: SyncReposResponse) {
   return `Sync complete. ${response.summary.active} active, ${response.summary.discovered} discovered, ${response.summary.archived} archived.`
+}
+
+function formatSyncOutcome(outcome: SyncReposResponse['outcome']) {
+  switch (outcome) {
+    case 'provider_not_configured':
+      return 'Sync unavailable: this forge is not configured on the server.'
+    case 'no_installations':
+      return 'Sync found no app installations. The server has no forge App credentials, or the app is not installed anywhere.'
+    case 'no_matching_installation':
+      return 'No app installation covers this organization. Install the forge app on the organization, then sync again.'
+    default:
+      return 'Sync did not run.'
+  }
 }
 
 function isSafeUrl(url: string) {

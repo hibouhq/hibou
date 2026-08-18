@@ -314,8 +314,12 @@ func TestSyncMakesArchivedAuthoritativeForMatchedRepositories(t *testing.T) {
 		t.Fatalf("seed web: %v", err)
 	}
 
-	if err := service.Sync(ctx, "github", "acme"); err != nil {
+	outcome, err := service.Sync(ctx, "github", "acme")
+	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
+	}
+	if outcome != SyncOutcomeSynced {
+		t.Fatalf("Sync() outcome = %q, want %q", outcome, SyncOutcomeSynced)
 	}
 
 	if repo := fakeStore.byKey("github", "acme/api"); repo == nil || !repo.Archived {
@@ -326,6 +330,95 @@ func TestSyncMakesArchivedAuthoritativeForMatchedRepositories(t *testing.T) {
 	}
 	if repo := fakeStore.byKey("github", "other/skip"); repo != nil {
 		t.Fatalf("expected other tenant repo not to be synced, got %#v", repo)
+	}
+}
+
+func TestSyncReportsNonSyncedOutcomes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		forges map[string]forge.Provider
+		want   SyncOutcome
+	}{
+		{name: "provider not configured", forges: map[string]forge.Provider{}, want: SyncOutcomeProviderUnknown},
+		{name: "no installations", forges: map[string]forge.Provider{"github": &stubProvider{}}, want: SyncOutcomeNoInstallations},
+		{name: "no matching installation", forges: map[string]forge.Provider{"github": &stubProvider{installations: []forge.Installation{{ID: 5, AccountName: "someone-else"}}}}, want: SyncOutcomeAccountUnmatched},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			service := NewService(newFakeStore(), tc.forges, zerolog.New(io.Discard))
+			outcome, err := service.Sync(ctx, "github", "acme")
+			if err != nil {
+				t.Fatalf("Sync() error = %v", err)
+			}
+			if outcome != tc.want {
+				t.Fatalf("Sync() outcome = %q, want %q", outcome, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyInstallationEmptyPayloadReListsFromForge(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fakeStore := newFakeStore()
+	provider := &stubProvider{
+		installations: []forge.Installation{{ID: 12, AccountName: "acme"}},
+		repositories:  []forge.Repository{{Owner: "acme", Name: "api", FullName: "acme/api"}},
+	}
+	service := NewService(fakeStore, map[string]forge.Provider{"github": provider}, zerolog.New(io.Discard))
+
+	if _, err := fakeStore.UpsertForgeRepository(ctx, store.ForgeRepository{Provider: "github", InstallationID: int64Ptr(12), AccountLogin: "acme", Owner: "acme", Name: "api", FullName: "acme/api"}); err != nil {
+		t.Fatalf("seed api: %v", err)
+	}
+	if _, err := fakeStore.UpsertForgeRepository(ctx, store.ForgeRepository{Provider: "github", InstallationID: int64Ptr(12), AccountLogin: "acme", Owner: "acme", Name: "old", FullName: "acme/old"}); err != nil {
+		t.Fatalf("seed old: %v", err)
+	}
+
+	err := service.ApplyInstallation(ctx, "github", forge.InstallationEvent{
+		Action:       "new_permissions_accepted",
+		Installation: forge.Installation{ID: 12, AccountName: "acme"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyInstallation() error = %v", err)
+	}
+
+	if repo := fakeStore.byKey("github", "acme/api"); repo == nil || repo.RemovedAt != nil {
+		t.Fatalf("expected acme/api to survive empty-payload installation event, got %#v", repo)
+	}
+	if repo := fakeStore.byKey("github", "acme/old"); repo == nil || repo.RemovedAt == nil {
+		t.Fatalf("expected acme/old removed after authoritative re-list, got %#v", repo)
+	}
+}
+
+func TestApplyInstallationEmptyPayloadWithoutForgeAccessKeepsInventory(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fakeStore := newFakeStore()
+	// OAuth-only mode: provider is configured but has no App installations,
+	// so the forge cannot be re-listed. The event must not wipe the inventory.
+	service := NewService(fakeStore, map[string]forge.Provider{"github": &stubProvider{}}, zerolog.New(io.Discard))
+
+	if _, err := fakeStore.UpsertForgeRepository(ctx, store.ForgeRepository{Provider: "github", InstallationID: int64Ptr(12), AccountLogin: "acme", Owner: "acme", Name: "api", FullName: "acme/api"}); err != nil {
+		t.Fatalf("seed api: %v", err)
+	}
+
+	err := service.ApplyInstallation(ctx, "github", forge.InstallationEvent{
+		Action:       "new_permissions_accepted",
+		Installation: forge.Installation{ID: 12, AccountName: "acme"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyInstallation() error = %v", err)
+	}
+
+	if repo := fakeStore.byKey("github", "acme/api"); repo == nil || repo.RemovedAt != nil {
+		t.Fatalf("expected inventory untouched when forge listing is unavailable, got %#v", repo)
 	}
 }
 

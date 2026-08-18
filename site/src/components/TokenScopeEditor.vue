@@ -33,13 +33,24 @@ const loadingRepos = ref(false)
 const repoError = ref('')
 const repoFilter = ref('')
 
+// A discovered (not yet enrolled) repo has no slug yet. Its first CI upload
+// auto-enrolls it with slug = the repo name the CLI sends, and the upload
+// scope check matches that same value pre-enrollment — so the name IS the
+// slug this token must carry to cover the repo.
+function repoScopeValue(repo: Repository) {
+  return repo.slug || repo.name
+}
+
 // Selected repos always stay visible even when they don't match the filter,
 // so a filter can never hide what the token is being granted.
 const visibleRepos = computed(() => {
   const query = repoFilter.value.trim().toLowerCase()
   if (!query) return repos.value
   const selected = new Set(scope.value.repos.slugs ?? [])
-  return repos.value.filter((repo) => repo.slug.toLowerCase().includes(query) || selected.has(repo.slug))
+  return repos.value.filter(
+    (repo) =>
+      repoScopeValue(repo).toLowerCase().includes(query) || selected.has(repoScopeValue(repo)),
+  )
 })
 
 const scope = computed(() => props.modelValue)
@@ -204,7 +215,7 @@ void loadOrgs()
           v-else-if="repos.length === 0"
           class="text-xs text-gray-500"
         >
-          No repositories enrolled in this organization.
+          No repositories in this organization.
         </p>
         <div v-else>
           <input
@@ -217,16 +228,20 @@ void loadOrgs()
           <div class="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay p-2">
             <label
               v-for="repo in visibleRepos"
-              :key="repo.slug"
+              :key="repo.full_name || repoScopeValue(repo)"
               class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-gray-300 hover:bg-surface-raised"
             >
               <input
                 type="checkbox"
-                :checked="(scope.repos.slugs ?? []).includes(repo.slug)"
+                :checked="(scope.repos.slugs ?? []).includes(repoScopeValue(repo))"
                 class="rounded border-surface-border"
-                @change="toggleRepo(repo.slug)"
+                @change="toggleRepo(repoScopeValue(repo))"
               >
-              <span class="font-mono text-xs">{{ repo.slug }}</span>
+              <span class="font-mono text-xs">{{ repoScopeValue(repo) }}</span>
+              <span
+                v-if="!repo.enrolled"
+                class="text-[10px] uppercase tracking-wide text-gray-500"
+              >not enrolled</span>
             </label>
             <p
               v-if="visibleRepos.length === 0"

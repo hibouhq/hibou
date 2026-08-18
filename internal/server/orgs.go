@@ -14,6 +14,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/orgprovision"
+	"github.com/hibouhq/hibou/internal/repoinventory"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -208,8 +209,11 @@ func (s *Server) syncCreatedOrg(org *store.Organization) {
 				s.log.Error().Interface("panic", recovered).Str("provider", org.Provider).Str("account", org.Slug).Msg("background repository inventory sync panicked")
 			}
 		}()
-		if err := s.inventorySvc.Sync(ctx, org.Provider, org.Slug); err != nil {
+		outcome, err := s.inventorySvc.Sync(ctx, org.Provider, org.Slug)
+		if err != nil {
 			s.log.Error().Err(err).Str("provider", org.Provider).Str("account", org.Slug).Msg("background repository inventory sync failed")
+		} else if outcome != repoinventory.SyncOutcomeSynced {
+			s.log.Warn().Str("provider", org.Provider).Str("account", org.Slug).Str("outcome", string(outcome)).Msg("background repository inventory sync did not run")
 		}
 	}()
 }

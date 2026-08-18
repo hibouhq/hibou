@@ -831,6 +831,8 @@ definitions:
     properties:
       account:
         type: string
+      outcome:
+        type: string
       provider:
         type: string
       repo_count:

@@ -7770,6 +7770,9 @@ const docTemplate = `{
                 "account": {
                     "type": "string"
                 },
+                "outcome": {
+                    "type": "string"
+                },
                 "provider": {
                     "type": "string"
                 },

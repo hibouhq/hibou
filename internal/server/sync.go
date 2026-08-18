@@ -4,10 +4,12 @@ import (
 	"net/http"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/repoinventory"
 )
 
 type syncReposResponse struct {
 	Synced    bool                 `json:"synced"`
+	Outcome   string               `json:"outcome"`
 	Provider  string               `json:"provider"`
 	Account   string               `json:"account"`
 	RepoCount int                  `json:"repo_count"`
@@ -37,7 +39,8 @@ func (s *Server) handleSyncRepos(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusServiceUnavailable, "repository inventory service unavailable")
 		return
 	}
-	if err := s.inventorySvc.Sync(r.Context(), org.Provider, org.Slug); err != nil {
+	outcome, err := s.inventorySvc.Sync(r.Context(), org.Provider, org.Slug)
+	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to sync repositories")
 		return
 	}
@@ -47,7 +50,8 @@ func (s *Server) handleSyncRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.JSON(w, http.StatusOK, syncReposResponse{
-		Synced:    true,
+		Synced:    outcome == repoinventory.SyncOutcomeSynced,
+		Outcome:   string(outcome),
 		Provider:  org.Provider,
 		Account:   org.Slug,
 		RepoCount: len(repos),
