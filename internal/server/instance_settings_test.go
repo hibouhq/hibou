@@ -21,7 +21,7 @@ func TestIsInstanceAdmin(t *testing.T) {
 	}
 
 	// No user in context: never an admin.
-	anonymous := httptest.NewRequest("GET", "/api/v1/instance/settings/banners", nil)
+	anonymous := httptest.NewRequest(http.MethodGet, "/api/v1/instance/settings/banners", nil)
 	if srv.isInstanceAdmin(anonymous) {
 		t.Fatal("anonymous request must not be instance admin")
 	}
@@ -54,7 +54,7 @@ func TestInstanceAdminsFileHotReload(t *testing.T) {
 	}
 
 	requestFor := func(email string) *http.Request {
-		req := httptest.NewRequest("GET", "/api/v1/instance/settings/banners", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/settings/banners", nil)
 		return req.WithContext(auth.WithUser(req.Context(), &store.User{Email: email}))
 	}
 

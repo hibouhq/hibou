@@ -115,6 +115,16 @@ max:
 # session:
 #   secret: your-secure-secret-here
 
+# Instance administrators (case-insensitive emails). Instance admins manage
+# instance-wide settings (announcement banners, instance audit); the role is
+# distinct from org/repo admin membership. Prefer admins_file
+# (HIBOU_INSTANCE_ADMINS_FILE) in production: point it at a mounted Secret —
+# it is re-read on every check, so edits apply live and no email lands in git.
+# List changes are recorded in the instance audit log either way.
+# instance:
+#   admins_file: /etc/hibou/instance-admins/emails
+#   admins: "admin@example.com,ops@example.com"
+
 # Forge configuration uses indexed environment variables:
 #   HIBOU_FORGE_0_TYPE=forgejo
 #   HIBOU_FORGE_0_URL=http://localhost:3030

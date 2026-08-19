@@ -124,8 +124,8 @@ func TestMalwareBlockIsUnconditional(t *testing.T) {
 	name := "evil-pkg"
 	version := "1.0.0"
 	newVulns := []storepkg.Vulnerability{
-		{Type: "malware", Severity: storepkg.SeverityLevel(dbgen.SeverityLevelCritical), ComponentName: &name, ComponentVersion: &version},
-		{Type: "sast", Severity: storepkg.SeverityLevel(dbgen.SeverityLevelCritical)},
+		{Type: "malware", Severity: storepkg.SeverityLevelCritical, ComponentName: &name, ComponentVersion: &version},
+		{Type: "sast", Severity: storepkg.SeverityLevelCritical},
 	}
 
 	reasons := evaluateMalwareBlock(newVulns)
