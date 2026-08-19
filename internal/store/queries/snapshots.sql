@@ -83,10 +83,27 @@ WHERE id = $1
 RETURNING *;
 
 -- name: CompleteSnapshot :one
+-- Finalizing an upload does not mean the data is ready: SBOM/SARIF artifacts
+-- are ingested by the async worker afterwards. Land on 'processing' while any
+-- such artifact is queued (the predicate mirrors the worker's claim query) so
+-- data views and gates keep reading the previous complete snapshot; the worker
+-- flips to 'complete' when ingestion finishes. Coverage/tests ingest at upload
+-- time, so artifact-less snapshots complete immediately.
 UPDATE snapshots
-SET status = 'complete'
-WHERE id = $1
-	AND status = 'pending'
+SET status = CASE
+	WHEN EXISTS (
+		SELECT 1
+		FROM snapshot_artifacts sa
+		WHERE sa.snapshot_id = snapshots.id
+			AND (
+				sa.kind = 'sarif'
+				OR (sa.kind = 'sbom' AND sa.format IN ('cyclonedx-json', 'spdx-json'))
+			)
+	) THEN 'processing'::snapshot_status
+	ELSE 'complete'::snapshot_status
+END
+WHERE snapshots.id = $1
+	AND snapshots.status = 'pending'
 RETURNING *;
 
 -- name: ClaimNextArtifactProcessingSnapshot :one
@@ -94,7 +111,9 @@ WITH candidate AS (
 	SELECT s.id
 	FROM snapshots s
 	WHERE (
-			s.status = 'complete'
+			s.status = 'processing'
+			-- 'complete' arm: rows finalized before status 'processing' existed.
+			OR s.status = 'complete'
 			OR (s.status = 'failed' AND s.artifact_processing_attempts > 0)
 		)
 		AND s.artifact_processing_finished_at IS NULL
@@ -172,7 +191,7 @@ SET artifact_processing_claimed_by = NULL,
 	artifact_processing_claim_expires_at = NULL
 WHERE artifact_processing_claimed_by = sqlc.arg(worker_id)
 	AND artifact_processing_finished_at IS NULL
-	AND (status = 'complete' OR status = 'failed');
+	AND (status = 'processing' OR status = 'complete' OR status = 'failed');
 
 -- name: ArchiveSnapshot :exec
 WITH target AS (

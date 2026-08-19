@@ -572,6 +572,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
 						r.Get("/{repoSlug}/tests", s.handleGetTests)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
+						r.Get("/{repoSlug}/onboard", s.handleGetOnboardingStatus)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
 						r.Route("/{repoSlug}/vex", func(r chi.Router) {
 							r.Post("/", s.handleCreateVEXStatement)
@@ -826,7 +827,7 @@ func (s *Server) releaseArtifactClaimsExcluding(ctx context.Context, excluded []
 			artifact_processing_claim_expires_at = NULL
 		WHERE artifact_processing_claimed_by = $1
 			AND artifact_processing_finished_at IS NULL
-			AND (status = 'complete' OR status = 'failed')
+			AND (status = 'processing' OR status = 'complete' OR status = 'failed')
 			AND NOT (id = ANY($2::uuid[]))
 	`, s.artifactWorkerID, pq.Array(excludedIDs))
 	if err != nil {

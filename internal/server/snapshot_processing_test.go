@@ -665,7 +665,7 @@ func quarantineUnrelatedClaimableSnapshots(t *testing.T, srv *Server, snapshotID
 			artifact_processing_claim_expires_at = NULL
 		WHERE id <> $1
 			AND artifact_processing_finished_at IS NULL
-			AND (status = 'complete' OR status = 'failed')
+			AND (status = 'processing' OR status = 'complete' OR status = 'failed')
 	`, snapshotID); err != nil {
 		t.Fatalf("quarantineUnrelatedClaimableSnapshots: %v", err)
 	}

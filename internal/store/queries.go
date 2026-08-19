@@ -354,6 +354,21 @@ func (q *Queries) ListAuditLogsByResource(ctx context.Context, resourceType, res
 	})
 }
 
+func (q *Queries) GetLatestRepoAuditLogByAction(ctx context.Context, orgID, repoID uuid.UUID, action string) (*dbgen.AuditLog, error) {
+	row, err := q.db.GetLatestRepoAuditLogByAction(ctx, dbgen.GetLatestRepoAuditLogByActionParams{
+		OrgID:      uuid.NullUUID{UUID: orgID, Valid: true},
+		ResourceID: repoID.String(),
+		Action:     action,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
 func (q *Queries) CountAuditLogsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
 	return q.db.CountAuditLogsByOrg(ctx, uuid.NullUUID{UUID: orgID, Valid: true})
 }

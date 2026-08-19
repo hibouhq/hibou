@@ -1371,6 +1371,12 @@ class ApiClient {
     )
   }
 
+  getOnboardingStatus(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<{ pull_request: { number: number; html_url: string; title: string } | null }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/onboard`,
+    )
+  }
+
   getOrgSettings(provider: string, slug: string) {
     return this.request<ApiResponse<OrgSettings>>(`/orgs/${provider}/${slug}/settings`)
   }

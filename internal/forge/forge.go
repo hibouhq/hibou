@@ -123,9 +123,9 @@ type CreatePROptions struct {
 }
 
 type PullRequest struct {
-	Number  int
-	Title   string
-	HTMLURL string
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
 }
 
 type ListReposOptions struct {

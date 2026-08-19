@@ -149,7 +149,9 @@ WITH candidate AS (
 	SELECT s.id
 	FROM snapshots s
 	WHERE (
-			s.status = 'complete'
+			s.status = 'processing'
+			-- 'complete' arm: rows finalized before status 'processing' existed.
+			OR s.status = 'complete'
 			OR (s.status = 'failed' AND s.artifact_processing_attempts > 0)
 		)
 		AND s.artifact_processing_finished_at IS NULL
@@ -330,12 +332,29 @@ func (q *Queries) CompleteArtifactProcessingSnapshotWithWarning(ctx context.Cont
 
 const completeSnapshot = `-- name: CompleteSnapshot :one
 UPDATE snapshots
-SET status = 'complete'
-WHERE id = $1
-	AND status = 'pending'
+SET status = CASE
+	WHEN EXISTS (
+		SELECT 1
+		FROM snapshot_artifacts sa
+		WHERE sa.snapshot_id = snapshots.id
+			AND (
+				sa.kind = 'sarif'
+				OR (sa.kind = 'sbom' AND sa.format IN ('cyclonedx-json', 'spdx-json'))
+			)
+	) THEN 'processing'::snapshot_status
+	ELSE 'complete'::snapshot_status
+END
+WHERE snapshots.id = $1
+	AND snapshots.status = 'pending'
 RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id
 `
 
+// Finalizing an upload does not mean the data is ready: SBOM/SARIF artifacts
+// are ingested by the async worker afterwards. Land on 'processing' while any
+// such artifact is queued (the predicate mirrors the worker's claim query) so
+// data views and gates keep reading the previous complete snapshot; the worker
+// flips to 'complete' when ingestion finishes. Coverage/tests ingest at upload
+// time, so artifact-less snapshots complete immediately.
 func (q *Queries) CompleteSnapshot(ctx context.Context, id uuid.UUID) (Snapshot, error) {
 	row := q.db.QueryRowContext(ctx, completeSnapshot, id)
 	var i Snapshot
@@ -1594,7 +1613,7 @@ SET artifact_processing_claimed_by = NULL,
 	artifact_processing_claim_expires_at = NULL
 WHERE artifact_processing_claimed_by = $1
 	AND artifact_processing_finished_at IS NULL
-	AND (status = 'complete' OR status = 'failed')
+	AND (status = 'processing' OR status = 'complete' OR status = 'failed')
 `
 
 func (q *Queries) ReleaseArtifactProcessingClaims(ctx context.Context, workerID sql.NullString) (int64, error) {

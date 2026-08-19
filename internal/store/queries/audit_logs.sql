@@ -21,6 +21,12 @@ WHERE resource_type = $1 AND resource_id = $2
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4;
 
+-- name: GetLatestRepoAuditLogByAction :one
+SELECT * FROM audit_logs
+WHERE org_id = $1 AND resource_type = 'repository' AND resource_id = $2 AND action = $3
+ORDER BY created_at DESC
+LIMIT 1;
+
 -- name: ListAuditLogsByActor :many
 SELECT * FROM audit_logs
 WHERE actor_id = $1

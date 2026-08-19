@@ -2077,26 +2077,27 @@ function snapshotPrimaryLabel(snapshot: Snapshot) {
 function snapshotStatusLabel(snapshot: Snapshot) {
   if (snapshot.status === 'failed') return 'Build failed'
   if (snapshot.status === 'pending') return 'Build running'
+  if (snapshot.status === 'processing') return 'Processing'
   if (snapshot.status === 'active') return 'Build active'
   return 'Build passed'
 }
 
 function snapshotBadgeClass(snapshot: Snapshot) {
   if (snapshot.status === 'failed') return 'bg-danger/15 text-danger'
-  if (snapshot.status === 'pending') return 'bg-amber-500/15 text-amber-300'
+  if (snapshot.status === 'pending' || snapshot.status === 'processing') return 'bg-amber-500/15 text-amber-300'
   if (snapshot.tag) return 'bg-sky-500/15 text-sky-300'
   return 'bg-emerald-500/15 text-emerald-300'
 }
 
 function snapshotDotClass(snapshot: Snapshot) {
   if (snapshot.status === 'failed') return 'bg-danger'
-  if (snapshot.status === 'pending') return 'bg-amber-400 animate-pulse'
+  if (snapshot.status === 'pending' || snapshot.status === 'processing') return 'bg-amber-400 animate-pulse'
   return 'bg-emerald-400'
 }
 
 function snapshotStatusTextClass(snapshot: Snapshot) {
   if (snapshot.status === 'failed') return 'text-danger'
-  if (snapshot.status === 'pending') return 'text-amber-300'
+  if (snapshot.status === 'pending' || snapshot.status === 'processing') return 'text-amber-300'
   return 'text-emerald-300'
 }
 

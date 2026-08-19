@@ -181,6 +181,7 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute:               anyGrantRoute(),
 	"PUT " + repoRoute:               needs(apitoken.CapAdmin, apitoken.AccessWrite),
 	"DELETE " + repoRoute:            needs(apitoken.CapAdmin, apitoken.AccessWrite),
+	"GET " + repoRoute + "/onboard":  needs(apitoken.CapAdmin, apitoken.AccessRead),
 	"POST " + repoRoute + "/onboard": needs(apitoken.CapAdmin, apitoken.AccessWrite),
 	"GET " + repoRoute + "/config":   anyGrantRoute(),
 

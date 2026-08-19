@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -47,6 +49,37 @@ func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusOK, cfg)
+}
+
+// handleGetOnboardingStatus reports the most recent onboarding PR opened for
+// the repository, replayed from the audit log so the state survives reloads.
+// The PR may since have been closed or merged; callers treat it as a hint.
+func (s *Server) handleGetOnboardingStatus(w http.ResponseWriter, r *http.Request) {
+	org, repo, _, ok := s.loadAuthorizedRepoWithUser(w, r, false)
+	if !ok {
+		return
+	}
+
+	entry, err := s.queries.GetLatestRepoAuditLogByAction(r.Context(), org.ID, repo.ID, audit.ActionOnboardingPR)
+	if err != nil {
+		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("load onboarding audit log")
+		api.JSONError(w, http.StatusInternalServerError, "failed to load onboarding status")
+		return
+	}
+
+	var pr *forge.PullRequest
+	if entry != nil {
+		var recorded struct {
+			Number int    `json:"pr_number"`
+			URL    string `json:"pr_url"`
+			Title  string `json:"title"`
+		}
+		if err := json.Unmarshal(entry.Context, &recorded); err == nil && recorded.URL != "" {
+			pr = &forge.PullRequest{Number: recorded.Number, Title: recorded.Title, HTMLURL: recorded.URL}
+		}
+	}
+
+	api.JSON(w, http.StatusOK, map[string]*forge.PullRequest{"pull_request": pr})
 }
 
 func (s *Server) handleOnboardRepo(w http.ResponseWriter, r *http.Request) {

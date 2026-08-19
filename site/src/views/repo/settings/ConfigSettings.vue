@@ -47,7 +47,32 @@
           v-if="isOrgAdmin"
           class="mt-4"
         >
+          <template v-if="openPR">
+            <p class="inline-flex flex-wrap items-center justify-center gap-1.5 text-sm text-gray-300">
+              <GitPullRequest class="h-4 w-4 shrink-0 text-ok" />
+              Onboarding pull request
+              <a
+                :href="openPR.html_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="font-medium text-accent hover:underline"
+              >#{{ openPR.number }}</a>
+              is open.
+            </p>
+            <p class="mt-1 text-xs text-gray-500">
+              Merge it to apply the starter configuration. If it was closed without merging, you can
+              <button
+                type="button"
+                class="text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="onboarding"
+                @click="onboard"
+              >
+                {{ onboarding ? 'open a new one…' : 'open a new one' }}
+              </button>.
+            </p>
+          </template>
           <button
+            v-else
             class="rounded-md bg-ok-muted px-3 py-1.5 text-sm font-medium text-white transition hover:bg-ok-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
             :disabled="onboarding"
@@ -60,18 +85,6 @@
             class="mt-2 text-xs text-danger"
           >
             {{ onboardError }}
-          </p>
-          <p
-            v-else-if="onboardedPR"
-            class="mt-2 text-xs text-ok"
-          >
-            Opened
-            <a
-              :href="onboardedPR.html_url"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-accent hover:underline"
-            >PR #{{ onboardedPR.number }}</a> with a starter configuration.
           </p>
         </div>
       </div>
@@ -139,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { FileCog, GitBranch } from 'lucide-vue-next'
+import { FileCog, GitBranch, GitPullRequest } from 'lucide-vue-next'
 import type { Ref } from 'vue'
 import { computed, inject, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -161,8 +174,11 @@ const loadFailed = ref(false)
 const onboarding = ref(false)
 const onboardError = ref('')
 const onboardedPR = ref<{ number: number; html_url: string } | null>(null)
+const existingPR = ref<{ number: number; html_url: string } | null>(null)
 
 const hasGates = computed(() => (config.value?.quality_gates?.length ?? 0) > 0)
+// PR opened in this session wins over the one replayed from the audit log.
+const openPR = computed(() => onboardedPR.value ?? existingPR.value)
 
 watch(
   [provider, slug, repoSlug],
@@ -172,6 +188,9 @@ watch(
     try {
       const res = await api.getRepoConfig(provider.value, slug.value, repoSlug.value)
       config.value = res.data
+      if ((res.data?.quality_gates?.length ?? 0) === 0) {
+        await loadOnboardingStatus()
+      }
     } catch {
       config.value = null
       loadFailed.value = true
@@ -181,6 +200,15 @@ watch(
   },
   { immediate: true },
 )
+
+async function loadOnboardingStatus() {
+  try {
+    const res = await api.getOnboardingStatus(provider.value, slug.value, repoSlug.value)
+    existingPR.value = res.data?.pull_request ?? null
+  } catch {
+    existingPR.value = null
+  }
+}
 
 interface GateRule { label: string; value: string }
 

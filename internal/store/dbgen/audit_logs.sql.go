@@ -75,6 +75,39 @@ func (q *Queries) CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) 
 	return i, err
 }
 
+const getLatestRepoAuditLogByAction = `-- name: GetLatestRepoAuditLogByAction :one
+SELECT id, actor_id, actor_type, actor_display, action, resource_type, resource_id, org_id, context, ip_address, user_agent, created_at FROM audit_logs
+WHERE org_id = $1 AND resource_type = 'repository' AND resource_id = $2 AND action = $3
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestRepoAuditLogByActionParams struct {
+	OrgID      uuid.NullUUID `json:"org_id"`
+	ResourceID string        `json:"resource_id"`
+	Action     string        `json:"action"`
+}
+
+func (q *Queries) GetLatestRepoAuditLogByAction(ctx context.Context, arg GetLatestRepoAuditLogByActionParams) (AuditLog, error) {
+	row := q.db.QueryRowContext(ctx, getLatestRepoAuditLogByAction, arg.OrgID, arg.ResourceID, arg.Action)
+	var i AuditLog
+	err := row.Scan(
+		&i.ID,
+		&i.ActorID,
+		&i.ActorType,
+		&i.ActorDisplay,
+		&i.Action,
+		&i.ResourceType,
+		&i.ResourceID,
+		&i.OrgID,
+		&i.Context,
+		&i.IpAddress,
+		&i.UserAgent,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listAuditLogs = `-- name: ListAuditLogs :many
 SELECT id, actor_id, actor_type, actor_display, action, resource_type, resource_id, org_id, context, ip_address, user_agent, created_at FROM audit_logs
 WHERE org_id = $1

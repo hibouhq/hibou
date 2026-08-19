@@ -734,7 +734,10 @@ function isSelectedSnapshot(snapshot: Snapshot) {
 }
 
 function isSuccessfulSnapshot(snapshot: Snapshot) {
-  return snapshot.status === 'complete'
+  // Mirrors the backend's complete-set ('complete', 'active'): the violet
+  // "latest" chip and the default selection point at the newest snapshot
+  // whose data is actually readable, never a pending/processing one.
+  return snapshot.status === 'complete' || snapshot.status === 'active'
 }
 
 function snapshotTitle(snapshot: Snapshot | null, prefix = 'Snapshot') {
@@ -766,7 +769,9 @@ function snapshotChipToneClass(snapshot: Snapshot) {
   if (snapshot.status === 'failed') {
     return 'snapshot-chip--failed'
   }
-  if (snapshot.status === 'pending') {
+  if (snapshot.status === 'pending' || snapshot.status === 'processing') {
+    // Processing = finalized upload whose SBOM/SARIF ingestion is still
+    // running: same amber spinner as pending, the data is not readable yet.
     return 'snapshot-chip--pending'
   }
   if (snapshot.tag) {
@@ -779,7 +784,7 @@ function snapshotChipToneClass(snapshot: Snapshot) {
 }
 
 function hasPendingSnapshots() {
-  return snapshots.value.some((snapshot) => snapshot.status === 'pending')
+  return snapshots.value.some((snapshot) => snapshot.status === 'pending' || snapshot.status === 'processing')
 }
 
 function syncSnapshotPolling(scopeKey: string) {

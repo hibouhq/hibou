@@ -132,6 +132,115 @@ func TestCompleteSnapshotRejectsFailedSnapshot(t *testing.T) {
 	}
 }
 
+func TestCompleteSnapshotEntersProcessingWhileArtifactsQueued(t *testing.T) {
+	databaseURL := os.Getenv("HIBOU_DATABASE_URL")
+	if databaseURL == "" {
+		databaseURL = testDatabaseURL
+	}
+
+	var (
+		db  *sql.DB
+		err error
+	)
+	for range 10 {
+		db, err = New(databaseURL)
+		if err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Skipf("database not available for snapshot completion test: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate() returned error: %v", err)
+	}
+
+	queries := NewQueries(db)
+	ctx := context.Background()
+
+	// A finalized upload with queued SBOM/SARIF work must NOT read as complete:
+	// data views resolve the latest complete snapshot, and an unprocessed one
+	// would shadow real data with zeros.
+	withArtifactsID := createSnapshotForStatusTest(t, ctx, queries, SnapshotStatusPending)
+	format := "cyclonedx-json"
+	if _, err := queries.CreateSnapshotArtifact(ctx, CreateSnapshotArtifactParams{
+		SnapshotID: withArtifactsID,
+		Kind:       "sbom",
+		Format:     &format,
+		ObjectKey:  "snapshots/" + withArtifactsID.String() + "/sbom.json",
+		SizeBytes:  64,
+	}); err != nil {
+		t.Fatalf("CreateSnapshotArtifact(sbom) error = %v", err)
+	}
+	finalized, err := queries.CompleteSnapshot(ctx, withArtifactsID)
+	if err != nil {
+		t.Fatalf("CompleteSnapshot(with artifacts) error = %v", err)
+	}
+	if finalized == nil || finalized.Status != SnapshotStatusProcessing {
+		t.Fatalf("CompleteSnapshot(with artifacts) status = %#v, want processing", finalized)
+	}
+	latest, err := queries.GetLatestCompleteSnapshotByRef(ctx, finalized.RefID)
+	if err != nil {
+		t.Fatalf("GetLatestCompleteSnapshotByRef() error = %v", err)
+	}
+	if latest != nil {
+		t.Fatalf("GetLatestCompleteSnapshotByRef() = %#v, want nil while processing", latest)
+	}
+
+	// Coverage/tests ingest at upload time: a snapshot without async artifacts
+	// completes immediately.
+	withoutArtifactsID := createSnapshotForStatusTest(t, ctx, queries, SnapshotStatusPending)
+	completed, err := queries.CompleteSnapshot(ctx, withoutArtifactsID)
+	if err != nil {
+		t.Fatalf("CompleteSnapshot(without artifacts) error = %v", err)
+	}
+	if completed == nil || completed.Status != SnapshotStatusComplete {
+		t.Fatalf("CompleteSnapshot(without artifacts) status = %#v, want complete", completed)
+	}
+
+	// The processing snapshot must be claimable by the artifact worker, or it
+	// would be stuck in processing forever.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE snapshots, snapshot_artifacts IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock snapshot tables: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE snapshots
+		SET artifact_processing_finished_at = NOW(),
+			artifact_processing_claimed_by = NULL,
+			artifact_processing_claim_expires_at = NULL
+		WHERE id <> $1
+	`, withArtifactsID); err != nil {
+		t.Fatalf("quarantine unrelated snapshots: %v", err)
+	}
+	txQueries := queries.WithTx(tx)
+	claimed, err := txQueries.ClaimNextArtifactProcessingSnapshot(ctx, "worker-processing-test", time.Now().Add(5*time.Minute), 3)
+	if err != nil {
+		t.Fatalf("ClaimNextArtifactProcessingSnapshot(processing) error = %v", err)
+	}
+	if claimed == nil || claimed.ID != withArtifactsID {
+		t.Fatalf("claimed = %#v, want processing snapshot %s", claimed, withArtifactsID)
+	}
+	done, err := txQueries.CompleteArtifactProcessingSnapshot(ctx, withArtifactsID, "worker-processing-test")
+	if err != nil {
+		t.Fatalf("CompleteArtifactProcessingSnapshot() error = %v", err)
+	}
+	if done == nil || done.Status != SnapshotStatusComplete {
+		t.Fatalf("post-processing status = %#v, want complete", done)
+	}
+}
+
 func createSnapshotForStatusTest(t *testing.T, ctx context.Context, queries *Queries, status SnapshotStatus) uuid.UUID {
 	t.Helper()
 

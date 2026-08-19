@@ -178,8 +178,9 @@ func TestUploadAutoReusesSnapshotForSameRefCommit(t *testing.T) {
 	if snapshot.ExpectedUploads == nil || *snapshot.ExpectedUploads != 2 {
 		t.Fatalf("expected_uploads = %v, want 2", snapshot.ExpectedUploads)
 	}
-	if snapshot.Status != store.SnapshotStatusComplete {
-		t.Fatalf("status = %s, want complete", snapshot.Status)
+	// Auto-completion with queued SBOM/SARIF artifacts lands on processing.
+	if snapshot.Status != store.SnapshotStatusProcessing {
+		t.Fatalf("status = %s, want processing", snapshot.Status)
 	}
 }
 
@@ -511,8 +512,8 @@ func TestUploadAutoAttachesWithinPendingSyntheticRetryAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshotByID(retry): %v", err)
 	}
-	if firstSnapshot == nil || firstSnapshot.Status != store.SnapshotStatusComplete {
-		t.Fatalf("first snapshot status = %#v, want complete", firstSnapshot)
+	if firstSnapshot == nil || firstSnapshot.Status != store.SnapshotStatusProcessing {
+		t.Fatalf("first snapshot status = %#v, want processing", firstSnapshot)
 	}
 	if retrySnapshot == nil || retrySnapshot.RunAttempt == nil || *retrySnapshot.RunAttempt != "1" {
 		t.Fatalf("retry snapshot run_attempt = %#v, want synthetic attempt 1", retrySnapshot)
@@ -586,11 +587,11 @@ func TestUploadCompleteTargetsLatestAttemptForGitLabRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshotByID(second): %v", err)
 	}
-	if firstSnapshot == nil || firstSnapshot.Status != store.SnapshotStatusComplete {
-		t.Fatalf("first snapshot status = %#v, want complete", firstSnapshot)
+	if firstSnapshot == nil || firstSnapshot.Status != store.SnapshotStatusProcessing {
+		t.Fatalf("first snapshot status = %#v, want processing", firstSnapshot)
 	}
-	if secondSnapshot == nil || secondSnapshot.Status != store.SnapshotStatusComplete {
-		t.Fatalf("second snapshot status = %#v, want complete", secondSnapshot)
+	if secondSnapshot == nil || secondSnapshot.Status != store.SnapshotStatusProcessing {
+		t.Fatalf("second snapshot status = %#v, want processing", secondSnapshot)
 	}
 }
 
@@ -606,8 +607,10 @@ func TestUploadAutoCompleteTrueTransitionsSnapshot(t *testing.T) {
 		"complete":   true,
 	}))
 
-	if response.Status != string(store.SnapshotStatusComplete) {
-		t.Fatalf("status = %s, want complete", response.Status)
+	// Finalizing with a queued SBOM lands on processing; the artifact worker
+	// flips it to complete once ingestion runs.
+	if response.Status != string(store.SnapshotStatusProcessing) {
+		t.Fatalf("status = %s, want processing", response.Status)
 	}
 }
 
@@ -1173,8 +1176,10 @@ func TestUploadAutoCompleteWithoutArtifactClosesExistingSnapshot(t *testing.T) {
 		"complete":   true,
 	})
 
-	if response.Status != string(store.SnapshotStatusComplete) {
-		t.Fatalf("status = %s, want complete", response.Status)
+	// Finalizing with a queued SBOM lands on processing; the artifact worker
+	// flips it to complete once ingestion runs.
+	if response.Status != string(store.SnapshotStatusProcessing) {
+		t.Fatalf("status = %s, want processing", response.Status)
 	}
 }
 
@@ -1367,8 +1372,10 @@ func TestUploadAutoTagDerivedFromTagRef(t *testing.T) {
 		"complete":   true,
 	}))
 
-	if response.Status != string(store.SnapshotStatusComplete) {
-		t.Fatalf("status = %s, want complete", response.Status)
+	// Finalizing with a queued SBOM lands on processing; the artifact worker
+	// flips it to complete once ingestion runs.
+	if response.Status != string(store.SnapshotStatusProcessing) {
+		t.Fatalf("status = %s, want processing", response.Status)
 	}
 	ref, err := srv.queries.GetRefByRepoAndName(context.Background(), repo.ID, "v1.2.3", store.RefTypeTag)
 	if err != nil {
