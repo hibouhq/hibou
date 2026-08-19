@@ -11,6 +11,13 @@ LDFLAGS   := -X github.com/hibouhq/hibou/internal/version.Version=$(VERSION) \
 			 -X github.com/hibouhq/hibou/internal/version.Date=$(DATE)
 GO_BUILD_FLAGS := -buildvcs=false -trimpath
 SQLC      := $(if $(wildcard /usr/local/bin/sqlc),/usr/local/bin/sqlc,sqlc)
+
+# Build targets regenerate by default so a local `make build-all` never ships
+# stale sqlc/swagger output. CI overrides this with GENERATE_DEP= because its
+# Prepare step already ran check-generate, and re-running `generate` in a
+# parallel step rewrites dbgen/ in place while `make lint` (sqlc diff) and
+# gosec are reading it — a race that intermittently fails the Lint step.
+GENERATE_DEP ?= generate
 SWAG      := $(if $(wildcard /usr/local/bin/swag),/usr/local/bin/swag,swag)
 
 # Reproducible release build (callers append: -o <out> .)
@@ -202,7 +209,7 @@ install: build ## Install hibou binary and create hibou-server symlink
 	ln -sf $(BINARY) $(shell go env GOPATH)/bin/hibou-server
 
 .PHONY: build-all
-build-all: generate build-frontend ## Cross-compile for all target platforms
+build-all: $(GENERATE_DEP) build-frontend ## Cross-compile for all target platforms
 	@mkdir -p $(DIST); \
 	pids=""; fail=0; \
 	for platform in $(PLATFORMS); do \
@@ -218,7 +225,7 @@ build-all: generate build-frontend ## Cross-compile for all target platforms
 	[ $$fail -eq 0 ]
 
 .PHONY: build-image-binaries
-build-image-binaries: generate build-frontend ## Cross-compile only the Linux binaries needed by container image builds
+build-image-binaries: $(GENERATE_DEP) build-frontend ## Cross-compile only the Linux binaries needed by container image builds
 	@mkdir -p $(DIST); \
 	pids=""; fail=0; \
 	for platform in $(IMAGE_PLATFORMS); do \
@@ -231,7 +238,7 @@ build-image-binaries: generate build-frontend ## Cross-compile only the Linux bi
 	[ $$fail -eq 0 ]
 
 .PHONY: build-all-ci
-build-all-ci: generate ## Cross-compile all release binaries, assuming frontend dist is already prepared
+build-all-ci: $(GENERATE_DEP) ## Cross-compile all release binaries, assuming frontend dist is already prepared
 	@mkdir -p $(DIST); \
 	pids=""; fail=0; \
 	for platform in $(PLATFORMS); do \
@@ -247,7 +254,7 @@ build-all-ci: generate ## Cross-compile all release binaries, assuming frontend 
 	[ $$fail -eq 0 ]
 
 .PHONY: build-image-binaries-ci
-build-image-binaries-ci: generate ## Cross-compile only Linux image binaries, assuming frontend dist is already prepared
+build-image-binaries-ci: $(GENERATE_DEP) ## Cross-compile only Linux image binaries, assuming frontend dist is already prepared
 	@mkdir -p $(DIST); \
 	pids=""; fail=0; \
 	for platform in $(IMAGE_PLATFORMS); do \

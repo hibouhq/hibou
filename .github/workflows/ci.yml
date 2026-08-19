@@ -72,11 +72,16 @@ jobs:
           - name: Build binaries and frontend coverage
             uses: ./.github/actions/devcontainer-ci
             with:
+              # GENERATE_DEP= skips the `generate` prerequisite: Prepare
+              # already ran check-generate (regenerate + assert clean), and
+              # regenerating again HERE races the parallel Lint step —
+              # `sqlc diff` reads dbgen/ while this step rewrites it in
+              # place, failing Lint with a whole-file phantom diff.
               run-cmd: |
                 if [ "${{ github.event_name }}" = "release" ]; then
-                  make build-all
+                  make build-all GENERATE_DEP=
                 else
-                  make build-image-binaries
+                  make build-image-binaries GENERATE_DEP=
                 fi
                 (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
 
