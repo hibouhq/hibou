@@ -8,6 +8,18 @@
     </div>
 
     <template v-else>
+      <RouterLink
+        v-if="malwareOpen > 0"
+        :to="{ name: 'org-vulnerabilities', params: route.params, query: { type: 'malware' } }"
+        class="flex items-center gap-2.5 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 transition hover:border-danger"
+      >
+        <Biohazard class="h-5 w-5 shrink-0 text-danger" />
+        <span class="text-sm font-semibold text-red-200">
+          {{ malwareOpen }} malicious {{ malwareOpen === 1 ? 'package' : 'packages' }} detected in {{ malwareRepoCount }} {{ malwareRepoCount === 1 ? 'repository' : 'repositories' }}
+        </span>
+        <span class="ml-auto text-xs text-red-300/80">Review immediately →</span>
+      </RouterLink>
+
       <!-- Severity rollup + coverage tiles -->
       <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-xl border border-surface-border bg-surface-raised/40 p-4 sm:col-span-2">
@@ -129,7 +141,14 @@
                   >{{ entry.status }}</span>
                 </td>
                 <td class="px-4 py-3">
-                  <div class="flex flex-wrap gap-1.5">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span
+                      v-if="entry.malware_open > 0"
+                      class="inline-flex items-center gap-1 rounded-full border border-danger/50 bg-danger/15 px-2 py-0.5 text-xs font-semibold text-red-200"
+                    >
+                      <Biohazard class="h-3 w-3" />
+                      malware {{ entry.malware_open }}
+                    </span>
                     <span
                       v-for="item in toSeverityItems(entry.vulnerabilities)"
                       :key="`${repoEntryKey(entry)}-${item.key}`"
@@ -164,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { ShieldAlert } from 'lucide-vue-next'
+import { Biohazard, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -182,6 +201,8 @@ const severityRank: Record<string, number> = { critical: 5, high: 4, medium: 3, 
 
 const severityItems = computed(() => toSeverityItems(dashboard.value?.totals.vulnerabilities))
 const totalVulnerabilities = computed(() => sumCounts(dashboard.value?.totals.vulnerabilities))
+const malwareOpen = computed(() => dashboard.value?.totals.malware_open ?? 0)
+const malwareRepoCount = computed(() => (dashboard.value?.repos ?? []).filter((entry) => entry.malware_open > 0).length)
 
 const coverageCards = computed(() => {
   const coverage = dashboard.value?.coverage
@@ -194,7 +215,12 @@ const coverageCards = computed(() => {
 
 const sortedRepos = computed(() => {
   const repos = [...(dashboard.value?.repos ?? [])]
-  return repos.sort((a, b) => riskScore(b.vulnerabilities) - riskScore(a.vulnerabilities))
+  return repos.sort((a, b) => {
+    if (a.malware_open !== b.malware_open) {
+      return b.malware_open - a.malware_open
+    }
+    return riskScore(b.vulnerabilities) - riskScore(a.vulnerabilities)
+  })
 })
 
 function riskScore(counts?: SeverityCounts | null) {

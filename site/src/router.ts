@@ -47,8 +47,12 @@ const router = createRouter({
         { path: 'orgs/:provider/:slug/repos', name: 'repos', component: () => import('@/views/ReposView.vue') },
         {
           path: 'orgs/:provider/:slug/clients/:clientSlug',
-          name: 'client-detail',
           component: () => import('@/views/ClientDetailView.vue'),
+          children: [
+            { path: '', name: 'client-detail', redirect: to => ({ name: 'client-overview', params: to.params }) },
+            { path: 'overview', name: 'client-overview', component: () => import('@/views/client/OverviewTab.vue') },
+            { path: 'history', name: 'client-history', component: () => import('@/views/client/HistoryTab.vue') },
+          ],
         },
         {
           path: 'orgs/:provider/:slug/repos/:repoSlug/compare',
@@ -136,6 +140,9 @@ const router = createRouter({
           children: [
             { path: '', name: 'settings', redirect: { name: 'settings-api-keys' } },
             { path: 'api-keys', name: 'settings-api-keys', component: () => import('@/views/settings/ApiKeysSettings.vue') },
+            { path: 'banners', name: 'settings-banners', component: () => import('@/views/settings/BannersSettings.vue') },
+            { path: 'admins', name: 'settings-instance-admins', component: () => import('@/views/settings/InstanceAdminsSettings.vue') },
+            { path: 'audit', name: 'settings-instance-audit', component: () => import('@/views/settings/InstanceAuditSettings.vue') },
           ],
         },
         { path: '/:pathMatch(.*)*', redirect: '/orgs' },

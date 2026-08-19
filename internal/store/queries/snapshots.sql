@@ -54,11 +54,20 @@ ORDER BY created_at ASC
 LIMIT $2;
 
 -- name: ListStalePendingSnapshots :many
+-- Two leashes: a snapshot a build has touched (run metadata or received
+-- uploads) that then stalls is stale after the upload window, but a run-less
+-- zero-upload placeholder (created by a push/PR webhook before CI reaches its
+-- upload step) gets the longer placeholder window — failing it at the upload
+-- window would paint a red chip in the middle of every build slower than the
+-- window, and the eventual upload could no longer adopt the row.
 SELECT * FROM snapshots
 WHERE status = 'pending'
-	AND created_at < $1
+	AND CASE WHEN run_id IS NULL AND received_uploads = 0
+		THEN created_at < sqlc.arg(placeholder_before)
+		ELSE created_at < sqlc.arg(started_before)
+	END
 ORDER BY created_at ASC
-LIMIT $2;
+LIMIT sqlc.arg(row_limit);
 
 -- name: ListArchivedSnapshotsForPurge :many
 SELECT * FROM snapshots
@@ -352,6 +361,17 @@ ON CONFLICT (snapshot_id) DO UPDATE SET
 -- name: GetSnapshotCodeRefs :one
 SELECT * FROM snapshot_code_refs WHERE snapshot_id = $1;
 
+-- name: RepoHasUploadActivity :one
+-- Whether any snapshot of this repo ever received a CI upload. Distinguishes
+-- upload-connected repos (a scan placeholder waits for CI to adopt it) from
+-- scan-only repos (the placeholder must self-complete or findings stay dark).
+SELECT EXISTS (
+	SELECT 1
+	FROM snapshots s
+	JOIN refs r ON r.id = s.ref_id
+	WHERE r.repo_id = $1 AND s.received_uploads > 0
+)::bool AS has_uploads;
+
 -- name: CreatePlaceholderSnapshot :one
 -- Webhook-created pending snapshot for a PR head that has no snapshot yet, so
 -- the UI shows the head as awaited and the CI upload adopts the row instead of
@@ -370,7 +390,13 @@ RETURNING *;
 -- run_id IS NULL — an upload carrying a run_id would miss the upsert's
 -- conflict key and insert a duplicate. A second run for the same commit finds
 -- no placeholder left and takes the normal upsert path.
+--
+-- A failed row with zero uploads is a placeholder the stale sweep gave up on
+-- before the build reached its upload step: the arriving upload proves the
+-- build alive, so it is resurrected to pending rather than duplicated. A
+-- genuinely failed upload (received_uploads > 0 or run metadata) stays failed.
 UPDATE snapshots SET
+	status = 'pending',
 	build_url = COALESCE($3, build_url),
 	run_id = $4,
 	run_attempt = $5,
@@ -379,5 +405,6 @@ UPDATE snapshots SET
 	pr_target_branch = COALESCE($8, pr_target_branch),
 	tag = COALESCE($9, tag),
 	expected_uploads = COALESCE($10, expected_uploads)
-WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL AND status = 'pending'
+WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL
+	AND (status = 'pending' OR (status = 'failed' AND received_uploads = 0))
 RETURNING *;

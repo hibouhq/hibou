@@ -61,6 +61,9 @@ func (s *Service) Subscribe() {
 	s.bus.Subscribe(events.VulnerabilitiesFound, func(ctx context.Context, event events.Event) {
 		s.handleVulnerabilitiesFound(ctx, event.Payload)
 	})
+	s.bus.Subscribe(events.MalwareDetected, func(ctx context.Context, event events.Event) {
+		s.handleMalwareDetected(ctx, event.Payload)
+	})
 	s.bus.Subscribe(events.RetentionWarnAt, func(ctx context.Context, event events.Event) {
 		s.handleRetentionWarnAt(ctx, event.Payload)
 	})
@@ -175,6 +178,50 @@ func (s *Service) handleVulnerabilitiesFound(ctx context.Context, payload any) {
 		Body:     body,
 		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", ""),
 		Severity: dbgen.NullSeverityLevel{SeverityLevel: maxSeverity, Valid: true},
+	})
+}
+
+// handleMalwareDetected is the malware slice of a scan's findings: always
+// critical, its own bell entry, same per-repo dedup ledger semantics as
+// handleVulnerabilitiesFound (keyed under malware.detected).
+func (s *Service) handleMalwareDetected(ctx context.Context, payload any) {
+	data, _ := payload.(map[string]any)
+	repoName, repoID, recipients, err := s.resolveRecipients(ctx, payload)
+	if err != nil {
+		s.log.Debug().Err(err).Msg("resolve recipients for malware detected")
+		return
+	}
+	identifiers := uniqueStrings(stringSliceValue(data["identifiers"]))
+	if len(identifiers) == 0 || repoID == uuid.Nil {
+		return
+	}
+
+	fresh, err := s.store.MarkFindingsNotified(ctx, string(events.MalwareDetected), repoID, identifiers)
+	if err != nil {
+		s.log.Error().Err(err).Str("repo_id", repoID.String()).Msg("dedup malware notification")
+		return
+	}
+	if len(fresh) == 0 {
+		return
+	}
+
+	freshSet := make(map[string]struct{}, len(fresh))
+	for _, identifier := range fresh {
+		freshSet[identifier] = struct{}{}
+	}
+	summary, _ := summarizeFreshFindings(data, freshSet)
+
+	title := fmt.Sprintf("Malware detected: %d malicious packages", len(fresh))
+	if len(fresh) == 1 {
+		title = "Malware detected"
+	}
+	body := fmt.Sprintf("%s in repo %s", summary, repoName)
+	s.createForRecipients(ctx, recipients, dbgen.CreateNotificationParams{
+		Type:     string(events.MalwareDetected),
+		Title:    title,
+		Body:     body,
+		Link:     s.repoTabLink(ctx, repoID, "vulnerabilities", "type=malware"),
+		Severity: dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevelCritical, Valid: true},
 	})
 }
 

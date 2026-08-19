@@ -138,6 +138,9 @@ func (d *Dispatcher) Subscribe() {
 	d.bus.Subscribe(events.VulnerabilitiesFound, func(ctx context.Context, event events.Event) {
 		d.handleEvent(ctx, event.Type, event.Payload)
 	})
+	d.bus.Subscribe(events.MalwareDetected, func(ctx context.Context, event events.Event) {
+		d.handleEvent(ctx, event.Type, event.Payload)
+	})
 	d.bus.Subscribe(events.GatePassed, func(ctx context.Context, event events.Event) {
 		d.handleEvent(ctx, event.Type, event.Payload)
 	})
@@ -647,6 +650,20 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 		if extra := len(identifiers) - len(listed); extra > 0 {
 			payload.Body += fmt.Sprintf(" (+%d more)", extra)
 		}
+	case events.MalwareDetected:
+		identifiers := stringSliceValue(data["identifiers"])
+		payload.Title = fmt.Sprintf("Malware detected: %d malicious packages", len(identifiers))
+		if len(identifiers) == 1 {
+			payload.Title = "Malware detected"
+		}
+		listed := identifiers
+		if len(listed) > 5 {
+			listed = listed[:5]
+		}
+		payload.Body = fmt.Sprintf("Malicious packages detected in repo %s: %s", payload.RepoName, strings.Join(listed, ", "))
+		if extra := len(identifiers) - len(listed); extra > 0 {
+			payload.Body += fmt.Sprintf(" (+%d more)", extra)
+		}
 	case events.GateFailed:
 		reason := stringValue(data, "reason", stringValue(data, "description", "quality gate threshold exceeded"))
 		payload.Title = "Quality gate failed"
@@ -675,6 +692,9 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 func defaultDispatchSeverity(eventType events.Type, data map[string]any) string {
 	if severity := strings.ToLower(strings.TrimSpace(stringValue(data, "severity", ""))); severity != "" {
 		return severity
+	}
+	if eventType == events.MalwareDetected {
+		return "critical"
 	}
 	if eventType == events.ScanFailed || eventType == events.GateFailed {
 		return "high"

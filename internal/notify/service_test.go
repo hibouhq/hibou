@@ -191,3 +191,49 @@ func TestHandleVulnerabilitiesFoundBatchesAndDedups(t *testing.T) {
 		t.Fatalf("re-notified already-known identifiers: %d notifications", len(store.notifications))
 	}
 }
+
+// Malware gets its own critical bell entry, deduped on its own ledger key, and
+// deep-links to the malware-filtered vulnerabilities tab.
+func TestHandleMalwareDetectedCriticalAndDedups(t *testing.T) {
+	memberID := uuid.New()
+	mock := &mockNotifyStore{
+		snapshot: &store.Snapshot{ID: uuid.New(), RefID: uuid.New()},
+		ref:      &store.Ref{ID: uuid.New(), RepoID: uuid.New()},
+		repo:     &store.Repository{ID: uuid.New(), OrgID: uuid.New(), Name: "api", Slug: "api"},
+		members:  []store.OrgMember{{UserID: memberID}},
+	}
+	fanout := ws.NewFanout(nil, ws.NewDispatcher(ws.NewHub(zerolog.Nop()), zerolog.Nop()), false, zerolog.Nop())
+	service := NewService(mock, fanout, events.New(zerolog.Nop()), zerolog.Nop())
+
+	payload := map[string]any{
+		"snapshot_id": mock.snapshot.ID.String(),
+		"identifiers": []any{"MAL-2025-0001"},
+		"findings":    []any{map[string]any{"identifier": "MAL-2025-0001", "severity": "critical", "component": "evil@1.0.0"}},
+	}
+	service.handleMalwareDetected(context.Background(), payload)
+	if len(mock.notifications) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(mock.notifications))
+	}
+	notification := mock.notifications[0]
+	if notification.Type != string(events.MalwareDetected) {
+		t.Fatalf("type = %q, want malware.detected", notification.Type)
+	}
+	if !notification.Severity.Valid || notification.Severity.SeverityLevel != dbgen.SeverityLevelCritical {
+		t.Fatalf("severity = %#v, want critical", notification.Severity)
+	}
+	if notification.Title != "Malware detected" {
+		t.Fatalf("title = %q", notification.Title)
+	}
+	if !strings.Contains(notification.Body, "evil@1.0.0") {
+		t.Fatalf("body = %q, want the component named", notification.Body)
+	}
+	if want := "/orgs/github/acme/repos/api/vulnerabilities?type=malware"; notification.Link != want {
+		t.Fatalf("link = %q, want %q", notification.Link, want)
+	}
+
+	// Same identifiers again: the ledger swallows the repeat.
+	service.handleMalwareDetected(context.Background(), payload)
+	if len(mock.notifications) != 1 {
+		t.Fatalf("expected repeat to dedup, got %d notifications", len(mock.notifications))
+	}
+}

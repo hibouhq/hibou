@@ -16,6 +16,16 @@ set -euo pipefail
 REPO=hibouhq/hibou
 NAMESPACE=hibou
 CHART=oci://ghcr.io/hibouhq/charts/hibou
+# Dogfooding: after a successful rollout the deployment is recorded in Hibou
+# itself via `hibou release deploy`. Auth comes from `hibou login` state or
+# the HIBOU_TOKEN env var (HIBOU_API_TOKEN accepted as an alias); skipped
+# with a warning when neither is available.
+export HIBOU_SERVER="${HIBOU_SERVER:-https://hibouhq.com}"
+export HIBOU_ORG="${HIBOU_ORG:-github/hibouhq}"
+HIBOU_REPO_SLUG="${HIBOU_REPO_SLUG:-hibou}"
+HIBOU_CLIENT_SLUG="${HIBOU_CLIENT_SLUG:-internal}"
+HIBOU_ENVIRONMENT="${HIBOU_ENVIRONMENT:-production}"
+[ -n "${HIBOU_API_TOKEN:-}" ] && export HIBOU_TOKEN="${HIBOU_TOKEN:-$HIBOU_API_TOKEN}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VALUES="${ROOT}/infra/dogfood/values-dogfood.yaml"
 : "${KUBECONFIG:=${ROOT}/infra/scaleway/kubeconfig.yaml}"
@@ -115,5 +125,105 @@ kubectl get deploy hibou -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.conta
 code="$(curl -sS -o /dev/null -w '%{http_code}' https://hibouhq.com/ || true)"
 echo "https://hibouhq.com -> ${code}"
 [ "$code" = "200" ] || die "site returned ${code}"
+
+# Record the deployment in Hibou (assign the release to the dogfood client).
+# Best-effort: the rollout already succeeded, so failures warn and never fail
+# the deploy. The release row is derived from the tag's snapshot, which may
+# still be finishing artifact processing — hence the retry loop.
+# Resolve a hibou CLI matching the server, the same way the upload action
+# does: ask /api/v1/bin/version what the server serves, reuse a matching PATH
+# or cached binary, otherwise download from /api/v1/bin/{os}/{arch}. The CLI
+# has no self-update; version-matching happens here, at the invocation site.
+# Sets HIBOU_CLI (command array); returns non-zero when no CLI can be had.
+ensure_hibou_cli() {
+  local want="" have="" os arch cache bin tmp
+  want="$(curl -sS --max-time 10 "${HIBOU_SERVER}/api/v1/bin/version" 2>/dev/null \
+    | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" || want=""
+
+  if command -v hibou >/dev/null; then
+    have="$(hibou version --short 2>/dev/null || true)"
+    if [ -n "$want" ] && [ "$have" = "$want" ]; then
+      HIBOU_CLI=(hibou)
+      return 0
+    fi
+  fi
+
+  if [ -z "$want" ]; then
+    # Server did not answer; a stale CLI beats none, source tree beats that.
+    if command -v hibou >/dev/null; then
+      echo "warn: could not read server CLI version — using hibou ${have:-unknown} from PATH" >&2
+      HIBOU_CLI=(hibou)
+      return 0
+    fi
+    if command -v go >/dev/null; then
+      HIBOU_CLI=(go run "$ROOT")
+      return 0
+    fi
+    echo "warn: no server version, no hibou, no go toolchain" >&2
+    return 1
+  fi
+
+  case "$(uname -s)" in
+    Linux)  os=linux;;
+    Darwin) os=darwin;;
+    *)      echo "warn: unsupported OS $(uname -s) for CLI download" >&2; return 1;;
+  esac
+  case "$(uname -m)" in
+    x86_64)         arch=amd64;;
+    aarch64|arm64)  arch=arm64;;
+    *)              echo "warn: unsupported arch $(uname -m) for CLI download" >&2; return 1;;
+  esac
+
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/hibou/bin"
+  bin="${cache}/hibou-${want}"
+  if [ ! -x "$bin" ]; then
+    info "Downloading hibou ${want} (${os}/${arch}) from ${HIBOU_SERVER}"
+    mkdir -p "$cache"
+    tmp="$(mktemp "${cache}/hibou.XXXXXX")"
+    if ! curl -fsSL --max-time 120 -o "$tmp" "${HIBOU_SERVER}/api/v1/bin/${os}/${arch}"; then
+      rm -f "$tmp"
+      echo "warn: CLI download failed" >&2
+      return 1
+    fi
+    chmod +x "$tmp"
+    mv "$tmp" "$bin"
+  fi
+  HIBOU_CLI=("$bin")
+}
+
+record_deployment() {
+  if ! ensure_hibou_cli; then
+    echo "warn: no usable hibou CLI — deployment not recorded" >&2
+    return 0
+  fi
+  local hibou_cli=("${HIBOU_CLI[@]}")
+
+  info "Recording deployment of ${TAG} in Hibou (${HIBOU_CLIENT_SLUG}/${HIBOU_ENVIRONMENT})"
+  local output
+  for i in $(seq 1 10); do
+    if output="$("${hibou_cli[@]}" release deploy \
+      --repo "$HIBOU_REPO_SLUG" \
+      --version "$TAG" \
+      --client "$HIBOU_CLIENT_SLUG" \
+      --env "$HIBOU_ENVIRONMENT" \
+      --notes "deploy.sh by $(whoami)@$(hostname)" 2>&1)"; then
+      info "$output"
+      return 0
+    fi
+    # The release is derived from the tag's snapshot; keep waiting while the
+    # server has not materialized it yet. Anything else is a real failure.
+    case "$output" in
+      *"not found"*)
+        [ "$i" -eq 10 ] && break
+        sleep 15
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  echo "warn: deployment not recorded: ${output}" >&2
+}
+record_deployment
 
 info "Done: ${VERSION}"

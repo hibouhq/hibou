@@ -515,6 +515,10 @@ definitions:
         items:
           type: string
         type: array
+      is_malware:
+        type: boolean
+      malware_type:
+        type: string
       references:
         items:
           type: string
@@ -618,6 +622,54 @@ definitions:
       status:
         type: string
       version:
+        type: string
+    type: object
+  server.instanceAuditLogEntryResponse:
+    properties:
+      action:
+        type: string
+      actor_display:
+        type: string
+      actor_type:
+        type: string
+      context:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      id:
+        type: string
+      ip_address:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      resource_id:
+        type: string
+      resource_type:
+        type: string
+    type: object
+  server.meResponse:
+    properties:
+      avatar_url:
+        type: string
+      created_at:
+        type: string
+      display_name:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      is_instance_admin:
+        type: boolean
+      provider:
+        type: string
+      provider_id:
+        type: string
+      updated_at:
         type: string
     type: object
   server.metricsResponse:
@@ -1089,6 +1141,17 @@ definitions:
         description: |-
           UserID is the creating user — provenance, not identity (ADR-022). Nil
           when the creator was deleted; org-owned keys keep working then.
+        type: string
+    type: object
+  store.AnnouncementBanner:
+    properties:
+      background_color:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      message:
         type: string
     type: object
   store.Client:
@@ -1874,6 +1937,192 @@ paths:
       summary: Health check
       tags:
       - system
+  /instance/audit-logs:
+    get:
+      description: 'Audit log entries across the whole instance: every organization
+        plus instance-level events (org-less rows). Instance admins only.'
+      parameters:
+      - description: Action filter
+        in: query
+        name: action
+        type: string
+      - description: Resource type filter
+        in: query
+        name: resource_type
+        type: string
+      - description: '''instance'' limits to instance-level (org-less) entries'
+        in: query
+        name: scope
+        type: string
+      - description: Organization ID; limits entries to that organization
+        in: query
+        name: org
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Items per page
+        in: query
+        name: per_page
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.instanceAuditLogEntryResponse'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Instance audit logs
+      tags:
+      - instance
+  /instance/banners:
+    get:
+      description: Enabled instance-wide announcement banners, shown at the top of
+        every page (login included).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.AnnouncementBanner'
+                  type: array
+              type: object
+      summary: Active announcement banners
+      tags:
+      - instance
+  /instance/settings/admins:
+    get:
+      description: The current instance-admin email list, resolved live from its managed
+        source (Secret-mounted file or env). Instance admins only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    type: string
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Instance administrators
+      tags:
+      - instance
+  /instance/settings/banners:
+    get:
+      description: Full banner list, enabled or not. Instance admins only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.AnnouncementBanner'
+                  type: array
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Announcement banner settings
+      tags:
+      - instance
+    put:
+      consumes:
+      - application/json
+      description: Replaces the full banner list. Instance admins only.
+      parameters:
+      - description: Banner list
+        in: body
+        name: request
+        required: true
+        schema:
+          items:
+            $ref: '#/definitions/store.AnnouncementBanner'
+          type: array
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/store.AnnouncementBanner'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update announcement banners
+      tags:
+      - instance
   /metrics:
     get:
       description: Returns basic server metrics
@@ -5635,7 +5884,7 @@ paths:
             - $ref: '#/definitions/api.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/store.User'
+                  $ref: '#/definitions/server.meResponse'
               type: object
         "401":
           description: Unauthorized

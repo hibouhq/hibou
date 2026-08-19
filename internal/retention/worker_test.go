@@ -2,6 +2,7 @@ package retention
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"testing"
@@ -59,13 +60,21 @@ func (s *workerStoreStub) ListVulnerabilitySummaryBySnapshot(_ context.Context, 
 	return append([]dbgen.ListVulnerabilitySummaryBySnapshotRow(nil), s.severityByID[snapshotID]...), nil
 }
 
-func (s *workerStoreStub) ListStalePendingSnapshots(_ context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error) {
-	s.staleBefore = before
+func (s *workerStoreStub) ListStalePendingSnapshots(_ context.Context, startedBefore, placeholderBefore time.Time, limit int32) ([]dbgen.Snapshot, error) {
+	s.staleBefore = startedBefore
 	s.staleLimit = limit
 	s.staleListCalls++
 	rows := make([]dbgen.Snapshot, 0, len(s.staleSnapshots))
 	for _, snapshot := range s.staleSnapshots {
-		if snapshot.Status == dbgen.SnapshotStatusPending && snapshot.CreatedAt.Before(before) {
+		if snapshot.Status != dbgen.SnapshotStatusPending {
+			continue
+		}
+		// Mirrors the SQL: run-less zero-upload placeholders get the longer leash.
+		cutoff := startedBefore
+		if !snapshot.RunID.Valid && snapshot.ReceivedUploads == 0 {
+			cutoff = placeholderBefore
+		}
+		if snapshot.CreatedAt.Before(cutoff) {
 			rows = append(rows, snapshot)
 		}
 	}
@@ -443,9 +452,23 @@ func TestWorkerSweepStalePending(t *testing.T) {
 		wantListCalls int
 	}{
 		{
-			name:          "fails only stale pending snapshots",
+			name:          "fails only stale pending snapshots a build has touched",
 			pendingWindow: 10 * time.Minute,
-			snapshots:     []dbgen.Snapshot{{ID: stalePendingID, Status: dbgen.SnapshotStatusPending, CreatedAt: now.Add(-11 * time.Minute)}},
+			snapshots:     []dbgen.Snapshot{{ID: stalePendingID, Status: dbgen.SnapshotStatusPending, RunID: sql.NullString{String: "run-1", Valid: true}, CreatedAt: now.Add(-11 * time.Minute)}},
+			wantFailedIDs: []uuid.UUID{stalePendingID},
+			wantListCalls: 1,
+		},
+		{
+			name:          "run-less placeholder outlives the upload window",
+			pendingWindow: 10 * time.Minute,
+			snapshots:     []dbgen.Snapshot{{ID: recentPendingID, Status: dbgen.SnapshotStatusPending, CreatedAt: now.Add(-30 * time.Minute)}},
+			wantFailedIDs: nil,
+			wantListCalls: 1,
+		},
+		{
+			name:          "run-less placeholder fails after the placeholder window",
+			pendingWindow: 10 * time.Minute,
+			snapshots:     []dbgen.Snapshot{{ID: stalePendingID, Status: dbgen.SnapshotStatusPending, CreatedAt: now.Add(-61 * time.Minute)}},
 			wantFailedIDs: []uuid.UUID{stalePendingID},
 			wantListCalls: 1,
 		},

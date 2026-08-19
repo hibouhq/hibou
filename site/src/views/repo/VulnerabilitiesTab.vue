@@ -1,5 +1,18 @@
 <template>
   <div class="space-y-5">
+    <button
+      v-if="openMalwareCount > 0 && activeFilters.type !== 'malware'"
+      type="button"
+      class="flex w-full items-center gap-2.5 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-left transition hover:border-danger"
+      @click="applyMalwareFilter"
+    >
+      <Biohazard class="h-5 w-5 shrink-0 text-danger" />
+      <span class="text-sm font-semibold text-red-200">
+        {{ openMalwareCount }} malware {{ openMalwareCount === 1 ? 'finding' : 'findings' }} — review immediately
+      </span>
+      <span class="ml-auto text-xs text-red-300/80">Show only malware →</span>
+    </button>
+
     <FilterBar
       v-model="activeFilters"
       v-model:search-query="searchQuery"
@@ -373,7 +386,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { KeyRound } from 'lucide-vue-next'
+import { Biohazard, KeyRound } from 'lucide-vue-next'
 
 import { api, type AcceptanceReasonKind, type FindingAcceptance, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
@@ -497,6 +510,13 @@ const sortKeys = new Set(sortOptions.map((option) => option.key))
 const sortDirectionKeys = new Set(sortDirectionOptions.map((option) => option.key))
 const syncingFromRoute = ref(false)
 const hasActiveFilters = computed(() => Object.values(activeFilters.value).some(Boolean) || searchQuery.value.trim().length > 0)
+// Facets exclude each dimension's own filter, so with the default
+// status=detected this is the open malware count for the whole snapshot.
+const openMalwareCount = computed(() => facetCounts.value.type?.malware ?? 0)
+
+function applyMalwareFilter() {
+  activeFilters.value = { ...activeFilters.value, type: 'malware' }
+}
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
 watch(

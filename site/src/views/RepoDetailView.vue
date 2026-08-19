@@ -257,7 +257,6 @@ import {
   Activity,
   BookMarked,
   Container,
-  ExternalLink,
   FlaskConical,
   GitCompareArrows,
   GitPullRequest,

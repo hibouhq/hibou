@@ -229,5 +229,8 @@ const packageFacts = computed<Fact[]>(() => [
 const advisoryFacts = computed<Fact[]>(() => [
   { label: 'CVSS', value: advisory.value?.cvss_score },
   { label: 'Vector', value: advisory.value?.cvss_vector, mono: true },
+  ...(advisory.value?.is_malware
+    ? [{ label: 'Malware', value: (advisory.value.malware_type || 'malicious code').replace(/_/g, ' '), hint: 'This package is known malicious — remove it; do not upgrade' } satisfies Fact]
+    : []),
 ])
 </script>

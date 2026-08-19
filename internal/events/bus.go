@@ -28,7 +28,12 @@ const (
 	// component}. The notify layer dedups identifiers per repo, so only
 	// genuinely never-notified findings ring the bell — and only once.
 	VulnerabilitiesFound Type = "vulnerabilities.found"
-	SecretScanCompleted  Type = "secret.scan.completed"
+	// MalwareDetected is the malicious-package slice of a scan's new findings,
+	// split out of VulnerabilitiesFound so it can carry critical urgency on its
+	// own channel: a dedicated bell notification and unconditional external
+	// dispatch. Same payload shape as VulnerabilitiesFound.
+	MalwareDetected     Type = "malware.detected"
+	SecretScanCompleted Type = "secret.scan.completed"
 	SecretScanFailed     Type = "secret.scan.failed"
 	SecretDiscovered     Type = "secret.discovered"
 	GatePassed           Type = "gate.passed"

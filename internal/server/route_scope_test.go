@@ -29,6 +29,7 @@ var publicRoutes = map[string]struct{}{
 	"GET /api/v1/schemas/hibou-config.schema.json": {},
 	"GET /api/v1/docs/*":                           {},
 	"GET /api/v1/ws":                               {},
+	"GET /api/v1/instance/banners":                 {},
 	"GET /api/v1/auth/providers":                   {},
 	"GET /api/v1/auth/login":                       {},
 	"GET /api/v1/auth/callback":                    {},

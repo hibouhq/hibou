@@ -18,8 +18,8 @@ func NewStoreAdapter(queries *store.Queries) *StoreAdapter {
 	return &StoreAdapter{queries: queries}
 }
 
-func (a *StoreAdapter) ListStalePendingSnapshots(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error) {
-	rows, err := a.queries.ListStalePendingSnapshots(ctx, before, limit)
+func (a *StoreAdapter) ListStalePendingSnapshots(ctx context.Context, startedBefore, placeholderBefore time.Time, limit int32) ([]dbgen.Snapshot, error) {
+	rows, err := a.queries.ListStalePendingSnapshots(ctx, startedBefore, placeholderBefore, limit)
 	if err != nil {
 		return nil, err
 	}

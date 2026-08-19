@@ -94,7 +94,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.scratch.enabled }}
+          {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.scratch.enabled .Values.hibou.instanceAdminsExistingSecret }}
           volumeMounts:
             {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
             - name: artifact-filesystem
@@ -104,8 +104,16 @@ spec:
             - name: scratch
               mountPath: {{ .Values.hibou.scratch.mountPath | quote }}
             {{- end }}
+            {{- if .Values.hibou.instanceAdminsExistingSecret }}
+            {{- /* Directory mount on purpose: subPath mounts never receive
+                   Secret updates, and the server re-reads this file per check
+                   so edits apply within the kubelet sync period. */}}
+            - name: instance-admins
+              mountPath: /etc/hibou/instance-admins
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.scratch.enabled }}
+      {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.scratch.enabled .Values.hibou.instanceAdminsExistingSecret }}
       volumes:
         {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
         - name: artifact-filesystem
@@ -116,5 +124,10 @@ spec:
         - name: scratch
           emptyDir:
             sizeLimit: {{ .Values.hibou.scratch.sizeLimit }}
+        {{- end }}
+        {{- if .Values.hibou.instanceAdminsExistingSecret }}
+        - name: instance-admins
+          secret:
+            secretName: {{ .Values.hibou.instanceAdminsExistingSecret }}
         {{- end }}
       {{- end }}

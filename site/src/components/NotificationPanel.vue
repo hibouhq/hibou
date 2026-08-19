@@ -45,7 +45,7 @@
           <button
             type="button"
             class="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-white/5"
-            :class="item.status === 'unread' ? 'border-l-2 border-l-accent bg-accent/[0.04]' : 'border-l-2 border-l-transparent'"
+            :class="rowClass(item)"
             @click="select(item)"
           >
             <span
@@ -92,6 +92,15 @@ function select(item: Notification) {
     // Backend links are forge-relative (e.g. /repos/<uuid>); push best-effort.
     void router.push(item.link).catch(() => undefined)
   }
+}
+
+// Critical notifications (malware, at minimum) get a red-tinted row, not just
+// a dot — priority must survive a flooded inbox.
+function rowClass(item: Notification): string {
+  if (item.status === 'unread' && (item.severity || '').toLowerCase() === 'critical') {
+    return 'border-l-2 border-l-danger bg-danger/10'
+  }
+  return item.status === 'unread' ? 'border-l-2 border-l-accent bg-accent/[0.04]' : 'border-l-2 border-l-transparent'
 }
 
 function severityDot(severity: string | undefined, status: string): string {

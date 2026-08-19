@@ -1155,6 +1155,12 @@ type ForgeRepository struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
+type InstanceSetting struct {
+	Key       string          `json:"key"`
+	Value     json.RawMessage `json:"value"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
 type Integration struct {
 	ID              uuid.UUID       `json:"id"`
 	OrgID           uuid.UUID       `json:"org_id"`

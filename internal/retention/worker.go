@@ -43,7 +43,7 @@ type WorkerStore interface {
 	ListRefsByRepo(ctx context.Context, repoID uuid.UUID, limit, offset int) ([]store.Ref, int, error)
 	ListSnapshotsForRetentionTimeline(ctx context.Context, repoID, refID uuid.UUID) ([]store.Snapshot, error)
 	ListVulnerabilitySummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListVulnerabilitySummaryBySnapshotRow, error)
-	ListStalePendingSnapshots(ctx context.Context, before time.Time, limit int32) ([]dbgen.Snapshot, error)
+	ListStalePendingSnapshots(ctx context.Context, startedBefore, placeholderBefore time.Time, limit int32) ([]dbgen.Snapshot, error)
 	ListSnapshotArtifactObjectKeys(ctx context.Context, snapshotID uuid.UUID) ([]string, error)
 	ArchiveSnapshot(ctx context.Context, id uuid.UUID) error
 	MarkSnapshotFailed(ctx context.Context, id uuid.UUID) error
@@ -341,8 +341,13 @@ func (w *Worker) SweepStalePending(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	cutoff := time.Now().Add(-w.pendingWindow)
-	staleSnapshots, err := w.store.ListStalePendingSnapshots(ctx, cutoff, batchSize)
+	// A run-less zero-upload placeholder (push/PR webhook row awaiting CI)
+	// gets a longer leash than the upload window: builds routinely take longer
+	// than the window to reach their upload step, and failing the row early
+	// paints a false red chip and forces the upload into a duplicate.
+	startedCutoff := time.Now().Add(-w.pendingWindow)
+	placeholderCutoff := time.Now().Add(-placeholderPendingWindow(w.pendingWindow))
+	staleSnapshots, err := w.store.ListStalePendingSnapshots(ctx, startedCutoff, placeholderCutoff, batchSize)
 	if err != nil {
 		return err
 	}
@@ -354,6 +359,18 @@ func (w *Worker) SweepStalePending(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// placeholderPendingWindow is the leash for webhook-created placeholder rows
+// no build has touched yet: six upload windows, at least an hour. A failed CI
+// run therefore turns its placeholder red within that bound; a slow-but-alive
+// build adopts (or resurrects) the row when its upload lands.
+func placeholderPendingWindow(pendingWindow time.Duration) time.Duration {
+	window := 6 * pendingWindow
+	if window < time.Hour {
+		return time.Hour
+	}
+	return window
 }
 
 func (w *Worker) listAllRefs(ctx context.Context, repoID uuid.UUID) ([]store.Ref, error) {

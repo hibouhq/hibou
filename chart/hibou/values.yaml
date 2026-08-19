@@ -88,6 +88,15 @@ hibou:
   # Hibou org and grants the installer admin. Set false in multi-tenant deployments where
   # app installs should not automatically create tenants.
   autoProvisionOrgs: true
+  # -- Existing Secret whose `emails` key holds the instance-admin list
+  # (comma- or newline-separated). Mounted as a volume and re-read by the
+  # server on every check, so editing the Secret takes effect within the
+  # kubelet sync period (~1 min) with no restart.
+  # Create/update with:
+  #   kubectl create secret generic hibou-instance-admins \
+  #     --from-literal=emails="a@example.com,b@example.com" \
+  #     --dry-run=client -o yaml | kubectl apply -f -
+  instanceAdminsExistingSecret: ""
   # -- Session secret for cookie signing. Leave empty to generate and retain a stable chart-managed secret.
   # Prefer sessionSecretExistingSecret in production to avoid storing the value in Helm release metadata.
   # Multi-replica deployments require one stable secret shared by every replica; rotating it invalidates existing hibou_session and hibou_oauth_state cookies.

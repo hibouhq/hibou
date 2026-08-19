@@ -116,7 +116,12 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	if cfg != nil {
 		weaknessGate = cfg.Weakness
 	}
-	reasons := append(evaluateStoredVulnerabilityGates(gates, delta.New), evaluateConfiguredWeaknessGates(gates, delta.New, weaknessGate)...)
+	// Malware blocks unconditionally — before any configured gate section: a
+	// malicious package is never acceptable, whether or not the repo has a
+	// vulnerabilities gate (or any gate) configured.
+	reasons := evaluateMalwareBlock(delta.New)
+	reasons = append(reasons, evaluateStoredVulnerabilityGates(gates, delta.New)...)
+	reasons = append(reasons, evaluateConfiguredWeaknessGates(gates, delta.New, weaknessGate)...)
 	if cfg != nil && cfg.Vulnerabilities != nil {
 		reasons = append(reasons, evaluateNewVulnerabilityGate(delta.New, cfg.Vulnerabilities)...)
 	}
@@ -159,11 +164,30 @@ func (s *Service) reachabilityGateEnabled(ctx context.Context, orgID uuid.UUID) 
 	return settings.VEXReachabilityAnalysis
 }
 
+// evaluateMalwareBlock is the unconditional part of malware gating: any new
+// malware finding fails the gate, regardless of which gate sections are
+// configured or how permissive their limits are. Runs on every evaluation.
+func evaluateMalwareBlock(newVulns []store.Vulnerability) []string {
+	malware := make([]string, 0, 2)
+	for _, vuln := range newVulns {
+		if strings.EqualFold(strings.TrimSpace(vuln.Type), "malware") {
+			malware = append(malware, vulnLabel(vuln))
+		}
+	}
+	if len(malware) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%d malicious packages introduced: %s", len(malware), strings.Join(malware, ", "))}
+}
+
 func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *VulnerabilityGate) []string {
 	counts := map[store.SeverityLevel]int{}
 	total := 0
 	for _, vuln := range newVulns {
-		if !strings.EqualFold(strings.TrimSpace(vuln.Type), "dependency") {
+		vulnType := strings.TrimSpace(vuln.Type)
+		// Malware counts toward the same thresholds as dependency findings; its
+		// unconditional block lives in evaluateMalwareBlock.
+		if !strings.EqualFold(vulnType, "dependency") && !strings.EqualFold(vulnType, "malware") {
 			continue
 		}
 		counts[vuln.Severity]++
@@ -182,6 +206,22 @@ func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *Vulnerab
 		reasons = append(reasons, fmt.Sprintf("%d new dependency vulnerabilities exceed the maximum %d", total, *gate.MaxNewTotal))
 	}
 	return reasons
+}
+
+// vulnLabel names a finding in gate reasons: component@version when known,
+// else the primary identifier.
+func vulnLabel(vuln store.Vulnerability) string {
+	if vuln.ComponentName != nil && *vuln.ComponentName != "" {
+		label := *vuln.ComponentName
+		if vuln.ComponentVersion != nil && *vuln.ComponentVersion != "" {
+			label += "@" + *vuln.ComponentVersion
+		}
+		return label
+	}
+	if vuln.PrimaryIdentifierValue != "" {
+		return vuln.PrimaryIdentifierValue
+	}
+	return vuln.Title
 }
 
 // evaluateNewSecretsGate caps the secret findings a PR introduces. Only rows of

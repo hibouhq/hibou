@@ -39,6 +39,17 @@ type Config struct {
 	MaxUploadSize     int64
 	SessionSecret     string
 	AutoProvisionOrgs bool
+	// InstanceAdmins lists the emails of hibou instance administrators
+	// (HIBOU_INSTANCE_ADMINS, comma-separated, case-insensitive). Instance
+	// admins manage instance-wide settings such as announcement banners; the
+	// role is unrelated to org or repo admin membership.
+	InstanceAdmins []string
+	// InstanceAdminsFile points at a file holding the same list (comma- or
+	// newline-separated), re-read on every authorization check. Mount a
+	// Kubernetes Secret as a volume and point this at it: editing the Secret
+	// then takes effect within the kubelet sync period, no restart and no
+	// email in git or Helm values. Takes precedence over InstanceAdmins.
+	InstanceAdminsFile string
 	// CoverageStoreLines controls whether per-line coverage hit data is
 	// persisted on upload (powers line-level patch coverage). Defaults to
 	// true; set HIBOU_COVERAGE_STORE_LINES=false to opt out on very large
@@ -174,6 +185,22 @@ func (c Config) CookieSecure() bool {
 	return u.Scheme == "https"
 }
 
+// ParseEmailList splits a comma- or newline-separated email list, trimming
+// and lowercasing entries so membership checks are case-insensitive. Shared
+// with the file-based instance-admin list, which is re-read at check time.
+func ParseEmailList(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
+	emails := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if email := strings.ToLower(strings.TrimSpace(part)); email != "" {
+			emails = append(emails, email)
+		}
+	}
+	return emails
+}
+
 func Load() (Config, error) {
 	v := viper.New()
 
@@ -208,6 +235,8 @@ func Load() (Config, error) {
 	v.SetDefault("max.upload.size", int64(104857600))
 	v.SetDefault("session.secret", DefaultSessionSecret)
 	v.SetDefault("auto.provision.orgs", false)
+	v.SetDefault("instance.admins", "")
+	v.SetDefault("instance.admins_file", "")
 	v.SetDefault("coverage.store_lines", true)
 	v.SetDefault("background.artifact_processing.enabled", true)
 	v.SetDefault("background.retention.enabled", true)
@@ -338,6 +367,8 @@ func Load() (Config, error) {
 		MaxUploadSize:        v.GetInt64("max.upload.size"),
 		SessionSecret:        v.GetString("session.secret"),
 		AutoProvisionOrgs:    v.GetBool("auto.provision.orgs"),
+		InstanceAdmins:       ParseEmailList(v.GetString("instance.admins")),
+		InstanceAdminsFile:   strings.TrimSpace(v.GetString("instance.admins_file")),
 		CoverageStoreLines:   v.GetBool("coverage.store_lines"),
 		AuditRetentionMonths: v.GetInt("audit.retention_months"),
 		RetentionPolicy:      retentionPolicy,

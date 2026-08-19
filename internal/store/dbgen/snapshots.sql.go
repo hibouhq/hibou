@@ -41,6 +41,7 @@ func (q *Queries) AddSnapshotArtifactBytes(ctx context.Context, arg AddSnapshotA
 
 const adoptPlaceholderSnapshot = `-- name: AdoptPlaceholderSnapshot :one
 UPDATE snapshots SET
+	status = 'pending',
 	build_url = COALESCE($3, build_url),
 	run_id = $4,
 	run_attempt = $5,
@@ -49,7 +50,8 @@ UPDATE snapshots SET
 	pr_target_branch = COALESCE($8, pr_target_branch),
 	tag = COALESCE($9, tag),
 	expected_uploads = COALESCE($10, expected_uploads)
-WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL AND status = 'pending'
+WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL
+	AND (status = 'pending' OR (status = 'failed' AND received_uploads = 0))
 RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id
 `
 
@@ -72,6 +74,11 @@ type AdoptPlaceholderSnapshotParams struct {
 // run_id IS NULL — an upload carrying a run_id would miss the upsert's
 // conflict key and insert a duplicate. A second run for the same commit finds
 // no placeholder left and takes the normal upsert path.
+//
+// A failed row with zero uploads is a placeholder the stale sweep gave up on
+// before the build reached its upload step: the arriving upload proves the
+// build alive, so it is resurrected to pending rather than duplicated. A
+// genuinely failed upload (received_uploads > 0 or run metadata) stays failed.
 func (q *Queries) AdoptPlaceholderSnapshot(ctx context.Context, arg AdoptPlaceholderSnapshotParams) (Snapshot, error) {
 	row := q.db.QueryRowContext(ctx, adoptPlaceholderSnapshot,
 		arg.RefID,
@@ -1495,18 +1502,28 @@ func (q *Queries) ListSnapshotsForRetentionTimeline(ctx context.Context, arg Lis
 const listStalePendingSnapshots = `-- name: ListStalePendingSnapshots :many
 SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id FROM snapshots
 WHERE status = 'pending'
-	AND created_at < $1
+	AND CASE WHEN run_id IS NULL AND received_uploads = 0
+		THEN created_at < $1
+		ELSE created_at < $2
+	END
 ORDER BY created_at ASC
-LIMIT $2
+LIMIT $3
 `
 
 type ListStalePendingSnapshotsParams struct {
-	CreatedAt time.Time `json:"created_at"`
-	Limit     int32     `json:"limit"`
+	PlaceholderBefore time.Time `json:"placeholder_before"`
+	StartedBefore     time.Time `json:"started_before"`
+	RowLimit          int32     `json:"row_limit"`
 }
 
+// Two leashes: a snapshot a build has touched (run metadata or received
+// uploads) that then stalls is stale after the upload window, but a run-less
+// zero-upload placeholder (created by a push/PR webhook before CI reaches its
+// upload step) gets the longer placeholder window — failing it at the upload
+// window would paint a red chip in the middle of every build slower than the
+// window, and the eventual upload could no longer adopt the row.
 func (q *Queries) ListStalePendingSnapshots(ctx context.Context, arg ListStalePendingSnapshotsParams) ([]Snapshot, error) {
-	rows, err := q.db.QueryContext(ctx, listStalePendingSnapshots, arg.CreatedAt, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listStalePendingSnapshots, arg.PlaceholderBefore, arg.StartedBefore, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1644,6 +1661,25 @@ func (q *Queries) RenewArtifactProcessingSnapshotClaim(ctx context.Context, arg 
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const repoHasUploadActivity = `-- name: RepoHasUploadActivity :one
+SELECT EXISTS (
+	SELECT 1
+	FROM snapshots s
+	JOIN refs r ON r.id = s.ref_id
+	WHERE r.repo_id = $1 AND s.received_uploads > 0
+)::bool AS has_uploads
+`
+
+// Whether any snapshot of this repo ever received a CI upload. Distinguishes
+// upload-connected repos (a scan placeholder waits for CI to adopt it) from
+// scan-only repos (the placeholder must self-complete or findings stay dark).
+func (q *Queries) RepoHasUploadActivity(ctx context.Context, repoID uuid.UUID) (bool, error) {
+	row := q.db.QueryRowContext(ctx, repoHasUploadActivity, repoID)
+	var has_uploads bool
+	err := row.Scan(&has_uploads)
+	return has_uploads, err
 }
 
 const updateSnapshotRetentionFlags = `-- name: UpdateSnapshotRetentionFlags :one

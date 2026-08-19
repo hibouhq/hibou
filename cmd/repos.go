@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -89,10 +90,16 @@ var reposShowCmd = &cobra.Command{
 }
 
 func resolveOrg() (string, error) {
+	// HIBOU_ORG serves pipelines that never ran 'hibou config set-org'; it
+	// wins over the stored default like HIBOU_SERVER/HIBOU_TOKEN do in the
+	// client.
+	if org := strings.TrimSpace(os.Getenv("HIBOU_ORG")); org != "" {
+		return org, nil
+	}
 	cfg, _ := cliconfig.Load()
 	org := cfg.Org
 	if org == "" {
-		return "", errors.New("no default org set — use 'hibou config set-org <provider/slug>'")
+		return "", errors.New("no default org set — use 'hibou config set-org <provider/slug>' or set HIBOU_ORG")
 	}
 	return org, nil
 }

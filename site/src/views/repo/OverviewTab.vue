@@ -52,6 +52,18 @@
             </div>
 
             <div class="space-y-4 px-4 py-4">
+              <RouterLink
+                v-if="malwareOpen > 0"
+                :to="malwareLink()"
+                class="flex items-center gap-2.5 rounded-lg border border-danger/50 bg-danger/10 px-3 py-2.5 transition hover:border-danger"
+              >
+                <Biohazard class="h-5 w-5 shrink-0 text-danger" />
+                <span class="text-sm font-semibold text-red-200">
+                  {{ malwareOpen }} malicious {{ malwareOpen === 1 ? 'package' : 'packages' }} detected
+                </span>
+                <span class="ml-auto text-xs text-red-300/80">Review immediately →</span>
+              </RouterLink>
+
               <div class="flex items-end gap-2">
                 <span class="text-3xl font-semibold text-white">{{ vulnerabilitiesTotal }}</span>
                 <span class="pb-1 text-sm text-gray-400">open vulnerabilities</span>
@@ -273,7 +285,7 @@
 </template>
 
 <script setup lang="ts">
-import { Activity, ArrowLeftRight, ArrowRight, Clock, Download, ExternalLink, FileArchive, FileText, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
+import { Activity, ArrowLeftRight, ArrowRight, Biohazard, Clock, Download, ExternalLink, FileArchive, FileText, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -300,6 +312,7 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 const loading = ref(true)
 const error = ref('')
 const summary = ref<RefSummary | null>(null)
+const malwareOpen = computed(() => summary.value?.malware_open ?? 0)
 const coverageRate = ref<number | null>(null)
 const files = ref<SnapshotFile[]>([])
 const filesLoading = ref(false)
@@ -460,6 +473,14 @@ function severityLink(key: SeverityKey) {
     name: 'repo-vulnerabilities',
     params: route.params,
     query: { ...route.query, severity: key },
+  }
+}
+
+function malwareLink() {
+  return {
+    name: 'repo-vulnerabilities',
+    params: route.params,
+    query: { ...route.query, type: 'malware' },
   }
 }
 

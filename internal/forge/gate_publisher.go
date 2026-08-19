@@ -467,9 +467,102 @@ func (a *GatePublisher) upsertGateComment(ctx context.Context, annotation *gateC
 	}
 }
 
+// malwareFindings returns the PR's new findings that are known-malicious
+// packages — the one class of finding that must never read like an ordinary
+// threshold breach on the PR.
+func malwareFindings(deltaResult *delta.DeltaResult) []store.Vulnerability {
+	if deltaResult == nil {
+		return nil
+	}
+	malware := make([]store.Vulnerability, 0, 2)
+	for _, finding := range deltaResult.New {
+		if strings.EqualFold(strings.TrimSpace(finding.Type), "malware") {
+			malware = append(malware, finding)
+		}
+	}
+	return malware
+}
+
+// malwareAlertMarkdown renders the unmissable malware callout. GitHub and
+// Forgejo render [!CAUTION] as a red alert box; forges without alert support
+// degrade to a plain blockquote, which still reads correctly.
+func malwareAlertMarkdown(malware []store.Vulnerability) string {
+	if len(malware) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("> [!CAUTION]\n")
+	b.WriteString("> ### 🚨 Malware detected in this change\n")
+	b.WriteString("> This pull request introduces known-malicious packages. **Do not merge.** Remove these packages entirely — do not upgrade them, and rotate any credentials exposed to environments where they were installed.\n")
+	b.WriteString(">\n> | Package | Advisory | Severity |\n> | --- | --- | --- |\n")
+	for _, finding := range malware {
+		fmt.Fprintf(&b, "> | `%s` | %s | %s |\n", componentLabel(finding), advisoryMarkdownLink(finding.PrimaryIdentifierValue), string(finding.Severity))
+	}
+	return b.String()
+}
+
+// componentLabel names a finding's package as name@version, falling back to
+// the finding title.
+func componentLabel(finding store.Vulnerability) string {
+	if finding.ComponentName != nil && strings.TrimSpace(*finding.ComponentName) != "" {
+		label := strings.TrimSpace(*finding.ComponentName)
+		if finding.ComponentVersion != nil && strings.TrimSpace(*finding.ComponentVersion) != "" {
+			label += "@" + strings.TrimSpace(*finding.ComponentVersion)
+		}
+		return label
+	}
+	return finding.Title
+}
+
+// advisoryMarkdownLink links an advisory id to its public database when the id
+// family is recognized; unrecognized ids render as plain text.
+func advisoryMarkdownLink(identifier string) string {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return "—"
+	}
+	upper := strings.ToUpper(identifier)
+	switch {
+	case strings.HasPrefix(upper, "GHSA-"):
+		return fmt.Sprintf("[%s](https://github.com/advisories/%s)", identifier, identifier)
+	case strings.HasPrefix(upper, "MAL-"), strings.HasPrefix(upper, "CVE-"):
+		return fmt.Sprintf("[%s](https://osv.dev/vulnerability/%s)", identifier, identifier)
+	}
+	return identifier
+}
+
+// severityChips summarizes new findings as compact per-severity counts,
+// worst first: "🔴 2 critical · 🟠 1 high".
+func severityChips(newFindings []store.Vulnerability) string {
+	counts := map[string]int{}
+	for _, finding := range newFindings {
+		counts[strings.ToLower(string(finding.Severity))]++
+	}
+	order := []struct{ key, dot string }{
+		{"critical", "🔴"}, {"high", "🟠"}, {"medium", "🟡"}, {"low", "🔵"}, {"info", "⚪"},
+	}
+	chips := make([]string, 0, len(order))
+	for _, level := range order {
+		if counts[level.key] > 0 {
+			chips = append(chips, fmt.Sprintf("%s %d %s", level.dot, counts[level.key], level.key))
+		}
+	}
+	return strings.Join(chips, " · ")
+}
+
+// isMalwareReason recognizes the reason line evaluateMalwareBlock produces so
+// the comment does not say the same thing twice when the alert box is shown.
+func isMalwareReason(reason string) bool {
+	return strings.Contains(reason, "malicious packages introduced")
+}
+
 func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult *delta.GateResult, deltaResult *delta.DeltaResult, status gateStatus) string {
+	malware := malwareFindings(deltaResult)
+
 	verdict := "✅ Quality gate passed"
 	switch {
+	case len(malware) > 0:
+		verdict = "🚨 Malware detected — do not merge"
 	case status.state == "failure":
 		verdict = "❌ Quality gate failed"
 	case status.conclusion == "neutral":
@@ -479,7 +572,21 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 	var b strings.Builder
 	fmt.Fprintf(&b, "### Hibou · %s\n\n", verdict)
 
-	if reasons := gateReasons(gateResult); len(reasons) > 0 {
+	if alert := malwareAlertMarkdown(malware); alert != "" {
+		b.WriteString(alert)
+		b.WriteString("\n")
+	}
+
+	// Remaining gate reasons — the malware alert already covers its own.
+	reasons := make([]string, 0)
+	for _, reason := range gateReasons(gateResult) {
+		if len(malware) > 0 && isMalwareReason(reason) {
+			continue
+		}
+		reasons = append(reasons, reason)
+	}
+	if len(reasons) > 0 {
+		b.WriteString("**Gate findings**\n\n")
 		for _, reason := range reasons {
 			fmt.Fprintf(&b, "- %s\n", reason)
 		}
@@ -487,8 +594,11 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 	}
 
 	if deltaResult != nil {
-		fmt.Fprintf(&b, "| New findings | Resolved | Unchanged |\n|---|---|---|\n| %d | %d | %d |\n\n",
+		fmt.Fprintf(&b, "| 🆕 New | ✅ Resolved | ♻️ Unchanged |\n| :---: | :---: | :---: |\n| %d | %d | %d |\n\n",
 			len(deltaResult.New), len(deltaResult.Resolved), deltaResult.Unchanged)
+		if chips := severityChips(deltaResult.New); chips != "" {
+			fmt.Fprintf(&b, "**New by severity:** %s\n\n", chips)
+		}
 	}
 
 	links := make([]string, 0, 2)
@@ -708,15 +818,26 @@ func gateForgeStatus(gateResult *delta.GateResult, deltaResult *delta.DeltaResul
 	}
 
 	reasons := gateReasons(gateResult)
+	malware := malwareFindings(deltaResult)
 	short := gateFailureDescription(reasons, deltaResult)
-	summary := gateFailureSummary(reasons, enforcement)
+	summary := gateFailureSummary(reasons, enforcement, malware)
+
+	title := "Quality gate failed"
+	advisoryTitle := "Quality gate (advisory)"
+	if len(malware) > 0 {
+		// Malware must be legible from the check list alone, before anyone
+		// opens the details.
+		title = "🚨 Malware detected — quality gate failed"
+		advisoryTitle = "🚨 Malware detected (advisory)"
+		short = truncate("🚨 "+short, 140)
+	}
 
 	if enforcement == enforcementBlocking {
 		return gateStatus{
 			state:       "failure",
 			conclusion:  "failure",
 			description: short,
-			title:       "Quality gate failed",
+			title:       title,
 			summary:     summary,
 			annotations: annotations,
 			enforcement: enforcement,
@@ -730,7 +851,7 @@ func gateForgeStatus(gateResult *delta.GateResult, deltaResult *delta.DeltaResul
 		state:       "success",
 		conclusion:  "neutral",
 		description: truncate("Advisory: "+short, 140),
-		title:       "Quality gate (advisory)",
+		title:       advisoryTitle,
 		summary:     summary,
 		annotations: annotations,
 		enforcement: enforcement,
@@ -808,20 +929,28 @@ func gateFailureDescription(reasons []string, deltaResult *delta.DeltaResult) st
 	return fmt.Sprintf("%d new vulnerabilities", count)
 }
 
-func gateFailureSummary(reasons []string, enforcement string) string {
+func gateFailureSummary(reasons []string, enforcement string, malware []store.Vulnerability) string {
 	var b strings.Builder
+	if alert := malwareAlertMarkdown(malware); alert != "" {
+		b.WriteString(alert)
+		b.WriteString("\n")
+	}
 	if enforcement == enforcementBlocking {
 		b.WriteString("**Quality gate failed.** This check is enforcing — it can block the merge if required by branch protection.\n\n")
 	} else {
 		b.WriteString("**Quality gate would fail** (advisory — this check does not block the merge).\n\n")
 	}
-	if len(reasons) > 0 {
-		for _, reason := range reasons {
-			b.WriteString("- ")
-			b.WriteString(reason)
-			b.WriteString("\n")
+	listed := 0
+	for _, reason := range reasons {
+		if len(malware) > 0 && isMalwareReason(reason) {
+			continue
 		}
-	} else {
+		b.WriteString("- ")
+		b.WriteString(reason)
+		b.WriteString("\n")
+		listed++
+	}
+	if listed == 0 && len(malware) == 0 {
 		b.WriteString("- One or more new findings crossed the configured thresholds.\n")
 	}
 	b.WriteString("\nOpen the details link to triage: dismiss a false positive, add a VEX statement, or override the gate — the check updates automatically, no CI re-run required.")

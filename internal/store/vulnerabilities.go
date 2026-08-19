@@ -704,7 +704,12 @@ const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, p
 
 //nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
+	// Open malware pins to the top of the default sorts (detected date at repo
+	// level, severity desc at org level): a malicious package must be the first
+	// row anyone sees. Ascending severity and status sorts are deliberate user
+	// choices and stay untouched.
 	return fmt.Sprintf(`ORDER BY
+  CASE WHEN ($%d::text IN ('', 'detected_asc', 'detected_desc', 'severity_desc')) AND type = 'malware' AND status = 'detected' THEN 0 ELSE 1 END ASC,
   CASE WHEN $%d::text = 'severity_asc' THEN CASE severity
     WHEN 'info' THEN 1
     WHEN 'low' THEN 2
@@ -725,7 +730,7 @@ func vulnerabilityOrderByClause(sortParam int) string {
   CASE WHEN $%d::text = 'status_desc' THEN status END DESC,
   CASE WHEN $%d::text = 'detected_asc' THEN detected_at END ASC,
   CASE WHEN $%d::text = 'detected_desc' OR $%d::text = '' THEN detected_at END DESC,
-  id DESC`, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam)
+  id DESC`, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam)
 }
 
 func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {

@@ -84,6 +84,7 @@ type componentGraphResponse struct {
 
 type refSummaryResponse struct {
 	Vulnerabilities  severityCounts `json:"vulnerabilities"`
+	MalwareOpen      int            `json:"malware_open"`
 	ComponentsTotal  int            `json:"components_total"`
 	CoverageLineRate *float64       `json:"coverage_line_rate,omitempty"`
 	TestsTotal       *int           `json:"tests_total,omitempty"`
@@ -101,6 +102,7 @@ type repoDashboardEntryResponse struct {
 	Enrolled        bool           `json:"enrolled"`
 	Status          string         `json:"status"`
 	Vulnerabilities severityCounts `json:"vulnerabilities"`
+	MalwareOpen     int            `json:"malware_open"`
 	ComponentsTotal int            `json:"components_total"`
 	LastScanned     *time.Time     `json:"last_scanned,omitempty"`
 	Outdated        bool           `json:"outdated"`
@@ -108,6 +110,7 @@ type repoDashboardEntryResponse struct {
 
 type orgDashboardTotalsResponse struct {
 	Vulnerabilities severityCounts `json:"vulnerabilities"`
+	MalwareOpen     int            `json:"malware_open"`
 	ComponentsTotal int            `json:"components_total"`
 }
 
@@ -653,6 +656,7 @@ func (s *Server) buildRefSummary(r *http.Request, repo *store.Repository, snapsh
 	createdAt := snapshot.CreatedAt
 	summary := refSummaryResponse{
 		Vulnerabilities: riskSeverityCounts(vulnerabilities, acceptances),
+		MalwareOpen:     openMalwareCount(vulnerabilities, acceptances),
 		ComponentsTotal: len(components),
 		SnapshotDate:    &createdAt,
 		SnapshotStatus:  &status,
@@ -724,6 +728,7 @@ func (s *Server) buildOrgDashboardResponse(r *http.Request, repos []repositoryIn
 			return orgDashboardResponse{}, err
 		}
 		addSeverityCounts(&response.Totals.Vulnerabilities, entry.Vulnerabilities)
+		response.Totals.MalwareOpen += entry.MalwareOpen
 		response.Totals.ComponentsTotal += entry.ComponentsTotal
 		response.Repos = append(response.Repos, entry)
 	}
@@ -773,6 +778,7 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 		return entry, err
 	}
 	entry.Vulnerabilities = riskSeverityCounts(vulnerabilities, acceptances)
+	entry.MalwareOpen = openMalwareCount(vulnerabilities, acceptances)
 	entry.ComponentsTotal = len(components)
 	return entry, nil
 }
@@ -1830,6 +1836,27 @@ func riskSeverityCounts(vulnerabilities []store.Vulnerability, acceptances []sto
 		incrementSeverity(&counts, string(vulnerability.Severity))
 	}
 	return counts
+}
+
+// openMalwareCount counts unresolved malware findings, skipping only
+// false-positive triage: risk-accepted malware still surfaces — accepting a
+// malicious package is a state worth seeing, not hiding.
+func openMalwareCount(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance) int {
+	kinds := acceptanceKindsByFingerprint(acceptances)
+	count := 0
+	for _, vulnerability := range vulnerabilities {
+		if vulnerability.Type != "malware" {
+			continue
+		}
+		if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
+			continue
+		}
+		if kinds[vulnerability.Fingerprint] == "false_positive" {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func acceptanceKindsByFingerprint(acceptances []store.FindingAcceptance) map[string]string {

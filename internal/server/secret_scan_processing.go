@@ -236,7 +236,11 @@ func (s *Server) executeSecretScanJob(ctx context.Context, job *store.SecretScan
 		allBranches := strings.TrimSpace(job.FromCommit) == "" && strings.TrimSpace(job.ToCommit) == ""
 		_, err = s.secretScanner.RunFullScan(ctx, repo.ID, snapshot.ID, target.cloneURL, branch, token, allBranches)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
+	return nil
 }
 
 type secretScanTarget struct {
@@ -321,8 +325,12 @@ func (s *Server) refreshSecretScanTargetFromForge(ctx context.Context, provider 
 
 // resolveSecretScanSnapshot finds or creates the snapshot findings hang on.
 // A push-triggered job usually has no snapshot: secret scans are not CI
-// uploads. A synthetic complete snapshot at the scanned commit is correct — it
-// has no artifacts, so the artifact-processing claim query never selects it.
+// uploads. The snapshot is created as a pending placeholder — the same shape
+// the PR webhook uses — so the CI upload for the commit adopts the row
+// (uploads reuse pending run-less snapshots) instead of racing it with a
+// duplicate, and so a just-pushed commit never masquerades as the ref's
+// latest complete analysis. Scan-only repos complete the placeholder when
+// the scan finishes (completeScanOnlySnapshot).
 //
 // An enrolment job knows even less: no ref row and no head SHA exist yet, so
 // both are resolved from the forge rather than skipped.
@@ -361,11 +369,41 @@ func (s *Server) resolveSecretScanSnapshot(ctx context.Context, job *store.Secre
 	if snapshot != nil {
 		return snapshot, nil
 	}
-	snapshot, err = s.queries.CreateSnapshot(ctx, ref.ID, commit, store.SnapshotStatusComplete)
+	snapshot, err = s.queries.CreatePlaceholderSnapshot(ctx, ref.ID, commit)
 	if err != nil {
 		return nil, fmt.Errorf("create snapshot at %s: %w", commit, err)
 	}
+	if snapshot == nil {
+		// Lost a creation race (CI upload or another webhook); adopt the row.
+		snapshot, err = s.queries.GetSnapshotByRefCommit(ctx, ref.ID, commit)
+		if err != nil || snapshot == nil {
+			return nil, fmt.Errorf("load raced snapshot at %s: %w", commit, err)
+		}
+	}
 	return snapshot, nil
+}
+
+// completeScanOnlySnapshot keeps scan findings readable on repos that never
+// upload: with no CI to adopt and finalize the pending placeholder, the
+// findings would hang on a snapshot data views never resolve. On repos with
+// upload history the placeholder is left pending for CI to adopt — that is
+// what keeps a just-pushed commit out of the "latest complete" data views
+// until its analysis actually lands.
+func (s *Server) completeScanOnlySnapshot(ctx context.Context, repoID uuid.UUID, snapshot *store.Snapshot) {
+	if snapshot == nil || snapshot.Status != store.SnapshotStatusPending {
+		return
+	}
+	hasUploads, err := s.queries.RepoHasUploadActivity(ctx, repoID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("repo_id", repoID.String()).Str("snapshot_id", snapshot.ID.String()).Msg("check repo upload activity after secret scan")
+		return
+	}
+	if hasUploads {
+		return
+	}
+	if _, err := s.queries.CompleteSnapshot(ctx, snapshot.ID); err != nil && !errors.Is(err, store.ErrSnapshotNotCompletable) {
+		s.log.Warn().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("complete scan-only snapshot")
+	}
 }
 
 // maybeEnqueueSecretScan records a job for a push; the clone happens on

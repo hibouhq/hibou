@@ -108,7 +108,7 @@ func (*retentionNudgeStoreStub) ListVulnerabilitySummaryBySnapshot(context.Conte
 	panic("unexpected ListVulnerabilitySummaryBySnapshot call")
 }
 
-func (*retentionNudgeStoreStub) ListStalePendingSnapshots(context.Context, time.Time, int32) ([]dbgen.Snapshot, error) {
+func (*retentionNudgeStoreStub) ListStalePendingSnapshots(context.Context, time.Time, time.Time, int32) ([]dbgen.Snapshot, error) {
 	panic("unexpected ListStalePendingSnapshots call")
 }
 

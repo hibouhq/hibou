@@ -7,6 +7,8 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const loading = ref(true)
   const isAuthenticated = computed(() => !!user.value)
+  // Cosmetic gate only — the server re-checks instance admin on every request.
+  const isInstanceAdmin = computed(() => user.value?.is_instance_admin === true)
 
   async function fetchUser() {
     loading.value = true
@@ -25,5 +27,5 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, loading, isAuthenticated, fetchUser, logout }
+  return { user, loading, isAuthenticated, isInstanceAdmin, fetchUser, logout }
 })

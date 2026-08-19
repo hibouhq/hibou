@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -25,7 +26,10 @@ func New() (*Client, error) {
 	return NewWithOverrides("", "")
 }
 
-// NewWithOverrides creates a client from flag/env/config values.
+// NewWithOverrides creates a client from flag/env/config values. Precedence:
+// explicit override, then HIBOU_SERVER / HIBOU_TOKEN (the same variables the
+// upload command reads, so pipelines configure the CLI once), then the stored
+// login config.
 func NewWithOverrides(serverOverride, tokenOverride string) (*Client, error) {
 	cfg, err := cliconfig.Load()
 	if err != nil {
@@ -34,18 +38,24 @@ func NewWithOverrides(serverOverride, tokenOverride string) (*Client, error) {
 
 	server := strings.TrimSpace(serverOverride)
 	if server == "" {
+		server = strings.TrimSpace(os.Getenv("HIBOU_SERVER"))
+	}
+	if server == "" {
 		server = strings.TrimSpace(cfg.Server)
 	}
 	if server == "" {
-		return nil, errors.New("not logged in — run 'hibou login' first")
+		return nil, errors.New("no server configured — run 'hibou login' or set HIBOU_SERVER")
 	}
 
 	token := strings.TrimSpace(tokenOverride)
 	if token == "" {
+		token = strings.TrimSpace(os.Getenv("HIBOU_TOKEN"))
+	}
+	if token == "" {
 		token = strings.TrimSpace(cfg.Token)
 	}
 	if token == "" {
-		return nil, errors.New("no token configured — run 'hibou login' first")
+		return nil, errors.New("no token configured — run 'hibou login' or set HIBOU_TOKEN")
 	}
 
 	return &Client{

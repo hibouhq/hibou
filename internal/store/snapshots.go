@@ -222,6 +222,12 @@ func (q *Queries) MarkSnapshotFailedIfPending(ctx context.Context, id uuid.UUID)
 	return q.db.MarkSnapshotFailedIfPending(ctx, id)
 }
 
+// RepoHasUploadActivity reports whether any snapshot of the repo ever
+// received a CI upload.
+func (q *Queries) RepoHasUploadActivity(ctx context.Context, repoID uuid.UUID) (bool, error) {
+	return q.db.RepoHasUploadActivity(ctx, repoID)
+}
+
 // CreatePlaceholderSnapshot inserts a pending snapshot for a webhook-observed
 // PR head that has no snapshot yet. Returns nil (no error) when any snapshot
 // already exists for the (ref, commit) pair.
@@ -643,10 +649,11 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, before time.Time, li
 	return snapshots, nil
 }
 
-func (q *Queries) ListStalePendingSnapshots(ctx context.Context, before time.Time, limit int32) ([]Snapshot, error) {
+func (q *Queries) ListStalePendingSnapshots(ctx context.Context, startedBefore, placeholderBefore time.Time, limit int32) ([]Snapshot, error) {
 	rows, err := q.db.ListStalePendingSnapshots(ctx, dbgen.ListStalePendingSnapshotsParams{
-		CreatedAt: before,
-		Limit:     limit,
+		StartedBefore:     startedBefore,
+		PlaceholderBefore: placeholderBefore,
+		RowLimit:          limit,
 	})
 	if err != nil {
 		return nil, err

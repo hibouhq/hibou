@@ -686,3 +686,53 @@ func TestGatePublisherPendingSnapshotNeverEvaluated(t *testing.T) {
 		t.Fatalf("no verdict may be persisted for a pending snapshot, got %d", len(store.prChecks))
 	}
 }
+
+// Malware must be legible on the PR before anyone opens details: alert box in
+// the check summary, malware-first title/description, and no duplicate line in
+// the remaining reasons.
+func TestGateForgeStatusMakesMalwareUnmissable(t *testing.T) {
+	name := "evil-pkg"
+	version := "1.0.0"
+	advisory := "MAL-2025-0001"
+	gateResult := &delta.GateResult{
+		Passed: false,
+		Reasons: []string{
+			"1 malicious packages introduced: evil-pkg@1.0.0",
+			"2 new critical dependency vulnerabilities exceed the maximum 0",
+		},
+	}
+	deltaResult := &delta.DeltaResult{New: []storepkg.Vulnerability{
+		{Type: "malware", Severity: storepkg.SeverityLevelCritical, ComponentName: &name, ComponentVersion: &version, PrimaryIdentifierValue: advisory},
+		{Type: "dependency", Severity: storepkg.SeverityLevelHigh},
+	}}
+
+	status := gateForgeStatus(gateResult, deltaResult, enforcementBlocking)
+	if status.title != "🚨 Malware detected — quality gate failed" {
+		t.Fatalf("title = %q", status.title)
+	}
+	if !strings.HasPrefix(status.description, "🚨 ") {
+		t.Fatalf("description must lead with the malware marker, got %q", status.description)
+	}
+	if !strings.Contains(status.summary, "> [!CAUTION]") || !strings.Contains(status.summary, "Malware detected in this change") {
+		t.Fatalf("summary must carry the caution alert, got %q", status.summary)
+	}
+	if !strings.Contains(status.summary, "[MAL-2025-0001](https://osv.dev/vulnerability/MAL-2025-0001)") {
+		t.Fatalf("summary must link the advisory, got %q", status.summary)
+	}
+	if strings.Contains(status.summary, "- 1 malicious packages introduced") {
+		t.Fatalf("malware reason must not be duplicated below the alert, got %q", status.summary)
+	}
+	if !strings.Contains(status.summary, "2 new critical dependency vulnerabilities") {
+		t.Fatalf("non-malware reasons must remain listed, got %q", status.summary)
+	}
+
+	// Without malware nothing changes shape.
+	plain := gateForgeStatus(&delta.GateResult{Reasons: []string{"too many highs"}}, &delta.DeltaResult{}, enforcementBlocking)
+	if plain.title != "Quality gate failed" || strings.Contains(plain.summary, "CAUTION") {
+		t.Fatalf("plain failure must stay unchanged: %q / %q", plain.title, plain.summary)
+	}
+
+	if chips := severityChips(deltaResult.New); chips != "🔴 1 critical · 🟠 1 high" {
+		t.Fatalf("severity chips = %q", chips)
+	}
+}

@@ -48,6 +48,9 @@ data:
   TMPDIR: {{ .Values.hibou.scratch.mountPath | quote }}
   {{- end }}
   HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"true"{{ end }}
+  {{- if .Values.hibou.instanceAdminsExistingSecret }}
+  HIBOU_INSTANCE_ADMINS_FILE: "/etc/hibou/instance-admins/emails"
+  {{- end }}
   {{- with (include "hibou.baseURL" .) }}
   HIBOU_BASE_URL: {{ . | quote }}
   {{- end }}

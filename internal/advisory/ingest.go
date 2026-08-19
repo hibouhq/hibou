@@ -241,16 +241,17 @@ func (ing *Ingester) finalizeAdvisoryRecord(ctx context.Context, queries Ingeste
 	}
 	mergedSeverity, mergedScore, mergedVector := MergeSeverity(convertSources(sources))
 	mergedVersion := selectCanonicalCVSSVersion(sources)
+	isMalware := advisoryRecord.IsMalware || result.IsMalware
 	finalRecord, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
 		CanonicalID: canonicalID,
 		Title:       advisoryRecord.Title,
 		Description: advisoryRecord.Description,
-		Severity:    toSeverityLevel(mergedSeverity),
+		Severity:    malwareSeverityFloor(toSeverityLevel(mergedSeverity), isMalware),
 		CvssScore:   toNullScore(mergedScore),
 		CvssVersion: toNullCVSSVersion(mergedVersion),
 		CvssVector:  mergedVector,
 		CweIds:      advisoryRecord.CweIds,
-		IsMalware:   advisoryRecord.IsMalware || result.IsMalware,
+		IsMalware:   isMalware,
 		MalwareType: coalesceMalwareType(advisoryRecord.MalwareType, normalizeMalwareType(result.MalwareType)),
 		PublishedAt: advisoryRecord.PublishedAt,
 		WithdrawnAt: advisoryRecord.WithdrawnAt,
@@ -318,16 +319,18 @@ func mergedAdvisoryUpsert(existing dbgen.Advisory, found bool, canonicalID strin
 		withdrawnAt = existing.WithdrawnAt
 	}
 
+	isMalware := (found && existing.IsMalware) || result.IsMalware
+
 	return dbgen.UpsertAdvisoryParams{
 		CanonicalID: canonicalID,
 		Title:       title,
 		Description: description,
-		Severity:    severity,
+		Severity:    malwareSeverityFloor(severity, isMalware),
 		CvssScore:   toNullScore(result.CVSSScore),
 		CvssVersion: toNullCVSSVersion(result.CVSSVersion),
 		CvssVector:  result.CVSSVector,
 		CweIds:      mergeStrings(existing.CweIds, result.CWEIDs),
-		IsMalware:   (found && existing.IsMalware) || result.IsMalware,
+		IsMalware:   isMalware,
 		MalwareType: malwareType,
 		PublishedAt: publishedAt,
 		WithdrawnAt: withdrawnAt,
@@ -476,6 +479,9 @@ func severityLevelRank(severity dbgen.SeverityLevel) int {
 }
 
 func severityForResult(result IngestResult) dbgen.SeverityLevel {
+	if result.IsMalware {
+		return dbgen.SeverityLevelCritical
+	}
 	if result.Severity != nil {
 		return toSeverityLevel(*result.Severity)
 	}
@@ -483,6 +489,15 @@ func severityForResult(result IngestResult) dbgen.SeverityLevel {
 		return toSeverityLevel(NormalizeSeverity(*result.CVSSScore))
 	}
 	return dbgen.SeverityLevelInfo
+}
+
+// malwareSeverityFloor pins malicious-package advisories to critical: MAL-*
+// records carry no CVSS, so severity derivation alone would leave them at info.
+func malwareSeverityFloor(severity dbgen.SeverityLevel, isMalware bool) dbgen.SeverityLevel {
+	if isMalware {
+		return dbgen.SeverityLevelCritical
+	}
+	return severity
 }
 
 func toSeverityLevel(severity Severity) dbgen.SeverityLevel {

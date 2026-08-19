@@ -116,3 +116,45 @@ func TestEvaluateGatesWithConfigLicensePolicy(t *testing.T) {
 		t.Fatalf("want copyleft + unknown reasons, got %v", gate.Reasons)
 	}
 }
+
+// Malware is unconditionally blocking: the block runs on every gate
+// evaluation, independent of which gate sections are configured, and the
+// reason names the package.
+func TestMalwareBlockIsUnconditional(t *testing.T) {
+	name := "evil-pkg"
+	version := "1.0.0"
+	newVulns := []storepkg.Vulnerability{
+		{Type: "malware", Severity: storepkg.SeverityLevel(dbgen.SeverityLevelCritical), ComponentName: &name, ComponentVersion: &version},
+		{Type: "sast", Severity: storepkg.SeverityLevel(dbgen.SeverityLevelCritical)},
+	}
+
+	reasons := evaluateMalwareBlock(newVulns)
+	if len(reasons) != 1 {
+		t.Fatalf("want exactly the malware reason, got %v", reasons)
+	}
+	if want := "1 malicious packages introduced: evil-pkg@1.0.0"; reasons[0] != want {
+		t.Fatalf("reason = %q, want %q", reasons[0], want)
+	}
+	if reasons := evaluateMalwareBlock(newVulns[1:]); len(reasons) != 0 {
+		t.Fatalf("non-malware findings must not trip the block, got %v", reasons)
+	}
+
+	// Malware also counts toward the vulnerabilities-section thresholds when
+	// that section exists.
+	zero := 0
+	reasons = evaluateNewVulnerabilityGate(newVulns, &VulnerabilityGate{MaxCritical: &zero})
+	if len(reasons) != 1 {
+		t.Fatalf("want the critical-threshold reason, got %v", reasons)
+	}
+
+	// End to end through EvaluateGatesWithConfig with NO gate sections
+	// configured at all: the malware block must still fire.
+	service := NewService(newMockStore(), zerolog.Nop())
+	result, err := service.EvaluateGatesWithConfig(context.Background(), uuid.New(), uuid.New(), &DeltaResult{New: newVulns}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateGatesWithConfig: %v", err)
+	}
+	if result.Passed || len(result.Reasons) != 1 {
+		t.Fatalf("gate with no configured sections must fail on malware, got passed=%v reasons=%v", result.Passed, result.Reasons)
+	}
+}

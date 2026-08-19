@@ -476,3 +476,33 @@ func TestIngesterReconcilesTrivyAndOSVSources(t *testing.T) {
 		t.Fatal("missing osv source row")
 	}
 }
+
+// OSV MAL-* records carry no CVSS and no database_specific.severity, so
+// severity derivation alone would file malicious packages as info. The floor
+// pins every malware advisory to critical, on both the insert and merge paths.
+func TestMalwareSeverityFloor(t *testing.T) {
+	if got := severityForResult(IngestResult{IsMalware: true}); got != dbgen.SeverityLevelCritical {
+		t.Fatalf("severityForResult(malware, no CVSS) = %q, want critical", got)
+	}
+	if got := severityForResult(IngestResult{}); got != dbgen.SeverityLevelInfo {
+		t.Fatalf("severityForResult(no signal) = %q, want info", got)
+	}
+
+	if got := malwareSeverityFloor(dbgen.SeverityLevelInfo, true); got != dbgen.SeverityLevelCritical {
+		t.Fatalf("floor(info, malware) = %q, want critical", got)
+	}
+	if got := malwareSeverityFloor(dbgen.SeverityLevelLow, false); got != dbgen.SeverityLevelLow {
+		t.Fatalf("floor(low, not malware) = %q, want low", got)
+	}
+
+	// An existing malware advisory stuck at info (pre-fix rows) is lifted on
+	// the next ingest even though 'found' normally keeps the stored severity.
+	existing := dbgen.Advisory{ID: uuid.New(), CanonicalID: "MAL-2025-1", Severity: dbgen.SeverityLevelInfo, IsMalware: true}
+	params := mergedAdvisoryUpsert(existing, true, "MAL-2025-1", IngestResult{ProviderID: "MAL-2025-1"})
+	if params.Severity != dbgen.SeverityLevelCritical {
+		t.Fatalf("merged severity = %q, want critical", params.Severity)
+	}
+	if !params.IsMalware {
+		t.Fatal("merged upsert lost is_malware")
+	}
+}

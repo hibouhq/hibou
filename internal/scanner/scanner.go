@@ -39,6 +39,7 @@ type queryStore interface {
 	MarkStaleVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) ([]string, error)
 	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
 	GetRefByID(ctx context.Context, id uuid.UUID) (*store.Ref, error)
+	GetRepositoryByID(ctx context.Context, id uuid.UUID) (*store.Repository, error)
 	ClearFindingsNotified(ctx context.Context, eventType string, repoID uuid.UUID, identifiers []string) error
 	GetSnapshotCodeRefs(ctx context.Context, snapshotID uuid.UUID) (*store.SnapshotCodeRefs, error)
 	ApplyReachabilityFromCodeRefs(ctx context.Context, snapshotID uuid.UUID, refs store.SnapshotCodeRefs) (int64, int64, error)
@@ -216,6 +217,7 @@ type createdFinding struct {
 	Identifier string
 	Severity   string
 	Component  string
+	IsMalware  bool
 }
 
 type scanCompletion struct {
@@ -342,11 +344,18 @@ func (s *Service) finalizeScan(ctx context.Context, completion scanCompletion) (
 		return completion.scanID, fmt.Errorf("update scan status: %w", err)
 	}
 
+	// org_id/repo_id/repo_name make the payloads dispatchable to external
+	// integrations — the dispatcher drops events it cannot scope to an org.
+	enrichment := s.eventEnrichment(ctx, completion.snapshotID)
+
 	scanPayload := map[string]any{
 		"scan_id":          completion.scanID.String(),
 		"snapshot_id":      completion.snapshotID.String(),
 		"providers":        completion.resolvedProviders,
 		"providers_failed": completion.providerFailed,
+	}
+	for key, value := range enrichment {
+		scanPayload[key] = value
 	}
 	if completion.triggeredByUserID != nil {
 		scanPayload["triggered_by_user_id"] = completion.triggeredByUserID.String()
@@ -355,27 +364,53 @@ func (s *Service) finalizeScan(ctx context.Context, completion scanCompletion) (
 
 	// One batch event per scan for the vulnerabilities it inserted; the
 	// notify layer dedups against what the repo was already told about.
+	// Malware findings are split onto their own event so they carry critical
+	// urgency end to end instead of drowning in the generic batch.
 	if finalStatus == "complete" && len(completion.created) > 0 {
 		identifiers := make([]string, 0, len(completion.created))
 		findings := make([]map[string]any, 0, len(completion.created))
+		malwareIdentifiers := make([]string, 0, 2)
+		malwareFindings := make([]map[string]any, 0, 2)
 		for _, finding := range completion.created {
 			if finding.Identifier == "" {
 				continue
 			}
-			identifiers = append(identifiers, finding.Identifier)
-			findings = append(findings, map[string]any{
+			payload := map[string]any{
 				"identifier": finding.Identifier,
 				"severity":   finding.Severity,
 				"component":  finding.Component,
-			})
+			}
+			if finding.IsMalware {
+				malwareIdentifiers = append(malwareIdentifiers, finding.Identifier)
+				malwareFindings = append(malwareFindings, payload)
+				continue
+			}
+			identifiers = append(identifiers, finding.Identifier)
+			findings = append(findings, payload)
 		}
 		if len(identifiers) > 0 {
-			s.publish(ctx, events.VulnerabilitiesFound, map[string]any{
+			batchPayload := map[string]any{
 				"scan_id":     completion.scanID.String(),
 				"snapshot_id": completion.snapshotID.String(),
 				"identifiers": identifiers,
 				"findings":    findings,
-			})
+			}
+			for key, value := range enrichment {
+				batchPayload[key] = value
+			}
+			s.publish(ctx, events.VulnerabilitiesFound, batchPayload)
+		}
+		if len(malwareIdentifiers) > 0 {
+			malwarePayload := map[string]any{
+				"scan_id":     completion.scanID.String(),
+				"snapshot_id": completion.snapshotID.String(),
+				"identifiers": malwareIdentifiers,
+				"findings":    malwareFindings,
+			}
+			for key, value := range enrichment {
+				malwarePayload[key] = value
+			}
+			s.publish(ctx, events.MalwareDetected, malwarePayload)
 		}
 	}
 
@@ -407,8 +442,10 @@ func (s *Service) markStaleMatchedVulnerabilities(ctx context.Context, snapshotI
 	if err != nil || ref == nil {
 		return nil
 	}
-	if err := s.queries.ClearFindingsNotified(ctx, string(events.VulnerabilitiesFound), ref.RepoID, resolved); err != nil {
-		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("clear notification dedup for resolved findings")
+	for _, eventType := range []events.Type{events.VulnerabilitiesFound, events.MalwareDetected} {
+		if err := s.queries.ClearFindingsNotified(ctx, string(eventType), ref.RepoID, resolved); err != nil {
+			s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Str("event_type", string(eventType)).Msg("clear notification dedup for resolved findings")
+		}
 	}
 	return nil
 }
@@ -552,6 +589,7 @@ func summarizeCreatedFinding(vulnerability *store.Vulnerability) createdFinding 
 	summary := createdFinding{
 		Identifier: strings.TrimSpace(vulnerability.PrimaryIdentifierValue),
 		Severity:   strings.ToLower(string(vulnerability.Severity)),
+		IsMalware:  vulnerability.Type == "malware",
 	}
 	if vulnerability.ComponentName != nil && strings.TrimSpace(*vulnerability.ComponentName) != "" {
 		summary.Component = strings.TrimSpace(*vulnerability.ComponentName)
@@ -572,11 +610,15 @@ func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, er
 	}); updateErr != nil {
 		return fmt.Errorf("%w; update scan failure: %w", err, updateErr)
 	}
-	s.publish(ctx, events.ScanFailed, map[string]any{
+	failPayload := map[string]any{
 		"scan_id":     scanID.String(),
 		"snapshot_id": snapshotID.String(),
 		"error":       err.Error(),
-	})
+	}
+	for key, value := range s.eventEnrichment(ctx, snapshotID) {
+		failPayload[key] = value
+	}
+	s.publish(ctx, events.ScanFailed, failPayload)
 	return err
 }
 
@@ -623,6 +665,30 @@ func (s *Service) resolveProviders(providerNames []string) []string {
 		resolved = append(resolved, trimmed)
 	}
 	return resolved
+}
+
+// eventEnrichment resolves the org/repo scope of a snapshot for event
+// payloads. Best-effort: an unresolvable snapshot yields an empty map and the
+// event still rings the bell (which resolves recipients itself); only external
+// dispatch needs org_id.
+func (s *Service) eventEnrichment(ctx context.Context, snapshotID uuid.UUID) map[string]any {
+	snapshot, err := s.queries.GetSnapshotByID(ctx, snapshotID)
+	if err != nil || snapshot == nil {
+		return map[string]any{}
+	}
+	ref, err := s.queries.GetRefByID(ctx, snapshot.RefID)
+	if err != nil || ref == nil {
+		return map[string]any{}
+	}
+	repo, err := s.queries.GetRepositoryByID(ctx, ref.RepoID)
+	if err != nil || repo == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"org_id":    repo.OrgID.String(),
+		"repo_id":   repo.ID.String(),
+		"repo_name": repo.Name,
+	}
 }
 
 func (s *Service) publish(ctx context.Context, eventType events.Type, payload any) {

@@ -33,6 +33,8 @@ type findingAdvisoryResponse struct {
 	CVSSScore   string   `json:"cvss_score,omitempty"`
 	CVSSVector  string   `json:"cvss_vector,omitempty"`
 	CWEs        []string `json:"cwes,omitempty"`
+	IsMalware   bool     `json:"is_malware,omitempty"`
+	MalwareType string   `json:"malware_type,omitempty"`
 	// The three fields a dependency finding is actually triaged on: what to
 	// upgrade to, where to read the details, and which other identifier the
 	// same advisory travels under. Same enrichment the components view uses.
@@ -146,9 +148,13 @@ func (s *Server) advisoryDetail(ctx context.Context, advisory dbgen.Advisory) *f
 		Severity:    string(advisory.Severity),
 		CVSSVector:  advisory.CvssVector,
 		CWEs:        advisory.CweIds,
+		IsMalware:   advisory.IsMalware,
 	}
 	if advisory.CvssScore.Valid {
 		detail.CVSSScore = advisory.CvssScore.String
+	}
+	if advisory.MalwareType.Valid {
+		detail.MalwareType = string(advisory.MalwareType.MalwareType)
 	}
 
 	// Fixed versions and references come from the same enrichment the

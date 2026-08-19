@@ -18,6 +18,13 @@ hibou:
     format: json
   sessionSecretExistingSecret: hibou-session
   autoProvisionOrgs: true
+  # Instance admins (announcement banners, instance settings, instance audit).
+  # The list lives in a Secret (never in git) and is re-read live — edit it with:
+  #   kubectl create secret generic hibou-instance-admins \
+  #     --from-literal=emails="<email1>,<email2>" \
+  #     --dry-run=client -o yaml | kubectl apply -f -
+  # Changes apply within ~1 minute, no restart needed.
+  instanceAdminsExistingSecret: hibou-instance-admins
   # Example GitHub forge wiring.
   # Create Secret "hibou-forge-github" with env-style keys such as:
   #   HIBOU_FORGE_0_TYPE=github

@@ -6,6 +6,16 @@ export interface User {
   display_name: string
   avatar_url?: string
   provider: string
+  is_instance_admin?: boolean
+}
+
+// Instance-wide announcement banner, managed by instance admins in
+// /settings/banners and rendered at the top of every page.
+export interface AnnouncementBanner {
+  id: string
+  message: string
+  background_color: string
+  enabled: boolean
 }
 
 // Postgres nullable columns serialize as {…, Valid} wrappers on some legacy
@@ -72,15 +82,16 @@ export interface NotificationRule {
 }
 
 // Event types emitted on the internal bus that notification rules can match.
+// Must stay in sync with isValidNotificationEventType (Go) — listing an event
+// the API rejects makes the rule form fail on save.
 export const NOTIFICATION_EVENT_TYPES = [
   'vulnerabilities.found',
+  'malware.detected',
   'gate.failed',
   'gate.passed',
   'scan.completed',
   'scan.failed',
   'scan.stale',
-  'secret.discovered',
-  'token.expiring',
 ] as const
 
 export interface QualityGate {
@@ -360,6 +371,13 @@ export interface AuditLogEntry {
   created_at: string
 }
 
+// Instance-wide audit row: the org-scoped shape plus the owning organization
+// (absent for instance-level events such as banner updates and admin grants).
+export interface InstanceAuditLogEntry extends AuditLogEntry {
+  org_provider?: string
+  org_slug?: string
+}
+
 export interface OrgSettings {
   vex_auto_propagate: boolean
   vex_reachability_analysis: boolean
@@ -504,6 +522,8 @@ export interface FindingAdvisory {
   cvss_score?: string
   cvss_vector?: string
   cwes?: string[]
+  is_malware?: boolean
+  malware_type?: string
   fixed_versions?: string[]
   references?: string[]
   aliases?: string[]
@@ -694,6 +714,7 @@ export interface OrgComponent extends ComponentWithVulns {
 
 export interface RefSummary {
   vulnerabilities: SeverityCounts
+  malware_open: number
   components_total: number
   coverage_line_rate?: number | null
   tests_total?: number | null
@@ -978,6 +999,7 @@ export interface RepoDashboardEntry {
   enrolled: boolean
   status: RepoLifecycleStatus
   vulnerabilities: SeverityCounts
+  malware_open: number
   components_total: number
   last_scanned?: string
   outdated: boolean
@@ -987,6 +1009,7 @@ export interface OrgDashboard {
   repos: RepoDashboardEntry[]
   totals: {
     vulnerabilities: SeverityCounts
+    malware_open: number
     components_total: number
   }
   coverage: {
@@ -2089,6 +2112,52 @@ class ApiClient {
 
   getServerVersion() {
     return this.request<ApiResponse<ServerVersion>>('/version')
+  }
+
+  // Public: enabled banners only, shown on every page including login.
+  getActiveBanners() {
+    return this.request<ApiResponse<AnnouncementBanner[]>>('/instance/banners')
+  }
+
+  // Instance admin only: the current admin email list, resolved live from its
+  // managed source (Secret-mounted file or env).
+  listInstanceAdmins() {
+    return this.request<ApiResponse<string[]>>('/instance/settings/admins')
+  }
+
+  // Instance admin only: audit logs across the whole instance — every org plus
+  // instance-level (org-less) events. scope: 'instance' limits to the latter.
+  listInstanceAuditLogs(params?: { action?: string; resource_type?: string; scope?: string; page?: number; per_page?: number }) {
+    const query = new URLSearchParams()
+    if (params?.action) {
+      query.set('action', params.action)
+    }
+    if (params?.resource_type) {
+      query.set('resource_type', params.resource_type)
+    }
+    if (params?.scope) {
+      query.set('scope', params.scope)
+    }
+    if (params?.page) {
+      query.set('page', String(params.page))
+    }
+    if (params?.per_page) {
+      query.set('per_page', String(params.per_page))
+    }
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return this.request<PaginatedResponse<InstanceAuditLogEntry>>(`/instance/audit-logs${suffix}`)
+  }
+
+  // Instance admin only: the full banner list, enabled or not.
+  getBannerSettings() {
+    return this.request<ApiResponse<AnnouncementBanner[]>>('/instance/settings/banners')
+  }
+
+  updateBannerSettings(banners: AnnouncementBanner[]) {
+    return this.request<ApiResponse<AnnouncementBanner[]>>('/instance/settings/banners', {
+      method: 'PUT',
+      body: JSON.stringify(banners),
+    })
   }
 
   // Absolute path to download the CLI binary for a platform. The browser

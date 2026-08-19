@@ -3,7 +3,7 @@
     <!-- Header row: title-ish blurb + filters, GitHub audit-log style -->
     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <p class="text-sm text-gray-400">
-        {{ repo ? 'Actions recorded for this repository.' : 'Actions recorded across this organization.' }}
+        {{ instance ? 'Actions recorded across the whole instance — every organization plus instance-level events.' : repo ? 'Actions recorded for this repository.' : 'Actions recorded across this organization.' }}
         <span
           v-if="!loading && !forbidden"
           class="text-gray-500"
@@ -11,6 +11,20 @@
       </p>
 
       <div class="flex flex-wrap items-center gap-2">
+        <select
+          v-if="instance"
+          v-model="scopeFilter"
+          class="h-7 rounded-md border border-surface-border bg-surface-overlay px-2 text-xs text-gray-300 focus:border-accent/50 focus:outline-none"
+          aria-label="Filter by scope"
+        >
+          <option value="">
+            Scope: all
+          </option>
+          <option value="instance">
+            Scope: instance-level
+          </option>
+        </select>
+
         <select
           v-model="actionFilter"
           class="h-7 rounded-md border border-surface-border bg-surface-overlay px-2 text-xs text-gray-300 focus:border-accent/50 focus:outline-none"
@@ -46,7 +60,7 @@
         </select>
 
         <button
-          v-if="actionFilter || resourceTypeFilter"
+          v-if="actionFilter || resourceTypeFilter || scopeFilter"
           class="h-7 rounded-md px-2 text-xs text-gray-400 transition hover:text-white"
           type="button"
           @click="resetFilters"
@@ -74,7 +88,7 @@
           Audit log is restricted
         </p>
         <p class="mt-1 text-xs text-gray-500">
-          Only organization admins can view audit events.
+          {{ instance ? 'Only instance admins can view instance audit events.' : 'Only organization admins can view audit events.' }}
         </p>
       </div>
 
@@ -131,6 +145,11 @@
                 v-if="resourceLabel(entry)"
                 class="text-gray-500"
               > · {{ resourceLabel(entry) }}</span>
+              <span
+                v-if="instance"
+                class="ml-1.5 rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+                :class="entry.org_slug ? 'border-surface-border text-gray-400' : 'border-accent/40 text-accent'"
+              >{{ entry.org_slug ?? 'instance' }}</span>
             </span>
 
             <span class="flex shrink-0 flex-col items-end gap-0.5 pt-0.5 text-xs text-gray-500">
@@ -205,24 +224,28 @@
 import { Bot, KeyRound, ScrollText, ShieldAlert } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 
-import { api, type AuditLogEntry } from '@/api/client'
+import { api, type InstanceAuditLogEntry } from '@/api/client'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
 
 const props = defineProps<{
-  provider: string
-  slug: string
+  // Instance mode: the whole-instance log (instance admins only). provider and
+  // slug are unused in this mode.
+  instance?: boolean
+  provider?: string
+  slug?: string
   // When set, the log is scoped to this repository.
   repo?: string
 }>()
 
 const PER_PAGE = 50
 
-const entries = ref<AuditLogEntry[]>([])
+const entries = ref<InstanceAuditLogEntry[]>([])
 const loading = ref(true)
 const forbidden = ref(false)
 const expandedId = ref('')
 const actionFilter = ref('')
 const resourceTypeFilter = ref('')
+const scopeFilter = ref('')
 const page = ref(1)
 const pagination = ref({ page: 1, per_page: PER_PAGE, total: 0 })
 
@@ -260,6 +283,9 @@ const KNOWN_ACTIONS = [
   'apikey.update',
   'apikey.delete',
   'apikey.rotate',
+  'instance.banners.update',
+  'instance.admin.granted',
+  'instance.admin.revoked',
 ]
 
 const KNOWN_RESOURCE_TYPES = [
@@ -275,13 +301,15 @@ const KNOWN_RESOURCE_TYPES = [
   'notification_rule',
   'api_key',
   'member',
+  'instance_setting',
+  'instance_admin',
 ]
 
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 const actionOptions = computed(() => Array.from(new Set([...KNOWN_ACTIONS, ...entries.value.map((entry) => entry.action)])).sort())
 const resourceTypeOptions = computed(() => Array.from(new Set([...KNOWN_RESOURCE_TYPES, ...entries.value.map((entry) => entry.resource_type)])).sort())
 
-watch([actionFilter, resourceTypeFilter], () => {
+watch([actionFilter, resourceTypeFilter, scopeFilter], () => {
   page.value = 1
   void load()
 })
@@ -291,7 +319,7 @@ watch(page, () => {
 })
 
 watch(
-  () => [props.provider, props.slug, props.repo],
+  () => [props.instance, props.provider, props.slug, props.repo],
   () => {
     page.value = 1
     void load()
@@ -304,13 +332,21 @@ async function load() {
   forbidden.value = false
 
   try {
-    const res = await api.listAuditLogs(props.provider, props.slug, {
-      action: actionFilter.value || undefined,
-      resource_type: resourceTypeFilter.value || undefined,
-      repo: props.repo || undefined,
-      page: page.value,
-      per_page: PER_PAGE,
-    })
+    const res = props.instance
+      ? await api.listInstanceAuditLogs({
+          action: actionFilter.value || undefined,
+          resource_type: resourceTypeFilter.value || undefined,
+          scope: scopeFilter.value || undefined,
+          page: page.value,
+          per_page: PER_PAGE,
+        })
+      : await api.listAuditLogs(props.provider ?? '', props.slug ?? '', {
+          action: actionFilter.value || undefined,
+          resource_type: resourceTypeFilter.value || undefined,
+          repo: props.repo || undefined,
+          page: page.value,
+          per_page: PER_PAGE,
+        })
 
     entries.value = res.data
     pagination.value = res.pagination
@@ -331,6 +367,7 @@ async function load() {
 function resetFilters() {
   actionFilter.value = ''
   resourceTypeFilter.value = ''
+  scopeFilter.value = ''
 }
 
 function toggleExpanded(id: string) {
@@ -349,7 +386,7 @@ function actorInitials(display: string) {
     .join('')
 }
 
-function resourceLabel(entry: AuditLogEntry) {
+function resourceLabel(entry: InstanceAuditLogEntry) {
   // Prefer a human-readable name from the context over a bare UUID.
   const context = entry.context ?? {}
   for (const key of ['name', 'title', 'repo_name', 'token_name', 'version']) {
@@ -361,7 +398,7 @@ function resourceLabel(entry: AuditLogEntry) {
   return ''
 }
 
-function hasContext(entry: AuditLogEntry) {
+function hasContext(entry: InstanceAuditLogEntry) {
   return entry.context && Object.keys(entry.context).length > 0
 }
 

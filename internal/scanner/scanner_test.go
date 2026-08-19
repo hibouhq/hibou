@@ -106,12 +106,13 @@ func (m *mockScannerStore) CreateVulnerability(_ context.Context, arg dbgen.Crea
 	vulnID := uuid.New()
 	m.createdVulnIDs = append(m.createdVulnIDs, vulnID)
 	vulnerability := &store.Vulnerability{
-		ID:          vulnID,
-		Type:        arg.Type,
-		SnapshotID:  arg.SnapshotID,
-		Severity:    arg.Severity,
-		ScannerName: arg.ScannerName,
-		Fingerprint: arg.Fingerprint,
+		ID:                     vulnID,
+		Type:                   arg.Type,
+		SnapshotID:             arg.SnapshotID,
+		Severity:               arg.Severity,
+		ScannerName:            arg.ScannerName,
+		Fingerprint:            arg.Fingerprint,
+		PrimaryIdentifierValue: arg.PrimaryIdentifierValue,
 	}
 	if arg.ComponentID.Valid {
 		vulnerability.ComponentID = &arg.ComponentID.UUID
@@ -130,6 +131,10 @@ func (m *mockScannerStore) GetSnapshotByID(_ context.Context, _ uuid.UUID) (*sto
 }
 
 func (m *mockScannerStore) GetRefByID(_ context.Context, _ uuid.UUID) (*store.Ref, error) {
+	return nil, nil
+}
+
+func (m *mockScannerStore) GetRepositoryByID(_ context.Context, _ uuid.UUID) (*store.Repository, error) {
 	return nil, nil
 }
 
@@ -277,8 +282,57 @@ func TestRunScanBasicFlow(t *testing.T) {
 	if last := store.scanStatuses[len(store.scanStatuses)-1].Status; last != "complete" {
 		t.Fatalf("expected final scan status complete, got %q", last)
 	}
-	if len(bus.events) == 0 || bus.events[len(bus.events)-1].Type != events.ScanCompleted {
-		t.Fatalf("expected scan completed event, got %#v", bus.events)
+	if len(bus.events) == 0 || bus.events[0].Type != events.ScanCompleted {
+		t.Fatalf("expected scan completed event first, got %#v", bus.events)
+	}
+	if bus.events[len(bus.events)-1].Type != events.VulnerabilitiesFound {
+		t.Fatalf("expected vulnerabilities.found batch event, got %#v", bus.events)
+	}
+}
+
+// A scan whose batch mixes malware and ordinary findings must emit TWO events:
+// the generic vulnerabilities.found without the malware identifiers, and one
+// malware.detected carrying only them — malware never drowns in the batch.
+func TestRunScanSplitsMalwareIntoOwnEvent(t *testing.T) {
+	store := newMockScannerStore()
+	cache := newMockCache()
+	ingester := newMockIngester()
+	bus := &mockBus{}
+	componentID := uuid.New()
+	depAdvisoryID := uuid.New()
+	malAdvisoryID := uuid.New()
+	snapshotID := uuid.New()
+
+	store.components = []dbgen.Component{{ID: componentID, Name: "leftpad", Version: "1.2.0", Ecosystem: "npm"}}
+	store.affectedRanges[packageKey("npm", "leftpad")] = []dbgen.AffectedRange{
+		{ID: uuid.New(), AdvisoryID: depAdvisoryID, Ecosystem: "npm", PackageName: "leftpad", Fixed: "2.0.0"},
+		{ID: uuid.New(), AdvisoryID: malAdvisoryID, Ecosystem: "npm", PackageName: "leftpad", Fixed: "9.9.9"},
+	}
+	store.advisories[depAdvisoryID] = dbgen.Advisory{ID: depAdvisoryID, CanonicalID: "CVE-2024-0001", Severity: dbgen.SeverityLevelHigh}
+	store.advisories[malAdvisoryID] = dbgen.Advisory{ID: malAdvisoryID, CanonicalID: "MAL-2025-0001", Severity: dbgen.SeverityLevelCritical, IsMalware: true}
+	cache.results["osv"] = []provider.AdvisoryResult{{ProviderID: "CVE-2024-0001"}, {ProviderID: "MAL-2025-0001"}}
+	ingester.results["osv"] = map[string]uuid.UUID{"CVE-2024-0001": depAdvisoryID, "MAL-2025-0001": malAdvisoryID}
+
+	service := New(store, cache, ingester, bus, map[string]provider.AdvisoryProvider{"osv": mockProvider{name: "osv"}}, zerolog.Nop())
+	if _, err := service.RunScan(context.Background(), snapshotID, []string{"osv"}, "user"); err != nil {
+		t.Fatalf("RunScan returned error: %v", err)
+	}
+
+	identifiersByEvent := map[events.Type][]string{}
+	for _, event := range bus.events {
+		payload, ok := event.Payload.(map[string]any)
+		if !ok {
+			continue
+		}
+		if identifiers, ok := payload["identifiers"].([]string); ok {
+			identifiersByEvent[event.Type] = identifiers
+		}
+	}
+	if got := identifiersByEvent[events.VulnerabilitiesFound]; len(got) != 1 || got[0] != "CVE-2024-0001" {
+		t.Fatalf("vulnerabilities.found identifiers = %v, want [CVE-2024-0001]", got)
+	}
+	if got := identifiersByEvent[events.MalwareDetected]; len(got) != 1 || got[0] != "MAL-2025-0001" {
+		t.Fatalf("malware.detected identifiers = %v, want [MAL-2025-0001]", got)
 	}
 }
 

@@ -90,6 +90,7 @@ type Server struct {
 	tokenExpiryChecker backgroundStarter
 	updateChecker      *updatecheck.Checker
 	gatePublisher      *forge.GatePublisher
+	instanceAdmins     instanceAdminState
 	forgeIPAllowlists  map[string]*forgeIPAllowlist
 	forgeLimiters      map[string]*ipRateLimiter
 	webhookHandlers    map[string][]forgeEventHandler
@@ -409,6 +410,8 @@ func (s *Server) routes(siteFS fs.FS) {
 		r.Get("/docs/*", httpSwagger.Handler(
 			httpSwagger.URL("/api/v1/docs/doc.json"),
 		))
+		// Public: the login page shows announcement banners too.
+		r.Get("/instance/banners", s.handleListActiveBanners)
 		r.Get("/auth/providers", auth.ProvidersHandler(s.authMgr))
 		r.Get("/auth/login", auth.LoginHandler(s.authMgr))
 		r.Get("/auth/callback", s.handleAuthCallback)
@@ -423,6 +426,10 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
 			r.Use(s.tokenScopeGuard)
 			r.Get("/users/me", s.handleGetMe)
+			r.Get("/instance/settings/banners", s.handleGetBannerSettings)
+			r.Put("/instance/settings/banners", s.handleUpdateBannerSettings)
+			r.Get("/instance/settings/admins", s.handleListInstanceAdmins)
+			r.Get("/instance/audit-logs", s.handleListInstanceAuditLogs)
 			r.Get("/notifications", s.notifySvc.HandleListNotifications)
 			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)
 			r.Post("/notifications/{id}/read", s.notifySvc.HandleMarkRead)
@@ -657,6 +664,9 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	}
 	if s.updateChecker != nil {
 		go s.updateChecker.Start(runtimeCtx)
+	}
+	if s.cfg.InstanceAdminsFile != "" || len(s.cfg.InstanceAdmins) > 0 {
+		go s.runInstanceAdminWatchLoop(runtimeCtx)
 	}
 }
 

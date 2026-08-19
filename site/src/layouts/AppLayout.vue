@@ -1,6 +1,6 @@
 <template>
   <div class="min-h-screen bg-surface text-[#e6edf3]">
-    <header class="fixed inset-x-0 top-0 z-50 h-14 border-b border-surface-border bg-surface-raised/95 backdrop-blur">
+    <header class="fixed inset-x-0 top-[var(--app-banner-height,0px)] z-50 h-14 border-b border-surface-border bg-surface-raised/95 backdrop-blur">
       <div class="flex h-full items-center gap-3 px-4">
         <div class="flex items-center gap-3">
           <button
@@ -432,7 +432,7 @@
       </aside>
     </Transition>
 
-    <main class="min-h-screen px-4 pb-6 pt-[4.75rem] sm:px-6">
+    <main class="min-h-screen px-4 pb-6 pt-[calc(4.75rem+var(--app-banner-height,0px))] sm:px-6">
       <div class="mx-auto max-w-7xl">
         <RouterView />
       </div>

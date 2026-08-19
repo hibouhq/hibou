@@ -57,8 +57,11 @@
 
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { KeyRound, User } from 'lucide-vue-next'
+import { KeyRound, Megaphone, ScrollText, ShieldCheck, User } from 'lucide-vue-next'
+import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
+
+import { useAuthStore } from '@/stores/auth'
 
 interface NavItem {
   label: string
@@ -67,16 +70,32 @@ interface NavItem {
 }
 
 const route = useRoute()
+const auth = useAuthStore()
 
-const nav: { title: string; items: NavItem[] }[] = [
-  {
-    title: 'Personal',
-    items: [
-      { label: 'API keys', icon: KeyRound, name: 'settings-api-keys' },
-      { label: 'Profile', icon: User },
-    ],
-  },
-]
+const nav = computed<{ title: string; items: NavItem[] }[]>(() => {
+  const groups: { title: string; items: NavItem[] }[] = [
+    {
+      title: 'Personal',
+      items: [
+        { label: 'API keys', icon: KeyRound, name: 'settings-api-keys' },
+        { label: 'Profile', icon: User },
+      ],
+    },
+  ]
+  // Instance-level settings: visible only to instance admins
+  // (HIBOU_INSTANCE_ADMINS); the server enforces regardless.
+  if (auth.isInstanceAdmin) {
+    groups.push({
+      title: 'Instance',
+      items: [
+        { label: 'Announcement banners', icon: Megaphone, name: 'settings-banners' },
+        { label: 'Administrators', icon: ShieldCheck, name: 'settings-instance-admins' },
+        { label: 'Audit log', icon: ScrollText, name: 'settings-instance-audit' },
+      ],
+    })
+  }
+  return groups
+})
 // Org-scoped settings (members, integrations, notifications, gates) live under
 // each organization's Settings tab, not here.
 </script>

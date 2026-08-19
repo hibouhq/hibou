@@ -113,7 +113,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.worker.scratch.enabled }}
+          {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.worker.scratch.enabled .Values.hibou.instanceAdminsExistingSecret }}
           volumeMounts:
             {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
             - name: artifact-filesystem
@@ -123,8 +123,16 @@ spec:
             - name: scratch
               mountPath: {{ .Values.hibou.worker.scratch.mountPath | quote }}
             {{- end }}
+            {{- if .Values.hibou.instanceAdminsExistingSecret }}
+            {{- /* The worker shares the ConfigMap (and so
+                   HIBOU_INSTANCE_ADMINS_FILE); mount the same Secret so the
+                   path resolves here too. */}}
+            - name: instance-admins
+              mountPath: /etc/hibou/instance-admins
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.worker.scratch.enabled }}
+      {{- if or (eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true") .Values.hibou.worker.scratch.enabled .Values.hibou.instanceAdminsExistingSecret }}
       volumes:
         {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
         - name: artifact-filesystem
@@ -135,6 +143,11 @@ spec:
         - name: scratch
           emptyDir:
             sizeLimit: {{ .Values.hibou.worker.scratch.sizeLimit }}
+        {{- end }}
+        {{- if .Values.hibou.instanceAdminsExistingSecret }}
+        - name: instance-admins
+          secret:
+            secretName: {{ .Values.hibou.instanceAdminsExistingSecret }}
         {{- end }}
       {{- end }}
 {{- end }}

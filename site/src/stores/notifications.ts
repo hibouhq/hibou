@@ -1,13 +1,15 @@
 import { defineStore } from 'pinia'
 import { onScopeDispose, ref } from 'vue'
 
-import { api, type Notification } from '@/api/client'
+import { api, type AnnouncementBanner, type Notification } from '@/api/client'
+import { useBannersStore } from '@/stores/banners'
 import { type GateUpdatedPayload, useGateEventsStore } from '@/stores/gateEvents'
 
 const MAX_RECONNECT_MS = 30_000
 
 export const useNotificationsStore = defineStore('notifications', () => {
   const gateEvents = useGateEventsStore()
+  const banners = useBannersStore()
   const unreadCount = ref(0)
   const items = ref<Notification[]>([])
   const loading = ref(false)
@@ -126,6 +128,12 @@ export const useNotificationsStore = defineStore('notifications', () => {
     if (message.type === 'gate.updated' && message.payload) {
       // Fan out to the gate-events store so PR gate views can refresh live.
       gateEvents.record(message.payload as GateUpdatedPayload)
+      return
+    }
+
+    if (message.type === 'banner.updated') {
+      // Fan out to the banners store so announcement banners update live.
+      banners.record((message.payload ?? []) as AnnouncementBanner[])
     }
   }
 
@@ -152,7 +160,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
         JSON.stringify({
           type: 'topic.subscribe',
           payload: {
-            topics: ['notification.new', 'gate.updated'],
+            topics: ['notification.new', 'gate.updated', 'banner.updated'],
           },
         }),
       )

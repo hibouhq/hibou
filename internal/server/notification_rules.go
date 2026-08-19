@@ -416,6 +416,7 @@ func isValidNotificationEventType(value string) bool {
 		string(events.ScanFailed),
 		string(events.ScanStale),
 		string(events.VulnerabilitiesFound),
+		string(events.MalwareDetected),
 		string(events.GatePassed),
 		string(events.GateFailed),
 		string(events.RetentionWarnAt),

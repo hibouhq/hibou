@@ -83,6 +83,11 @@ const (
 var routeScopes = map[string]routeScope{
 	"GET /api/v1/users/me": selfRoute(),
 
+	"GET /api/v1/instance/settings/banners": sessionOnlyRoute(),
+	"PUT /api/v1/instance/settings/banners": sessionOnlyRoute(),
+	"GET /api/v1/instance/settings/admins":  sessionOnlyRoute(),
+	"GET /api/v1/instance/audit-logs":       sessionOnlyRoute(),
+
 	"GET /api/v1/notifications":              sessionOnlyRoute(),
 	"GET /api/v1/notifications/unread-count": sessionOnlyRoute(),
 	"POST /api/v1/notifications/{id}/read":   sessionOnlyRoute(),

@@ -232,6 +232,81 @@ func TestStartNextSecretScanJobRespectsConcurrencySlots(t *testing.T) {
 	}
 }
 
+func TestResolveSecretScanSnapshotCreatesPendingPlaceholder(t *testing.T) {
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	ctx := context.Background()
+
+	commit := "scan-head-1"
+	ref, err := srv.queries.UpsertRef(ctx, repo.ID, "main", store.RefTypeBranch, store.UpsertRefOptions{LatestCommitSHA: &commit})
+	if err != nil {
+		t.Fatalf("UpsertRef: %v", err)
+	}
+
+	job := &store.SecretScanJob{RepoID: repo.ID, RefName: "main", ToCommit: commit}
+	snapshot, err := srv.resolveSecretScanSnapshot(ctx, job, nil, secretScanTarget{})
+	if err != nil {
+		t.Fatalf("resolveSecretScanSnapshot: %v", err)
+	}
+	// A scan-created snapshot must be a pending placeholder: a complete one
+	// would shadow the ref's real latest analysis and block the CI upload
+	// from adopting the row (duplicate snapshots per commit).
+	if snapshot == nil || snapshot.Status != store.SnapshotStatusPending {
+		t.Fatalf("scan snapshot = %#v, want pending placeholder", snapshot)
+	}
+	if snapshot.RefID != ref.ID || snapshot.CommitSHA != commit {
+		t.Fatalf("scan snapshot targets %s@%s, want %s@%s", snapshot.RefID, snapshot.CommitSHA, ref.ID, commit)
+	}
+
+	// Scan-only repo (no upload history): the scan completes the placeholder
+	// so its findings are readable.
+	srv.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
+	stored, err := srv.queries.GetSnapshotByID(ctx, snapshot.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotByID: %v", err)
+	}
+	if stored == nil || stored.Status != store.SnapshotStatusComplete {
+		t.Fatalf("scan-only snapshot status = %#v, want complete", stored)
+	}
+}
+
+func TestCompleteScanOnlySnapshotLeavesPlaceholderForUploadingRepos(t *testing.T) {
+	srv, org, _, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	ctx := context.Background()
+
+	commit := "scan-head-2"
+	ref, err := srv.queries.UpsertRef(ctx, repo.ID, "main", store.RefTypeBranch, store.UpsertRefOptions{LatestCommitSHA: &commit})
+	if err != nil {
+		t.Fatalf("UpsertRef: %v", err)
+	}
+
+	// Upload history on an earlier commit: this repo's snapshots are finalized
+	// by CI, so the scan must leave its placeholder pending for CI to adopt.
+	earlier, err := srv.queries.CreateSnapshot(ctx, ref.ID, "earlier-commit", store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot(earlier): %v", err)
+	}
+	if _, err := srv.queries.IncrementSnapshotReceivedUploads(ctx, earlier.ID); err != nil {
+		t.Fatalf("IncrementSnapshotReceivedUploads: %v", err)
+	}
+
+	job := &store.SecretScanJob{RepoID: repo.ID, RefName: "main", ToCommit: commit}
+	snapshot, err := srv.resolveSecretScanSnapshot(ctx, job, nil, secretScanTarget{})
+	if err != nil {
+		t.Fatalf("resolveSecretScanSnapshot: %v", err)
+	}
+	srv.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
+
+	stored, err := srv.queries.GetSnapshotByID(ctx, snapshot.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshotByID: %v", err)
+	}
+	if stored == nil || stored.Status != store.SnapshotStatusPending {
+		t.Fatalf("placeholder status = %#v, want pending until the CI upload adopts it", stored)
+	}
+}
+
 func TestMaybeEnqueueSecretScanPushShapes(t *testing.T) {
 	srv, org := newSecretScanTestServer(t)
 	repo := createRepository(t, srv, org, repoSeed{

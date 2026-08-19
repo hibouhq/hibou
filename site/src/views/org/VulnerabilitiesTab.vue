@@ -1,5 +1,18 @@
 <template>
   <div class="space-y-4">
+    <button
+      v-if="orgMalwareOpen > 0 && activeFilters.type !== 'malware'"
+      type="button"
+      class="flex w-full items-center gap-2.5 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-left transition hover:border-danger"
+      @click="applyMalwareFilter"
+    >
+      <Biohazard class="h-5 w-5 shrink-0 text-danger" />
+      <span class="text-sm font-semibold text-red-200">
+        {{ orgMalwareOpen }} malware {{ orgMalwareOpen === 1 ? 'finding' : 'findings' }} across this organization — review immediately
+      </span>
+      <span class="ml-auto text-xs text-red-300/80">Show only malware →</span>
+    </button>
+
     <FilterBar
       v-model="activeFilters"
       v-model:search-query="searchQuery"
@@ -159,10 +172,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { Biohazard } from 'lucide-vue-next'
+import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { api, type AcceptanceReasonKind, type FindingAcceptance, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
+import { api, type AcceptanceReasonKind, type FindingAcceptance, type OrgDashboard, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
@@ -209,6 +223,12 @@ const sortDirectionOptions = [
 ]
 
 const hasActiveFilters = computed(() => Object.entries(activeFilters.value).some(([key, value]) => Boolean(value) && !(key === 'status' && value === 'detected')) || searchQuery.value.trim().length > 0)
+const orgDashboard = inject<Ref<OrgDashboard | null>>('orgDashboard', ref(null))
+const orgMalwareOpen = computed(() => orgDashboard.value?.totals.malware_open ?? 0)
+
+function applyMalwareFilter() {
+  activeFilters.value = { ...activeFilters.value, type: 'malware' }
+}
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
 watch(
