@@ -31,6 +31,10 @@ type cycloneDXDocument struct {
 }
 
 type cycloneDXComponent struct {
+	// Group carries the namespace CycloneDX splits off the name (npm scope,
+	// Maven groupId); dropping it made hibou query advisories under the bare
+	// name — see canonicalComponentName.
+	Group      string               `json:"group"`
 	Name       string               `json:"name"`
 	Version    string               `json:"version"`
 	PURL       string               `json:"purl"`
@@ -147,7 +151,7 @@ func parseCycloneDXJSONGraph(data []byte) (parsedCycloneDXGraph, error) {
 func collectCycloneDXComponent(component cycloneDXComponent, seen map[string]int, parsed *parsedCycloneDXGraph) {
 	purl := strings.TrimSpace(component.PURL)
 	version := strings.TrimSpace(component.Version)
-	name := strings.TrimSpace(component.Name)
+	name := canonicalComponentName(purl, component.Group, component.Name)
 	bomRef := strings.TrimSpace(component.BomRef)
 	if purl != "" && version != "" {
 		ecosystem := ecosystemFromPURL(purl)

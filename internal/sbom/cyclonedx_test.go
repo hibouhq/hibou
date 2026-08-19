@@ -84,3 +84,52 @@ func TestParseCycloneDXJSONGraphFlatDocumentHasZeroDependencies(t *testing.T) {
 		t.Fatalf("bomRefIndex size = %d, want 2", len(bomRefIndex))
 	}
 }
+
+// Trivy (per the CycloneDX spec) splits scoped npm names into group + name.
+// The stored component name must carry the scope: advisories are keyed on the
+// full name, and the bare name collides with unscoped typosquat malware.
+func TestParseCycloneDXJSONScopedPackagesKeepTheirScope(t *testing.T) {
+	t.Parallel()
+
+	components, err := ParseCycloneDXJSON([]byte(`{
+		"bomFormat":"CycloneDX",
+		"components":[
+			{"group":"@babel","name":"helper-validator-identifier","version":"7.28.5","purl":"pkg:npm/%40babel/helper-validator-identifier@7.28.5"},
+			{"name":"left-pad","version":"1.3.0","purl":"pkg:npm/left-pad@1.3.0"},
+			{"group":"com.fasterxml.jackson.core","name":"jackson-databind","version":"2.15.0","purl":"pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.15.0"},
+			{"name":"curl","version":"7.88.1","purl":"pkg:deb/debian/curl@7.88.1"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("ParseCycloneDXJSON: %v", err)
+	}
+	want := map[string]string{
+		"pkg:npm/%40babel/helper-validator-identifier@7.28.5":          "@babel/helper-validator-identifier",
+		"pkg:npm/left-pad@1.3.0":                                       "left-pad",
+		"pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.15.0": "com.fasterxml.jackson.core:jackson-databind",
+		// OS packages keep the bare name: the namespace is the distro vendor.
+		"pkg:deb/debian/curl@7.88.1": "curl",
+	}
+	if len(components) != len(want) {
+		t.Fatalf("expected %d components, got %d", len(want), len(components))
+	}
+	for _, component := range components {
+		if got := want[component.PURL]; component.Name != got {
+			t.Fatalf("name for %s = %q, want %q", component.PURL, component.Name, got)
+		}
+	}
+}
+
+func TestCanonicalComponentNameFallsBackToGroupAndName(t *testing.T) {
+	t.Parallel()
+
+	if got := canonicalComponentName("", "@vue", "runtime-dom"); got != "@vue/runtime-dom" {
+		t.Fatalf("group fallback = %q, want @vue/runtime-dom", got)
+	}
+	if got := canonicalComponentName("not-a-purl", "", "runtime-dom"); got != "runtime-dom" {
+		t.Fatalf("bare fallback = %q, want runtime-dom", got)
+	}
+	if got := canonicalComponentName("pkg:golang/github.com/aws/aws-sdk-go-v2/config@v1.32.25", "", "config"); got != "github.com/aws/aws-sdk-go-v2/config" {
+		t.Fatalf("golang purl = %q, want full module path", got)
+	}
+}

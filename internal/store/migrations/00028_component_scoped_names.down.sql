@@ -1,0 +1,2 @@
+-- No-op: the scoped names are the correct ones; restoring the truncated names
+-- would reintroduce the mismatch.

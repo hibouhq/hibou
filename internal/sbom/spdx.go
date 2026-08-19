@@ -47,9 +47,9 @@ func ParseSPDXJSON(data []byte) ([]ParsedComponent, error) {
 			continue
 		}
 
-		name := strings.TrimSpace(pkg.Name)
 		version := strings.TrimSpace(pkg.VersionInfo)
 		purl := spdxPackagePURL(pkg.ExternalRefs)
+		name := canonicalComponentName(purl, "", pkg.Name)
 		ecosystem := ecosystemFromPURL(purl)
 		components = append(components, ParsedComponent{
 			PURL:      purl,
