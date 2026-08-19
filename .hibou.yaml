@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json
+version: 1
+
+# Configure branch-aware weakness quality gates for code findings.
+# Vulnerability (CVE) gates stay managed in Hibou itself.
+quality_gates:
+  - branches: ["main"]
+    # enforcement: advisory   # advisory (default, informational/non-blocking) | blocking
+    weaknesses:
+      max_critical: 0
+      max_high: 0
+    # coverage:
+    #   min_coverage: 60
+    #   grace: 2
+    #   diff_minimum: 80
+
+# Exclude files from coverage metrics:
+# coverage:
+#   exclude:
+#     - "*_test.go"
+#     - "testutil/**"
+
+# Safety-net timeout: force-close snapshot if --complete/--expect never triggers (default: 10m):
+# upload:
+#   window: 10m
+
+# Which tags derive releases when their analysis is uploaded (ADR-024).
+# Default matches v-prefixed semver-ish tags (v1.2.3, 1.2, v2.0.0-rc.1):
+# releases:
+#   tag_pattern: "^payments-v\\d+\\.\\d+\\.\\d+$"
