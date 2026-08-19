@@ -1,7 +1,7 @@
 <template>
   <div
     ref="rootRef"
-    class="relative flex flex-wrap items-center gap-3"
+    class="relative flex min-w-0 max-w-full flex-wrap items-center gap-3"
     :class="block ? 'w-full' : ''"
   >
     <button
@@ -13,7 +13,7 @@
         block && !hero ? 'min-w-0 flex-1 justify-between' : '',
       ]"
       type="button"
-      :title="hero ? 'Change ' + (align === 'right' ? 'base' : 'head') : undefined"
+      :title="hero ? `${selectedLabel} — change ${align === 'right' ? 'base' : 'head'}` : undefined"
       @click.stop="isOpen = !isOpen"
     >
       <component

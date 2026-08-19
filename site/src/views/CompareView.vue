@@ -701,18 +701,17 @@
 
             <div
               v-if="patchCoverage.files.length"
-              class="mt-4 space-y-2"
+              class="mt-4 divide-y divide-surface-border-subtle rounded-xl border border-surface-border-subtle bg-surface-base/40"
             >
               <div
                 v-for="file in patchCoverage.files"
                 :key="file.file_path"
-                class="rounded-xl border border-surface-border-subtle bg-surface-base/40 p-3"
               >
-                <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2 px-3 py-1.5">
                   <button
                     v-if="file.hunks"
                     type="button"
-                    class="flex min-w-0 items-center gap-1.5 text-left transition hover:text-white"
+                    class="flex min-w-0 flex-1 items-center gap-1.5 text-left transition hover:text-white"
                     @click="togglePatchFile(file.file_path)"
                   >
                     <ChevronDown
@@ -723,9 +722,26 @@
                   </button>
                   <span
                     v-else
-                    class="truncate font-mono text-xs text-gray-200"
+                    class="min-w-0 flex-1 truncate font-mono text-xs text-gray-200"
                   >{{ file.file_path }}</span>
-                  <span class="flex shrink-0 items-center gap-2">
+                  <span class="flex shrink-0 items-center gap-1.5">
+                    <template v-if="file.uncovered_line_numbers?.length">
+                      <span
+                        v-for="range in formatLineRanges(file.uncovered_line_numbers).slice(0, MAX_INLINE_RANGES)"
+                        :key="range"
+                        class="hidden rounded bg-danger/15 px-1.5 py-0.5 font-mono text-[11px] text-danger sm:inline"
+                      >L{{ range }}</span>
+                      <span
+                        v-if="formatLineRanges(file.uncovered_line_numbers).length > MAX_INLINE_RANGES"
+                        class="hidden font-mono text-[11px] text-danger sm:inline"
+                        :title="formatLineRanges(file.uncovered_line_numbers).map((range) => `L${range}`).join(', ')"
+                      >+{{ formatLineRanges(file.uncovered_line_numbers).length - MAX_INLINE_RANGES }}</span>
+                    </template>
+                    <Check
+                      v-else
+                      class="h-3.5 w-3.5 text-emerald-400"
+                      title="All changed lines covered"
+                    />
                     <span
                       class="text-xs font-medium"
                       :style="{ color: rateColor(file.rate) }"
@@ -746,25 +762,8 @@
                   </span>
                 </div>
                 <div
-                  v-if="file.uncovered_line_numbers && file.uncovered_line_numbers.length"
-                  class="mt-2 flex flex-wrap items-center gap-1.5"
-                >
-                  <span class="text-[11px] uppercase tracking-wide text-gray-500">Uncovered</span>
-                  <span
-                    v-for="range in formatLineRanges(file.uncovered_line_numbers)"
-                    :key="range"
-                    class="rounded bg-danger/15 px-1.5 py-0.5 font-mono text-[11px] text-danger"
-                  >L{{ range }}</span>
-                </div>
-                <div
-                  v-else
-                  class="mt-2 text-[11px] text-emerald-300"
-                >
-                  All changed lines covered
-                </div>
-                <div
                   v-if="file.hunks && expandedPatchFiles.has(file.file_path)"
-                  class="mt-3"
+                  class="border-t border-surface-border-subtle p-3"
                 >
                   <PatchDiffFile
                     :hunks="file.hunks"
@@ -1349,7 +1348,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
+import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, Check, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api, type AcceptanceReasonKind, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
@@ -1485,20 +1484,17 @@ const baseSnapshotOpen = ref(false)
 const headSnapshotOpen = ref(false)
 const activeTab = ref<TabId>('overview')
 const expandedPatchFiles = ref<Set<string>>(new Set())
+// Uncovered-line chips shown inline per file row; the rest collapses to "+N"
+// (full list in the tooltip) so one gappy file can't blow up the row.
+const MAX_INLINE_RANGES = 3
 
-// Auto-expand files with uncovered lines so the gaps are visible at a glance —
-// but cap it. A large PR would otherwise mount every diff at once and jank the
-// page; past the cap we start collapsed and let the reviewer open on demand.
-const MAX_AUTO_EXPANDED_FILES = 10
+// Files start collapsed: the uncovered-line chips already show the gaps at a
+// glance, and mounting every diff up front janks the page on large PRs. The
+// reviewer expands only the file they want to inspect.
 watch(
   () => comparison.value?.patch_coverage,
-  (patch) => {
-    const withGaps = (patch?.files ?? [])
-      .filter((file) => file.hunks && (file.uncovered_line_numbers?.length ?? 0) > 0)
-      .map((file) => file.file_path)
-    expandedPatchFiles.value = new Set(
-      withGaps.length > MAX_AUTO_EXPANDED_FILES ? [] : withGaps,
-    )
+  () => {
+    expandedPatchFiles.value = new Set()
   },
 )
 
