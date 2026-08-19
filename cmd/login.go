@@ -147,18 +147,18 @@ func openBrowser(rawURL string) error {
 	cleanURL := parsed.String()
 
 	if browser := strings.TrimSpace(os.Getenv("BROWSER")); browser != "" {
-		return exec.Command(filepath.Base(browser), cleanURL).Start() //nolint:gosec // browser from user's $BROWSER env
+		return exec.Command(filepath.Base(browser), cleanURL).Start() // #nosec G204 G702 -- browser from user's $BROWSER env
 	}
 
 	switch runtime.GOOS {
 	case "darwin":
-		//nolint:gosec // G204,G702: URL validated above and binary name is constant.
+		// #nosec G204 G702 -- URL validated above and binary name is constant.
 		return exec.Command("open", cleanURL).Start()
 	case "windows":
-		//nolint:gosec // G204,G702: URL validated above and binary name is constant.
+		// #nosec G204 G702 -- URL validated above and binary name is constant.
 		return exec.Command("rundll32", "url.dll,FileProtocolHandler", cleanURL).Start()
 	default:
-		//nolint:gosec // G204,G702: URL validated above and binary name is constant.
+		// #nosec G204 G702 -- URL validated above and binary name is constant.
 		return exec.Command("xdg-open", cleanURL).Start()
 	}
 }

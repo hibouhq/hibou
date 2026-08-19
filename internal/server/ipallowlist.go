@@ -51,7 +51,7 @@ func newForgeIPAllowlist(ctx context.Context, log zerolog.Logger, source forgeIP
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	//nolint:gosec // G118: cancel is retained on the allowlist and invoked via server shutdown.
+	// #nosec G118 -- cancel is retained on the allowlist and invoked via server shutdown.
 	alCtx, cancel := context.WithCancel(ctx)
 
 	componentName := "ip-allowlist"

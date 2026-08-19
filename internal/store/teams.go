@@ -63,8 +63,8 @@ func (q *Queries) GetTeamBySlug(ctx context.Context, orgID uuid.UUID, slug strin
 func (q *Queries) ListTeamsByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]Team, int, error) {
 	rows, err := q.db.ListTeamsByOrg(ctx, dbgen.ListTeamsByOrgParams{
 		OrgID:  orgID,
-		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
-		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Limit:  int32(limit),  // #nosec G115 -- pagination values are bounded by API parsing.
+		Offset: int32(offset), // #nosec G115 -- pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

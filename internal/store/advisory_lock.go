@@ -10,7 +10,7 @@ import (
 // Advisory-lock keys for singleton background loops. Each value must stay
 // stable across releases — changing one lets two replicas run the same loop.
 //
-//nolint:gosec // G101: these are advisory-lock names, not credentials.
+// #nosec G101 -- these are advisory-lock names, not credentials.
 const (
 	LockAdvisoryScanPass = "hibou:advisory-scan-pass"
 	LockRetentionPass    = "hibou:retention-pass"
@@ -67,5 +67,5 @@ func WithLeaderLock(ctx context.Context, db *sql.DB, key string, fn func(context
 func advisoryLockID(key string) int64 {
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(key))
-	return int64(hash.Sum64()) //nolint:gosec // G115: intentional wrap; only bit-identity matters
+	return int64(hash.Sum64()) // #nosec G115 -- intentional wrap; only bit-identity matters
 }

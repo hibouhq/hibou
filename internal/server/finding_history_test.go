@@ -374,6 +374,79 @@ func TestFindingHistoryAcceptsEncodedFingerprint(t *testing.T) {
 	}
 }
 
+// A developer who suppresses in code (`#nosec G101 -- reason`) has already
+// written the triage comment; the scanner extracts it and the ingest stores it
+// on the suppressed row. The timeline must surface it as the transition's
+// comment, the same way a UI decision's comment travels.
+func TestFindingHistoryCarriesInSourceSuppressionComment(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	fingerprint := uuid.NewString()
+
+	seedHistoryFinding(t, srv, repo, "main", "sha-detected", fingerprint, "detected")
+
+	ctx := context.Background()
+	ref, err := srv.queries.GetRefByRepoAndName(ctx, repo.ID, "main", store.RefTypeBranch)
+	if err != nil || ref == nil {
+		t.Fatalf("GetRefByRepoAndName: %v", err)
+	}
+	snapshot, err := srv.queries.CreateSnapshot(ctx, ref.ID, "sha-suppressed", store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	if _, err := srv.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+		Type:                   "sast",
+		SnapshotID:             snapshot.ID,
+		Title:                  "hardcoded credential",
+		PrimaryIdentifierKind:  "rule",
+		PrimaryIdentifierValue: "G101",
+		OriginalSeverity:       dbgen.SeverityLevelHigh,
+		Severity:               dbgen.SeverityLevelHigh,
+		Status:                 "suppressed",
+		ScannerName:            "gosec",
+		Fingerprint:            fingerprint,
+		Metadata:               json.RawMessage(`{"suppression":{"kind":"inSource","justification":"event name, not a credential"}}`),
+	}); err != nil {
+		t.Fatalf("CreateVulnerability(suppressed): %v", err)
+	}
+
+	history := decodeFindingHistory(t, callFindingHistory(t, srv, admin, org, repo.Slug, fingerprint))
+
+	var suppressed *findingHistoryEvent
+	for index := range history.Events {
+		if history.Events[index].Kind == "suppressed" {
+			suppressed = &history.Events[index]
+		}
+	}
+	if suppressed == nil {
+		t.Fatalf("no suppressed event: %+v", history.Events)
+	}
+	if comment, _ := suppressed.Detail["comment"].(string); comment != "event name, not a credential" {
+		t.Fatalf("suppressed event detail = %+v, want the in-source justification", suppressed.Detail)
+	}
+}
+
+// scanHistoryEvent must attach the in-source justification only when there is
+// one: a plain transition keeps a nil detail so the API shape stays stable.
+func TestScanHistoryEventSuppressionComment(t *testing.T) {
+	t.Parallel()
+
+	plain := scanHistoryEvent(store.FindingTransition{PreviousStatus: "detected", Status: "resolved"})
+	if plain.Detail != nil {
+		t.Fatalf("plain transition detail = %+v, want nil", plain.Detail)
+	}
+	blank := scanHistoryEvent(store.FindingTransition{PreviousStatus: "detected", Status: "suppressed", SuppressionJustification: "   "})
+	if blank.Detail != nil {
+		t.Fatalf("blank justification detail = %+v, want nil", blank.Detail)
+	}
+	justified := scanHistoryEvent(store.FindingTransition{PreviousStatus: "detected", Status: "suppressed", SuppressionJustification: "bounded by API parsing"})
+	if comment, _ := justified.Detail["comment"].(string); comment != "bounded by API parsing" {
+		t.Fatalf("justified detail = %+v", justified.Detail)
+	}
+}
+
 func TestScanEventKind(t *testing.T) {
 	t.Parallel()
 

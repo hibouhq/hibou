@@ -143,6 +143,7 @@ const router = createRouter({
             { path: 'banners', name: 'settings-banners', component: () => import('@/views/settings/BannersSettings.vue') },
             { path: 'admins', name: 'settings-instance-admins', component: () => import('@/views/settings/InstanceAdminsSettings.vue') },
             { path: 'audit', name: 'settings-instance-audit', component: () => import('@/views/settings/InstanceAuditSettings.vue') },
+            { path: 'jobs', name: 'settings-instance-jobs', component: () => import('@/views/settings/InstanceJobsSettings.vue') },
           ],
         },
         { path: '/:pathMatch(.*)*', redirect: '/orgs' },

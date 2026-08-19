@@ -2,7 +2,7 @@ package seed
 
 import (
 	"context"
-	"crypto/sha1" //nolint:gosec // G505: SHA1 is used only for deterministic fake git hashes in seed data.
+	"crypto/sha1" // #nosec G505 -- SHA1 is used only for deterministic fake git hashes in seed data.
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -1164,7 +1164,7 @@ func coverageRate(covered, valid int) float64 {
 }
 
 func fakeHistorySHA(orgIndex, repoIndex, step int) string {
-	//nolint:gosec // G401: SHA1 is used only for deterministic fake git commit hashes in seed data.
+	// #nosec G401 -- SHA1 is used only for deterministic fake git commit hashes in seed data.
 	sum := sha1.Sum([]byte(fmt.Sprintf("hist-%d-%d-%d", orgIndex, repoIndex, step)))
 	return hex.EncodeToString(sum[:])[:7]
 }
@@ -1196,13 +1196,13 @@ func finding(tool, ruleID string, severity store.SeverityLevel, status, filePath
 }
 
 func fakeCommitSHA(orgIndex, repoIndex int) string {
-	//nolint:gosec // G401: SHA1 is used only for deterministic fake git commit hashes.
+	// #nosec G401 -- SHA1 is used only for deterministic fake git commit hashes.
 	sum := sha1.Sum([]byte(fmt.Sprintf("%d-%d", orgIndex, repoIndex)))
 	return hex.EncodeToString(sum[:])[:7]
 }
 
 func findingLocationHash(tool, ruleID, filePath string, startLine, endLine int32) string {
-	//nolint:gosec // G401: SHA1 is used only for deterministic seed location hashes.
+	// #nosec G401 -- SHA1 is used only for deterministic seed location hashes.
 	sum := sha1.Sum([]byte(fmt.Sprintf("%s|%s|%s|%d|%d", tool, ruleID, filePath, startLine, endLine)))
 	return hex.EncodeToString(sum[:])
 }

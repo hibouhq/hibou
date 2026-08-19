@@ -20,6 +20,23 @@ export function relativeTime(input: string) {
   return formatter.format(diffSeconds, 'second')
 }
 
+// Compact duration for job run/wait times: "840ms", "4.2s", "3m 12s", "2h 05m".
+export function formatDuration(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return '—'
+  }
+  if (seconds < 1) {
+    return `${Math.round(seconds * 1000)}ms`
+  }
+  if (seconds < 60) {
+    return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)}m ${String(Math.round(seconds % 60)).padStart(2, '0')}s`
+  }
+  return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}m`
+}
+
 export function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('en', {
     month: 'short',

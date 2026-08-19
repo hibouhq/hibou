@@ -48,7 +48,7 @@ const (
 	RetentionEviction      Type = "retention.eviction_started"
 	RetentionProtected     Type = "retention.protected_exceeds_budget"
 	NotificationNew        Type = "notification.new"
-	TokenExpiring          Type = "token.expiring" //nolint:gosec // event name, not a credential
+	TokenExpiring          Type = "token.expiring" // #nosec G101 -- event name, not a credential
 )
 
 type Event struct {

@@ -165,7 +165,7 @@ func (s *Server) listFilteredAuditLogs(ctx context.Context, orgID uuid.UUID, act
 	}
 
 	listArgs := append(append([]any{}, args...), limit, offset)
-	//nolint:gosec // G201: whereClause is assembled from fixed predicates with positional placeholders only.
+	// #nosec G201 -- whereClause is assembled from fixed predicates with positional placeholders only.
 	listQuery := fmt.Sprintf(`
 SELECT id, actor_type, actor_display, action, resource_type, resource_id, context, ip_address, created_at
 FROM audit_logs

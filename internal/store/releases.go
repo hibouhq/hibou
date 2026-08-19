@@ -140,7 +140,7 @@ func (q *Queries) GetReleaseByRepoAndID(ctx context.Context, repoID, id uuid.UUI
 }
 
 func (q *Queries) ListReleasesByRepo(ctx context.Context, repoID uuid.UUID, limit, offset int) ([]Release, int, error) {
-	rows, err := q.db.ListReleasesByRepo(ctx, dbgen.ListReleasesByRepoParams{RepoID: repoID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
+	rows, err := q.db.ListReleasesByRepo(ctx, dbgen.ListReleasesByRepoParams{RepoID: repoID, Limit: int32(limit), Offset: int32(offset)}) // #nosec G115 -- pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -166,8 +166,8 @@ func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, repoID uuid.UU
 		VersionQuery:   filters.VersionQuery,
 		ClientSlug:     filters.ClientSlug,
 		VulnerableOnly: filters.VulnerableOnly,
-		RowLimit:       int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
-		RowOffset:      int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
+		RowLimit:       int32(limit),  // #nosec G115 -- pagination values are bounded by API parsing.
+		RowOffset:      int32(offset), // #nosec G115 -- pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err
@@ -230,7 +230,7 @@ func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, repoID uuid.UU
 }
 
 func (q *Queries) ListReleasesByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]Release, int, error) {
-	rows, err := q.db.ListReleasesByOrg(ctx, dbgen.ListReleasesByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
+	rows, err := q.db.ListReleasesByOrg(ctx, dbgen.ListReleasesByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) // #nosec G115 -- pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}

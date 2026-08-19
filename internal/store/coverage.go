@@ -42,10 +42,10 @@ func (q *Queries) CreateCoverageReport(ctx context.Context, snapshotID uuid.UUID
 		Format:          format,
 		LineRate:        nullFloat64FromPtr(lineRate),
 		BranchRate:      nullFloat64FromPtr(branchRate),
-		LinesValid:      int32(linesValid),      //nolint:gosec // G115: value bounded by file metrics
-		LinesCovered:    int32(linesCovered),    //nolint:gosec // G115: value bounded by file metrics
-		BranchesValid:   int32(branchesValid),   //nolint:gosec // G115: value bounded by file metrics
-		BranchesCovered: int32(branchesCovered), //nolint:gosec // G115: value bounded by file metrics
+		LinesValid:      int32(linesValid),      // #nosec G115 -- value bounded by file metrics
+		LinesCovered:    int32(linesCovered),    // #nosec G115 -- value bounded by file metrics
+		BranchesValid:   int32(branchesValid),   // #nosec G115 -- value bounded by file metrics
+		BranchesCovered: int32(branchesCovered), // #nosec G115 -- value bounded by file metrics
 	})
 	if err != nil {
 		return nil, err
@@ -75,10 +75,10 @@ func (q *Queries) CreateCoverageFile(ctx context.Context, coverageReportID uuid.
 		FilePath:         filePath,
 		LineRate:         nullFloat64FromPtr(lineRate),
 		BranchRate:       nullFloat64FromPtr(branchRate),
-		LinesValid:       int32(linesValid),      //nolint:gosec // G115: value bounded by file metrics
-		LinesCovered:     int32(linesCovered),    //nolint:gosec // G115: value bounded by file metrics
-		BranchesValid:    int32(branchesValid),   //nolint:gosec // G115: value bounded by file metrics
-		BranchesCovered:  int32(branchesCovered), //nolint:gosec // G115: value bounded by file metrics
+		LinesValid:       int32(linesValid),      // #nosec G115 -- value bounded by file metrics
+		LinesCovered:     int32(linesCovered),    // #nosec G115 -- value bounded by file metrics
+		BranchesValid:    int32(branchesValid),   // #nosec G115 -- value bounded by file metrics
+		BranchesCovered:  int32(branchesCovered), // #nosec G115 -- value bounded by file metrics
 	})
 	if err != nil {
 		return nil, err

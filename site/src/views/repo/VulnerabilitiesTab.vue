@@ -74,6 +74,7 @@
       @accept="(kind, finding) => { closeDrawer(); openTriageDialog(kind, [finding.fingerprint], finding) }"
       @reopen="(fingerprint) => { closeDrawer(); void reopenFindings([fingerprint]) }"
       @revoke="(finding) => { closeDrawer(); void markSecretRevoked(finding) }"
+      @disputed="applyDisputeToRows"
       @navigate="navigateDrawer"
     />
 
@@ -388,7 +389,7 @@ import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
 import { Biohazard, KeyRound } from 'lucide-vue-next'
 
-import { api, type AcceptanceReasonKind, type FindingAcceptance, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { api, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
 import FilterBar from '@/components/FilterBar.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
@@ -1072,6 +1073,14 @@ function patchRowsAfterTriage(fingerprints: string[], acceptance: FindingAccepta
   )
 }
 
+// The modal writes the dispute itself (ADR-026); this only keeps the row's
+// badge honest without a refetch.
+function applyDisputeToRows(fingerprint: string, dispute: FindingDispute | null) {
+  vulnerabilities.value = vulnerabilities.value.map((vulnerability) =>
+    vulnerability.fingerprint === fingerprint ? { ...vulnerability, dispute: dispute ?? undefined } : vulnerability,
+  )
+}
+
 async function markSecretRevoked(vulnerability: Vulnerability) {
   const comment = await promptDialog({
     title: 'Attest secret revocation',
@@ -1100,7 +1109,7 @@ function fixChipTitle(vulnerability: Vulnerability): string {
 }
 
 function triageFor(vulnerability: Vulnerability) {
-  return triageState(vulnerability, acceptanceFor(vulnerability))
+  return triageState(vulnerability, acceptanceFor(vulnerability), new Date(), vulnerability.dispute)
 }
 
 // The tooltip carries the "why" — the recorded reason — plus the expiry when set.

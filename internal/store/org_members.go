@@ -81,8 +81,8 @@ func (q *Queries) PruneForgeOrgMembersForUser(ctx context.Context, userID uuid.U
 func (q *Queries) ListOrgMembers(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]OrgMember, int, error) {
 	rows, err := q.db.ListOrgMembers(ctx, dbgen.ListOrgMembersParams{
 		OrgID:  orgID,
-		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
-		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Limit:  int32(limit),  // #nosec G115 -- pagination values are bounded by API parsing.
+		Offset: int32(offset), // #nosec G115 -- pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

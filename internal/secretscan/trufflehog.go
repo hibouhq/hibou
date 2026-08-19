@@ -81,7 +81,7 @@ func (p *TruffleHogProvider) ScanFilesystem(ctx context.Context, dir string) ([]
 
 func (p *TruffleHogProvider) run(ctx context.Context, args []string) ([]SecretFinding, error) {
 	args = append(args, "--json", "--no-update")
-	//nolint:gosec // G204: binary path comes from LookPath during provider construction.
+	// #nosec G204 -- binary path comes from LookPath during provider construction.
 	cmd := exec.CommandContext(ctx, p.bin, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

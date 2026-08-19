@@ -78,7 +78,7 @@ func (p *BetterleaksProvider) ScanFilesystem(ctx context.Context, dir string) ([
 func (p *BetterleaksProvider) runBetterleaks(ctx context.Context, reportDir string, args ...string) ([]SecretFinding, error) {
 	reportPath := filepath.Join(reportDir, "betterleaks-report.json")
 	args = append(args, "--report-format=json", "--report-path="+reportPath, "--exit-code=0")
-	//nolint:gosec // G204: binary path comes from LookPath during provider construction.
+	// #nosec G204 -- binary path comes from LookPath during provider construction.
 	cmd := exec.CommandContext(ctx, p.bin, args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("run betterleaks %s: %w: %s", args[0], err, string(output))

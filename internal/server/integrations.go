@@ -192,7 +192,7 @@ func (s *Server) handleReplayIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	auditLogs, err := s.queries.ListAuditLogsByResource(r.Context(), "integration", integration.ID.String(), int32(limit), 0) //nolint:gosec // G115: limit is bounded to [1,10] by parseReplayLimit.
+	auditLogs, err := s.queries.ListAuditLogsByResource(r.Context(), "integration", integration.ID.String(), int32(limit), 0) // #nosec G115 -- limit is bounded to [1,10] by parseReplayLimit.
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load audit logs")
 		return

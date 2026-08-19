@@ -32,6 +32,7 @@ const (
 var findingActivityActions = []string{
 	audit.ActionFindingAcceptance,
 	audit.ActionFindingCreate,
+	audit.ActionFindingDispute,
 	audit.ActionSecretRevoked,
 }
 
@@ -69,7 +70,8 @@ type findingHistoryEvent struct {
 	From      string `json:"from,omitempty"`
 	To        string `json:"to,omitempty"`
 
-	// Activity events: who did what.
+	// Activity events: who did what. Detail is also set on a scan-observed
+	// suppression, carrying the in-source justification as its comment.
 	Action       string         `json:"action,omitempty"`
 	ActorType    string         `json:"actor_type,omitempty"`
 	ActorDisplay string         `json:"actor_display,omitempty"`
@@ -187,7 +189,7 @@ func (s *Server) handleGetFindingHistory(w http.ResponseWriter, r *http.Request)
 }
 
 func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
-	return findingHistoryEvent{
+	event := findingHistoryEvent{
 		Source:    "scan",
 		Kind:      scanEventKind(transition.PreviousStatus, transition.Status),
 		At:        transition.ObservedAt,
@@ -198,6 +200,15 @@ func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
 		From:      transition.PreviousStatus,
 		To:        transition.Status,
 	}
+	// A developer who suppresses in code (`#nosec G115 -- reason`) has written
+	// the triage comment already; the scanner extracted it (SARIF
+	// suppressions[].justification) and the ingest kept it. Surface it the way
+	// a human decision's comment is surfaced, so the timeline reads the same
+	// whether the call was made in the UI or in the source.
+	if justification := strings.TrimSpace(transition.SuppressionJustification); justification != "" {
+		event.Detail = map[string]any{"comment": justification}
+	}
+	return event
 }
 
 // scanEventKind names the transition the way a reader thinks about it: the
@@ -241,6 +252,11 @@ func activityEventKind(action, status string) string {
 		return "reported"
 	case audit.ActionSecretRevoked:
 		return "revoked"
+	case audit.ActionFindingDispute:
+		if status == "undisputed" {
+			return "dispute_withdrawn"
+		}
+		return "disputed"
 	case audit.ActionFindingAcceptance:
 		switch status {
 		case "open":

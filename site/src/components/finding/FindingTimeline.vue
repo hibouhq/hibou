@@ -162,6 +162,8 @@ const LABELS: Record<string, string> = {
   false_positive: 'Marked false positive',
   reopened: 'Reopened',
   revoked: 'Secret revoked & rotated',
+  disputed: 'Suppression disputed',
+  dispute_withdrawn: 'Dispute withdrawn',
   triaged: 'Triaged',
 }
 
@@ -182,6 +184,8 @@ function markerClass(event: FindingHistoryEvent): string {
     case 'accepted':
     case 'reopened':
       return 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+    case 'disputed':
+      return 'border-danger/40 bg-danger/15 text-danger'
     case 'false_positive':
       return 'border-surface-border bg-surface-overlay text-gray-400'
     default:

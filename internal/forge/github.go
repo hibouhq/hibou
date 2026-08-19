@@ -535,7 +535,7 @@ func (g *GitHub) OAuth2Config(redirectURL string) *oauth2.Config {
 		ClientSecret: g.clientSecret,
 		RedirectURL:  redirectURL,
 		Scopes:       []string{"read:user", "user:email", "repo"},
-		//nolint:gosec // G101: OAuth endpoint URLs are constants, not credentials.
+		// #nosec G101 -- OAuth endpoint URLs are constants, not credentials.
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://github.com/login/oauth/authorize",
 			TokenURL: "https://github.com/login/oauth/access_token",

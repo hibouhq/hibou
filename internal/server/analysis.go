@@ -651,12 +651,16 @@ func (s *Server) buildRefSummary(r *http.Request, repo *store.Repository, snapsh
 	if err != nil {
 		return refSummaryResponse{}, err
 	}
+	disputed, err := s.queries.DisputedFingerprints(r.Context(), repo.ID)
+	if err != nil {
+		return refSummaryResponse{}, err
+	}
 
 	status := string(snapshot.Status)
 	createdAt := snapshot.CreatedAt
 	summary := refSummaryResponse{
-		Vulnerabilities: riskSeverityCounts(vulnerabilities, acceptances),
-		MalwareOpen:     openMalwareCount(vulnerabilities, acceptances),
+		Vulnerabilities: riskSeverityCounts(vulnerabilities, acceptances, disputed),
+		MalwareOpen:     openMalwareCount(vulnerabilities, acceptances, disputed),
 		ComponentsTotal: len(components),
 		SnapshotDate:    &createdAt,
 		SnapshotStatus:  &status,
@@ -777,8 +781,12 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 	if err != nil {
 		return entry, err
 	}
-	entry.Vulnerabilities = riskSeverityCounts(vulnerabilities, acceptances)
-	entry.MalwareOpen = openMalwareCount(vulnerabilities, acceptances)
+	disputed, err := s.queries.DisputedFingerprints(r.Context(), repository.ID)
+	if err != nil {
+		return entry, err
+	}
+	entry.Vulnerabilities = riskSeverityCounts(vulnerabilities, acceptances, disputed)
+	entry.MalwareOpen = openMalwareCount(vulnerabilities, acceptances, disputed)
 	entry.ComponentsTotal = len(components)
 	return entry, nil
 }
@@ -1817,14 +1825,31 @@ func paginateSlice[T any](items []T, offset, limit int) []T {
 	return items[offset:end]
 }
 
+// isNonRiskStatus implements the ADR-023 status semantics with the ADR-026
+// exception: resolved findings and scanner-suppressed findings are not risk —
+// unless the suppression is disputed, in which case a human contested the
+// in-source directive and the finding counts as open again.
+func isNonRiskStatus(vulnerability store.Vulnerability, disputed map[string]struct{}) bool {
+	switch vulnerability.Status {
+	case "resolved":
+		return true
+	case "suppressed":
+		_, isDisputed := disputed[vulnerability.Fingerprint]
+		return !isDisputed
+	default:
+		return false
+	}
+}
+
 // riskSeverityCounts implements the ADR-023 risk-reporting semantics:
-// resolved/suppressed findings are not risk, a false positive never was one,
-// and an accepted risk still counts — flagged in AcceptedRisk.
-func riskSeverityCounts(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance) severityCounts {
+// resolved/suppressed findings are not risk (disputed suppressions are,
+// ADR-026), a false positive never was one, and an accepted risk still
+// counts — flagged in AcceptedRisk.
+func riskSeverityCounts(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance, disputed map[string]struct{}) severityCounts {
 	kinds := acceptanceKindsByFingerprint(acceptances)
 	counts := severityCounts{}
 	for _, vulnerability := range vulnerabilities {
-		if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
+		if isNonRiskStatus(vulnerability, disputed) {
 			continue
 		}
 		switch kinds[vulnerability.Fingerprint] {
@@ -1841,14 +1866,14 @@ func riskSeverityCounts(vulnerabilities []store.Vulnerability, acceptances []sto
 // openMalwareCount counts unresolved malware findings, skipping only
 // false-positive triage: risk-accepted malware still surfaces — accepting a
 // malicious package is a state worth seeing, not hiding.
-func openMalwareCount(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance) int {
+func openMalwareCount(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance, disputed map[string]struct{}) int {
 	kinds := acceptanceKindsByFingerprint(acceptances)
 	count := 0
 	for _, vulnerability := range vulnerabilities {
 		if vulnerability.Type != "malware" {
 			continue
 		}
-		if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
+		if isNonRiskStatus(vulnerability, disputed) {
 			continue
 		}
 		if kinds[vulnerability.Fingerprint] == "false_positive" {

@@ -948,10 +948,15 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acceptanceKinds := acceptanceKindsByFingerprint(acceptances)
+	disputed, err := s.queries.DisputedFingerprints(r.Context(), repo.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding disputes")
+		return
+	}
 
 	points := make([]trendPointResponse, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		point, err := s.buildTrendPoint(r, snapshot, acceptanceKinds)
+		point, err := s.buildTrendPoint(r, snapshot, acceptanceKinds, disputed)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -1045,7 +1050,7 @@ func parseTrendSince(raw string) (*time.Time, error) {
 	return &parsed, nil
 }
 
-func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot, acceptanceKinds map[string]string) (trendPointResponse, error) {
+func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot, acceptanceKinds map[string]string, disputed map[string]struct{}) (trendPointResponse, error) {
 	vulnerabilities, err := s.queries.ListAllVulnerabilitiesBySnapshot(r.Context(), snapshot.ID)
 	if err != nil {
 		return trendPointResponse{}, errors.New("failed to load vulnerability trends")
@@ -1054,7 +1059,7 @@ func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot, accep
 	if err != nil {
 		return trendPointResponse{}, errors.New("failed to load component trends")
 	}
-	findings, vulns := countTrendSnapshotSeverities(vulnerabilities, acceptanceKinds)
+	findings, vulns := countTrendSnapshotSeverities(vulnerabilities, acceptanceKinds, disputed)
 	return trendPointResponse{
 		SnapshotID:       snapshot.ID,
 		Date:             snapshot.CreatedAt,
@@ -1073,11 +1078,11 @@ func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot, accep
 	}, nil
 }
 
-func countTrendSnapshotSeverities(vulnerabilities []store.Vulnerability, acceptanceKinds map[string]string) (severityCounts, severityCounts) {
+func countTrendSnapshotSeverities(vulnerabilities []store.Vulnerability, acceptanceKinds map[string]string, disputed map[string]struct{}) (severityCounts, severityCounts) {
 	findings := severityCounts{}
 	vulns := severityCounts{}
 	for _, vulnerability := range vulnerabilities {
-		if vulnerability.Status == "resolved" || vulnerability.Status == "suppressed" {
+		if isNonRiskStatus(vulnerability, disputed) {
 			continue
 		}
 		// ADR-023 risk semantics: a false positive never was a vulnerability.

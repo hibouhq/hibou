@@ -95,6 +95,7 @@ type Server struct {
 	forgeLimiters      map[string]*ipRateLimiter
 	webhookHandlers    map[string][]forgeEventHandler
 	artifactWorkerID   string
+	enabledLoops       []string
 	lifecycleCtx       context.Context
 	shutdownCancel     context.CancelFunc
 	startedAt          time.Time
@@ -429,6 +430,9 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/instance/settings/banners", s.handleGetBannerSettings)
 			r.Put("/instance/settings/banners", s.handleUpdateBannerSettings)
 			r.Get("/instance/settings/admins", s.handleListInstanceAdmins)
+			r.Get("/instance/jobs/overview", s.handleInstanceJobsOverview)
+			r.Get("/instance/jobs/timeline", s.handleInstanceJobsTimeline)
+			r.Get("/instance/jobs/stats", s.handleInstanceJobsStats)
 			r.Get("/instance/audit-logs", s.handleListInstanceAuditLogs)
 			r.Get("/notifications", s.notifySvc.HandleListNotifications)
 			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)
@@ -568,6 +572,8 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Post("/{repoSlug}/reachability", s.handleSubmitReachability)
 						r.Put("/{repoSlug}/vulnerabilities/acceptance", s.handleBatchFindingAcceptance)
 						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/acceptance", s.handleSetFindingAcceptance)
+						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/dispute", s.handleSetFindingDispute)
+						r.Delete("/{repoSlug}/vulnerabilities/{vulnID}/dispute", s.handleDeleteFindingDispute)
 						r.Post("/{repoSlug}/vulnerabilities/{vulnID}/revocation", s.handleAttestSecretRevocation)
 						r.Get("/{repoSlug}/finding-acceptances", s.handleListFindingAcceptances)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
@@ -638,35 +644,51 @@ func (s *Server) webhookProtection(next http.Handler) http.Handler {
 // startBackgroundLoops launches the enabled background workers as goroutines
 // bound to runtimeCtx.
 func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
+	loops := make([]string, 0, 10)
 	if s.retentionWorker != nil && s.cfg.Background.RetentionEnabled {
+		loops = append(loops, "retention")
 		go s.runRetentionLoop(runtimeCtx)
 	}
 	if s.cfg.Background.StalePendingEnabled {
+		loops = append(loops, "stale_pending")
 		go s.runStalePendingLoop(runtimeCtx)
 	}
 	if s.objStore != nil && s.cfg.Background.ArtifactProcessingEnabled {
+		loops = append(loops, "artifact_processing")
 		go s.runArtifactProcessingLoop(runtimeCtx)
 	}
 	if s.advisoryScanner != nil && len(s.advisoryProviders) > 0 && s.cfg.AdvisoryScan.Interval > 0 {
+		loops = append(loops, "advisory_scan")
 		go s.runAdvisoryScanLoop(runtimeCtx)
 	}
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
+		loops = append(loops, "stale_scan")
 		go s.staleScanChecker.Start(runtimeCtx)
 	}
 	if s.tokenExpiryChecker != nil && s.cfg.Background.StaleScanEnabled {
+		loops = append(loops, "token_expiry")
 		go s.tokenExpiryChecker.Start(runtimeCtx)
 	}
 	if s.secretScanner != nil && s.cfg.Background.SecretScanEnabled {
+		loops = append(loops, "secret_scan")
 		go s.runSecretScanLoop(runtimeCtx)
 	}
 	if s.gatePublisher != nil {
+		loops = append(loops, "gate_reconcile")
 		go s.gatePublisher.StartReconcileLoop(runtimeCtx, 5*time.Minute)
 	}
 	if s.updateChecker != nil {
+		loops = append(loops, "update_check")
 		go s.updateChecker.Start(runtimeCtx)
 	}
 	if s.cfg.InstanceAdminsFile != "" || len(s.cfg.InstanceAdmins) > 0 {
+		loops = append(loops, "instance_admin_watch")
 		go s.runInstanceAdminWatchLoop(runtimeCtx)
+	}
+	// Set before the heartbeat goroutine starts so it never races the append.
+	s.enabledLoops = loops
+	if s.queries != nil {
+		go s.runWorkerHeartbeatLoop(runtimeCtx)
 	}
 }
 
@@ -732,6 +754,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), s.claimReleaseTimeout())
 	defer releaseCancel()
 	releaseErr := errors.Join(s.releaseArtifactClaims(releaseCtx), s.releaseSecretScanClaims(releaseCtx))
+	if s.queries != nil {
+		if err := s.queries.MarkWorkerStopped(releaseCtx, s.artifactWorkerID); err != nil {
+			s.log.Warn().Err(err).Msg("marking worker stopped failed")
+		}
+	}
 	wsErr := s.wsHubWaitForDrain(ctx)
 	if errors.Is(wsErr, context.DeadlineExceeded) || errors.Is(wsErr, context.Canceled) {
 		s.closeWebsockets()

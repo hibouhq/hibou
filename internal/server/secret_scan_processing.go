@@ -130,7 +130,7 @@ func (s *Server) startNextSecretScanJob(ctx context.Context) (bool, error) {
 	}
 	release := func() { <-s.secretScanSlots }
 
-	maxAttempts := int32(s.cfg.SecretScan.MaxAttempts) //nolint:gosec // validated 1..100 at config load
+	maxAttempts := int32(s.cfg.SecretScan.MaxAttempts) // #nosec G115 -- validated 1..100 at config load
 	job, err := s.queries.ClaimNextSecretScanJob(ctx, s.artifactWorkerID, time.Now().Add(s.artifactProcessingLeaseDuration()), maxAttempts)
 	if err != nil || job == nil {
 		release()

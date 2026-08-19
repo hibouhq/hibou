@@ -274,32 +274,32 @@ func (s *Service) runScanProvider(ctx context.Context, scanID, snapshotID uuid.U
 	prov, ok := s.providers[providerName]
 	if !ok {
 		s.log.Error().Str("provider", providerName).Msg(providerNotConfiguredMessage)
-		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", providerNotConfiguredMessage) //nolint:gosec // G115: query counts are bounded by component batch size.
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", providerNotConfiguredMessage) // #nosec G115 -- query counts are bounded by component batch size.
 		return nil, errors.New(providerNotConfiguredMessage)
 	}
 
 	results, err := s.cache.QueryWithCache(ctx, prov, packageQueries)
 	if err != nil {
 		s.log.Error().Err(err).Str("provider", providerName).Msg("query advisories")
-		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", err.Error()) //nolint:gosec // G115: query counts are bounded by component batch size.
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), 0, "failed", err.Error()) // #nosec G115 -- query counts are bounded by component batch size.
 		return nil, err
 	}
 
 	advisoryMap, err := s.ingester.Ingest(ctx, providerName, toIngestResults(results))
 	if err != nil {
 		s.log.Error().Err(err).Str("provider", providerName).Msg("ingest advisories")
-		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(results)), "failed", err.Error()) //nolint:gosec // G115: provider result counts are bounded by requested packages.
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(results)), "failed", err.Error()) // #nosec G115 -- provider result counts are bounded by requested packages.
 		return nil, err
 	}
 
 	providerMatchIDsByType, providerCreated, err := s.matchComponents(ctx, snapshotID, providerName, components, advisoryMap)
 	if err != nil {
 		s.log.Error().Err(err).Str("provider", providerName).Msg("match affected ranges")
-		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "failed", err.Error()) //nolint:gosec // G115: advisory counts are bounded by provider responses.
+		s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "failed", err.Error()) // #nosec G115 -- advisory counts are bounded by provider responses.
 		return nil, err
 	}
 
-	s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "complete", "") //nolint:gosec // G115: advisory counts are bounded by provider responses.
+	s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "complete", "") // #nosec G115 -- advisory counts are bounded by provider responses.
 	return &scanProviderResult{matchIDsByType: providerMatchIDsByType, created: providerCreated}, nil
 }
 
@@ -624,7 +624,7 @@ func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, er
 
 func (s *Service) completeProvider(ctx context.Context, providerRecord dbgen.ScanProvider, startedAt time.Time, cacheMisses, advisoriesFound int32, status, errorMessage string) {
 	completedAt := time.Now().UTC()
-	responseTime := int32(completedAt.Sub(startedAt) / time.Millisecond) //nolint:gosec // G115: scan provider response times are operationally bounded.
+	responseTime := int32(completedAt.Sub(startedAt) / time.Millisecond) // #nosec G115 -- scan provider response times are operationally bounded.
 	if _, err := s.queries.UpdateScanProvider(ctx, dbgen.UpdateScanProviderParams{
 		ID:              providerRecord.ID,
 		Status:          status,

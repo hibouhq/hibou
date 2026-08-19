@@ -334,6 +334,181 @@
                 }
             }
         },
+        "/instance/jobs/overview": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Per-kind queue counters and the worker fleet. Instance admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "instance"
+                ],
+                "summary": "Instance jobs overview",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.instanceJobsOverviewResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/instance/jobs/stats": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Bucketed throughput and latency percentiles plus the trailing-7-day baseline. Instance admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "instance"
+                ],
+                "summary": "Instance jobs statistics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Window: 1h, 6h, 24h (default) or 7d",
+                        "name": "window",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.instanceJobsStatsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/instance/jobs/timeline": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Job runs overlapping the window, newest first, row-capped. Instance admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "instance"
+                ],
+                "summary": "Instance jobs timeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Window: 1h, 6h, 24h (default) or 7d",
+                        "name": "window",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.instanceJobsTimelineResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/instance/settings/admins": {
             "get": {
                 "security": [
@@ -5607,6 +5782,186 @@
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/dispute": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Contests a scanner-suppressed finding (ADR-026). The finding stays visible and counts against the quality gate despite the in-source directive, until the directive is removed or the dispute withdrawn. Only findings whose current status is suppressed can be disputed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Dispute an in-source suppression",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Vulnerability ID",
+                        "name": "vulnID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Dispute",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.findingDisputeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.FindingDispute"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Withdraws the dispute on a scanner-suppressed finding; the in-source suppression applies again (visible but never open, never gating).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Withdraw a suppression dispute",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Vulnerability ID",
+                        "name": "vulnID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/revocation": {
             "post": {
                 "security": [
@@ -7643,6 +7998,14 @@
                 "advisory": {
                     "$ref": "#/definitions/server.findingAdvisoryResponse"
                 },
+                "dispute": {
+                    "description": "Dispute is the human-axis override of an in-source suppression\n(ADR-026): present when someone contested the scanner's suppression.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.FindingDispute"
+                        }
+                    ]
+                },
                 "finding": {
                     "$ref": "#/definitions/store.Vulnerability"
                 },
@@ -7657,6 +8020,15 @@
                     "items": {
                         "$ref": "#/definitions/server.findingVEXResponse"
                     }
+                }
+            }
+        },
+        "server.findingDisputeRequest": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "description": "Reason is required: a dispute is a disagreement with a written\njustification, so it owes one back.",
+                    "type": "string"
                 }
             }
         },
@@ -7682,7 +8054,7 @@
             "type": "object",
             "properties": {
                 "action": {
-                    "description": "Activity events: who did what.",
+                    "description": "Activity events: who did what. Detail is also set on a scan-observed\nsuppression, carrying the in-source justification as its comment.",
                     "type": "string"
                 },
                 "actor_display": {
@@ -7806,6 +8178,132 @@
                     "type": "string"
                 },
                 "resource_type": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.instanceJobsOverviewResponse": {
+            "type": "object",
+            "properties": {
+                "heartbeat_interval_seconds": {
+                    "type": "number"
+                },
+                "kinds": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.InstanceJobKindCounts"
+                    }
+                },
+                "workers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.instanceJobsWorker"
+                    }
+                }
+            }
+        },
+        "server.instanceJobsStatsResponse": {
+            "type": "object",
+            "properties": {
+                "baselines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.InstanceJobBaseline"
+                    }
+                },
+                "bucket_seconds": {
+                    "type": "integer"
+                },
+                "buckets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.InstanceJobStatsBucket"
+                    }
+                },
+                "since": {
+                    "type": "string"
+                },
+                "window": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.instanceJobsTimelineResponse": {
+            "type": "object",
+            "properties": {
+                "max_rows": {
+                    "type": "integer"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.InstanceJobRun"
+                    }
+                },
+                "since": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "window": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.instanceJobsWorker": {
+            "type": "object",
+            "properties": {
+                "active_jobs": {
+                    "type": "integer"
+                },
+                "cpu_percent": {
+                    "type": "number"
+                },
+                "gomaxprocs": {
+                    "type": "integer"
+                },
+                "goroutines": {
+                    "type": "integer"
+                },
+                "heap_alloc_bytes": {
+                    "type": "integer"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_heartbeat_at": {
+                    "type": "string"
+                },
+                "loops": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "memory_rss_bytes": {
+                    "type": "integer"
+                },
+                "pid": {
+                    "type": "integer"
+                },
+                "running_jobs": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is derived from last_heartbeat_at: online within 3 heartbeat\nintervals, stale beyond, stopped after a graceful shutdown.",
+                    "type": "string"
+                },
+                "stopped_at": {
+                    "type": "string"
+                },
+                "version": {
                     "type": "string"
                 }
             }
@@ -8694,6 +9192,29 @@
                 }
             }
         },
+        "store.FindingDispute": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "disputed_by": {
+                    "type": "string"
+                },
+                "fingerprint": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                }
+            }
+        },
         "store.FindingOccurrence": {
             "type": "object",
             "properties": {
@@ -8728,6 +9249,119 @@
                 },
                 "title": {
                     "type": "string"
+                }
+            }
+        },
+        "store.InstanceJobBaseline": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "p50_duration_seconds": {
+                    "type": "number"
+                },
+                "p50_wait_seconds": {
+                    "type": "number"
+                },
+                "p95_duration_seconds": {
+                    "type": "number"
+                },
+                "p95_wait_seconds": {
+                    "type": "number"
+                },
+                "samples": {
+                    "type": "integer"
+                }
+            }
+        },
+        "store.InstanceJobKindCounts": {
+            "type": "object",
+            "properties": {
+                "completed_24h": {
+                    "type": "integer"
+                },
+                "failed_24h": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "oldest_queued_at": {
+                    "type": "string"
+                },
+                "queued": {
+                    "type": "integer"
+                },
+                "running": {
+                    "type": "integer"
+                }
+            }
+        },
+        "store.InstanceJobRun": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "queued_at": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "worker_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.InstanceJobStatsBucket": {
+            "type": "object",
+            "properties": {
+                "bucket": {
+                    "type": "string"
+                },
+                "completed": {
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "p50_duration_seconds": {
+                    "type": "number"
+                },
+                "p50_wait_seconds": {
+                    "type": "number"
+                },
+                "p95_duration_seconds": {
+                    "type": "number"
+                },
+                "p95_wait_seconds": {
+                    "type": "number"
                 }
             }
         },
@@ -9328,6 +9962,14 @@
                 "detected_at": {
                     "type": "string"
                 },
+                "dispute": {
+                    "description": "Dispute is the ADR-026 override projection: someone contested this\nfinding's in-source suppression, so it counts as open despite the\nscanner's suppressed status. Nil = suppression uncontested.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.VulnerabilityDispute"
+                        }
+                    ]
+                },
                 "due_date": {
                     "type": "string"
                 },
@@ -9500,6 +10142,17 @@
                     "type": "string"
                 },
                 "vex_justification": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.VulnerabilityDispute": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "reason": {
                     "type": "string"
                 }
             }

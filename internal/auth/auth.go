@@ -68,7 +68,7 @@ func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, provide
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	signature := m.sign(state, providerID, timestamp)
 
-	//nolint:gosec // G124: cookie security attributes depend on deployment TLS config.
+	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
 		Name:     oauthStateCookieName,
 		Value:    strings.Join([]string{hex.EncodeToString([]byte(state)), hex.EncodeToString([]byte(providerID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString(signature)}, "|"),
@@ -183,7 +183,7 @@ func (m *Manager) SetSessionCookie(w http.ResponseWriter, user *store.User) {
 	userID := user.ID.String()
 	signature := m.sign(userID, timestamp)
 
-	//nolint:gosec // G124: cookie security attributes depend on deployment TLS config.
+	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    strings.Join([]string{hex.EncodeToString([]byte(userID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString(signature)}, "|"),
@@ -351,7 +351,7 @@ func (m *Manager) sign(parts ...string) []byte {
 }
 
 func (m *Manager) clearCookie(w http.ResponseWriter, name string) {
-	//nolint:gosec // G124: cookie security attributes depend on deployment TLS config.
+	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",

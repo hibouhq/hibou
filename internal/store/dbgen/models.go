@@ -1124,6 +1124,15 @@ type FindingAcceptance struct {
 	VexJustification NullVexJustification `json:"vex_justification"`
 }
 
+type FindingDispute struct {
+	ID          uuid.UUID     `json:"id"`
+	RepoID      uuid.UUID     `json:"repo_id"`
+	Fingerprint string        `json:"fingerprint"`
+	Reason      string        `json:"reason"`
+	DisputedBy  uuid.NullUUID `json:"disputed_by"`
+	CreatedAt   time.Time     `json:"created_at"`
+}
+
 type ForgeOrgAdmin struct {
 	ID             uuid.UUID     `json:"id"`
 	Provider       string        `json:"provider"`
@@ -1643,4 +1652,21 @@ type VulnerabilityStateTransition struct {
 	ChangedBy       uuid.NullUUID `json:"changed_by"`
 	ChangedAt       time.Time     `json:"changed_at"`
 	Comment         string        `json:"comment"`
+}
+
+type WorkerInstance struct {
+	ID              string          `json:"id"`
+	Hostname        string          `json:"hostname"`
+	Pid             int32           `json:"pid"`
+	Version         string          `json:"version"`
+	Loops           []string        `json:"loops"`
+	StartedAt       time.Time       `json:"started_at"`
+	LastHeartbeatAt time.Time       `json:"last_heartbeat_at"`
+	StoppedAt       sql.NullTime    `json:"stopped_at"`
+	CpuPercent      sql.NullFloat64 `json:"cpu_percent"`
+	MemoryRssBytes  sql.NullInt64   `json:"memory_rss_bytes"`
+	HeapAllocBytes  sql.NullInt64   `json:"heap_alloc_bytes"`
+	Goroutines      sql.NullInt32   `json:"goroutines"`
+	Gomaxprocs      sql.NullInt32   `json:"gomaxprocs"`
+	ActiveJobs      int32           `json:"active_jobs"`
 }

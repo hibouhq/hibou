@@ -180,7 +180,7 @@ func (q *Queries) ListFindingActivity(ctx context.Context, orgID uuid.UUID, repo
 		RepoID:      repoID.String(),
 		Fingerprint: fingerprint,
 		Actions:     actions,
-		RowLimit:    int32(limit), //nolint:gosec // G115: limit is a small server-side constant.
+		RowLimit:    int32(limit), // #nosec G115 -- limit is a small server-side constant.
 	})
 	if err != nil {
 		return nil, err

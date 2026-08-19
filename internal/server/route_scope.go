@@ -87,6 +87,9 @@ var routeScopes = map[string]routeScope{
 	"PUT /api/v1/instance/settings/banners": sessionOnlyRoute(),
 	"GET /api/v1/instance/settings/admins":  sessionOnlyRoute(),
 	"GET /api/v1/instance/audit-logs":       sessionOnlyRoute(),
+	"GET /api/v1/instance/jobs/overview":    sessionOnlyRoute(),
+	"GET /api/v1/instance/jobs/timeline":    sessionOnlyRoute(),
+	"GET /api/v1/instance/jobs/stats":       sessionOnlyRoute(),
 
 	"GET /api/v1/notifications":              sessionOnlyRoute(),
 	"GET /api/v1/notifications/unread-count": sessionOnlyRoute(),
@@ -227,6 +230,8 @@ var routeScopes = map[string]routeScope{
 
 	"PUT " + repoRoute + "/vulnerabilities/acceptance":           needs(apitoken.CapTriage, apitoken.AccessWrite),
 	"PUT " + repoRoute + "/vulnerabilities/{vulnID}/acceptance":  needs(apitoken.CapTriage, apitoken.AccessWrite),
+	"PUT " + repoRoute + "/vulnerabilities/{vulnID}/dispute":     needs(apitoken.CapTriage, apitoken.AccessWrite),
+	"DELETE " + repoRoute + "/vulnerabilities/{vulnID}/dispute":  needs(apitoken.CapTriage, apitoken.AccessWrite),
 	"POST " + repoRoute + "/vulnerabilities/{vulnID}/revocation": needs(apitoken.CapTriage, apitoken.AccessWrite),
 	"GET " + repoRoute + "/finding-acceptances":                  needs(apitoken.CapTriage, apitoken.AccessRead),
 

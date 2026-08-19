@@ -108,7 +108,8 @@ func (a *Adapter) RemovePolicy(sec string, ptype string, rule []string) error {
 	args := []any{ptype}
 
 	for index, value := range rule {
-		//nolint:gosec,perfsprint // G202: query parameters are positional ($1, $2...), not interpolated values.
+		// #nosec G202 -- query parameters are positional ($1, $2...), not interpolated values.
+		//nolint:perfsprint // Sprintf keeps the placeholder arithmetic readable.
 		query += fmt.Sprintf(` AND v%d = $%d`, index, index+2)
 		args = append(args, value)
 	}
@@ -130,7 +131,8 @@ func (a *Adapter) RemoveFilteredPolicy(sec string, ptype string, fieldIndex int,
 			continue
 		}
 
-		//nolint:gosec,perfsprint // G202: query parameters are positional ($1, $2...), not interpolated values.
+		// #nosec G202 -- query parameters are positional ($1, $2...), not interpolated values.
+		//nolint:perfsprint // Sprintf keeps the placeholder arithmetic readable.
 		query += fmt.Sprintf(` AND v%d = $%d`, fieldIndex+index, placeholder)
 		args = append(args, value)
 		placeholder++

@@ -66,6 +66,17 @@ func (s *Service) ComputeDelta(ctx context.Context, prSnapshotID, targetSnapshot
 	if err != nil {
 		return nil, fmt.Errorf("list target vulnerabilities: %w", err)
 	}
+	// A scanner-suppressed finding is never open and never gating (ADR-023),
+	// so it must not enter the diff on either side — otherwise a new `#nosec`
+	// finding counts against the weakness gate. The exception is a disputed
+	// suppression (ADR-026): a human contested the directive, so it keeps
+	// counting until the directive is removed or the dispute withdrawn.
+	// Filtering the PR side also makes "suppressed in the PR" read as
+	// resolved, which is what the suppression meant.
+	prVulns, targetVulns, err = s.filterUndisputedSuppressed(ctx, prSnapshotID, prVulns, targetVulns)
+	if err != nil {
+		return nil, err
+	}
 
 	result := &DeltaResult{}
 	prSet := uniqueVulnerabilities(prVulns)
@@ -112,6 +123,59 @@ type acceptanceStore interface {
 	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
 	GetRefByID(ctx context.Context, id uuid.UUID) (*store.Ref, error)
 	ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]store.FindingAcceptance, error)
+}
+
+// disputeStore is satisfied by the real store. On stores that don't implement
+// it, every suppressed finding is filtered — the ADR-023 default; disputes are
+// simply not honored there.
+type disputeStore interface {
+	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
+	GetRefByID(ctx context.Context, id uuid.UUID) (*store.Ref, error)
+	ListFindingDisputesByRepo(ctx context.Context, repoID uuid.UUID) ([]store.FindingDispute, error)
+}
+
+// filterUndisputedSuppressed drops scanner-suppressed findings from both sides
+// of the diff, keeping the disputed ones (ADR-026). Fail-safe direction: when
+// disputes cannot be loaded, only the suppression default applies — a dispute
+// is merely not surfaced, the gate never wrongly passes on an open finding.
+func (s *Service) filterUndisputedSuppressed(ctx context.Context, snapshotID uuid.UUID, prVulns, targetVulns []store.Vulnerability) ([]store.Vulnerability, []store.Vulnerability, error) {
+	disputed := map[string]struct{}{}
+	if scopeStore, ok := s.store.(disputeStore); ok {
+		snapshot, err := scopeStore.GetSnapshotByID(ctx, snapshotID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load snapshot for dispute scope: %w", err)
+		}
+		var ref *store.Ref
+		if snapshot != nil {
+			ref, err = scopeStore.GetRefByID(ctx, snapshot.RefID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("load ref for dispute scope: %w", err)
+			}
+		}
+		if ref != nil {
+			disputes, err := scopeStore.ListFindingDisputesByRepo(ctx, ref.RepoID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("list finding disputes: %w", err)
+			}
+			for _, dispute := range disputes {
+				disputed[dispute.Fingerprint] = struct{}{}
+			}
+		}
+	}
+	return dropUndisputedSuppressed(prVulns, disputed), dropUndisputedSuppressed(targetVulns, disputed), nil
+}
+
+func dropUndisputedSuppressed(vulns []store.Vulnerability, disputed map[string]struct{}) []store.Vulnerability {
+	filtered := make([]store.Vulnerability, 0, len(vulns))
+	for _, vuln := range vulns {
+		if vuln.Status == "suppressed" {
+			if _, ok := disputed[strings.TrimSpace(vuln.Fingerprint)]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, vuln)
+	}
+	return filtered
 }
 
 // filterAcceptedNewVulnerabilities drops findings the repo has accepted (or

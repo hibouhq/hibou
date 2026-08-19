@@ -37,6 +37,7 @@ const (
 	ActionRepoEnrolled      = "repo.enrolled"
 	ActionFindingAcceptance = "finding.acceptance"
 	ActionFindingCreate     = "finding.create"
+	ActionFindingDispute    = "finding.dispute"
 	ActionRepoDetected      = "repo.detected"
 	ActionRepoArchived      = "repo.archived"
 	ActionRepoUnarchived    = "repo.unarchived"

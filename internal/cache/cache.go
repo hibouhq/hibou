@@ -143,7 +143,7 @@ func (s *Service) cacheBatchResultsForQuery(ctx context.Context, providerName st
 		PackageName:   query.Name,
 		Provider:      providerName,
 		ResponseData:  payload,
-		AdvisoryCount: int32(len(matched)), //nolint:gosec // G115: advisory count is bounded by batch query size.
+		AdvisoryCount: int32(len(matched)), // #nosec G115 -- advisory count is bounded by batch query size.
 		FetchedAt:     fetchedAt,
 		ExpiresAt:     fetchedAt.Add(s.ttlForProvider(providerName)),
 	}); err != nil {

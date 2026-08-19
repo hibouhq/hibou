@@ -75,11 +75,15 @@ SELECT sqlc.embed(v),
   fa.vex_justification AS acceptance_vex_justification,
   fa.accepted_by AS acceptance_accepted_by,
   fa.expires_at AS acceptance_expires_at,
-  fa.created_at AS acceptance_created_at
+  fa.created_at AS acceptance_created_at,
+  fd.reason AS dispute_reason,
+  fd.created_at AS dispute_created_at
 FROM vulnerabilities v
 LEFT JOIN finding_acceptances fa
   ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
   AND (fa.expires_at IS NULL OR fa.expires_at > now())
+LEFT JOIN finding_disputes fd
+  ON fd.repo_id = v.repo_id AND fd.fingerprint = v.fingerprint
 WHERE v.snapshot_id = $1
   AND v.status = ANY(@statuses::vulnerability_status[])
   AND (COALESCE(array_length(@types::text[], 1), 0) = 0 OR v.type::text = ANY(@types::text[]))
@@ -363,6 +367,11 @@ WITH observations AS (
            s.created_at AS observed_at,
            v.status::text AS status,
            v.severity::text AS severity,
+           -- The in-source suppression justification the scanner extracted
+           -- (e.g. the text after `#nosec G115 --`), carried on the row's
+           -- metadata by the ingest. Shown as the comment of the transition
+           -- that suppressed the finding.
+           v.metadata #>> '{suppression,justification}' AS suppression_justification,
            LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status
     FROM vulnerabilities v
     JOIN snapshots s ON s.id = v.snapshot_id
@@ -372,7 +381,8 @@ WITH observations AS (
       AND s.status IN ('complete', 'active')
 )
 SELECT ref_name, ref_type, commit_sha, observed_at, status, severity,
-       COALESCE(previous_status, '')::text AS previous_status
+       COALESCE(previous_status, '')::text AS previous_status,
+       COALESCE(suppression_justification, '')::text AS suppression_justification
 FROM observations
 WHERE previous_status IS DISTINCT FROM status
 ORDER BY observed_at DESC, ref_name

@@ -272,7 +272,7 @@ func gitHubEventPRHeadSHA(eventPath string) string {
 	if eventPath == "" {
 		return ""
 	}
-	payload, err := os.ReadFile(eventPath) //nolint:gosec // G703: the CLI reads GITHUB_EVENT_PATH, the Actions-runner-provided payload file, with the invoking user's own privileges — no trust boundary to traverse.
+	payload, err := os.ReadFile(eventPath) // #nosec G304 G703 -- the CLI reads GITHUB_EVENT_PATH, the Actions-runner-provided payload file, with the invoking user's own privileges — no trust boundary to traverse.
 	if err != nil {
 		return ""
 	}

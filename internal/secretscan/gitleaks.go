@@ -82,7 +82,7 @@ func (p *GitleaksProvider) ScanFilesystem(ctx context.Context, dir string) ([]Se
 func (p *GitleaksProvider) runGitleaks(ctx context.Context, reportDir string, args ...string) ([]SecretFinding, error) {
 	reportPath := filepath.Join(reportDir, "gitleaks-report.json")
 	args = append(args, "--report-format=json", "--report-path="+reportPath, "--exit-code=0")
-	//nolint:gosec // G204: binary path comes from LookPath during provider construction.
+	// #nosec G204 -- binary path comes from LookPath during provider construction.
 	cmd := exec.CommandContext(ctx, p.bin, args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("run gitleaks %s: %w: %s", args[0], err, string(output))

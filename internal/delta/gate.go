@@ -338,13 +338,13 @@ func evaluateStoredVulnerabilityGates(gates []dbgen.QualityGate, vulns []store.V
 
 func evaluateStoredVulnerabilityGate(gate dbgen.QualityGate, critical, high, medium int) []string {
 	reasons := make([]string, 0, 3)
-	if int32(critical) > gate.MaxCritical { //nolint:gosec // G115: severity counts are bounded by in-memory delta size.
+	if int32(critical) > gate.MaxCritical { // #nosec G115 -- severity counts are bounded by in-memory delta size.
 		reasons = append(reasons, fmt.Sprintf("gate %q exceeded max critical vulnerabilities: %d > %d", gate.Name, critical, gate.MaxCritical))
 	}
-	if int32(high) > gate.MaxHigh { //nolint:gosec // G115: severity counts are bounded by in-memory delta size.
+	if int32(high) > gate.MaxHigh { // #nosec G115 -- severity counts are bounded by in-memory delta size.
 		reasons = append(reasons, fmt.Sprintf("gate %q exceeded max high vulnerabilities: %d > %d", gate.Name, high, gate.MaxHigh))
 	}
-	if gate.MaxMedium.Valid && int32(medium) > gate.MaxMedium.Int32 { //nolint:gosec // G115: severity counts are bounded by in-memory delta size.
+	if gate.MaxMedium.Valid && int32(medium) > gate.MaxMedium.Int32 { // #nosec G115 -- severity counts are bounded by in-memory delta size.
 		reasons = append(reasons, fmt.Sprintf("gate %q exceeded max medium vulnerabilities: %d > %d", gate.Name, medium, gate.MaxMedium.Int32))
 	}
 	return reasons
@@ -367,7 +367,7 @@ func evaluateStoredFindingGates(gates []dbgen.QualityGate, vulns []store.Vulnera
 			continue
 		}
 		newVulnerabilities := countVulnerabilitiesBySeverity(vulns, gate.FindingSeverities)
-		if int32(newVulnerabilities) > gate.MaxNewFindings.Int32 { //nolint:gosec // G115: finding counts are bounded by in-memory delta size.
+		if int32(newVulnerabilities) > gate.MaxNewFindings.Int32 { // #nosec G115 -- finding counts are bounded by in-memory delta size.
 			reasons = append(reasons, fmt.Sprintf("gate %q exceeded max new vulnerabilities: %d > %d", gate.Name, newVulnerabilities, gate.MaxNewFindings.Int32))
 		}
 	}

@@ -85,7 +85,7 @@ func (q *Queries) GetClientBySlug(ctx context.Context, orgID uuid.UUID, slug str
 }
 
 func (q *Queries) ListClientsByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]Client, int, error) {
-	rows, err := q.db.ListClientsByOrg(ctx, dbgen.ListClientsByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
+	rows, err := q.db.ListClientsByOrg(ctx, dbgen.ListClientsByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) // #nosec G115 -- pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}
@@ -104,7 +104,7 @@ func (q *Queries) ListClientsByOrg(ctx context.Context, orgID uuid.UUID, limit, 
 }
 
 func (q *Queries) ListClientsWithStatsByOrg(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]ClientWithStats, int, error) {
-	rows, err := q.db.ListClientsWithStatsByOrg(ctx, dbgen.ListClientsWithStatsByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) //nolint:gosec // G115: pagination values are bounded by API parsing.
+	rows, err := q.db.ListClientsWithStatsByOrg(ctx, dbgen.ListClientsWithStatsByOrgParams{OrgID: orgID, Limit: int32(limit), Offset: int32(offset)}) // #nosec G115 -- pagination values are bounded by API parsing.
 	if err != nil {
 		return nil, 0, err
 	}

@@ -7,7 +7,8 @@ import (
 )
 
 // ADR-023 semantics table: a false positive never was a vulnerability; an
-// accepted risk is still risk, flagged; resolved/suppressed are not risk.
+// accepted risk is still risk, flagged; resolved/suppressed are not risk —
+// unless the suppression is disputed (ADR-026), which makes it risk again.
 func TestRiskSeverityCounts(t *testing.T) {
 	t.Parallel()
 
@@ -17,15 +18,20 @@ func TestRiskSeverityCounts(t *testing.T) {
 		{Fingerprint: "fp", Severity: store.SeverityLevelHigh, Status: "detected"},
 		{Fingerprint: "fixed", Severity: store.SeverityLevelLow, Status: "resolved"},
 		{Fingerprint: "nosec", Severity: store.SeverityLevelLow, Status: "suppressed"},
+		{Fingerprint: "contested", Severity: store.SeverityLevelMedium, Status: "suppressed"},
 	}
 	acceptances := []store.FindingAcceptance{
 		{Fingerprint: "accepted", ReasonKind: "risk_accepted"},
 		{Fingerprint: "fp", ReasonKind: "false_positive"},
 	}
+	disputed := map[string]struct{}{"contested": {}}
 
-	counts := riskSeverityCounts(vulnerabilities, acceptances)
+	counts := riskSeverityCounts(vulnerabilities, acceptances, disputed)
 	if counts.Critical != 1 || counts.High != 1 || counts.Low != 0 {
 		t.Fatalf("counts = %+v, want critical=1 high=1 low=0", counts)
+	}
+	if counts.Medium != 1 {
+		t.Fatalf("medium = %d, want 1 (disputed suppression counts as risk)", counts.Medium)
 	}
 	if counts.AcceptedRisk != 1 {
 		t.Fatalf("accepted_risk = %d, want 1 (accepted risk counts, flagged)", counts.AcceptedRisk)
@@ -42,7 +48,7 @@ func TestCountTrendSnapshotSeveritiesExcludesFalsePositives(t *testing.T) {
 	}
 	kinds := map[string]string{"sast-fp": "false_positive", "dep-fp": "false_positive"}
 
-	findings, vulns := countTrendSnapshotSeverities(vulnerabilities, kinds)
+	findings, vulns := countTrendSnapshotSeverities(vulnerabilities, kinds, nil)
 	if findings.High != 1 {
 		t.Fatalf("findings.High = %d, want 1 (FP excluded)", findings.High)
 	}

@@ -117,7 +117,7 @@ func scanRustIdentifiers(roots []string) (map[string]struct{}, error) {
 			if !strings.HasSuffix(path, ".rs") {
 				return nil
 			}
-			content, err := os.ReadFile(path) //nolint:gosec // G122: CI-side scan of the caller's own checkout; no trust boundary.
+			content, err := os.ReadFile(path) // #nosec G122 G304 -- CI-side scan of the caller's own checkout; no trust boundary.
 			if err != nil {
 				return nil
 			}

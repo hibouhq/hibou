@@ -534,6 +534,12 @@ definitions:
         $ref: '#/definitions/store.FindingAcceptance'
       advisory:
         $ref: '#/definitions/server.findingAdvisoryResponse'
+      dispute:
+        allOf:
+        - $ref: '#/definitions/store.FindingDispute'
+        description: |-
+          Dispute is the human-axis override of an in-source suppression
+          (ADR-026): present when someone contested the scanner's suppression.
       finding:
         $ref: '#/definitions/store.Vulnerability'
       occurrences:
@@ -544,6 +550,14 @@ definitions:
         items:
           $ref: '#/definitions/server.findingVEXResponse'
         type: array
+    type: object
+  server.findingDisputeRequest:
+    properties:
+      reason:
+        description: |-
+          Reason is required: a dispute is a disagreement with a written
+          justification, so it owes one back.
+        type: string
     type: object
   server.findingFingerprintsResponse:
     properties:
@@ -562,7 +576,9 @@ definitions:
   server.findingHistoryEvent:
     properties:
       action:
-        description: 'Activity events: who did what.'
+        description: |-
+          Activity events: who did what. Detail is also set on a scan-observed
+          suppression, carrying the in-source justification as its comment.
         type: string
       actor_display:
         type: string
@@ -649,6 +665,91 @@ definitions:
       resource_id:
         type: string
       resource_type:
+        type: string
+    type: object
+  server.instanceJobsOverviewResponse:
+    properties:
+      heartbeat_interval_seconds:
+        type: number
+      kinds:
+        items:
+          $ref: '#/definitions/store.InstanceJobKindCounts'
+        type: array
+      workers:
+        items:
+          $ref: '#/definitions/server.instanceJobsWorker'
+        type: array
+    type: object
+  server.instanceJobsStatsResponse:
+    properties:
+      baselines:
+        items:
+          $ref: '#/definitions/store.InstanceJobBaseline'
+        type: array
+      bucket_seconds:
+        type: integer
+      buckets:
+        items:
+          $ref: '#/definitions/store.InstanceJobStatsBucket'
+        type: array
+      since:
+        type: string
+      window:
+        type: string
+    type: object
+  server.instanceJobsTimelineResponse:
+    properties:
+      max_rows:
+        type: integer
+      runs:
+        items:
+          $ref: '#/definitions/store.InstanceJobRun'
+        type: array
+      since:
+        type: string
+      truncated:
+        type: boolean
+      window:
+        type: string
+    type: object
+  server.instanceJobsWorker:
+    properties:
+      active_jobs:
+        type: integer
+      cpu_percent:
+        type: number
+      gomaxprocs:
+        type: integer
+      goroutines:
+        type: integer
+      heap_alloc_bytes:
+        type: integer
+      hostname:
+        type: string
+      id:
+        type: string
+      last_heartbeat_at:
+        type: string
+      loops:
+        items:
+          type: string
+        type: array
+      memory_rss_bytes:
+        type: integer
+      pid:
+        type: integer
+      running_jobs:
+        type: integer
+      started_at:
+        type: string
+      status:
+        description: |-
+          Status is derived from last_heartbeat_at: online within 3 heartbeat
+          intervals, stale beyond, stopped after a graceful shutdown.
+        type: string
+      stopped_at:
+        type: string
+      version:
         type: string
     type: object
   server.meResponse:
@@ -1248,6 +1349,21 @@ definitions:
       vex_justification:
         type: string
     type: object
+  store.FindingDispute:
+    properties:
+      created_at:
+        type: string
+      disputed_by:
+        type: string
+      fingerprint:
+        type: string
+      id:
+        type: string
+      reason:
+        type: string
+      repo_id:
+        type: string
+    type: object
   store.FindingOccurrence:
     properties:
       commit_sha:
@@ -1271,6 +1387,80 @@ definitions:
         type: string
       title:
         type: string
+    type: object
+  store.InstanceJobBaseline:
+    properties:
+      kind:
+        type: string
+      p50_duration_seconds:
+        type: number
+      p50_wait_seconds:
+        type: number
+      p95_duration_seconds:
+        type: number
+      p95_wait_seconds:
+        type: number
+      samples:
+        type: integer
+    type: object
+  store.InstanceJobKindCounts:
+    properties:
+      completed_24h:
+        type: integer
+      failed_24h:
+        type: integer
+      kind:
+        type: string
+      oldest_queued_at:
+        type: string
+      queued:
+        type: integer
+      running:
+        type: integer
+    type: object
+  store.InstanceJobRun:
+    properties:
+      attempts:
+        type: integer
+      detail:
+        type: string
+      error:
+        type: string
+      finished_at:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      queued_at:
+        type: string
+      started_at:
+        type: string
+      status:
+        type: string
+      worker_id:
+        type: string
+    type: object
+  store.InstanceJobStatsBucket:
+    properties:
+      bucket:
+        type: string
+      completed:
+        type: integer
+      failed:
+        type: integer
+      kind:
+        type: string
+      p50_duration_seconds:
+        type: number
+      p50_wait_seconds:
+        type: number
+      p95_duration_seconds:
+        type: number
+      p95_wait_seconds:
+        type: number
     type: object
   store.Integration:
     properties:
@@ -1678,6 +1868,13 @@ definitions:
         type: string
       detected_at:
         type: string
+      dispute:
+        allOf:
+        - $ref: '#/definitions/store.VulnerabilityDispute'
+        description: |-
+          Dispute is the ADR-026 override projection: someone contested this
+          finding's in-source suppression, so it counts as open despite the
+          scanner's suppressed status. Nil = suppression uncontested.
       due_date:
         type: string
       ecosystem:
@@ -1796,6 +1993,13 @@ definitions:
       reason_kind:
         type: string
       vex_justification:
+        type: string
+    type: object
+  store.VulnerabilityDispute:
+    properties:
+      created_at:
+        type: string
+      reason:
         type: string
     type: object
   uuid.NullUUID:
@@ -2016,6 +2220,110 @@ paths:
                   type: array
               type: object
       summary: Active announcement banners
+      tags:
+      - instance
+  /instance/jobs/overview:
+    get:
+      description: Per-kind queue counters and the worker fleet. Instance admins only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.instanceJobsOverviewResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Instance jobs overview
+      tags:
+      - instance
+  /instance/jobs/stats:
+    get:
+      description: Bucketed throughput and latency percentiles plus the trailing-7-day
+        baseline. Instance admins only.
+      parameters:
+      - description: 'Window: 1h, 6h, 24h (default) or 7d'
+        in: query
+        name: window
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.instanceJobsStatsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Instance jobs statistics
+      tags:
+      - instance
+  /instance/jobs/timeline:
+    get:
+      description: Job runs overlapping the window, newest first, row-capped. Instance
+        admins only.
+      parameters:
+      - description: 'Window: 1h, 6h, 24h (default) or 7d'
+        in: query
+        name: window
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.instanceJobsTimelineResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Instance jobs timeline
       tags:
       - instance
   /instance/settings/admins:
@@ -5184,6 +5492,126 @@ paths:
       security:
       - BearerAuth: []
       summary: Accept or reopen a finding
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/dispute:
+    delete:
+      description: Withdraws the dispute on a scanner-suppressed finding; the in-source
+        suppression applies again (visible but never open, never gating).
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Vulnerability ID
+        in: path
+        name: vulnID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Withdraw a suppression dispute
+      tags:
+      - vulnerabilities
+    put:
+      consumes:
+      - application/json
+      description: Contests a scanner-suppressed finding (ADR-026). The finding stays
+        visible and counts against the quality gate despite the in-source directive,
+        until the directive is removed or the dispute withdrawn. Only findings whose
+        current status is suppressed can be disputed.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Vulnerability ID
+        in: path
+        name: vulnID
+        required: true
+        type: string
+      - description: Dispute
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.findingDisputeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.FindingDispute'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Dispute an in-source suppression
       tags:
       - vulnerabilities
   /orgs/{provider}/{slug}/repos/{repoSlug}/vulnerabilities/{vulnID}/revocation:

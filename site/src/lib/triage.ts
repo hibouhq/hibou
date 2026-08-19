@@ -5,9 +5,9 @@
 // snapshot) and an optional fingerprint-keyed acceptance — the human decision,
 // which survives snapshots. Every view derives one displayed state from here.
 
-import type { FindingAcceptance, Vulnerability } from '@/api/client'
+import type { FindingAcceptance, FindingDispute, Vulnerability } from '@/api/client'
 
-export type TriageState = 'open' | 'accepted_risk' | 'false_positive' | 'fixed' | 'suppressed'
+export type TriageState = 'open' | 'accepted_risk' | 'false_positive' | 'fixed' | 'suppressed' | 'disputed'
 
 export interface TriageStateInfo {
   state: TriageState
@@ -62,6 +62,14 @@ const STATES: Record<TriageState, TriageStateInfo> = {
     countsAgainstGate: false,
     humanDecision: false,
   },
+  disputed: {
+    state: 'disputed',
+    label: 'Disputed',
+    description: 'The in-source suppression is contested (ADR-026): the finding counts as open until the directive is removed or the dispute withdrawn.',
+    badgeClass: 'whitespace-nowrap border-danger/40 bg-danger/10 text-danger',
+    countsAgainstGate: true,
+    humanDecision: true,
+  },
 }
 
 /** An acceptance past its expiry no longer suppresses anything. */
@@ -83,6 +91,7 @@ export function triageState(
   vulnerability: Pick<Vulnerability, 'status'>,
   acceptance?: FindingAcceptance | null,
   now = new Date(),
+  dispute?: FindingDispute | null,
 ): TriageStateInfo {
   if (isAcceptanceActive(acceptance, now)) {
     return acceptance!.reason_kind === 'false_positive' ? STATES.false_positive : STATES.accepted_risk
@@ -91,7 +100,9 @@ export function triageState(
     case 'resolved':
       return STATES.fixed
     case 'suppressed':
-      return STATES.suppressed
+      // A dispute (ADR-026) overrides the scanner's suppression: the human
+      // axis wins the display exactly as an acceptance does for open findings.
+      return dispute ? STATES.disputed : STATES.suppressed
     default:
       return STATES.open
   }

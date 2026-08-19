@@ -380,10 +380,10 @@ func (s *Server) persistCoverageLines(ctx context.Context, tx *sql.Tx, fileID uu
 	branchesCovered := make([]int32, len(lines))
 	branchesValid := make([]int32, len(lines))
 	for i, line := range lines {
-		numbers[i] = int32(line.Number)                  //nolint:gosec // G115: source line numbers are bounded by file size
-		hits[i] = int32(line.Hits)                       //nolint:gosec // G115: hit counts are bounded by test executions
-		branchesCovered[i] = int32(line.BranchesCovered) //nolint:gosec // G115: branch counts are bounded by line width
-		branchesValid[i] = int32(line.BranchesValid)     //nolint:gosec // G115: branch counts are bounded by line width
+		numbers[i] = int32(line.Number)                  // #nosec G115 -- source line numbers are bounded by file size
+		hits[i] = int32(line.Hits)                       // #nosec G115 -- hit counts are bounded by test executions
+		branchesCovered[i] = int32(line.BranchesCovered) // #nosec G115 -- branch counts are bounded by line width
+		branchesValid[i] = int32(line.BranchesValid)     // #nosec G115 -- branch counts are bounded by line width
 	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO coverage_lines (coverage_file_id, line_number, hits, branches_covered, branches_valid)

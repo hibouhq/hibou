@@ -18,9 +18,12 @@ import (
 // round trip: the finding, its advisory, the triage decision, VEX statements,
 // and where the fingerprint is currently detected.
 type findingDetailResponse struct {
-	Finding     *store.Vulnerability      `json:"finding"`
-	Advisory    *findingAdvisoryResponse  `json:"advisory,omitempty"`
-	Acceptance  *store.FindingAcceptance  `json:"acceptance,omitempty"`
+	Finding    *store.Vulnerability     `json:"finding"`
+	Advisory   *findingAdvisoryResponse `json:"advisory,omitempty"`
+	Acceptance *store.FindingAcceptance `json:"acceptance,omitempty"`
+	// Dispute is the human-axis override of an in-source suppression
+	// (ADR-026): present when someone contested the scanner's suppression.
+	Dispute     *store.FindingDispute     `json:"dispute,omitempty"`
 	VEX         []findingVEXResponse      `json:"vex,omitempty"`
 	Occurrences []store.FindingOccurrence `json:"occurrences"`
 }
@@ -91,6 +94,10 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 
 	if acceptance, err := s.queries.GetActiveFindingAcceptance(r.Context(), repo.ID, fingerprint); err == nil && acceptance != nil {
 		response.Acceptance = acceptance
+	}
+
+	if dispute, err := s.queries.GetFindingDispute(r.Context(), repo.ID, fingerprint); err == nil && dispute != nil {
+		response.Dispute = dispute
 	}
 
 	if occurrences, err := s.queries.ListFindingOccurrences(r.Context(), repo.ID, fingerprint); err == nil {

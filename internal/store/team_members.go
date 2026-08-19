@@ -37,8 +37,8 @@ func (q *Queries) RemoveTeamMember(ctx context.Context, teamID, userID uuid.UUID
 func (q *Queries) ListTeamMembers(ctx context.Context, teamID uuid.UUID, limit, offset int) ([]TeamMember, int, error) {
 	rows, err := q.db.ListTeamMembers(ctx, dbgen.ListTeamMembersParams{
 		TeamID: teamID,
-		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
-		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Limit:  int32(limit),  // #nosec G115 -- pagination values are bounded by API parsing.
+		Offset: int32(offset), // #nosec G115 -- pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

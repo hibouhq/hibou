@@ -25,6 +25,15 @@ describe('triageState', () => {
     expect(info.humanDecision).toBe(false)
   })
 
+  it('reads a disputed suppression as disputed and gating (ADR-026)', () => {
+    const info = triageState({ status: 'suppressed' }, null, new Date(), { reason: 'contested' })
+    expect(info.state).toBe('disputed')
+    expect(info.countsAgainstGate).toBe(true)
+    expect(info.humanDecision).toBe(true)
+    // A dispute only overrides a suppression — other statuses ignore it.
+    expect(triageState({ status: 'detected' }, null, new Date(), { reason: 'contested' }).state).toBe('open')
+  })
+
   it('lets a human decision win over the observation status', () => {
     // The acceptance is fingerprint-keyed and survives snapshots, so it is the
     // durable truth regardless of what the scanner reports.

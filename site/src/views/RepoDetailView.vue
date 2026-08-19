@@ -925,30 +925,37 @@ function extractPullRequestNumber(refName: string) {
   color: rgb(220 252 231);
 }
 
+/* Processing: a quiet neutral chip — the only signal is a thin bright comet
+   tracing the oval's border. The comet is a mostly-transparent conic gradient
+   whose START ANGLE is animated (registered @property), so the highlight
+   travels along the border instead of the masked element rotating (which
+   wobbles on a non-circular pill). Browsers without @property fall back to a
+   static thin highlight. */
 .snapshot-chip--pending {
-  border-color: rgb(251 191 36 / 0.48);
-  background: linear-gradient(180deg, rgb(120 53 15 / 0.26), rgb(17 24 39 / 0.92));
-  color: rgb(253 224 71);
-  box-shadow: 0 0 0 1px rgb(251 191 36 / 0.1);
+  border-color: rgb(148 163 184 / 0.24);
+  background: linear-gradient(180deg, rgb(30 41 59 / 0.6), rgb(17 24 39 / 0.92));
+  color: rgb(203 213 225);
 }
 
 .snapshot-chip--pending::before {
-  opacity: 0.96;
+  opacity: 1;
+  padding: 1.5px;
   background: conic-gradient(
-    from 0deg,
-    rgb(251 191 36 / 0.08),
-    rgb(253 224 71 / 0.92),
-    rgb(245 158 11 / 0.28),
-    rgb(253 224 71 / 0.92),
-    rgb(251 191 36 / 0.08)
+    from var(--snapshot-chip-spin, 0deg),
+    transparent 0deg,
+    transparent 285deg,
+    rgb(96 165 250 / 0.55) 320deg,
+    rgb(191 219 254) 348deg,
+    rgb(255 255 255) 357deg,
+    transparent 360deg
   );
-  animation: snapshot-border-spin 2.8s linear infinite;
+  filter: drop-shadow(0 0 3px rgb(147 197 253 / 0.85));
+  animation: snapshot-border-roll 1.8s linear infinite;
 }
 
 .snapshot-chip--pending.snapshot-chip--selected {
-  border-color: rgb(251 191 36 / 0.72);
-  background: linear-gradient(180deg, rgb(180 83 9 / 0.28), rgb(120 53 15 / 0.92));
-  color: rgb(254 249 195);
+  border-color: rgb(148 163 184 / 0.42);
+  color: rgb(226 232 240);
 }
 
 .snapshot-chip--failed {
@@ -981,9 +988,15 @@ function extractPullRequestNumber(refName: string) {
   opacity: 0.78;
 }
 
-@keyframes snapshot-border-spin {
+@property --snapshot-chip-spin {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes snapshot-border-roll {
   to {
-    transform: rotate(1turn);
+    --snapshot-chip-spin: 360deg;
   }
 }
 

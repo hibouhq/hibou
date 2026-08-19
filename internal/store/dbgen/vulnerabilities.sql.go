@@ -1082,6 +1082,11 @@ WITH observations AS (
            s.created_at AS observed_at,
            v.status::text AS status,
            v.severity::text AS severity,
+           -- The in-source suppression justification the scanner extracted
+           -- (e.g. the text after ` + "`" + `#nosec G115 --` + "`" + `), carried on the row's
+           -- metadata by the ingest. Shown as the comment of the transition
+           -- that suppressed the finding.
+           v.metadata #>> '{suppression,justification}' AS suppression_justification,
            LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status
     FROM vulnerabilities v
     JOIN snapshots s ON s.id = v.snapshot_id
@@ -1091,7 +1096,8 @@ WITH observations AS (
       AND s.status IN ('complete', 'active')
 )
 SELECT ref_name, ref_type, commit_sha, observed_at, status, severity,
-       COALESCE(previous_status, '')::text AS previous_status
+       COALESCE(previous_status, '')::text AS previous_status,
+       COALESCE(suppression_justification, '')::text AS suppression_justification
 FROM observations
 WHERE previous_status IS DISTINCT FROM status
 ORDER BY observed_at DESC, ref_name
@@ -1105,13 +1111,14 @@ type ListFindingTransitionsParams struct {
 }
 
 type ListFindingTransitionsRow struct {
-	RefName        string    `json:"ref_name"`
-	RefType        string    `json:"ref_type"`
-	CommitSha      string    `json:"commit_sha"`
-	ObservedAt     time.Time `json:"observed_at"`
-	Status         string    `json:"status"`
-	Severity       string    `json:"severity"`
-	PreviousStatus string    `json:"previous_status"`
+	RefName                  string    `json:"ref_name"`
+	RefType                  string    `json:"ref_type"`
+	CommitSha                string    `json:"commit_sha"`
+	ObservedAt               time.Time `json:"observed_at"`
+	Status                   string    `json:"status"`
+	Severity                 string    `json:"severity"`
+	PreviousStatus           string    `json:"previous_status"`
+	SuppressionJustification string    `json:"suppression_justification"`
 }
 
 // The scan-observed life of a fingerprint, per ref: the snapshot that first
@@ -1135,6 +1142,7 @@ func (q *Queries) ListFindingTransitions(ctx context.Context, arg ListFindingTra
 			&i.Status,
 			&i.Severity,
 			&i.PreviousStatus,
+			&i.SuppressionJustification,
 		); err != nil {
 			return nil, err
 		}
@@ -1275,11 +1283,15 @@ SELECT v.id, v.type, v.snapshot_id, v.title, v.description, v.original_severity,
   fa.vex_justification AS acceptance_vex_justification,
   fa.accepted_by AS acceptance_accepted_by,
   fa.expires_at AS acceptance_expires_at,
-  fa.created_at AS acceptance_created_at
+  fa.created_at AS acceptance_created_at,
+  fd.reason AS dispute_reason,
+  fd.created_at AS dispute_created_at
 FROM vulnerabilities v
 LEFT JOIN finding_acceptances fa
   ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
   AND (fa.expires_at IS NULL OR fa.expires_at > now())
+LEFT JOIN finding_disputes fd
+  ON fd.repo_id = v.repo_id AND fd.fingerprint = v.fingerprint
 WHERE v.snapshot_id = $1
   AND v.status = ANY($4::vulnerability_status[])
   AND (COALESCE(array_length($5::text[], 1), 0) = 0 OR v.type::text = ANY($5::text[]))
@@ -1327,6 +1339,8 @@ type ListVulnerabilitiesBySnapshotRow struct {
 	AcceptanceAcceptedBy       uuid.NullUUID            `json:"acceptance_accepted_by"`
 	AcceptanceExpiresAt        sql.NullTime             `json:"acceptance_expires_at"`
 	AcceptanceCreatedAt        sql.NullTime             `json:"acceptance_created_at"`
+	DisputeReason              sql.NullString           `json:"dispute_reason"`
+	DisputeCreatedAt           sql.NullTime             `json:"dispute_created_at"`
 }
 
 // The acceptance LEFT JOIN is the ADR-023 hot read: decision status is
@@ -1424,6 +1438,8 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 			&i.AcceptanceAcceptedBy,
 			&i.AcceptanceExpiresAt,
 			&i.AcceptanceCreatedAt,
+			&i.DisputeReason,
+			&i.DisputeCreatedAt,
 		); err != nil {
 			return nil, err
 		}

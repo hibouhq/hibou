@@ -166,8 +166,8 @@ func (q *Queries) GetSnapshotAtDate(ctx context.Context, repoID uuid.UUID, refNa
 func (q *Queries) ListSnapshotsByRef(ctx context.Context, refID uuid.UUID, limit, offset int) ([]Snapshot, int, error) {
 	rows, err := q.db.ListSnapshotsByRef(ctx, dbgen.ListSnapshotsByRefParams{
 		RefID:  refID,
-		Limit:  int32(limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
-		Offset: int32(offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Limit:  int32(limit),  // #nosec G115 -- pagination values are bounded by API parsing.
+		Offset: int32(offset), // #nosec G115 -- pagination values are bounded by API parsing.
 	})
 	if err != nil {
 		return nil, 0, err

@@ -252,7 +252,7 @@
                   to="/settings"
                   @click="isUserMenuOpen = false"
                 >
-                  API Keys
+                  Settings
                 </RouterLink>
                 <button
                   class="flex w-full rounded-xl px-3 py-2 text-left text-sm text-gray-300 transition hover:bg-accent-muted hover:text-white"
@@ -652,7 +652,10 @@ const navSections = computed<NavSection[]>(() => {
     }
   }
 
-  sections.push({ items: [{ label: 'API keys', icon: Settings, to: '/settings' }] })
+  // The personal/instance settings area (/settings): API keys, and for
+  // instance admins also banners, administrators, audit, jobs. Labeled by the
+  // area, not by its first tab.
+  sections.push({ items: [{ label: 'Settings', icon: Settings, to: '/settings' }] })
   return sections
 })
 

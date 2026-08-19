@@ -106,8 +106,8 @@ func (s *Server) handleListVEXStatements(w http.ResponseWriter, r *http.Request)
 	rows, err := s.queries.ListVEXStatementsByRepo(r.Context(), dbgen.ListVEXStatementsByRepoParams{
 		OrgID:  org.ID,
 		RepoID: uuid.NullUUID{UUID: repo.ID, Valid: true},
-		Limit:  int32(pagination.PerPage), //nolint:gosec // G115: pagination is bounded by API parsing.
-		Offset: int32(pagination.Offset),  //nolint:gosec // G115: pagination is bounded by API parsing.
+		Limit:  int32(pagination.PerPage), // #nosec G115 -- pagination is bounded by API parsing.
+		Offset: int32(pagination.Offset),  // #nosec G115 -- pagination is bounded by API parsing.
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list VEX statements")
@@ -237,7 +237,7 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.queries.ListVEXStatementsByRepo(r.Context(), dbgen.ListVEXStatementsByRepoParams{
 		OrgID:  org.ID,
 		RepoID: uuid.NullUUID{UUID: repo.ID, Valid: true},
-		Limit:  int32(total), //nolint:gosec // G115: total row count is bounded by repository statement volume.
+		Limit:  int32(total), // #nosec G115 -- total row count is bounded by repository statement volume.
 		Offset: 0,
 	})
 	if err != nil {

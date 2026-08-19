@@ -105,6 +105,10 @@ type Vulnerability struct {
 	// Acceptance is the ADR-023 decision projection, joined server-side in the
 	// list queries. Nil = open.
 	Acceptance *VulnerabilityAcceptance `json:"acceptance,omitempty"`
+	// Dispute is the ADR-026 override projection: someone contested this
+	// finding's in-source suppression, so it counts as open despite the
+	// scanner's suppressed status. Nil = suppression uncontested.
+	Dispute *VulnerabilityDispute `json:"dispute,omitempty"`
 	// FixedInPRs lists open pull requests whose latest gate run resolves this
 	// fingerprint — it changes the triage decision ("merge #12 instead of
 	// accepting"). Attached by the list/detail handlers, never stored.
@@ -121,6 +125,27 @@ type VulnerabilityAcceptance struct {
 	AcceptedBy       *uuid.UUID `json:"accepted_by,omitempty"`
 	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
+}
+
+// VulnerabilityDispute is the dispute as projected onto a finding row
+// (ADR-026): just enough for the list badge and its tooltip.
+type VulnerabilityDispute struct {
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// disputeFromNullable assembles the projection from the LEFT JOIN's nullable
+// columns; a NULL reason means no dispute row matched (reason is NOT NULL on
+// the table, so a present row always carries one).
+func disputeFromNullable(reason sql.NullString, createdAt sql.NullTime) *VulnerabilityDispute {
+	if !reason.Valid {
+		return nil
+	}
+	dispute := &VulnerabilityDispute{Reason: reason.String}
+	if createdAt.Valid {
+		dispute.CreatedAt = createdAt.Time
+	}
+	return dispute
 }
 
 // acceptanceFromNullable assembles the projection from the LEFT JOIN's
@@ -192,8 +217,8 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 	}
 	params := dbgen.ListVulnerabilitiesBySnapshotParams{
 		SnapshotID: snapshotID,
-		Limit:      int32(opts.Limit),  //nolint:gosec // G115: pagination values are bounded by API parsing.
-		Offset:     int32(opts.Offset), //nolint:gosec // G115: pagination values are bounded by API parsing.
+		Limit:      int32(opts.Limit),  // #nosec G115 -- pagination values are bounded by API parsing.
+		Offset:     int32(opts.Offset), // #nosec G115 -- pagination values are bounded by API parsing.
 		Statuses:   statuses,
 		Types:      normalizeStringFilters(opts.Types),
 		Severities: normalizeStringFilters(opts.Severities),
@@ -214,6 +239,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 	for i, row := range rows {
 		vulnerability := vulnerabilityFromRow(row.Vulnerability)
 		vulnerability.Acceptance = acceptanceFromNullable(row.AcceptanceReasonKind, row.AcceptanceReason, row.AcceptanceLabels, row.AcceptanceVexJustification, row.AcceptanceAcceptedBy, row.AcceptanceExpiresAt, row.AcceptanceCreatedAt)
+		vulnerability.Dispute = disputeFromNullable(row.DisputeReason, row.DisputeCreatedAt)
 		vulnerabilities[i] = *vulnerability
 	}
 
@@ -278,10 +304,10 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 
 	sort := normalizeVulnerabilitySort(opts.Sort)
 	sortParam := addArg(sort)
-	limitParam := addArg(int32(opts.Limit))   //nolint:gosec // G115: pagination values bounded by API parsing.
-	offsetParam := addArg(int32(opts.Offset)) //nolint:gosec // G115: pagination values bounded by API parsing.
+	limitParam := addArg(int32(opts.Limit))   // #nosec G115 -- pagination values bounded by API parsing.
+	offsetParam := addArg(int32(opts.Offset)) // #nosec G115 -- pagination values bounded by API parsing.
 
-	//nolint:gosec // G201: validated sort + positional parameters only.
+	// #nosec G201 -- validated sort + positional parameters only.
 	listSQL := fmt.Sprintf("SELECT %s FROM vulnerabilities\nWHERE %s\n%s\nLIMIT $%d OFFSET $%d",
 		vulnerabilitySelectColumns, where, vulnerabilityOrderByClause(sortParam), limitParam, offsetParam)
 
@@ -329,7 +355,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshotDynamic(ctx context.Context, snap
 	// The acceptance LEFT JOIN (ADR-023) rides the (repo_id, fingerprint)
 	// unique index; filterquery conditions may reference the fa alias
 	// (acceptance:/label: qualifiers), so the count shares the join.
-	//nolint:gosec // G201: query uses validated sort input and positional parameters.
+	// #nosec G201 -- query uses validated sort input and positional parameters.
 	listSQL := fmt.Sprintf(`SELECT v.*, %s FROM vulnerabilities v
 %s
 WHERE %s
@@ -453,7 +479,7 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 
 	facetMap := func(exclude, column, extraWhere, extra string) (map[string]int, error) {
 		where, args := buildConds(exclude)
-		//nolint:gosec // G201: `column`/`extraWhere`/`fromClause` are constant fragments; all filter values use positional params.
+		// #nosec G201 -- `column`/`extraWhere`/`fromClause` are constant fragments; all filter values use positional params.
 		query := fmt.Sprintf("SELECT %s::text AS k, COUNT(*)::bigint FROM %s WHERE %s%s GROUP BY %s%s", column, fromClause, where, extraWhere, column, extra)
 		rows, err := q.sqlDB.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -670,14 +696,16 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 	}
 }
 
-const acceptanceProjectionColumns = "fa.reason_kind, fa.reason, fa.labels, fa.vex_justification, fa.accepted_by, fa.expires_at, fa.created_at"
+const acceptanceProjectionColumns = "fa.reason_kind, fa.reason, fa.labels, fa.vex_justification, fa.accepted_by, fa.expires_at, fa.created_at, fd.reason, fd.created_at"
 
 const acceptanceJoinClause = `LEFT JOIN finding_acceptances fa
   ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
-  AND (fa.expires_at IS NULL OR fa.expires_at > now())`
+  AND (fa.expires_at IS NULL OR fa.expires_at > now())
+LEFT JOIN finding_disputes fd
+  ON fd.repo_id = v.repo_id AND fd.fingerprint = v.fingerprint`
 
 // scanVulnerabilityWithAcceptance scans v.* (physical column order) plus the
-// acceptance projection appended by the dynamic list query.
+// acceptance and dispute projections appended by the dynamic list query.
 func scanVulnerabilityWithAcceptance(scanner interface {
 	Scan(dest ...interface{}) error
 }) (*Vulnerability, error) {
@@ -688,15 +716,18 @@ func scanVulnerabilityWithAcceptance(scanner interface {
 	var justification dbgen.NullVexJustification
 	var acceptedBy uuid.NullUUID
 	var expiresAt, createdAt sql.NullTime
+	var disputeReason sql.NullString
+	var disputeCreatedAt sql.NullTime
 
 	dest := vulnerabilityScanDest(&row)
-	dest = append(dest, &reasonKind, &reason, pq.Array(&labels), &justification, &acceptedBy, &expiresAt, &createdAt)
+	dest = append(dest, &reasonKind, &reason, pq.Array(&labels), &justification, &acceptedBy, &expiresAt, &createdAt, &disputeReason, &disputeCreatedAt)
 	if err := scanner.Scan(dest...); err != nil {
 		return nil, err
 	}
 
 	vulnerability := vulnerabilityFromRow(row)
 	vulnerability.Acceptance = acceptanceFromNullable(reasonKind, reason, labels, justification, acceptedBy, expiresAt, createdAt)
+	vulnerability.Dispute = disputeFromNullable(disputeReason, disputeCreatedAt)
 	return vulnerability, nil
 }
 
@@ -988,6 +1019,11 @@ type FindingTransition struct {
 	Status         string    `json:"status"`
 	PreviousStatus string    `json:"previous_status,omitempty"`
 	Severity       string    `json:"severity,omitempty"`
+	// SuppressionJustification is the in-source justification the scanner
+	// extracted (SARIF suppressions[].justification — e.g. the text after
+	// `#nosec G115 --`). Non-empty only on observations whose status is
+	// suppressed.
+	SuppressionJustification string `json:"suppression_justification,omitempty"`
 }
 
 // GetFindingFirstObservation returns the oldest observation of a fingerprint on
@@ -1018,7 +1054,7 @@ func (q *Queries) ListFindingTransitions(ctx context.Context, repoID uuid.UUID, 
 	rows, err := q.db.ListFindingTransitions(ctx, dbgen.ListFindingTransitionsParams{
 		RepoID:      repoID,
 		Fingerprint: fingerprint,
-		RowLimit:    int32(limit), //nolint:gosec // G115: limit is a small server-side constant.
+		RowLimit:    int32(limit), // #nosec G115 -- limit is a small server-side constant.
 	})
 	if err != nil {
 		return nil, err
@@ -1026,13 +1062,14 @@ func (q *Queries) ListFindingTransitions(ctx context.Context, repoID uuid.UUID, 
 	out := make([]FindingTransition, len(rows))
 	for i, row := range rows {
 		out[i] = FindingTransition{
-			RefName:        row.RefName,
-			RefType:        row.RefType,
-			CommitSHA:      row.CommitSha,
-			ObservedAt:     row.ObservedAt,
-			Status:         row.Status,
-			PreviousStatus: row.PreviousStatus,
-			Severity:       row.Severity,
+			RefName:                  row.RefName,
+			RefType:                  row.RefType,
+			CommitSHA:                row.CommitSha,
+			ObservedAt:               row.ObservedAt,
+			Status:                   row.Status,
+			PreviousStatus:           row.PreviousStatus,
+			Severity:                 row.Severity,
+			SuppressionJustification: row.SuppressionJustification,
 		}
 	}
 	return out, nil

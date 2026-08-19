@@ -378,6 +378,98 @@ export interface InstanceAuditLogEntry extends AuditLogEntry {
   org_slug?: string
 }
 
+// ADR-025 instance jobs observability. Kinds: secret_scan,
+// artifact_processing, advisory_scan. Statuses: queued, running, complete,
+// failed, cancelled.
+export interface InstanceJobKindCounts {
+  kind: string
+  queued: number
+  running: number
+  completed_24h: number
+  failed_24h: number
+  oldest_queued_at?: string
+}
+
+// One replica in the worker registry. Resource numbers are self-reported and
+// process-level (not cgroup limits). running_jobs is derived from the claim
+// columns; active_jobs is the replica's own report.
+export interface InstanceWorker {
+  id: string
+  hostname: string
+  pid: number
+  version?: string
+  loops: string[]
+  started_at: string
+  last_heartbeat_at: string
+  stopped_at?: string
+  cpu_percent?: number
+  memory_rss_bytes?: number
+  heap_alloc_bytes?: number
+  goroutines?: number
+  gomaxprocs?: number
+  active_jobs: number
+  running_jobs: number
+  status: 'online' | 'stale' | 'stopped'
+}
+
+export interface InstanceJobsOverview {
+  kinds: InstanceJobKindCounts[]
+  workers: InstanceWorker[]
+  heartbeat_interval_seconds: number
+}
+
+export interface InstanceJobRun {
+  kind: string
+  id: string
+  label: string
+  detail?: string
+  status: string
+  queued_at: string
+  started_at?: string
+  finished_at?: string
+  worker_id?: string
+  attempts: number
+  error?: string
+}
+
+export interface InstanceJobsTimeline {
+  window: string
+  since: string
+  runs: InstanceJobRun[]
+  max_rows: number
+  truncated: boolean
+}
+
+export interface InstanceJobStatsBucket {
+  kind: string
+  bucket: string
+  completed: number
+  failed: number
+  p50_duration_seconds: number
+  p95_duration_seconds: number
+  p50_wait_seconds: number
+  p95_wait_seconds: number
+}
+
+export interface InstanceJobBaseline {
+  kind: string
+  samples: number
+  p50_duration_seconds: number
+  p95_duration_seconds: number
+  p50_wait_seconds: number
+  p95_wait_seconds: number
+}
+
+export interface InstanceJobsStats {
+  window: string
+  since: string
+  bucket_seconds: number
+  buckets: InstanceJobStatsBucket[]
+  baselines: InstanceJobBaseline[]
+}
+
+export type InstanceJobsWindow = '1h' | '6h' | '24h' | '7d'
+
 export interface OrgSettings {
   vex_auto_propagate: boolean
   vex_reachability_analysis: boolean
@@ -461,6 +553,8 @@ export interface Vulnerability {
   origin_owner_id?: string
   // Server-side acceptance projection (ADR-023); absent = open.
   acceptance?: FindingAcceptance
+  // Server-side dispute projection (ADR-026); absent = suppression uncontested.
+  dispute?: FindingDispute
   metadata?: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -557,6 +651,7 @@ export interface FindingDetail {
   finding: Vulnerability
   advisory?: FindingAdvisory
   acceptance?: FindingAcceptance
+  dispute?: FindingDispute
   vex?: Array<{ status: string; justification?: string; source: string; statement?: string }>
   occurrences: Array<{ ref_name: string; ref_type: string; commit_sha: string; snapshot_at: string; status: string }>
 }
@@ -670,6 +765,17 @@ export interface FindingAcceptance {
   vex_justification?: VexJustification
   accepted_by?: string
   expires_at?: string
+  created_at?: string
+}
+
+// ADR-026: the human-axis override for an in-source suppression. Row exists =
+// the suppression is contested and the finding counts as open again.
+export interface FindingDispute {
+  id?: string
+  repo_id?: string
+  fingerprint?: string
+  reason: string
+  disputed_by?: string
   created_at?: string
 }
 
@@ -1918,6 +2024,22 @@ class ApiClient {
     )
   }
 
+  // ADR-026: contest an in-source suppression — the finding counts as open
+  // until the directive is removed or the dispute withdrawn.
+  setFindingDispute(provider: string, slug: string, repoSlug: string, vulnID: string, reason: string) {
+    return this.request<ApiResponse<FindingDispute>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/dispute`,
+      { method: 'PUT', body: JSON.stringify({ reason }) },
+    )
+  }
+
+  deleteFindingDispute(provider: string, slug: string, repoSlug: string, vulnID: string) {
+    return this.request<ApiResponse<{ status: string }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/dispute`,
+      { method: 'DELETE' },
+    )
+  }
+
   // Secrets never auto-resolve (ADR-023): resolution is a human attestation
   // that the credential was revoked and rotated.
   attestSecretRevocation(provider: string, slug: string, repoSlug: string, vulnID: string, comment: string) {
@@ -2146,6 +2268,22 @@ class ApiClient {
     }
     const suffix = query.size > 0 ? `?${query.toString()}` : ''
     return this.request<PaginatedResponse<InstanceAuditLogEntry>>(`/instance/audit-logs${suffix}`)
+  }
+
+  // Instance admin only: queue counters per job kind plus the worker fleet.
+  getInstanceJobsOverview() {
+    return this.request<ApiResponse<InstanceJobsOverview>>('/instance/jobs/overview')
+  }
+
+  // Instance admin only: job runs overlapping the window, newest first.
+  getInstanceJobsTimeline(window: InstanceJobsWindow) {
+    return this.request<ApiResponse<InstanceJobsTimeline>>(`/instance/jobs/timeline?window=${window}`)
+  }
+
+  // Instance admin only: bucketed throughput/latency stats plus the
+  // trailing-7-day baseline used for degradation badges.
+  getInstanceJobsStats(window: InstanceJobsWindow) {
+    return this.request<ApiResponse<InstanceJobsStats>>(`/instance/jobs/stats?window=${window}`)
   }
 
   // Instance admin only: the full banner list, enabled or not.

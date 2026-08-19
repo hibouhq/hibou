@@ -154,6 +154,37 @@
                 </FindingSection>
 
                 <FindingSection
+                  v-if="detail.finding.status === 'suppressed'"
+                  title="Suppressed in source"
+                  boxed
+                >
+                  <p class="text-sm text-gray-200">
+                    The scanner excludes this finding: a suppression directive is in the code<template v-if="detail.finding.file_path">
+                      at <span class="font-mono text-xs">{{ detail.finding.file_path }}<template v-if="detail.finding.start_line">:{{ detail.finding.start_line }}</template></span>
+                    </template>.
+                  </p>
+                  <p
+                    v-if="suppressionJustification"
+                    class="mt-1 text-sm text-gray-300"
+                  >
+                    “{{ suppressionJustification }}”
+                  </p>
+                  <p class="mt-2 text-xs text-gray-500">
+                    It cannot be reopened from here — remove the directive and rescan to reopen it. If the suppression is wrong, dispute it below: the finding then counts as open until the directive is removed or the dispute withdrawn.
+                  </p>
+                  <p
+                    v-if="detail.dispute"
+                    class="mt-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
+                  >
+                    Disputed — {{ detail.dispute.reason }}
+                    <span
+                      v-if="detail.dispute.created_at"
+                      class="text-xs opacity-75"
+                    > · {{ formatDate(detail.dispute.created_at) }}</span>
+                  </p>
+                </FindingSection>
+
+                <FindingSection
                   v-if="detail.acceptance"
                   title="Decision"
                   boxed
@@ -290,7 +321,62 @@
           <!-- Actions: the same Accept ▾ / Reopen as the row — one implementation -->
           <footer class="shrink-0 border-t border-surface-border-subtle px-6 py-3">
             <div class="flex flex-wrap items-center gap-2">
-              <template v-if="detail.acceptance">
+              <!-- A scanner suppression has its own verbs (ADR-026): the code
+                   owns the state, so triage offers dispute/withdraw, never
+                   accept or reopen. -->
+              <template v-if="detail.finding.status === 'suppressed'">
+                <template v-if="detail.dispute">
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    :disabled="disputeBusy"
+                    title="Accept the in-source suppression again: the finding stops counting against the gate"
+                    @click="withdrawDispute"
+                  >
+                    Withdraw dispute
+                  </button>
+                </template>
+                <template v-else-if="disputeFormOpen">
+                  <input
+                    v-model="disputeReason"
+                    type="text"
+                    class="w-64 rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-accent/50 focus:outline-none"
+                    placeholder="Why is this suppression wrong?"
+                    @keyup.enter="submitDispute"
+                    @keyup.esc="disputeFormOpen = false"
+                  >
+                  <button
+                    type="button"
+                    class="rounded-lg border border-danger/40 bg-danger/10 px-3 py-1.5 text-xs text-danger transition hover:bg-danger/20 disabled:opacity-50"
+                    :disabled="disputeBusy || !disputeReason.trim()"
+                    @click="submitDispute"
+                  >
+                    Dispute
+                  </button>
+                  <button
+                    type="button"
+                    class="px-2 py-1.5 text-xs text-gray-500 transition hover:text-gray-300"
+                    @click="disputeFormOpen = false"
+                  >
+                    Cancel
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-danger/50 hover:text-danger"
+                    title="Contest the in-source suppression: the finding counts as open until the directive is removed or the dispute withdrawn"
+                    @click="disputeFormOpen = true"
+                  >
+                    Dispute suppression…
+                  </button>
+                </template>
+                <span
+                  v-if="disputeError"
+                  class="text-xs text-danger"
+                >{{ disputeError }}</span>
+              </template>
+              <template v-else-if="detail.acceptance">
                 <button
                   type="button"
                   class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
@@ -340,7 +426,7 @@ import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from '
 
 import { X } from 'lucide-vue-next'
 
-import { api, type AcceptanceReasonKind, type FindingDetail, type Repository, type Vulnerability } from '@/api/client'
+import { api, type AcceptanceReasonKind, type FindingDetail, type FindingDispute, type Repository, type Vulnerability } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import CodeFindingDetails from '@/components/finding/CodeFindingDetails.vue'
@@ -373,6 +459,9 @@ const emit = defineEmits<{
   accept: [kind: AcceptanceReasonKind, finding: Vulnerability]
   reopen: [fingerprint: string]
   revoke: [finding: Vulnerability]
+  // ADR-026: the dispute is written by the modal itself (it owns the inline
+  // reason form); the event lets the list behind it patch its row's badge.
+  disputed: [fingerprint: string, dispute: FindingDispute | null]
   navigate: [delta: number]
 }>()
 
@@ -389,7 +478,55 @@ const loading = ref(true)
 const error = ref('')
 const tab = ref<TabKey>('overview')
 
-const state = computed(() => triageState(detail.value?.finding ?? { status: '' }, detail.value?.acceptance))
+const state = computed(() => triageState(detail.value?.finding ?? { status: '' }, detail.value?.acceptance, new Date(), detail.value?.dispute))
+
+// The in-source justification the scanner extracted (SARIF
+// suppressions[].justification), carried on the finding's metadata by the
+// ingest — e.g. the text after `#nosec G115 --`.
+const suppressionJustification = computed(() => {
+  const suppression = detail.value?.finding.metadata?.suppression
+  if (!suppression || typeof suppression !== 'object') return ''
+  const justification = (suppression as Record<string, unknown>).justification
+  return typeof justification === 'string' ? justification.trim() : ''
+})
+
+const disputeFormOpen = ref(false)
+const disputeReason = ref('')
+const disputeBusy = ref(false)
+const disputeError = ref('')
+
+async function submitDispute() {
+  const reason = disputeReason.value.trim()
+  if (!reason || disputeBusy.value || !detail.value) return
+  disputeBusy.value = true
+  disputeError.value = ''
+  try {
+    const res = await api.setFindingDispute(props.provider, props.slug, props.repoSlug, detail.value.finding.id, reason)
+    disputeFormOpen.value = false
+    disputeReason.value = ''
+    emit('disputed', props.fingerprint, res.data ?? { reason })
+    await load()
+  } catch (err) {
+    disputeError.value = err instanceof Error ? err.message : 'Failed to dispute the suppression'
+  } finally {
+    disputeBusy.value = false
+  }
+}
+
+async function withdrawDispute() {
+  if (disputeBusy.value || !detail.value) return
+  disputeBusy.value = true
+  disputeError.value = ''
+  try {
+    await api.deleteFindingDispute(props.provider, props.slug, props.repoSlug, detail.value.finding.id)
+    emit('disputed', props.fingerprint, null)
+    await load()
+  } catch (err) {
+    disputeError.value = err instanceof Error ? err.message : 'Failed to withdraw the dispute'
+  } finally {
+    disputeBusy.value = false
+  }
+}
 const componentBacked = computed(() => isComponentBacked(detail.value?.finding?.type))
 const identifier = computed(() => detail.value?.finding.primary_identifier_value || detail.value?.finding.scanner_name || '')
 const identifierUrl = computed(() => advisoryUrl(detail.value?.advisory?.canonical_id || identifier.value))
