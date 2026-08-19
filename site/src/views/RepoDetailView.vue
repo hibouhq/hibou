@@ -124,16 +124,6 @@
               <GitPullRequest class="h-3.5 w-3.5" />
               PR Review
             </RouterLink>
-            <a
-              v-if="repo.html_url"
-              :href="repo.html_url"
-              target="_blank"
-              rel="noopener"
-              class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
-            >
-              <ExternalLink class="h-3.5 w-3.5" />
-              <span class="hidden sm:inline">Open on forge</span>
-            </a>
           </div>
         </div>
       </div>

@@ -1,405 +1,477 @@
 <template>
-  <section class="space-y-6">
-    <div class="rounded-3xl border border-surface-border bg-surface-raised p-6 shadow-[0_24px_80px_-48px_rgba(0,0,0,0.9)]">
+  <div class="pb-8">
+    <div
+      v-if="loading"
+      class="py-8 text-sm text-gray-500"
+    >
+      Loading client details…
+    </div>
+
+    <template v-else>
       <div
-        v-if="loading"
-        class="text-sm text-gray-500"
+        v-if="error"
+        class="rounded-md border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
       >
-        Loading client details...
+        {{ error }}
       </div>
 
-      <template v-else>
-        <div
-          v-if="error"
-          class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
-        >
-          {{ error }}
-        </div>
-
-        <div
-          v-if="client"
-          :class="['space-y-6', error ? 'mt-6' : '']"
-        >
-          <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-                Client
-              </p>
-              <h1 class="mt-2 text-3xl font-semibold tracking-tight text-white">
-                {{ client.name }}
-              </h1>
-              <div class="mt-3 flex flex-wrap items-center gap-3">
-                <span
-                  :class="clientTypeClass(client.client_type)"
-                  class="rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]"
-                >
-                  {{ client.client_type }}
-                </span>
-                <span
-                  :class="activeVersionBadgeClass"
-                  class="rounded-full px-4 py-1.5 text-sm font-medium tracking-[0.08em]"
-                >
-                  {{ activeVersion ? `Active ${activeVersion}` : 'No active version' }}
-                </span>
-              </div>
-              <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-400">
-                <span>{{ client.contact_name || 'No contact owner' }}</span>
-                <span>{{ client.contact_email || 'No contact email' }}</span>
-              </div>
-              <div class="mt-4 flex flex-wrap gap-2">
-                <template v-if="clientLabelEntries(client).length > 0">
-                  <span
-                    v-for="[key, value] in clientLabelEntries(client)"
-                    :key="`header-${key}`"
-                    class="inline-flex max-w-full items-center gap-2 rounded-full border border-surface-border bg-surface-overlay px-3 py-1.5 text-sm text-gray-300"
-                  >
-                    <span class="font-medium text-gray-100">{{ key }}:</span>
-                    <a
-                      v-if="isSafeUrl(value)"
-                      :href="value"
-                      class="truncate text-accent transition hover:text-white hover:underline"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {{ value }}
-                    </a>
-                    <span
-                      v-else
-                      class="truncate"
-                    >
-                      {{ value }}
-                    </span>
-                  </span>
-                </template>
-                <p
-                  v-else
-                  class="text-sm text-gray-500"
-                >
-                  No labels configured for this client.
-                </p>
-              </div>
+      <template v-if="client">
+        <!-- Header (GitHub-style, matches repo/org detail) -->
+        <div class="flex flex-wrap items-start justify-between gap-3 pt-1">
+          <div class="min-w-0">
+            <h1 class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xl">
+              <Building2 class="h-5 w-5 shrink-0 text-gray-500" />
+              <RouterLink
+                :to="`/orgs/${provider}/${slug}`"
+                class="text-accent transition hover:underline"
+              >
+                {{ slug }}
+              </RouterLink>
+              <span class="text-gray-600">/</span>
+              <RouterLink
+                :to="`/orgs/${provider}/${slug}/clients`"
+                class="text-accent transition hover:underline"
+              >
+                clients
+              </RouterLink>
+              <span class="text-gray-600">/</span>
+              <span class="font-semibold text-white">{{ client.name }}</span>
+              <span
+                class="ml-1 rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize"
+                :class="client.client_type === 'internal' ? 'border-amber-500/40 text-amber-300' : 'border-sky-500/40 text-sky-300'"
+              >
+                {{ client.client_type }}
+              </span>
+            </h1>
+            <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
+              <span
+                v-if="client.contact_name"
+                class="inline-flex items-center gap-1.5"
+              >
+                <UserRound class="h-3.5 w-3.5 text-gray-500" />
+                {{ client.contact_name }}
+              </span>
+              <a
+                v-if="client.contact_email"
+                :href="`mailto:${client.contact_email}`"
+                class="inline-flex items-center gap-1.5 font-mono text-xs text-gray-400 transition hover:text-accent"
+              >
+                <Mail class="h-3.5 w-3.5 text-gray-500" />
+                {{ client.contact_email }}
+              </a>
+              <span
+                v-if="!client.contact_name && !client.contact_email"
+                class="text-gray-600"
+              >No contact configured</span>
             </div>
-
-            <button
-              class="inline-flex items-center justify-center rounded-2xl border border-surface-border bg-surface-overlay px-4 py-2.5 text-sm text-gray-300 transition hover:border-accent/50 hover:text-white"
-              type="button"
-              @click="showDeploymentForm = !showDeploymentForm"
+            <div
+              v-if="clientLabelEntries(client).length > 0"
+              class="mt-2.5 flex flex-wrap gap-1.5"
             >
-              {{ showDeploymentForm ? 'Cancel' : 'New Deployment' }}
-            </button>
+              <span
+                v-for="[key, value] in clientLabelEntries(client)"
+                :key="`label-${key}`"
+                class="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-overlay px-2 py-0.5 text-[11px] text-gray-300"
+              >
+                <span class="font-medium text-gray-200">{{ key }}:</span>
+                <a
+                  v-if="isSafeUrl(value)"
+                  :href="value"
+                  class="truncate text-accent transition hover:underline"
+                  target="_blank"
+                  rel="noreferrer"
+                >{{ value }}</a>
+                <span
+                  v-else
+                  class="truncate"
+                >{{ value }}</span>
+              </span>
+            </div>
           </div>
 
-          <section
-            v-if="showDeploymentForm"
-            class="rounded-3xl border border-surface-border-subtle bg-surface-overlay/70 p-5"
+          <button
+            class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90"
+            type="button"
+            @click="showDeploymentForm = !showDeploymentForm"
           >
-            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <label class="space-y-2 text-sm text-gray-300">
-                <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Repository</span>
-                <select
-                  v-model="deploymentForm.repoSlug"
-                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
-                >
-                  <option value="">Select repository</option>
-                  <option
-                    v-for="repo in repos"
-                    :key="repo.id"
-                    :value="repo.slug"
-                  >{{ repo.name }}</option>
-                </select>
-              </label>
+            <Plus
+              class="h-3.5 w-3.5 transition-transform"
+              :class="showDeploymentForm ? 'rotate-45' : ''"
+            />
+            {{ showDeploymentForm ? 'Cancel' : 'New deployment' }}
+          </button>
+        </div>
 
-              <label class="space-y-2 text-sm text-gray-300">
-                <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Release</span>
-                <select
-                  v-model="deploymentForm.releaseId"
-                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
-                >
-                  <option value="">Select release</option>
-                  <option
-                    v-for="release in releases"
-                    :key="release.id"
-                    :value="release.id"
-                  >{{ release.version }}</option>
-                </select>
-              </label>
-
-              <label class="space-y-2 text-sm text-gray-300">
-                <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Environment</span>
-                <input
-                  v-model="deploymentForm.environment"
-                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
-                  type="text"
-                >
-              </label>
-
-              <label class="space-y-2 text-sm text-gray-300">
-                <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Deployed By</span>
-                <input
-                  v-model="deploymentForm.deployedBy"
-                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
-                  type="text"
-                >
-              </label>
-            </div>
-
-            <div class="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_220px_auto]">
-              <label class="space-y-2 text-sm text-gray-300">
-                <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Notes</span>
-                <input
-                  v-model="deploymentForm.notes"
-                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
-                  type="text"
-                >
-              </label>
-
-              <label class="space-y-2 text-sm text-gray-300">
-                <span class="block text-xs uppercase tracking-[0.2em] text-gray-500">Deployed At</span>
-                <input
-                  v-model="deploymentForm.deployedAt"
-                  class="w-full rounded-2xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-100"
-                  type="datetime-local"
-                >
-              </label>
-
-              <button
-                class="mt-auto rounded-2xl border border-accent/30 bg-accent-muted px-5 py-3 text-sm font-medium text-accent transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                type="button"
-                :disabled="submittingDeployment"
-                @click="createDeployment"
+        <!-- Deployment form (compact, matches ClientsTab create form) -->
+        <section
+          v-if="showDeploymentForm"
+          class="mt-4 rounded-md border border-surface-border bg-surface-raised p-4"
+        >
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="flex flex-col gap-1.5">
+              <label
+                class="text-xs font-medium text-gray-300"
+                for="deploy-repo"
+              >Repository</label>
+              <select
+                id="deploy-repo"
+                v-model="deploymentForm.repoSlug"
+                class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 text-sm text-gray-200 focus:border-accent/50 focus:outline-none"
               >
-                {{ submittingDeployment ? 'Deploying...' : 'Create Deployment' }}
-              </button>
+                <option value="">
+                  Select repository
+                </option>
+                <option
+                  v-for="repo in repos"
+                  :key="repo.id"
+                  :value="repo.slug"
+                >
+                  {{ repo.name }}
+                </option>
+              </select>
             </div>
-
+            <div class="flex flex-col gap-1.5">
+              <label
+                class="text-xs font-medium text-gray-300"
+                for="deploy-release"
+              >Release</label>
+              <select
+                id="deploy-release"
+                v-model="deploymentForm.releaseId"
+                :disabled="!deploymentForm.repoSlug"
+                class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 font-mono text-sm text-gray-200 focus:border-accent/50 focus:outline-none disabled:opacity-50"
+              >
+                <option value="">
+                  Select release
+                </option>
+                <option
+                  v-for="release in releases"
+                  :key="release.id"
+                  :value="release.id"
+                >
+                  {{ release.version }}
+                </option>
+              </select>
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label
+                class="text-xs font-medium text-gray-300"
+                for="deploy-environment"
+              >Environment</label>
+              <input
+                id="deploy-environment"
+                v-model="deploymentForm.environment"
+                class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 font-mono text-sm text-gray-200 focus:border-accent/50 focus:outline-none"
+                type="text"
+                placeholder="production"
+              >
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label
+                class="text-xs font-medium text-gray-300"
+                for="deploy-by"
+              >Deployed by</label>
+              <input
+                id="deploy-by"
+                v-model="deploymentForm.deployedBy"
+                class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 text-sm text-gray-200 focus:border-accent/50 focus:outline-none"
+                type="text"
+              >
+            </div>
+            <div class="flex flex-col gap-1.5 sm:col-span-2">
+              <label
+                class="text-xs font-medium text-gray-300"
+                for="deploy-notes"
+              >Notes</label>
+              <input
+                id="deploy-notes"
+                v-model="deploymentForm.notes"
+                class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 text-sm text-gray-200 focus:border-accent/50 focus:outline-none"
+                type="text"
+              >
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label
+                class="text-xs font-medium text-gray-300"
+                for="deploy-at"
+              >Deployed at</label>
+              <input
+                id="deploy-at"
+                v-model="deploymentForm.deployedAt"
+                class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 text-sm text-gray-200 focus:border-accent/50 focus:outline-none"
+                type="datetime-local"
+              >
+            </div>
+          </div>
+          <div class="mt-4 flex items-center gap-3">
+            <button
+              class="rounded-md bg-ok-muted px-3 py-1.5 text-sm font-medium text-white transition hover:bg-ok-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              :disabled="submittingDeployment"
+              @click="createDeployment"
+            >
+              {{ submittingDeployment ? 'Deploying…' : 'Create deployment' }}
+            </button>
             <p
               v-if="deploymentError"
-              class="mt-3 text-sm text-danger"
+              class="text-sm text-danger"
             >
               {{ deploymentError }}
             </p>
-          </section>
+          </div>
+        </section>
 
-          <section class="grid gap-4 md:grid-cols-2">
-            <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
-              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-                Labels
-              </p>
-              <div
-                v-if="clientLabelEntries(client).length > 0"
-                class="mt-3 space-y-2 text-sm text-gray-300"
-              >
-                <div
-                  v-for="[key, value] in clientLabelEntries(client)"
-                  :key="`card-${key}`"
-                  class="flex flex-wrap items-start gap-2"
-                >
-                  <span class="font-medium text-gray-100">{{ key }}:</span>
-                  <a
-                    v-if="isSafeUrl(value)"
-                    :href="value"
-                    class="break-all text-accent transition hover:text-white hover:underline"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {{ value }}
-                  </a>
-                  <span
-                    v-else
-                    class="break-all"
-                  >
-                    {{ value }}
-                  </span>
-                </div>
-              </div>
-              <div
-                v-else
-                class="mt-2 text-sm text-gray-500"
-              >
-                No labels
-              </div>
+        <!-- Stat rail (org-dashboard style) -->
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="rounded-md border border-surface-border bg-surface-raised px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.14em] text-gray-500">
+              Active version
+            </p>
+            <p
+              class="mt-1 truncate font-mono text-xl font-semibold"
+              :class="activeVersion ? 'text-emerald-300' : 'text-gray-600'"
+            >
+              {{ activeVersion || 'none' }}
+            </p>
+          </div>
+          <div class="rounded-md border border-surface-border bg-surface-raised px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.14em] text-gray-500">
+              Open vulnerabilities
+            </p>
+            <div class="mt-1 flex items-baseline gap-2.5">
+              <span
+                class="text-xl font-semibold"
+                :class="impact.length > 0 ? 'text-white' : 'text-gray-600'"
+              >{{ impact.length }}</span>
+              <span
+                v-for="(count, severity) in impactSeverityCounts"
+                :key="severity"
+                class="text-xs font-medium"
+                :class="severityTextClass(severity)"
+              >{{ count }} {{ severity }}</span>
             </div>
-            <div class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/70 p-4">
-              <p class="text-xs uppercase tracking-[0.2em] text-gray-500">
-                Client Type
-              </p>
-              <div class="mt-2">
-                <span
-                  :class="clientTypeClass(client.client_type)"
-                  class="rounded-full px-3 py-1 text-xs font-medium uppercase tracking-[0.16em]"
-                >
-                  {{ client.client_type }}
-                </span>
-              </div>
+          </div>
+          <div class="rounded-md border border-surface-border bg-surface-raised px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.14em] text-gray-500">
+              Deployments
+            </p>
+            <p
+              class="mt-1 text-xl font-semibold"
+              :class="deployments.length > 0 ? 'text-white' : 'text-gray-600'"
+            >
+              {{ deployments.length }}
+            </p>
+          </div>
+          <div class="rounded-md border border-surface-border bg-surface-raised px-4 py-3">
+            <p class="text-[11px] uppercase tracking-[0.14em] text-gray-500">
+              Environments
+            </p>
+            <div class="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <span
+                class="text-xl font-semibold"
+                :class="environments.length > 0 ? 'text-white' : 'text-gray-600'"
+              >{{ environments.length }}</span>
+              <span
+                v-for="environment in environments"
+                :key="environment"
+                class="rounded-full bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-gray-300"
+              >{{ environment }}</span>
             </div>
-          </section>
+          </div>
         </div>
 
-        <div
-          v-else-if="!error"
-          class="text-sm text-gray-500"
-        >
-          Client not found.
-        </div>
+        <!-- Impact analysis -->
+        <section class="mt-6">
+          <div class="flex items-baseline justify-between">
+            <h2 class="text-base font-semibold text-white">
+              Impact analysis
+            </h2>
+            <span class="text-xs text-gray-500">Vulnerabilities affecting active deployments</span>
+          </div>
+          <div
+            v-if="impactLoading"
+            class="mt-3 text-sm text-gray-500"
+          >
+            Loading impact analysis…
+          </div>
+          <div
+            v-else-if="impact.length === 0"
+            class="mt-3 rounded-md border border-dashed border-surface-border px-6 py-8 text-center"
+          >
+            <ShieldCheck class="mx-auto h-7 w-7 text-emerald-500/60" />
+            <p class="mt-2 text-sm text-gray-400">
+              No open vulnerabilities reach this client's active deployments.
+            </p>
+          </div>
+          <div
+            v-else
+            class="mt-3 overflow-hidden rounded-md border border-surface-border"
+          >
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
+                <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.14em] text-gray-500">
+                  <tr>
+                    <th class="px-4 py-2.5 font-medium">
+                      Severity
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Advisory
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Component
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Release
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-surface-border-subtle">
+                  <tr
+                    v-for="item in impact"
+                    :key="`${item.canonical_id}-${item.component_name}-${item.release_version}`"
+                    class="transition hover:bg-surface-overlay/50"
+                  >
+                    <td class="px-4 py-2.5">
+                      <span :class="['rounded-full px-2 py-0.5 text-[11px] font-medium', severityClass(item.severity)]">{{ item.severity }}</span>
+                    </td>
+                    <td class="px-4 py-2.5 font-mono text-xs">
+                      <a
+                        v-if="advisoryUrl(item.canonical_id)"
+                        :href="advisoryUrl(item.canonical_id)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-accent transition hover:underline"
+                      >{{ item.canonical_id }}</a>
+                      <span
+                        v-else
+                        class="text-gray-300"
+                      >{{ item.canonical_id }}</span>
+                    </td>
+                    <td class="px-4 py-2.5 text-gray-300">
+                      {{ item.component_name }}
+                    </td>
+                    <td class="px-4 py-2.5 font-mono text-xs text-gray-300">
+                      {{ item.release_version }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Deployments -->
+        <section class="mt-6">
+          <div class="flex items-baseline justify-between">
+            <h2 class="text-base font-semibold text-white">
+              Deployments
+            </h2>
+            <span class="text-xs text-gray-500">Release history and rollout status</span>
+          </div>
+          <div
+            v-if="deploymentsLoading"
+            class="mt-3 text-sm text-gray-500"
+          >
+            Loading deployments…
+          </div>
+          <div
+            v-else-if="deployments.length === 0"
+            class="mt-3 rounded-md border border-dashed border-surface-border px-6 py-8 text-center"
+          >
+            <Rocket class="mx-auto h-7 w-7 text-gray-600" />
+            <p class="mt-2 text-sm font-medium text-gray-300">
+              No deployments recorded yet
+            </p>
+            <p class="mx-auto mt-1 max-w-md text-sm text-gray-500">
+              Record one here, or assign this client to a release from a repository's Releases tab.
+            </p>
+          </div>
+          <div
+            v-else
+            class="mt-3 overflow-hidden rounded-md border border-surface-border"
+          >
+            <div class="overflow-x-auto">
+              <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
+                <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.14em] text-gray-500">
+                  <tr>
+                    <th class="px-4 py-2.5 font-medium">
+                      Release
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Environment
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Status
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Deployed
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      By
+                    </th>
+                    <th class="px-4 py-2.5 font-medium">
+                      Notes
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-surface-border-subtle">
+                  <tr
+                    v-for="deployment in deployments"
+                    :key="deployment.id"
+                    class="transition hover:bg-surface-overlay/50"
+                  >
+                    <td class="px-4 py-2.5 font-mono text-xs text-gray-200">
+                      {{ deployment.release_version || deployment.release_id }}
+                    </td>
+                    <td class="px-4 py-2.5">
+                      <span class="rounded-full bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-gray-300">{{ deployment.environment }}</span>
+                    </td>
+                    <td class="px-4 py-2.5">
+                      <span
+                        :class="statusClass(deployment.status)"
+                        class="rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize"
+                      >
+                        {{ deployment.status.replace('_', ' ') }}
+                      </span>
+                    </td>
+                    <td
+                      class="px-4 py-2.5 text-gray-400"
+                      :title="formatDateTime(deployment.deployed_at)"
+                    >
+                      {{ relativeTime(deployment.deployed_at) }}
+                    </td>
+                    <td class="px-4 py-2.5 text-gray-300">
+                      {{ deployment.deployed_by || 'System' }}
+                    </td>
+                    <td class="max-w-xs truncate px-4 py-2.5 text-xs text-gray-500">
+                      {{ deployment.notes || '—' }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </template>
-    </div>
 
-    <section class="rounded-3xl border border-surface-border bg-surface-raised p-6">
-      <div>
-        <h2 class="text-xl font-semibold text-white">
-          Impact Analysis
-        </h2>
-        <p class="mt-2 text-sm text-gray-400">
-          Vulnerabilities currently affecting this client's active deployments.
-        </p>
+      <div
+        v-else-if="!error"
+        class="py-8 text-sm text-gray-500"
+      >
+        Client not found.
       </div>
-
-      <div class="mt-6 overflow-hidden rounded-2xl border border-surface-border-subtle">
-        <div
-          v-if="impactLoading"
-          class="px-4 py-10 text-sm text-gray-500"
-        >
-          Loading impact analysis...
-        </div>
-        <div
-          v-else-if="impact.length === 0"
-          class="px-4 py-10 text-sm text-gray-500"
-        >
-          No active-deployment vulnerabilities found for this client.
-        </div>
-        <div
-          v-else
-          class="overflow-x-auto"
-        >
-          <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
-            <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
-              <tr>
-                <th class="px-4 py-3 font-medium">
-                  Severity
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Canonical ID
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Component
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Release
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-surface-border-subtle">
-              <tr
-                v-for="item in impact"
-                :key="`${item.canonical_id}-${item.component_name}-${item.release_version}`"
-                class="transition hover:bg-white/5"
-              >
-                <td class="px-4 py-4">
-                  <span :class="['rounded-full px-2.5 py-1 text-xs font-medium', severityClass(item.severity)]">{{ item.severity }}</span>
-                </td>
-                <td class="px-4 py-4 font-mono text-xs text-accent">
-                  {{ item.canonical_id }}
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ item.component_name }}
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ item.release_version }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <section class="rounded-3xl border border-surface-border bg-surface-raised p-6">
-      <div>
-        <h2 class="text-xl font-semibold text-white">
-          Deployments
-        </h2>
-        <p class="mt-2 text-sm text-gray-400">
-          Release history and rollout status for this client.
-        </p>
-      </div>
-
-      <div class="mt-6 overflow-hidden rounded-2xl border border-surface-border-subtle">
-        <div
-          v-if="deploymentsLoading"
-          class="px-4 py-10 text-sm text-gray-500"
-        >
-          Loading deployments...
-        </div>
-        <div
-          v-else-if="deployments.length === 0"
-          class="px-4 py-10 text-sm text-gray-500"
-        >
-          No deployments recorded yet.
-        </div>
-        <div
-          v-else
-          class="overflow-x-auto"
-        >
-          <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
-            <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.18em] text-gray-500">
-              <tr>
-                <th class="px-4 py-3 font-medium">
-                  Release
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Environment
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Status
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Date
-                </th>
-                <th class="px-4 py-3 font-medium">
-                  Deployed By
-                </th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-surface-border-subtle">
-              <tr
-                v-for="deployment in deployments"
-                :key="deployment.id"
-                class="transition hover:bg-white/5"
-              >
-                <td class="px-4 py-4 text-gray-300">
-                  {{ deployment.release_version || deployment.release_id }}
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ deployment.environment }}
-                </td>
-                <td class="px-4 py-4">
-                  <span
-                    :class="statusClass(deployment.status)"
-                    class="rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em]"
-                  >
-                    {{ deployment.status }}
-                  </span>
-                </td>
-                <td class="px-4 py-4 text-gray-400">
-                  {{ formatDate(deployment.deployed_at) }}
-                </td>
-                <td class="px-4 py-4 text-gray-300">
-                  {{ deployment.deployed_by || 'System' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  </section>
+    </template>
+  </div>
 </template>
 
 <script setup lang="ts">
+import { Building2, Mail, Plus, Rocket, ShieldCheck, UserRound } from 'lucide-vue-next'
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type Client, type Deployment, type Release, type Repository } from '@/api/client'
+import { formatDateTime, relativeTime } from '@/lib/datetime'
+import { advisoryUrl } from '@/lib/findingDisplay'
 
 const route = useRoute()
 
@@ -435,9 +507,25 @@ const activeDeployment = computed(
     ) ?? null,
 )
 const activeVersion = computed(() => activeDeployment.value?.release_version || null)
-const activeVersionBadgeClass = computed(() =>
-  activeVersion.value ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/5 text-gray-400',
+
+const environments = computed(() =>
+  [...new Set(deployments.value.map((deployment) => deployment.environment))].sort(),
 )
+
+const IMPACT_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info']
+
+const impactSeverityCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const item of impact.value) {
+    const severity = item.severity.toLowerCase()
+    counts[severity] = (counts[severity] ?? 0) + 1
+  }
+  const ordered: Record<string, number> = {}
+  for (const severity of IMPACT_SEVERITY_ORDER) {
+    if (counts[severity]) ordered[severity] = counts[severity]
+  }
+  return ordered
+})
 
 watch(
   () => [provider.value, slug.value, clientSlug.value],
@@ -530,13 +618,6 @@ async function createDeployment() {
   }
 }
 
-function formatDate(value?: string) {
-  if (!value) {
-    return 'N/A'
-  }
-  return new Date(value).toLocaleString()
-}
-
 function isSafeUrl(url: string) {
   return /^https?:\/\//i.test(url.trim())
 }
@@ -549,20 +630,31 @@ function severityClass(level: string) {
   return `sev-${level.toLowerCase()}`
 }
 
-function statusClass(status: string) {
-  switch (status.toLowerCase()) {
-    case 'active':
-      return 'bg-emerald-500/10 text-emerald-300'
-    case 'rolled_back':
-      return 'bg-warning/15 text-warning'
-    case 'superseded':
-      return 'bg-white/5 text-gray-400'
+function severityTextClass(severity: string) {
+  switch (severity) {
+    case 'critical':
+      return 'text-danger'
+    case 'high':
+      return 'text-orange-400'
+    case 'medium':
+      return 'text-amber-300'
+    case 'low':
+      return 'text-sky-300'
     default:
-      return 'bg-white/5 text-gray-300'
+      return 'text-gray-400'
   }
 }
 
-function clientTypeClass(clientType: string) {
-  return clientType === 'internal' ? 'bg-amber-500/10 text-amber-300' : 'bg-sky-500/10 text-sky-300'
+function statusClass(status: string) {
+  switch (status.toLowerCase()) {
+    case 'active':
+      return 'border-ok/40 text-ok'
+    case 'rolled_back':
+      return 'border-warning/40 text-warning'
+    case 'superseded':
+      return 'border-surface-border text-gray-400'
+    default:
+      return 'border-surface-border text-gray-300'
+  }
 }
 </script>
