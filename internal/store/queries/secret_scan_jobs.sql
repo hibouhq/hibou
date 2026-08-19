@@ -24,7 +24,15 @@ RETURNING *;
 WITH candidate AS (
 	SELECT j.id
 	FROM secret_scan_jobs j
-	WHERE j.status IN ('pending', 'processing')
+	WHERE (
+			j.status IN ('pending', 'processing')
+			-- Failed-retry arm (mirrors ClaimNextArtifactProcessingSnapshot):
+			-- FailSecretScanJob with mark_finished=false parks a retryable
+			-- failure as status 'failed' with finished_at NULL. Without this
+			-- arm those rows were never claimed again — zombies that the jobs
+			-- view showed as running for weeks.
+			OR (j.status = 'failed' AND j.finished_at IS NULL)
+		)
 		AND j.attempts < sqlc.arg(max_attempts)
 		AND (
 			j.claim_expires_at IS NULL
@@ -90,8 +98,9 @@ WHERE claimed_by = sqlc.arg(worker_id)
 SELECT * FROM secret_scan_jobs WHERE id = $1;
 
 -- name: CountPendingSecretScanJobs :one
--- Queue depth: the autoscaling signal for worker replicas.
-SELECT COUNT(*) FROM secret_scan_jobs WHERE status IN ('pending', 'processing') AND finished_at IS NULL;
+-- Queue depth: the autoscaling signal for worker replicas. Unfinished 'failed'
+-- rows are pending retries (see the claim's failed-retry arm), so they count.
+SELECT COUNT(*) FROM secret_scan_jobs WHERE status IN ('pending', 'processing', 'failed') AND finished_at IS NULL;
 
 -- name: ListSecretScanJobsByRepo :many
 SELECT * FROM secret_scan_jobs

@@ -38,7 +38,10 @@ describe('MarkdownText', () => {
     expect(html).toContain('<ul')
     expect(html).toContain('<ol')
     expect(html).toContain('<code')
-    expect(html).toContain('let x = 1;')
+    // ```rust is a known language, so the code is split across highlight
+    // spans — assert the pieces rather than the contiguous line.
+    expect(html).toContain('let')
+    expect(html).toContain('x =')
   })
 
   it('renders emphasis and links', async () => {
@@ -178,5 +181,81 @@ describe('MarkdownText', () => {
   it('tells the reader when the text was truncated', async () => {
     const html = await render('a'.repeat(200_000))
     expect(html).toContain('Description truncated')
+  })
+
+  it('renders GFM pipe tables with alignment', async () => {
+    const html = await render([
+      '| Line | Status | Count |',
+      '| --- | :---: | ---: |',
+      '| 3.x | **Affected** | 12 |',
+      '| 5.x | Not affected | 0 |',
+    ].join('\n'))
+
+    expect(html).toContain('<table')
+    expect(html).toContain('<thead')
+    expect(html).toContain('<th')
+    expect(html).toContain('<td')
+    expect(html).toContain('text-center')
+    expect(html).toContain('text-right')
+    // Cells run through the inline renderer: emphasis works inside them.
+    expect(html).toContain('<strong')
+    expect(html).toContain('Affected')
+  })
+
+  it('a table between paragraphs is not swallowed by the paragraph above it', async () => {
+    const html = await render([
+      'Both figures are current.',
+      '| a | b |',
+      '| --- | --- |',
+      '| 1 | 2 |',
+    ].join('\n'))
+    expect(html).toContain('<table')
+  })
+
+  it('prose containing pipes without a delimiter row stays a paragraph', async () => {
+    const html = await render('use a | b | c as the flag\nplain next line')
+    expect(html).not.toContain('<table')
+  })
+
+  it('HTML inside table cells stays escaped text', async () => {
+    const html = await render([
+      '| col |',
+      '| --- |',
+      '| <script>alert(1)</script> |',
+    ].join('\n'))
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;')
+  })
+
+  it('highlights fenced code for known languages', async () => {
+    const html = await render([
+      '```java',
+      'public class A { // note',
+      '  String s = "x";',
+      '}',
+      '```',
+    ].join('\n'))
+
+    // Keyword, string, and comment tokens each get their palette span.
+    expect(html).toContain('text-[#ff7b72]')
+    expect(html).toContain('text-[#a5d6ff]')
+    expect(html).toContain('text-[#8b949e]')
+    // The code text itself survives intact.
+    expect(html).toContain('public')
+    expect(html).toContain('note')
+  })
+
+  it('unknown or absent fence languages render as plain code', async () => {
+    for (const fence of ['```', '```notalanguage']) {
+      const html = await render(`${fence}\nlet x = 1;\n\`\`\``)
+      expect(html).toContain('let x = 1;')
+      expect(html).not.toContain('text-[#ff7b72]')
+    }
+  })
+
+  it('HTML inside highlighted code stays escaped text', async () => {
+    const html = await render('```html\n<script>alert(1)</script>\n```')
+    expect(html).not.toContain('<script>alert')
+    expect(html).toContain('&lt;')
   })
 })

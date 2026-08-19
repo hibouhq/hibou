@@ -147,7 +147,7 @@
           class="relative"
         >
           <button
-            class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition"
+            class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-40"
             :class="[
               isFilterMenuOpen(filter.key) || hasFilterSelection(filter.key)
                 ? 'border-accent/40 bg-accent-muted text-accent'
@@ -157,6 +157,8 @@
             type="button"
             aria-haspopup="true"
             :aria-expanded="isFilterMenuOpen(filter.key)"
+            :disabled="advancedActive"
+            :title="advancedActive ? 'Dropdowns are disabled while the query uses OR or parentheses — edit the query directly' : undefined"
             @click.stop="toggleFilterMenu(filter.key)"
           >
             <span>{{ filter.label }}</span>
@@ -337,6 +339,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
+import type { DisplaySegment, ValidationIssue } from '@/lib/filterBarQuery'
+import {
+  buildBarQuery,
+  isConnectiveWord,
+  isParenChar,
+  isValidFilterValue,
+  parseBarQuery,
+  tokenizeBarQuery,
+} from '@/lib/filterBarQuery'
+
 interface FilterDef {
   key: string
   label: string
@@ -356,31 +368,10 @@ interface SortDef {
   descLabel?: string
 }
 
-interface DisplaySegment {
-  text: string
-  className: string
-}
-
-interface ValidationIssue {
-  id: string
-  parts: DisplaySegment[]
-}
-
-interface ParsedQuery {
-  filters: Record<string, string>
-  searchText: string
-  issues: ValidationIssue[]
-}
-
 interface CursorContext {
   token: string
   start: number
   end: number
-}
-
-interface BarQueryChunk {
-  text: string
-  isWhitespace: boolean
 }
 
 type OpenMenu =
@@ -391,6 +382,7 @@ type OpenMenu =
 type AutocompleteItem =
   | { type: 'key'; key: string; primary: string; secondary: string }
   | { type: 'value'; key: string; value: string; primary: string; secondary: string }
+  | { type: 'operator'; value: string; primary: string; secondary: string }
 
 const props = withDefaults(defineProps<{
   filters: FilterDef[]
@@ -421,6 +413,9 @@ defineEmits<{
 
 const modelValue = defineModel<Record<string, string>>({ default: () => ({}) })
 const searchQuery = defineModel<string>('searchQuery', { default: '' })
+// Set (and the discrete models left untouched) while the bar holds an OR /
+// parenthesised query; empty in plain mode.
+const advancedQuery = defineModel<string>('advancedQuery', { default: '' })
 const sortValue = defineModel<string>('sortValue', { default: '' })
 const sortDirection = defineModel<string>('sortDirection', { default: '' })
 
@@ -440,13 +435,6 @@ let validationTimer: ReturnType<typeof setTimeout> | null = null
 
 const filterMap = computed(() => {
   return new Map(props.filters.map((filter) => [filter.key.toLowerCase(), filter]))
-})
-
-const filterOptionMaps = computed(() => {
-  return new Map(props.filters.map((filter) => [
-    filter.key.toLowerCase(),
-    new Map(filter.options.map((option) => [normalizeFilterFragment(option), option])),
-  ]))
 })
 
 const sortOptions = computed(() => props.sortOptions ?? [])
@@ -471,7 +459,7 @@ const sortButtonLabel = computed(() => {
   return `${arrow} ${label}`
 })
 
-const parsedBarQuery = computed(() => parseBarQuery(barQuery.value))
+const parsedBarQuery = computed(() => parseBarQuery(barQuery.value, props.filters, props.searchable))
 const cursorContext = computed(() => getCursorContext(barQuery.value, cursorPosition.value))
 
 const autocompleteItems = computed<AutocompleteItem[]>(() => {
@@ -480,26 +468,42 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
   }
 
   const context = cursorContext.value
-  if (!context || !context.token) {
-    return props.filters.map((filter) => ({
-      type: 'key',
+  const keyItems = (keyQuery: string): AutocompleteItem[] => props.filters
+    .filter((filter) => keyQuery === '' || filter.key.toLowerCase().includes(keyQuery) || filter.label.toLowerCase().includes(keyQuery))
+    .map((filter) => ({
+      type: 'key' as const,
       key: filter.key,
       primary: `${filter.key}:`,
       secondary: filter.label,
     }))
+  // Connectives are offered only where the grammar allows one: after a
+  // completed condition or a closing paren, never at the start, after an
+  // opening paren, or after another connective.
+  const operatorItems = (keyQuery: string): AutocompleteItem[] => {
+    const before = barQuery.value.slice(0, context?.start ?? cursorPosition.value).trimEnd()
+    const lastWord = before.match(/[^\s()]+$|\)$/)?.[0] ?? ''
+    if (!lastWord || lastWord === '(' || isConnectiveWord(lastWord)) {
+      return []
+    }
+    return ['and', 'or']
+      .filter((word) => keyQuery === '' || word.startsWith(keyQuery))
+      .map((word) => ({
+        type: 'operator' as const,
+        value: word,
+        primary: word,
+        secondary: word === 'and' ? 'both conditions' : 'either condition',
+      }))
+  }
+
+  if (!context || !context.token) {
+    return [...operatorItems(''), ...keyItems('')]
   }
 
   const separatorIndex = context.token.indexOf(':')
   if (separatorIndex === -1) {
-    const keyQuery = context.token.toLowerCase()
-    return props.filters
-      .filter((filter) => filter.key.toLowerCase().includes(keyQuery) || filter.label.toLowerCase().includes(keyQuery))
-      .map((filter) => ({
-        type: 'key',
-        key: filter.key,
-        primary: `${filter.key}:`,
-        secondary: filter.label,
-      }))
+    // "(sta" is a paren plus the start of a key — match on the key part.
+    const keyQuery = context.token.toLowerCase().replace(/^\(+/, '')
+    return [...operatorItems(keyQuery), ...keyItems(keyQuery)]
   }
 
   const key = context.token.slice(0, separatorIndex).toLowerCase()
@@ -554,6 +558,14 @@ const displaySegments = computed<DisplaySegment[]>(() => {
       return [{ text: chunk.text, className: 'text-transparent' }]
     }
 
+    // Boolean structure reads at a glance: connectives purple, parens amber.
+    if (isParenChar(chunk.text)) {
+      return [{ text: chunk.text, className: 'text-[#d29922]' }]
+    }
+    if (isConnectiveWord(chunk.text)) {
+      return [{ text: chunk.text, className: 'text-[#d2a8ff]' }]
+    }
+
     const match = chunk.text.match(/^([A-Za-z0-9_-]+):(.*)$/)
     if (!match) {
       return [{ text: chunk.text, className: 'text-gray-100' }]
@@ -562,6 +574,8 @@ const displaySegments = computed<DisplaySegment[]>(() => {
     return buildFilterDisplaySegments(match[1], match[2])
   })
 })
+
+const advancedActive = computed(() => Boolean(parsedBarQuery.value.advancedQuery))
 
 watch(
   [modelValue, searchQuery],
@@ -685,7 +699,12 @@ function selectAutocomplete(item: AutocompleteItem) {
   let nextCursor = 0
 
   if (item.type === 'key') {
-    replacement = `${item.key}:`
+    // A leading paren typed with the key ("(sta") survives the completion.
+    const parens = context.token.match(/^\(+/)?.[0] ?? ''
+    replacement = `${parens}${item.key}:`
+    nextCursor = (before + replacement).length
+  } else if (item.type === 'operator') {
+    replacement = after.length === 0 ? `${item.value} ` : item.value
     nextCursor = (before + replacement).length
   } else {
     const filter = filterMap.value.get(item.key.toLowerCase())
@@ -726,6 +745,9 @@ function autocompleteOptionId(index: number) {
 function autocompleteItemKey(item: AutocompleteItem, index: number) {
   if (item.type === 'key') {
     return `key-${item.key}-${index}`
+  }
+  if (item.type === 'operator') {
+    return `operator-${item.value}-${index}`
   }
   return `value-${item.key}-${item.value}-${index}`
 }
@@ -893,7 +915,13 @@ function clearAll() {
 }
 
 function syncBarFromModels() {
-  const nextQuery = buildBarQuery(modelValue.value ?? {}, searchQuery.value)
+  // While the bar holds a boolean query, it is the source of truth: the
+  // discrete models cannot express OR/parens, so rebuilding from them would
+  // destroy the query. The dropdown buttons are disabled in this mode.
+  if (advancedActive.value) {
+    return
+  }
+  const nextQuery = buildBarQuery(props.filters, modelValue.value ?? {}, searchQuery.value, props.searchable)
   if (barQuery.value !== nextQuery) {
     barQuery.value = nextQuery
   }
@@ -902,6 +930,16 @@ function syncBarFromModels() {
 
 function syncModelsFromBar() {
   const parsed = parsedBarQuery.value
+
+  if (advancedQuery.value !== parsed.advancedQuery) {
+    advancedQuery.value = parsed.advancedQuery
+  }
+  // Advanced mode leaves the discrete models untouched — the consumer runs
+  // the advanced query verbatim and ignores them while it is set.
+  if (parsed.advancedQuery) {
+    return
+  }
+
   syncingFromBar.value = true
 
   try {
@@ -931,82 +969,6 @@ function syncModelsFromBar() {
     nextTick(() => {
       syncingFromBar.value = false
     })
-  }
-}
-
-function buildBarQuery(filters: Record<string, string>, freeText: string) {
-  const tokens: string[] = []
-
-  for (const filter of props.filters) {
-    if (filter.hidden) {
-      continue
-    }
-
-    const value = filters[filter.key]
-    if (value) {
-      tokens.push(`${filter.key}:${value}`)
-    }
-  }
-
-  const trimmedSearch = props.searchable ? freeText.trim() : ''
-  if (trimmedSearch.length > 0) {
-    tokens.push(trimmedSearch)
-  }
-
-  return tokens.join(' ')
-}
-
-function parseBarQuery(query: string): ParsedQuery {
-  const filters: Record<string, string> = {}
-  const searchTerms: string[] = []
-  const issues = new Map<string, ValidationIssue>()
-  const tokens = tokenizeBarQuery(query)
-    .filter((chunk) => !chunk.isWhitespace)
-    .map((chunk) => chunk.text)
-
-  for (const token of tokens) {
-    const match = token.match(/^([A-Za-z0-9_-]+):(.*)$/)
-    if (!match) {
-      if (props.searchable && token.length > 0) {
-        searchTerms.push(token)
-      }
-      continue
-    }
-
-    const rawKey = match[1]
-    const rawValue = match[2]
-    const filter = filterMap.value.get(rawKey.toLowerCase())
-
-    if (!filter) {
-      addValidationIssue(issues, createUnknownFilterIssue(rawKey))
-      continue
-    }
-
-    const validated = validateFilterValues(filter, rawValue)
-
-    for (const issue of validated.issues) {
-      addValidationIssue(issues, issue)
-    }
-
-    if (validated.issues.length === 0 && validated.values.length > 0) {
-      filters[filter.key] = filter.multi ? dedupe(validated.values).join(',') : validated.values[0]
-    }
-
-    if (filter.multi) {
-      continue
-    }
-  }
-
-  for (const [key, filter] of filterMap.value) {
-    if (filter.defaultValue && !(filter.key in filters)) {
-      filters[key] = filter.defaultValue
-    }
-  }
-
-  return {
-    filters,
-    searchText: props.searchable ? searchTerms.join(' ') : '',
-    issues: [...issues.values()],
   }
 }
 
@@ -1047,163 +1009,8 @@ function sameRecord(left: Record<string, string>, right: Record<string, string>)
   return true
 }
 
-function dedupe(values: string[]) {
-  return Array.from(new Set(values))
-}
-
-function tokenizeBarQuery(query: string): BarQueryChunk[] {
-  const chunks: BarQueryChunk[] = []
-  let index = 0
-
-  while (index < query.length) {
-    if (isWhitespaceChar(query[index])) {
-      const whitespaceStart = index
-      while (index < query.length && isWhitespaceChar(query[index])) {
-        index += 1
-      }
-
-      chunks.push({
-        text: query.slice(whitespaceStart, index),
-        isWhitespace: true,
-      })
-      continue
-    }
-
-    const tokenEnd = findBarTokenEnd(query, index)
-    chunks.push({
-      text: query.slice(index, tokenEnd),
-      isWhitespace: false,
-    })
-    index = tokenEnd
-  }
-
-  return chunks
-}
-
-function findBarTokenEnd(query: string, start: number) {
-  if (!hasQualifierKeyAt(query, start)) {
-    let end = start
-    while (end < query.length && !isWhitespaceChar(query[end])) {
-      end += 1
-    }
-    return end
-  }
-
-  let end = start
-  while (end < query.length) {
-    if (!isWhitespaceChar(query[end])) {
-      end += 1
-      continue
-    }
-
-    const whitespaceStart = end
-    while (end < query.length && isWhitespaceChar(query[end])) {
-      end += 1
-    }
-
-    if (hasQualifierKeyAt(query, end)) {
-      return whitespaceStart
-    }
-  }
-
-  return query.length
-}
-
-function hasQualifierKeyAt(query: string, start: number) {
-  if (start >= query.length) {
-    return false
-  }
-
-  let end = start
-  while (end < query.length && /[A-Za-z0-9_-]/.test(query[end])) {
-    end += 1
-  }
-
-  return end > start && query[end] === ':'
-}
-
-function isWhitespaceChar(char: string) {
-  return /\s/.test(char)
-}
-
-function normalizeFilterFragment(value: string) {
-  return value.trim().toLowerCase()
-}
-
-function getCanonicalFilterOption(filter: FilterDef, value: string) {
-  const options = filterOptionMaps.value.get(filter.key.toLowerCase())
-  const normalized = normalizeFilterFragment(value)
-
-  if (!options || normalized.length === 0) {
-    return undefined
-  }
-
-  return options.get(normalized)
-}
-
-function validateFilterValues(filter: FilterDef, rawValue: string) {
-  const values: string[] = []
-  const issues: ValidationIssue[] = []
-
-  if (!filter.multi) {
-    const trimmed = rawValue.trim()
-    if (trimmed.length === 0) {
-      issues.push(createEmptyValueIssue(filter.key))
-      return { values, issues }
-    }
-
-    if (filter.freeform) {
-      values.push(trimmed)
-      return { values, issues }
-    }
-
-    if (filter.options.length > 0) {
-      const canonical = getCanonicalFilterOption(filter, rawValue)
-      if (!canonical) {
-        issues.push(createInvalidValueIssue(filter.key, trimmed))
-        return { values, issues }
-      }
-      values.push(canonical)
-      return { values, issues }
-    }
-
-    values.push(trimmed)
-    return { values, issues }
-  }
-
-  const fragments = rawValue.split(',')
-  for (const fragment of fragments) {
-    const trimmed = fragment.trim()
-    if (trimmed.length === 0) {
-      issues.push(createEmptyValueIssue(filter.key))
-      continue
-    }
-
-    if (filter.freeform) {
-      values.push(trimmed)
-      continue
-    }
-
-    if (filter.options.length > 0) {
-      const canonical = getCanonicalFilterOption(filter, fragment)
-      if (!canonical) {
-        issues.push(createInvalidValueIssue(filter.key, trimmed))
-        continue
-      }
-      values.push(canonical)
-      continue
-    }
-
-    values.push(trimmed)
-  }
-
-  if (issues.length > 0) {
-    return { values: [], issues }
-  }
-
-  return { values, issues }
-}
-
+// isConnectiveAt reports whether a standalone `and`/`or` word starts at the
+// given position — the boundary a qualifier's value run must not cross.
 function buildFilterDisplaySegments(rawKey: string, rawValue: string): DisplaySegment[] {
   const filter = filterMap.value.get(rawKey.toLowerCase())
   const qualifierClass = 'text-gray-400'
@@ -1254,57 +1061,6 @@ function buildFilterDisplaySegments(rawKey: string, rawValue: string): DisplaySe
   }
 
   return segments
-}
-
-function isValidFilterValue(filter: FilterDef, rawValue: string) {
-  const trimmed = rawValue.trim()
-  if (trimmed.length === 0) {
-    return false
-  }
-
-  if (filter.freeform || filter.options.length === 0) {
-    return true
-  }
-
-  return getCanonicalFilterOption(filter, rawValue) !== undefined
-}
-
-function createUnknownFilterIssue(rawKey: string): ValidationIssue {
-  return {
-    id: `unknown-filter:${rawKey.toLowerCase()}`,
-    parts: [
-      { text: 'Unknown filter ', className: 'text-[#f0c674]' },
-      { text: rawKey, className: 'font-medium text-[#ffcc66]' },
-    ],
-  }
-}
-
-function createEmptyValueIssue(key: string): ValidationIssue {
-  return {
-    id: `empty-value:${key}`,
-    parts: [
-      { text: 'Empty value for ', className: 'text-[#f0c674]' },
-      { text: key, className: 'font-medium text-[#ffd38a]' },
-    ],
-  }
-}
-
-function createInvalidValueIssue(key: string, value: string): ValidationIssue {
-  return {
-    id: `invalid-value:${key}:${value.toLowerCase()}`,
-    parts: [
-      { text: 'Invalid value ', className: 'text-[#f0c674]' },
-      { text: value, className: 'font-medium text-[#ffb757]' },
-      { text: ' for ', className: 'text-[#f0c674]' },
-      { text: key, className: 'font-medium text-[#ffd38a]' },
-    ],
-  }
-}
-
-function addValidationIssue(target: Map<string, ValidationIssue>, issue: ValidationIssue) {
-  if (!target.has(issue.id)) {
-    target.set(issue.id, issue)
-  }
 }
 
 function filterKeyBadge(key: string): string {

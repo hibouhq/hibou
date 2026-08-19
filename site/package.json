@@ -23,6 +23,7 @@
     "d3-zoom": "^3.0.0",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^2.2.0",
+    "prismjs": "^1.30.0",
     "vue": "^3.5.0",
     "vue-chartjs": "^5.3.3",
     "vue-router": "^4.4.0"
@@ -36,6 +37,7 @@
     "@types/d3-transition": "^3.0.9",
     "@types/d3-zoom": "^3.0.8",
     "@types/node": "^25.9.1",
+    "@types/prismjs": "^1.26.6",
     "@vitejs/plugin-vue": "^5.1.0",
     "@vitest/coverage-v8": "^2.0.0",
     "@vue/tsconfig": "^0.5.0",

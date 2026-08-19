@@ -16,7 +16,15 @@ const claimNextSecretScanJob = `-- name: ClaimNextSecretScanJob :one
 WITH candidate AS (
 	SELECT j.id
 	FROM secret_scan_jobs j
-	WHERE j.status IN ('pending', 'processing')
+	WHERE (
+			j.status IN ('pending', 'processing')
+			-- Failed-retry arm (mirrors ClaimNextArtifactProcessingSnapshot):
+			-- FailSecretScanJob with mark_finished=false parks a retryable
+			-- failure as status 'failed' with finished_at NULL. Without this
+			-- arm those rows were never claimed again — zombies that the jobs
+			-- view showed as running for weeks.
+			OR (j.status = 'failed' AND j.finished_at IS NULL)
+		)
 		AND j.attempts < $3
 		AND (
 			j.claim_expires_at IS NULL
@@ -111,10 +119,11 @@ func (q *Queries) CompleteSecretScanJob(ctx context.Context, arg CompleteSecretS
 }
 
 const countPendingSecretScanJobs = `-- name: CountPendingSecretScanJobs :one
-SELECT COUNT(*) FROM secret_scan_jobs WHERE status IN ('pending', 'processing') AND finished_at IS NULL
+SELECT COUNT(*) FROM secret_scan_jobs WHERE status IN ('pending', 'processing', 'failed') AND finished_at IS NULL
 `
 
-// Queue depth: the autoscaling signal for worker replicas.
+// Queue depth: the autoscaling signal for worker replicas. Unfinished 'failed'
+// rows are pending retries (see the claim's failed-retry arm), so they count.
 func (q *Queries) CountPendingSecretScanJobs(ctx context.Context) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPendingSecretScanJobs)
 	var count int64

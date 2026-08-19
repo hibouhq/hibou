@@ -95,6 +95,7 @@ WHERE v.snapshot_id = $1
   AND (@acceptance::text = ''
        OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR (@acceptance::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = @acceptance::text)
 ORDER BY
   CASE WHEN @sort::text = 'severity_asc' THEN v.severity_rank END ASC,
@@ -111,6 +112,8 @@ SELECT COUNT(*)::bigint FROM vulnerabilities v
 LEFT JOIN finding_acceptances fa
   ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
   AND (fa.expires_at IS NULL OR fa.expires_at > now())
+LEFT JOIN finding_disputes fd
+  ON fd.repo_id = v.repo_id AND fd.fingerprint = v.fingerprint
 WHERE v.snapshot_id = $1
   AND v.status = ANY(@statuses::vulnerability_status[])
   AND (COALESCE(array_length(@types::text[], 1), 0) = 0 OR v.type::text = ANY(@types::text[]))
@@ -122,6 +125,7 @@ WHERE v.snapshot_id = $1
   AND (@acceptance::text = ''
        OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR (@acceptance::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = @acceptance::text);
 
 -- name: ListAllVulnerabilitiesBySnapshot :many
@@ -367,12 +371,14 @@ WITH observations AS (
            s.created_at AS observed_at,
            v.status::text AS status,
            v.severity::text AS severity,
+           v.reachability::text AS reachability,
            -- The in-source suppression justification the scanner extracted
            -- (e.g. the text after `#nosec G115 --`), carried on the row's
            -- metadata by the ingest. Shown as the comment of the transition
            -- that suppressed the finding.
            v.metadata #>> '{suppression,justification}' AS suppression_justification,
-           LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status
+           LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status,
+           LAG(v.reachability::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_reachability
     FROM vulnerabilities v
     JOIN snapshots s ON s.id = v.snapshot_id
     JOIN refs r ON r.id = s.ref_id
@@ -382,9 +388,16 @@ WITH observations AS (
 )
 SELECT ref_name, ref_type, commit_sha, observed_at, status, severity,
        COALESCE(previous_status, '')::text AS previous_status,
-       COALESCE(suppression_justification, '')::text AS suppression_justification
+       COALESCE(suppression_justification, '')::text AS suppression_justification,
+       COALESCE(reachability, '')::text AS reachability,
+       COALESCE(previous_reachability, '')::text AS previous_reachability
 FROM observations
 WHERE previous_status IS DISTINCT FROM status
+   -- A reachability verdict is a timeline event too: it changes whether the
+   -- finding gates (org opt-in) and what the VEX export says. Only definite
+   -- verdicts qualify — a new snapshot's rows start unknown until classified,
+   -- and "went back to unknown" would be noise, not information.
+   OR (reachability IS DISTINCT FROM previous_reachability AND reachability IN ('reachable', 'not_reachable'))
 ORDER BY observed_at DESC, ref_name
 LIMIT sqlc.arg(row_limit);
 

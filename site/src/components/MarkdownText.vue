@@ -1,8 +1,11 @@
 <script lang="ts">
 import { defineComponent, h, type VNode } from 'vue'
 
+import { highlightCode } from '@/lib/codeHighlight'
+
 // Renders the markdown subset that advisory text actually uses — headings,
-// lists, fenced and inline code, emphasis, links, blockquotes, rules.
+// lists, fenced code (with syntax highlighting), inline code, emphasis,
+// links, blockquotes, rules, GFM pipe tables.
 //
 // THREAT MODEL. This text is third-party and attacker-influenceable: an
 // advisory description, a scanner message, a VEX statement. Three properties
@@ -12,6 +15,9 @@ import { defineComponent, h, type VNode } from 'vue'
 //     (no `v-html`, no innerHTML, no dangerouslySetInnerHTML equivalent), so
 //     `<script>` and `<img onerror>` in the source render as visible text.
 //     There is no sanitiser to keep up to date because nothing is sanitised.
+//     Syntax highlighting keeps the property: Prism is used only through its
+//     tokenize API (a token tree, never markup — see lib/codeHighlight.ts),
+//     mapped to spans whose class comes from a fixed vocabulary.
 //  2. The only attribute ever taken from the input is an `href`, and only when
 //     the value matched `https?://…` — `javascript:`, `data:`, `vbscript:` and
 //     protocol-relative `//host` cannot become links. Every link carries
@@ -19,10 +25,12 @@ import { defineComponent, h, type VNode } from 'vue'
 //  3. Parsing is linear and bounded. Input is truncated, block and inline
 //     counts are capped, the inline scanner is a single global regex with no
 //     nested quantifiers or backreferences, and nothing recurses — so no input
-//     can hang the tab (ReDoS) or blow the stack.
+//     can hang the tab (ReDoS) or blow the stack. Highlighting is bounded the
+//     same way: allowlisted languages, size-capped input, plain-text fallback.
 //
-// Not supported on purpose: raw HTML (rendered as text), tables, footnotes,
-// reference links. Advisories using them stay readable, just unstyled.
+// Not supported on purpose: raw HTML (rendered as text), footnotes,
+// reference links, escaped pipes inside table cells. Advisories using them
+// stay readable, just unstyled.
 
 /** Beyond this the text is not a description any more; the tail is dropped. */
 const MAX_CHARS = 64_000
@@ -30,8 +38,14 @@ const MAX_LINES = 2_000
 const MAX_BLOCKS = 500
 const MAX_INLINE_NODES = 400
 const MAX_LIST_ITEMS = 200
+const MAX_TABLE_ROWS = 100
+const MAX_TABLE_COLS = 12
 
 const FENCE = /^\s*```/
+// The fence's info string ("```java"): only the leading word is the language.
+const FENCE_LANGUAGE = /^\s*```\s*([A-Za-z0-9#+._-]*)/
+// A GFM delimiter row: cells of dashes with optional alignment colons.
+const TABLE_DELIMITER = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/
 const HEADING = /^(#{1,6})\s+(.*)$/
 const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/
 const QUOTE = /^\s*>\s?(.*)$/
@@ -110,6 +124,36 @@ function inlineNodes(source: string): (string | VNode)[] {
   return nodes
 }
 
+// codeNodes renders a fenced block's content: highlighted spans when the
+// fence names a supported language, one plain text node otherwise. Spans
+// carry only a class from codeHighlight's fixed vocabulary — the code itself
+// stays a text node either way (threat model property 1).
+function codeNodes(code: string, language: string): (string | VNode)[] {
+  const spans = language ? highlightCode(code, language) : null
+  if (!spans) return [code]
+  return spans.map(span => (span.className ? h('span', { class: span.className }, span.text) : span.text))
+}
+
+// isTableStart detects a GFM pipe table: a header row containing at least one
+// pipe, immediately followed by a delimiter row of dashes and colons.
+function isTableStart(lines: string[], index: number): boolean {
+  const header = lines[index]
+  const delimiter = lines[index + 1]
+  if (!header || !delimiter || !header.includes('|')) return false
+  if (!TABLE_DELIMITER.test(delimiter)) return false
+  return splitTableRow(header).length >= 2 && splitTableRow(header).length === splitTableRow(delimiter).length
+}
+
+// splitTableRow breaks a pipe row into trimmed cells, dropping the empty
+// edge cells a leading/trailing pipe produces. Escaped pipes are not
+// supported (documented above); a stray pipe just makes one extra cell.
+function splitTableRow(line: string): string[] {
+  const cells = line.split('|').map(cell => cell.trim())
+  if (cells.length > 0 && cells[0] === '') cells.shift()
+  if (cells.length > 0 && cells[cells.length - 1] === '') cells.pop()
+  return cells
+}
+
 function renderBlocks(source: string): VNode[] {
   const truncated = source.length > MAX_CHARS
   const text = (truncated ? source.slice(0, MAX_CHARS) : source).replace(/\r\n?/g, '\n')
@@ -117,6 +161,33 @@ function renderBlocks(source: string): VNode[] {
 
   const blocks: VNode[] = []
   let index = 0
+
+  const readTable = () => {
+    const header = splitTableRow(lines[index])
+    const alignments = splitTableRow(lines[index + 1]).map((cell) => {
+      const trimmed = cell.trim()
+      if (trimmed.startsWith(':') && trimmed.endsWith(':')) return 'text-center'
+      if (trimmed.endsWith(':')) return 'text-right'
+      return 'text-left'
+    })
+    index += 2
+
+    const bodyRows: string[][] = []
+    while (index < lines.length && bodyRows.length < MAX_TABLE_ROWS && lines[index].includes('|') && lines[index].trim()) {
+      bodyRows.push(splitTableRow(lines[index]))
+      index++
+    }
+
+    const alignFor = (column: number) => alignments[column] ?? 'text-left'
+    const headCells = header.slice(0, MAX_TABLE_COLS).map((cell, column) =>
+      h('th', { class: `border-b border-surface-border px-2 py-1 font-semibold text-gray-200 ${alignFor(column)}` }, inlineNodes(cell)))
+    const rows = bodyRows.map(cells =>
+      h('tr', { class: 'border-b border-surface-border-subtle' },
+        cells.slice(0, MAX_TABLE_COLS).map((cell, column) =>
+          h('td', { class: `px-2 py-1 align-top ${alignFor(column)}` }, inlineNodes(cell)))))
+    blocks.push(h('div', { class: 'my-2 overflow-x-auto' },
+      h('table', { class: 'w-full border-collapse text-xs' }, [h('thead', h('tr', headCells)), h('tbody', rows)])))
+  }
 
   const readList = (ordered: boolean) => {
     const items: VNode[] = []
@@ -147,6 +218,7 @@ function renderBlocks(source: string): VNode[] {
     }
 
     if (FENCE.test(line)) {
+      const language = FENCE_LANGUAGE.exec(line)?.[1] ?? ''
       index++
       const code: string[] = []
       while (index < lines.length && !FENCE.test(lines[index])) {
@@ -156,7 +228,12 @@ function renderBlocks(source: string): VNode[] {
       index++ // closing fence
       blocks.push(h('pre', {
         class: 'my-2 overflow-x-auto rounded-lg border border-surface-border-subtle bg-surface px-3 py-2',
-      }, h('code', { class: 'font-mono text-[12px] leading-relaxed text-gray-300' }, code.join('\n'))))
+      }, h('code', { class: 'font-mono text-[12px] leading-relaxed text-gray-300' }, codeNodes(code.join('\n'), language))))
+      continue
+    }
+
+    if (isTableStart(lines, index)) {
+      readTable()
       continue
     }
 
@@ -197,7 +274,7 @@ function renderBlocks(source: string): VNode[] {
 
     // Paragraph: soft line breaks join, a blank line ends it.
     const paragraph: string[] = []
-    while (index < lines.length && lines[index].trim() && !HEADING.test(lines[index]) && !BULLET.test(lines[index]) && !ORDERED.test(lines[index]) && !FENCE.test(lines[index]) && !RULE.test(lines[index]) && !QUOTE.test(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !HEADING.test(lines[index]) && !BULLET.test(lines[index]) && !ORDERED.test(lines[index]) && !FENCE.test(lines[index]) && !RULE.test(lines[index]) && !QUOTE.test(lines[index]) && !isTableStart(lines, index)) {
       paragraph.push(lines[index].trim())
       index++
     }

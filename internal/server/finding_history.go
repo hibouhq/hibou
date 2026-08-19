@@ -200,6 +200,19 @@ func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
 		From:      transition.PreviousStatus,
 		To:        transition.Status,
 	}
+	// A row whose status did not change was selected for its reachability
+	// verdict (the query's second arm): the call-graph analysis proved the
+	// vulnerable symbol unreachable, or revealed it reachable again. From/To
+	// carry the verdicts for these events, not the status.
+	if transition.PreviousStatus == transition.Status && transition.Reachability != "" {
+		if transition.Reachability == "not_reachable" {
+			event.Kind = "became_unreachable"
+		} else {
+			event.Kind = "became_reachable"
+		}
+		event.From = transition.PreviousReachability
+		event.To = transition.Reachability
+	}
 	// A developer who suppresses in code (`#nosec G115 -- reason`) has written
 	// the triage comment already; the scanner extracted it (SARIF
 	// suppressions[].justification) and the ingest kept it. Surface it the way

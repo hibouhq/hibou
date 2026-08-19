@@ -365,8 +365,12 @@ func acceptanceQualifierToSQL(values []string, param int) (string, []interface{}
 			parts = append(parts, "fa.id IS NULL")
 		case "any", "accepted":
 			parts = append(parts, "fa.id IS NOT NULL")
+		case "disputed":
+			// ADR-026: the suppression is contested — resolved against the
+			// finding_disputes LEFT JOIN (fd), not the acceptance row.
+			parts = append(parts, "fd.id IS NOT NULL")
 		default:
-			return "", nil, param, fmt.Errorf("acceptance must be one of risk, fp, accepted, open (got %q)", value)
+			return "", nil, param, fmt.Errorf("acceptance must be one of risk, fp, accepted, open, disputed (got %q)", value)
 		}
 	}
 	if len(parts) == 1 {

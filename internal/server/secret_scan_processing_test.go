@@ -37,6 +37,12 @@ func newSecretScanTestServer(t *testing.T) (*Server, *store.Organization) {
 	srv.artifactWorkerID = uniqueName(t, "worker")
 	srv.secretScanner = secretscan.NewScanner(nil, srv.queries, nil, srv.log, "")
 	srv.secretScanSlots = make(chan struct{}, srv.cfg.SecretScan.MaxConcurrency)
+	// The claim picks the oldest claimable row instance-wide — including
+	// retryable failures other test runs left behind (the failed-retry arm).
+	// Finish them so claimTestSecretScanJob gets THIS test's job.
+	if _, err := srv.db.ExecContext(context.Background(), `UPDATE secret_scan_jobs SET status = 'complete', claimed_by = NULL, claim_expires_at = NULL, finished_at = NOW() WHERE finished_at IS NULL`); err != nil {
+		t.Fatalf("quarantine leftover secret scan jobs: %v", err)
+	}
 	return srv, org
 }
 

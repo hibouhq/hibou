@@ -77,6 +77,46 @@ func seedHistoryFinding(t *testing.T, srv *Server, repo *store.Repository, refNa
 	}
 }
 
+// seedHistoryFindingWithReachability is seedHistoryFinding plus a call-graph
+// verdict on the observation, for timeline reachability-transition tests.
+func seedHistoryFindingWithReachability(t *testing.T, srv *Server, repo *store.Repository, refName, sha, fingerprint, status, reachability string) {
+	t.Helper()
+
+	ctx := context.Background()
+	ref, err := srv.queries.GetRefByRepoAndName(ctx, repo.ID, refName, store.RefTypeBranch)
+	if err != nil {
+		t.Fatalf("GetRefByName: %v", err)
+	}
+	if ref == nil {
+		ref, err = srv.queries.CreateRef(ctx, repo.ID, refName, store.RefTypeBranch, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("CreateRef: %v", err)
+		}
+	}
+	snapshot, err := srv.queries.CreateSnapshot(ctx, ref.ID, sha, store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	params := dbgen.CreateVulnerabilityParams{
+		Type:                   "dependency",
+		SnapshotID:             snapshot.ID,
+		Title:                  "vulnerable dependency",
+		PrimaryIdentifierKind:  "advisory",
+		PrimaryIdentifierValue: "CVE-2026-0001",
+		OriginalSeverity:       dbgen.SeverityLevelHigh,
+		Severity:               dbgen.SeverityLevelHigh,
+		Status:                 status,
+		ScannerName:            "trivy",
+		Fingerprint:            fingerprint,
+	}
+	if reachability != "" {
+		params.Reachability = dbgen.NullReachability{Reachability: dbgen.Reachability(reachability), Valid: true}
+	}
+	if _, err := srv.queries.CreateVulnerability(ctx, params); err != nil {
+		t.Fatalf("CreateVulnerability(%s/%s): %v", status, reachability, err)
+	}
+}
+
 // seedHistoryAuditLog writes one raw audit entry, so a test can plant exactly
 // the row it wants the endpoint to return — or to refuse to return.
 func seedHistoryAuditLog(t *testing.T, srv *Server, orgID uuid.UUID, repoID, action string, context map[string]any) {
@@ -425,6 +465,41 @@ func TestFindingHistoryCarriesInSourceSuppressionComment(t *testing.T) {
 	}
 	if comment, _ := suppressed.Detail["comment"].(string); comment != "event name, not a credential" {
 		t.Fatalf("suppressed event detail = %+v, want the in-source justification", suppressed.Detail)
+	}
+}
+
+// A reachability verdict is a timeline event (it changes gating and the VEX
+// export): unknown → not_reachable reads "proven unreachable", a later flip
+// back reads "reachable again", and going back to unknown is silence, not an
+// event.
+func TestFindingHistoryShowsReachabilityTransitions(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, _ := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	fingerprint := uuid.NewString()
+
+	seedHistoryFindingWithReachability(t, srv, repo, "main", "sha-1", fingerprint, "detected", "")
+	seedHistoryFindingWithReachability(t, srv, repo, "main", "sha-2", fingerprint, "detected", "not_reachable")
+	seedHistoryFindingWithReachability(t, srv, repo, "main", "sha-3", fingerprint, "detected", "reachable")
+	// Back to unknown (fresh snapshot never classified): must NOT emit an event.
+	seedHistoryFindingWithReachability(t, srv, repo, "main", "sha-4", fingerprint, "detected", "")
+
+	history := decodeFindingHistory(t, callFindingHistory(t, srv, admin, org, repo.Slug, fingerprint))
+
+	kinds := make([]string, 0, len(history.Events))
+	for _, event := range history.Events {
+		kinds = append(kinds, event.Kind)
+	}
+	want := []string{"became_reachable", "became_unreachable", "first_detected"}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
+	}
+	if history.Events[1].From != "" || history.Events[1].To != "not_reachable" {
+		t.Fatalf("unreachable event from/to = %q/%q, want the verdicts", history.Events[1].From, history.Events[1].To)
+	}
+	if history.Events[0].From != "not_reachable" || history.Events[0].To != "reachable" {
+		t.Fatalf("reachable event from/to = %q/%q", history.Events[0].From, history.Events[0].To)
 	}
 }
 

@@ -217,7 +217,12 @@ func (s *Server) executeSecretScanJob(ctx context.Context, job *store.SecretScan
 	if auth, ok := provider.(forge.CloneAuthProvider); ok {
 		token, err = auth.CloneToken(ctx, target.owner)
 		if err != nil {
-			return fmt.Errorf("mint clone token for %s/%s: %w", target.owner, target.name, err)
+			// Minting can fail while the clone still succeeds (public repo,
+			// installation missing or renamed). The clone is the authority:
+			// attempt it tokenless and let a private repo fail with the
+			// clone's own auth error instead of dying here.
+			s.log.Warn().Err(err).Str("repo", repo.Slug).Str("owner", target.owner).Msg("clone token minting failed, attempting tokenless clone")
+			token = ""
 		}
 	}
 
@@ -257,6 +262,16 @@ func (s *Server) resolveSecretScanTarget(ctx context.Context, provider forge.Pro
 	target, err := s.mirroredSecretScanTarget(ctx, repo)
 	if err != nil {
 		return secretScanTarget{}, err
+	}
+
+	// No mirrored URL: derive it from owner/name before asking the forge API.
+	// The API call must never be load-bearing here — it runs anonymous when
+	// token minting fails, and anonymous GitHub is 60 requests/hour, which
+	// terminally failed every scan of a repo that had no mirrored row.
+	if target.cloneURL == "" {
+		if derivable, ok := provider.(forge.CloneURLProvider); ok {
+			target.cloneURL = derivable.CloneURL(target.owner, target.name)
+		}
 	}
 
 	needsLive := target.cloneURL == "" || s.cfg.SecretScan.MaxRepoMB > 0

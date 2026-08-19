@@ -290,6 +290,13 @@
           </table>
         </div>
       </section>
+
+      <!-- Runs: the timeline's payload as a flat, filterable list -->
+      <JobsRunList
+        v-if="timeline"
+        :runs="timeline.runs"
+        :now-ms="nowMs"
+      />
     </template>
   </div>
 </template>
@@ -301,6 +308,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { InstanceJobsOverview, InstanceJobsStats, InstanceJobsTimeline, InstanceJobsWindow, InstanceJobStatsBucket } from '@/api/client'
 import { api } from '@/api/client'
 import JobsKindStats from '@/components/settings/JobsKindStats.vue'
+import JobsRunList from '@/components/settings/JobsRunList.vue'
 import JobsTimeline from '@/components/settings/JobsTimeline.vue'
 import { formatDuration, relativeTime } from '@/lib/datetime'
 import type { KindVerdict } from '@/lib/jobStats'

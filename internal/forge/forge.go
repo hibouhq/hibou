@@ -96,6 +96,15 @@ type CloneAuthProvider interface {
 	CloneToken(ctx context.Context, owner string) (string, error)
 }
 
+// CloneURLProvider is implemented by forges whose HTTPS clone URL is derivable
+// from owner and name alone, without an API round trip. The secret scanner
+// falls back to it when the mirrored forge_repositories row carries no URL —
+// a rate-limited or anonymous API call must never be load-bearing for a clone
+// whose URL is knowable offline. Empty result means "cannot derive".
+type CloneURLProvider interface {
+	CloneURL(owner, name string) string
+}
+
 type Installation struct {
 	ID          int64
 	AccountName string

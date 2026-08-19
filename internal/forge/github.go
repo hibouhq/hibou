@@ -180,6 +180,21 @@ func appendUniqueRepositories(target []Repository, repositories []Repository, se
 	return target
 }
 
+// CloneURL implements CloneURLProvider without an API call: github.com's web
+// host is fixed, and a GHES web host is the API URL minus its /api/v3 suffix.
+func (g *GitHub) CloneURL(owner, name string) string {
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if owner == "" || name == "" {
+		return ""
+	}
+	base := "https://github.com"
+	if g.apiURL != "" && g.apiURL != defaultGitHubAPIURL {
+		base = strings.TrimSuffix(strings.TrimRight(g.apiURL, "/"), "/api/v3")
+	}
+	return base + "/" + owner + "/" + name + ".git"
+}
+
 func (g *GitHub) GetRepository(ctx context.Context, owner, name string) (*Repository, error) {
 	var payload githubRepository
 	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(owner), url.PathEscape(name))

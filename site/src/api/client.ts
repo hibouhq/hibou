@@ -1861,12 +1861,19 @@ class ApiClient {
       file?: string
       search?: string
       acceptance?: string
+      // Full boolean filterquery (AND/OR/parentheses); when set the server
+      // uses it exclusively and the discrete params above are ignored.
+      q?: string
       sort?: string
       page?: number
       per_page?: number
     },
   ) {
     const query = new URLSearchParams()
+
+    if (params?.q) {
+      query.set('q', params.q)
+    }
 
     if (params?.ref) {
       query.set('ref', params.ref)

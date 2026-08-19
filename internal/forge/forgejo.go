@@ -30,6 +30,17 @@ type Forgejo struct {
 	httpClient    *http.Client
 }
 
+// CloneURL implements CloneURLProvider: Forgejo's apiURL is the web base
+// (request paths append /api/v1), so the clone URL derives directly from it.
+func (f *Forgejo) CloneURL(owner, name string) string {
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if owner == "" || name == "" {
+		return ""
+	}
+	return f.apiURL + "/" + owner + "/" + name + ".git"
+}
+
 func NewForgejo(apiURL, clientID, clientSecret, webhookSecret string) *Forgejo {
 	if apiURL == "" {
 		apiURL = "http://localhost:3030"

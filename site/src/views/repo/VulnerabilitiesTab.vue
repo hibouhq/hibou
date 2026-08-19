@@ -16,6 +16,7 @@
     <FilterBar
       v-model="activeFilters"
       v-model:search-query="searchQuery"
+      v-model:advanced-query="advancedQuery"
       v-model:sort-value="currentSort"
       v-model:sort-direction="currentSortDirection"
       :filters="filterDefs"
@@ -116,6 +117,7 @@
         >
           ▾
         </button>
+        <!-- Alternatives only — the main button already means "accept risk". -->
         <div
           v-if="bulkMenuOpen"
           class="absolute left-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
@@ -123,13 +125,7 @@
           <button
             type="button"
             class="block w-full px-3 py-1.5 text-left text-xs text-gray-200 transition hover:bg-surface-overlay"
-            @click="bulkMenuOpen = false; openTriageDialog('risk_accepted', [...selected])"
-          >
-            Accept risk…
-          </button>
-          <button
-            type="button"
-            class="block w-full px-3 py-1.5 text-left text-xs text-gray-200 transition hover:bg-surface-overlay"
+            title="Not a real issue: excluded from the gate and from risk reporting."
             @click="bulkMenuOpen = false; openTriageDialog('false_positive', [...selected])"
           >
             False positive…
@@ -322,6 +318,9 @@
                     >
                       ▾
                     </button>
+                    <!-- The menu holds only the ALTERNATIVES: the main button
+                         already is "accept risk", repeating it here read as
+                         two different actions. -->
                     <div
                       v-if="rowMenuFor === vulnerability.id"
                       class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
@@ -329,13 +328,7 @@
                       <button
                         type="button"
                         class="block w-full px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
-                        @click.stop="rowMenuFor = ''; openTriageDialog('risk_accepted', [vulnerability.fingerprint], vulnerability)"
-                      >
-                        Accept risk…
-                      </button>
-                      <button
-                        type="button"
-                        class="block w-full px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
+                        title="Not a real issue: excluded from the gate and from risk reporting."
                         @click.stop="rowMenuFor = ''; openTriageDialog('false_positive', [vulnerability.fingerprint], vulnerability)"
                       >
                         False positive…
@@ -460,6 +453,9 @@ async function runSecretScan() {
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected' })
 const searchQuery = ref('')
+// Non-empty while the filter bar holds an OR/parenthesised query (ADR-023
+// filterquery grammar); sent verbatim as `q`, superseding discrete params.
+const advancedQuery = ref('')
 const currentSort = ref('detected')
 const currentSortDirection = ref('desc')
 const pagination = ref({ page: 1, per_page: 50, total: 0 })
@@ -487,7 +483,9 @@ const statusOptions = ['detected', 'resolved', 'suppressed']
 // current page. Order by descending count, then alphabetically.
 const toolOptions = computed(() => mergeFacetOptions(facetCounts.value.tool, seenTools.value))
 const fileOptions = computed(() => mergeFacetOptions(facetCounts.value.file, seenFiles.value))
-const acceptanceOptions = ['open', 'accepted', 'risk_accepted', 'false_positive']
+// 'disputed' is deliberately last: it lives on the dispute axis (ADR-026),
+// not the acceptance one — position separates it from the acceptance states.
+const acceptanceOptions = ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed']
 const filterDefs = computed(() => [
   { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
@@ -599,6 +597,9 @@ async function loadVulnerabilities() {
         file: activeFilters.value.file || undefined,
         search: searchQuery.value || undefined,
         acceptance: activeFilters.value.acceptance || undefined,
+        // An OR/parenthesised bar query runs as the server-side filterquery;
+        // the server uses it exclusively when present.
+        q: advancedQuery.value || undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,
         per_page: pagination.value.per_page,
@@ -647,7 +648,7 @@ async function loadVulnerabilities() {
 }
 
 watch(
-  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, currentSort, currentSortDirection, () => pagination.value.page],
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, advancedQuery, currentSort, currentSortDirection, () => pagination.value.page],
   () => { void loadVulnerabilities() },
   { immediate: true },
 )

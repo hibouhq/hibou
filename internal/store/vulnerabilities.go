@@ -36,7 +36,7 @@ type VulnerabilityListOptions struct {
 // unrecognized is dropped rather than silently matching nothing.
 func normalizeAcceptanceFilter(value string) string {
 	switch value {
-	case "open", "accepted", "risk_accepted", "false_positive":
+	case "open", "accepted", "risk_accepted", "false_positive", "disputed":
 		return value
 	}
 	return ""
@@ -1024,6 +1024,11 @@ type FindingTransition struct {
 	// `#nosec G115 --`). Non-empty only on observations whose status is
 	// suppressed.
 	SuppressionJustification string `json:"suppression_justification,omitempty"`
+	// Reachability/PreviousReachability carry the call-graph verdict when the
+	// transition was selected for a reachability flip (a definite verdict
+	// appearing or changing). Empty means unknown/not analyzed.
+	Reachability         string `json:"reachability,omitempty"`
+	PreviousReachability string `json:"previous_reachability,omitempty"`
 }
 
 // GetFindingFirstObservation returns the oldest observation of a fingerprint on
@@ -1070,6 +1075,8 @@ func (q *Queries) ListFindingTransitions(ctx context.Context, repoID uuid.UUID, 
 			PreviousStatus:           row.PreviousStatus,
 			Severity:                 row.Severity,
 			SuppressionJustification: row.SuppressionJustification,
+			Reachability:             row.Reachability,
+			PreviousReachability:     row.PreviousReachability,
 		}
 	}
 	return out, nil

@@ -309,8 +309,25 @@ func TestSecretScanJobClaimMutationsAreOwnerGuarded(t *testing.T) {
 func TestFailSecretScanJobRetryableVersusTerminal(t *testing.T) {
 	db := openSecretScanTestDB(t)
 	ctx := context.Background()
-	queries := NewQueries(db)
+
+	// The reclaim assertions below race other tests' rows for the claim's
+	// created_at ordering, so run the whole scenario in one locked tx with
+	// unrelated jobs quarantined (same pattern as the claim exclusivity test).
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE secret_scan_jobs IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock secret_scan_jobs: %v", err)
+	}
+	queries := NewQueries(db).WithTx(tx)
 	repoID := createRepoForSecretScanTest(t, ctx, queries)
+	if _, err := tx.ExecContext(ctx, `UPDATE secret_scan_jobs SET status = 'complete', claimed_by = NULL, claim_expires_at = NULL, finished_at = NOW() WHERE repo_id <> $1`, repoID); err != nil {
+		t.Fatalf("quarantine unrelated jobs: %v", err)
+	}
 
 	job, err := queries.EnqueueSecretScanJob(ctx, EnqueueSecretScanJobParams{
 		RepoID:  repoID,
@@ -320,7 +337,7 @@ func TestFailSecretScanJobRetryableVersusTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueSecretScanJob() error = %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE secret_scan_jobs SET status = 'processing', claimed_by = 'worker-a' WHERE id = $1`, job.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE secret_scan_jobs SET status = 'processing', claimed_by = 'worker-a' WHERE id = $1`, job.ID); err != nil {
 		t.Fatalf("simulate claim: %v", err)
 	}
 
@@ -335,15 +352,30 @@ func TestFailSecretScanJobRetryableVersusTerminal(t *testing.T) {
 		t.Fatalf("last_error = %q, want the cause recorded", failed.LastError)
 	}
 
-	if _, err := db.ExecContext(ctx, `UPDATE secret_scan_jobs SET claimed_by = 'worker-a' WHERE id = $1`, job.ID); err != nil {
-		t.Fatalf("re-claim: %v", err)
+	// "Retryable" must mean the claim actually picks the row up again — a
+	// parked status 'failed'/finished_at NULL row that no claim matches is a
+	// zombie, not a retry (the bug this arm of the test pins down).
+	reclaimed, err := queries.ClaimNextSecretScanJob(ctx, "worker-b", time.Now().Add(time.Minute), 5)
+	if err != nil {
+		t.Fatalf("ClaimNextSecretScanJob(after retryable failure) error = %v", err)
 	}
-	terminal, err := queries.FailSecretScanJob(ctx, job.ID, "worker-a", "repo too large", true)
+	if reclaimed == nil || reclaimed.ID != job.ID {
+		t.Fatalf("reclaimed = %#v, want the retryable failed job to be claimed again", reclaimed)
+	}
+
+	terminal, err := queries.FailSecretScanJob(ctx, job.ID, "worker-b", "repo too large", true)
 	if err != nil {
 		t.Fatalf("FailSecretScanJob(terminal) error = %v", err)
 	}
 	if terminal == nil || terminal.FinishedAt == nil {
 		t.Fatalf("terminal failure = %#v, want finished_at set", terminal)
+	}
+	afterTerminal, err := queries.ClaimNextSecretScanJob(ctx, "worker-c", time.Now().Add(time.Minute), 5)
+	if err != nil {
+		t.Fatalf("ClaimNextSecretScanJob(after terminal failure) error = %v", err)
+	}
+	if afterTerminal != nil {
+		t.Fatalf("claimed %#v after terminal failure, want nothing claimable", afterTerminal)
 	}
 }
 

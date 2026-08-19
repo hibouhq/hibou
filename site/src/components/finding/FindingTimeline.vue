@@ -77,6 +77,18 @@
             {{ eventDetail(event) }}
           </p>
           <p
+            v-else-if="event.kind === 'became_unreachable'"
+            class="mt-0.5 text-xs text-gray-500"
+          >
+            Call-graph analysis found no execution path to the vulnerable symbol; with reachability gating on, this stops blocking merges.
+          </p>
+          <p
+            v-else-if="event.kind === 'became_reachable'"
+            class="mt-0.5 text-xs text-gray-500"
+          >
+            Analysis now finds an execution path to the vulnerable symbol — this counts as real risk again.
+          </p>
+          <p
             v-else-if="event.kind === 'first_detected'"
             class="mt-0.5 text-xs text-gray-500"
           >
@@ -156,6 +168,8 @@ const LABELS: Record<string, string> = {
   resolved: 'No longer detected',
   reintroduced: 'Reintroduced',
   suppressed: 'Suppressed by the scanner',
+  became_unreachable: 'Proven unreachable',
+  became_reachable: 'Reachable again',
   status_change: 'Status changed',
   reported: 'Reported manually',
   accepted: 'Risk accepted',
@@ -177,9 +191,11 @@ function markerClass(event: FindingHistoryEvent): string {
       return 'border-accent/50 bg-accent/15 text-accent'
     case 'detected':
     case 'reintroduced':
+    case 'became_reachable':
       return 'border-danger/40 bg-danger/15 text-danger'
     case 'resolved':
     case 'revoked':
+    case 'became_unreachable':
       return 'border-ok/40 bg-ok/15 text-ok'
     case 'accepted':
     case 'reopened':
