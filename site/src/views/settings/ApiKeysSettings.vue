@@ -5,8 +5,10 @@ import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, KeyRound, Pencil, R
 
 import type { ApiKey, Organization, TokenScope } from '@/api/client'
 import { api } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import TokenScopeEditor from '@/components/TokenScopeEditor.vue'
 
+const { confirmDialog } = useDialog()
 const keys = ref<ApiKey[]>([])
 const loading = ref(true)
 const listError = ref('')
@@ -193,7 +195,7 @@ async function submit() {
 }
 
 async function rotate(key: ApiKey) {
-  if (!window.confirm(`Rotate "${key.name}"? The current secret stops working immediately.`)) return
+  if (!(await confirmDialog({ title: `Rotate "${key.name}"?`, message: 'The current secret stops working immediately.', confirmLabel: 'Rotate key', tone: 'danger' }))) return
 
   const org = key.owner_type === 'org' ? keyOrg(key) : undefined
   if (key.owner_type === 'org' && !org) {
@@ -217,7 +219,7 @@ async function rotate(key: ApiKey) {
 }
 
 async function revoke(key: ApiKey) {
-  if (!window.confirm(`Revoke "${key.name}"? Anything using it stops working immediately.`)) return
+  if (!(await confirmDialog({ title: `Revoke "${key.name}"?`, message: 'Anything using it stops working immediately.', confirmLabel: 'Revoke key', tone: 'danger' }))) return
 
   const org = key.owner_type === 'org' ? keyOrg(key) : undefined
   if (key.owner_type === 'org' && !org) {

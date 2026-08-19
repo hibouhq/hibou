@@ -411,8 +411,13 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 // the forge_repositories sync record.
 type repoVisibilityResponse struct {
 	*store.Repository
-	Private        bool   `json:"private"`
-	Visibility     string `json:"visibility"`
+	Private    bool   `json:"private"`
+	Visibility string `json:"visibility"`
+	// HTMLURL is the repo's home on the forge, from the sync record (with a
+	// provider_id-derived fallback). The UI builds every deep link — blob at a
+	// commit, commit page, branch — from it; without it those render as plain
+	// text.
+	HTMLURL        string `json:"html_url,omitempty"`
 	ViewerCanAudit bool   `json:"viewer_can_audit"`
 }
 
@@ -423,6 +428,12 @@ func (s *Server) repoDetailResponse(ctx context.Context, repo *store.Repository)
 		if forgeRepo.Private {
 			resp.Visibility = "private"
 		}
+		resp.HTMLURL = forgeRepo.HTMLURL
+	}
+	// Repos enrolled before the sync record existed (or manually) still have
+	// owner/name coordinates; derive the URL the same way the inventory does.
+	if resp.HTMLURL == "" {
+		resp.HTMLURL = forgeRepoURL(nil, s.forgeWebURL(repo.Provider), repo.Provider, repo.ProviderID)
 	}
 	return resp
 }

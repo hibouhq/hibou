@@ -20,6 +20,7 @@ type Store interface {
 	MarkInstallationRepositoriesRemoved(ctx context.Context, provider string, installationID int64) ([]store.ForgeRepositoryChange, error)
 	SetForgeRepositoryArchived(ctx context.Context, provider, providerKey string, archived bool) (*store.ForgeRepositoryChange, error)
 	SetForgeRepositoryPrivate(ctx context.Context, provider, providerKey string, private bool) error
+	SyncRepositoryDefaultBranch(ctx context.Context, provider, providerKey, defaultBranch string) ([]dbgen.SyncRepositoryDefaultBranchRow, error)
 	ListForgeRepositoriesByAccount(ctx context.Context, provider, account string) ([]store.ForgeRepository, error)
 	GetForgeRepositoryByProviderRepoID(ctx context.Context, provider, id string) (*store.ForgeRepository, error)
 	CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error)
@@ -156,7 +157,7 @@ func (s *Service) ApplyRepository(ctx context.Context, providerID string, ev for
 	}
 
 	switch strings.ToLower(strings.TrimSpace(ev.Action)) {
-	case "created", "publicized", "privatized":
+	case "created", "edited", "publicized", "privatized":
 		return s.applyRepositoryUpsert(ctx, providerID, ev.Repo)
 	case "renamed", "transferred":
 		return s.upsertAndRetirePreviousKey(ctx, providerID, ev.Repo, oldProviderKey)
@@ -327,6 +328,7 @@ func (s *Service) upsertRepositoryCore(ctx context.Context, providerID string, i
 		fullName = owner + "/" + strings.TrimSpace(repo.Name)
 	}
 	providerRepoID := stringPtr(strings.TrimSpace(repo.ProviderRepoID))
+	defaultBranch := strings.TrimSpace(repo.DefaultBranch)
 	result, err := s.store.UpsertForgeRepository(ctx, store.ForgeRepository{
 		Provider:       strings.TrimSpace(providerID),
 		InstallationID: installationID,
@@ -336,14 +338,37 @@ func (s *Service) upsertRepositoryCore(ctx context.Context, providerID string, i
 		Name:           strings.TrimSpace(repo.Name),
 		FullName:       fullName,
 		Private:        repo.Private,
-		DefaultBranch:  strings.TrimSpace(repo.DefaultBranch),
+		DefaultBranch:  defaultBranch,
 		HTMLURL:        strings.TrimSpace(repo.HTMLURL),
 		Archived:       archived,
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.syncEnrolledDefaultBranch(ctx, providerID, result, defaultBranch)
 	return result, nil
+}
+
+// syncEnrolledDefaultBranch keeps enrolled repositories on the forge's default
+// branch: the forge is the source of truth, a manual override only bridges the
+// gap until the forge reports again. Failures are logged, not returned — the
+// inventory write must not fail over a follower update.
+func (s *Service) syncEnrolledDefaultBranch(ctx context.Context, providerID string, result *store.ForgeRepositoryUpsertResult, defaultBranch string) {
+	if defaultBranch == "" || result == nil || result.Repository == nil {
+		return
+	}
+	providerKey := strings.TrimSpace(result.Repository.ProviderKey)
+	if providerKey == "" {
+		return
+	}
+	updated, err := s.store.SyncRepositoryDefaultBranch(ctx, strings.TrimSpace(providerID), providerKey, defaultBranch)
+	if err != nil {
+		s.log.Warn().Err(err).Str("provider", strings.TrimSpace(providerID)).Str("provider_key", providerKey).Str("default_branch", defaultBranch).Msg("sync enrolled repository default branch")
+		return
+	}
+	for _, row := range updated {
+		s.log.Info().Str("provider", strings.TrimSpace(providerID)).Str("repo_slug", row.Slug).Str("org_id", row.OrgID.String()).Str("default_branch", defaultBranch).Msg("enrolled repository default branch followed the forge")
+	}
 }
 
 func (s *Service) markInstallationRepositoriesRemoved(ctx context.Context, providerID string, installationID int64, account, reason string) error {

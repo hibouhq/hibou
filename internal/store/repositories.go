@@ -298,6 +298,17 @@ func (q *Queries) DeleteRepository(ctx context.Context, id uuid.UUID) error {
 	return q.db.DeleteRepository(ctx, id)
 }
 
+// SyncRepositoryDefaultBranch makes every enrolled repository tracking the
+// given forge repo follow the forge's default branch. Returns the updated
+// rows; repositories already on that branch are untouched.
+func (q *Queries) SyncRepositoryDefaultBranch(ctx context.Context, provider, providerKey, defaultBranch string) ([]dbgen.SyncRepositoryDefaultBranchRow, error) {
+	return q.db.SyncRepositoryDefaultBranch(ctx, dbgen.SyncRepositoryDefaultBranchParams{
+		Provider:      provider,
+		ProviderKey:   providerKey,
+		DefaultBranch: defaultBranch,
+	})
+}
+
 func (q *Queries) ListRepositoryRetentionUsage(ctx context.Context) ([]RepositoryRetentionUsageRow, error) {
 	rows, err := q.db.ListRepositoryRetentionUsage(ctx)
 	if err != nil {

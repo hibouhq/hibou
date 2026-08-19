@@ -422,6 +422,29 @@ func TestApplyInstallationEmptyPayloadWithoutForgeAccessKeepsInventory(t *testin
 	}
 }
 
+func TestApplyRepositoryEditedFollowsForgeDefaultBranch(t *testing.T) {
+	t.Parallel()
+
+	fakeStore := newFakeStore()
+	service := NewService(fakeStore, nil, zerolog.New(io.Discard))
+	ctx := context.Background()
+
+	err := service.ApplyRepository(ctx, "github", forge.RepositoryEvent{
+		Action: "edited",
+		Repo:   forge.Repository{ProviderRepoID: "42", Owner: "acme", Name: "api", FullName: "acme/api", DefaultBranch: "develop"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyRepository(edited) error = %v", err)
+	}
+
+	if repo := fakeStore.byKey("github", "acme/api"); repo == nil || repo.DefaultBranch != "develop" {
+		t.Fatalf("expected inventory default branch develop, got %#v", repo)
+	}
+	if len(fakeStore.defaultBranchSyncs) != 1 || fakeStore.defaultBranchSyncs[0] != "github|acme/api|develop" {
+		t.Fatalf("expected enrolled default branch sync github|acme/api|develop, got %v", fakeStore.defaultBranchSyncs)
+	}
+}
+
 func TestUpsertRepositoryDetectedAuditOnlyOnTransition(t *testing.T) {
 	t.Parallel()
 
@@ -619,6 +642,7 @@ type fakeStore struct {
 	auditLogs                         []dbgen.CreateAuditLogParams
 	createAuditErr                    error
 	clock                             int64
+	defaultBranchSyncs                []string
 }
 
 func newFakeStore() *fakeStore {
@@ -700,6 +724,11 @@ func (f *fakeStore) SetForgeRepositoryArchived(_ context.Context, provider, prov
 	repo.UpdatedAt = fakeTime(&f.clock)
 	f.repos[key] = repo
 	return &store.ForgeRepositoryChange{ID: repo.ID, FullName: repo.FullName, ProviderKey: repo.ProviderKey}, nil
+}
+
+func (f *fakeStore) SyncRepositoryDefaultBranch(_ context.Context, provider, providerKey, defaultBranch string) ([]dbgen.SyncRepositoryDefaultBranchRow, error) {
+	f.defaultBranchSyncs = append(f.defaultBranchSyncs, provider+"|"+providerKey+"|"+defaultBranch)
+	return nil, nil
 }
 
 func (f *fakeStore) SetForgeRepositoryPrivate(_ context.Context, provider, providerKey string, private bool) error {

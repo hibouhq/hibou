@@ -1,6 +1,9 @@
 <template>
   <div class="px-4 pt-5">
-    <div class="compare-rise relative">
+    <!-- compare-rise's animation makes this a stacking context, so the ref
+         picker dropdowns (z-50 inside) are trapped at this block's level: it
+         must sit above the z-20 snapshot row or they render underneath it. -->
+    <div class="compare-rise relative z-30">
       <p class="mb-1 flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-gray-500">
         <span class="compare-beacon" />
         <span class="compare-display">Compare</span>

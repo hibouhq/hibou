@@ -1,5 +1,9 @@
 <template>
-  <div class="space-y-5">
+  <!-- Overview: the code and how to fix it. -->
+  <div
+    v-if="section !== 'details'"
+    class="space-y-5"
+  >
     <!-- The code is the finding. It leads, in place, with the offending lines
          marked — reading the rule id first tells you nothing you can act on. -->
     <FindingSection
@@ -17,16 +21,42 @@
         :end-line="finding.end_line"
         :repo-html-url="repoHtmlUrl"
         :forge-provider="forgeProvider"
+        :fallback-sha="fallbackSha"
       />
     </FindingSection>
 
     <FindingSection
+      v-if="finding.solution || finding.remediation_link"
+      title="How to fix"
+      boxed
+      class="!border-ok/30 !bg-ok/5"
+    >
+      <p
+        v-if="finding.solution"
+        class="text-sm text-gray-300"
+      >
+        {{ finding.solution }}
+      </p>
+      <a
+        v-if="finding.remediation_link"
+        :href="finding.remediation_link"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="mt-1 inline-block text-xs text-accent underline underline-offset-2"
+      >Remediation guidance</a>
+    </FindingSection>
+  </div>
+
+  <!-- Details: the rule record and the scanner's full message. -->
+  <div
+    v-else
+    class="space-y-5"
+  >
+    <FindingSection
       v-if="message"
       title="What the rule found"
     >
-      <p class="whitespace-pre-wrap text-sm text-gray-300">
-        {{ message }}
-      </p>
+      <MarkdownText :text="message" />
     </FindingSection>
 
     <FindingSection
@@ -58,27 +88,6 @@
         >{{ cwe }}</a>
       </div>
     </FindingSection>
-
-    <FindingSection
-      v-if="finding.solution || finding.remediation_link"
-      title="How to fix"
-      boxed
-      class="!border-ok/30 !bg-ok/5"
-    >
-      <p
-        v-if="finding.solution"
-        class="text-sm text-gray-300"
-      >
-        {{ finding.solution }}
-      </p>
-      <a
-        v-if="finding.remediation_link"
-        :href="finding.remediation_link"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="mt-1 inline-block text-xs text-accent underline underline-offset-2"
-      >Remediation guidance</a>
-    </FindingSection>
   </div>
 </template>
 
@@ -86,6 +95,7 @@
 import { computed } from 'vue'
 
 import type { FindingDetail } from '@/api/client'
+import MarkdownText from '@/components/MarkdownText.vue'
 import type { Fact } from '@/components/finding/facts'
 import FindingCodeSnippet from '@/components/finding/FindingCodeSnippet.vue'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
@@ -96,6 +106,8 @@ import { cweUrl } from '@/lib/findingDisplay'
 // the source. No package, no advisory, no upgrade — a code change fixes it.
 const props = defineProps<{
   detail: FindingDetail
+  /** Which half the modal is rendering: the overview or the reference tab. */
+  section?: 'overview' | 'details'
   provider?: string
   slug?: string
   repoSlug?: string
@@ -104,6 +116,9 @@ const props = defineProps<{
 }>()
 
 const finding = computed(() => props.detail.finding)
+// The newest ref currently detecting the finding — the commit the snippet
+// links against when the source fetch cannot supply one.
+const fallbackSha = computed(() => props.detail.occurrences[0]?.commit_sha ?? '')
 // The title is already in the drawer header; repeating it as the message adds
 // nothing, so only a distinct description is shown.
 const message = computed(() => (finding.value.description !== finding.value.title ? finding.value.description : ''))

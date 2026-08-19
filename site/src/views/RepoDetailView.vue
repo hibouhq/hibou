@@ -205,7 +205,7 @@
       </div>
 
       <div
-        v-if="!isReleaseTabActive"
+        v-if="!isFencedTabActive"
         class="px-4 pt-3"
       >
         <BranchPRSelector
@@ -220,7 +220,7 @@
       </div>
 
       <div
-        v-if="!isReleaseTabActive && (snapshots.length > 0 || snapshotsLoading)"
+        v-if="!isFencedTabActive && (snapshots.length > 0 || snapshotsLoading)"
         class="flex items-center gap-2 overflow-x-auto border-b border-surface-border-subtle px-4 py-2"
       >
         <span class="shrink-0 text-[11px] uppercase tracking-[0.14em] text-gray-500">Snapshot</span>
@@ -505,8 +505,10 @@ const tabs = computed(() => {
     // selector strip disappears while it is active.
     { label: 'Releases', name: 'repo-releases', icon: Rocket, fenced: true, to: { name: 'repo-releases', params: route.params } },
     { label: 'Deployments', name: 'repo-deployments', icon: Container, fenced: true, badge: 'Soon', to: { name: 'repo-deployments', params: route.params } },
-    { label: 'Insights', name: 'repo-insights', icon: LineChart, to: { name: 'repo-insights', params: route.params } },
-    { label: 'Settings', name: 'repo-settings', icon: Settings, to: { name: 'repo-settings', params: route.params } },
+    // Insights and Settings are repo-level like Releases: fencing them drops
+    // the ref/snapshot selector strip, which does not apply to them.
+    { label: 'Insights', name: 'repo-insights', icon: LineChart, fenced: true, to: { name: 'repo-insights', params: route.params } },
+    { label: 'Settings', name: 'repo-settings', icon: Settings, fenced: true, to: { name: 'repo-settings', params: route.params } },
   ]
 })
 
@@ -552,7 +554,17 @@ watch(
   },
 )
 
-const isReleaseTabActive = computed(() => route.name === 'repo-releases' || route.name === 'repo-deployments')
+// Fenced tabs are repo-level, not ref-scoped: the ref/snapshot selector strip
+// hides while one is active (ADR-024 §1).
+const isFencedTabActive = computed(() => {
+  if (typeof route.name !== 'string') return false
+  return (
+    route.name === 'repo-releases'
+    || route.name === 'repo-deployments'
+    || route.name === 'repo-insights'
+    || route.name.startsWith('repo-settings')
+  )
+})
 
 function isActiveTab(name: string) {
   if (name === 'repo-settings') {

@@ -67,14 +67,35 @@ export function isComponentBacked(type: string | undefined): boolean {
   return type === 'dependency' || type === 'container'
 }
 
-/** Where to read the advisory an identifier names. */
+/**
+ * Where to read the advisory an identifier names: the vendor's own page when
+ * one is constructible from the id alone, osv.dev for the many namespaces OSV
+ * hosts (ALSA, SUSE-SU, RLSA, PHSA, MGASA, CGA, MAL, PYSEC, CURL, …).
+ * Namespace list mirrors ADVISORY_PATTERNS in SearchPalette.vue.
+ */
 export function advisoryUrl(id: string | undefined): string {
   const value = (id ?? '').trim()
   if (!value) return ''
-  if (value.startsWith('GHSA-')) return `https://github.com/advisories/${value}`
-  if (value.startsWith('CVE-')) return `https://nvd.nist.gov/vuln/detail/${value}`
-  if (value.startsWith('GO-')) return `https://pkg.go.dev/vuln/${value}`
-  if (/^[A-Z]+-\d/.test(value)) return `https://osv.dev/vulnerability/${value}`
+  const upper = value.toUpperCase()
+  if (upper.startsWith('CVE-')) return `https://nvd.nist.gov/vuln/detail/${value}`
+  if (upper.startsWith('GHSA-')) return `https://github.com/advisories/${value}`
+  if (upper.startsWith('GO-')) return `https://pkg.go.dev/vuln/${value}`
+  if (upper.startsWith('RUSTSEC-')) return `https://rustsec.org/advisories/${value}.html`
+  if (upper.startsWith('SNYK-')) return `https://security.snyk.io/vuln/${value}`
+  if (/^RH(SA|BA|EA)-/.test(upper)) return `https://access.redhat.com/errata/${value}`
+  if (upper.startsWith('USN-')) return `https://ubuntu.com/security/notices/${value}`
+  if (/^(DSA|DLA)-/.test(upper)) return `https://security-tracker.debian.org/tracker/${value}`
+  if (upper.startsWith('ELSA-')) return `https://linux.oracle.com/errata/${value}.html`
+  // Amazon Linux 2 pages live under /AL2/ with the plain ALAS- prefix.
+  if (upper.startsWith('ALAS2-')) return `https://alas.aws.amazon.com/AL2/${value.replace(/^ALAS2-/i, 'ALAS-')}.html`
+  if (upper.startsWith('ALAS-')) return `https://alas.aws.amazon.com/${value}.html`
+  if (upper.startsWith('GLSA-')) return `https://security.gentoo.org/glsa/${value.replace(/^GLSA-/i, '')}`
+  if (upper.startsWith('FEDORA-')) return `https://bodhi.fedoraproject.org/updates/${value}`
+  // Chainguard ids are GHSA-shaped (letter groups), so the digit-based
+  // fallback below cannot be relied on for them.
+  if (upper.startsWith('CGA-')) return `https://osv.dev/vulnerability/${value}`
+  // Multi-segment prefixes (SUSE-SU-…, openSUSE-SU-…, UBUNTU-CVE-…) included.
+  if (/^[A-Z]+(-[A-Z]+)*-\d/i.test(value)) return `https://osv.dev/vulnerability/${value}`
   return ''
 }
 

@@ -103,11 +103,13 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { api, ORG_MEMBER_ROLES, type OrgMember } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 import { relativeTime } from '@/lib/datetime'
 import { useAuthStore } from '@/stores/auth'
 
+const { confirmDialog } = useDialog()
 const route = useRoute()
 const authStore = useAuthStore()
 const { isOrgAdmin } = useOrgRole()
@@ -165,7 +167,7 @@ async function changeRole(member: OrgMember, role: string) {
 
 async function removeMember(member: OrgMember) {
   const name = member.user?.display_name || member.user?.email || 'this member'
-  if (!window.confirm(`Remove ${name} from the organization?`)) {
+  if (!(await confirmDialog({ title: `Remove ${name} from the organization?`, message: 'They lose access immediately; they can be invited again later.', confirmLabel: 'Remove member', tone: 'danger' }))) {
     return
   }
   busyUserID.value = member.user_id

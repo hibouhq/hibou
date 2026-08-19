@@ -592,6 +592,59 @@ func (q *Queries) ListStaleRepositories(ctx context.Context, completedAt sql.Nul
 	return items, nil
 }
 
+const syncRepositoryDefaultBranch = `-- name: SyncRepositoryDefaultBranch :many
+UPDATE repositories
+SET default_branch = $1, updated_at = NOW()
+WHERE provider = $2
+  AND lower(provider_id) = lower($3)
+  AND default_branch <> $1
+RETURNING id, org_id, slug, default_branch
+`
+
+type SyncRepositoryDefaultBranchParams struct {
+	DefaultBranch string `json:"default_branch"`
+	Provider      string `json:"provider"`
+	ProviderKey   string `json:"provider_key"`
+}
+
+type SyncRepositoryDefaultBranchRow struct {
+	ID            uuid.UUID `json:"id"`
+	OrgID         uuid.UUID `json:"org_id"`
+	Slug          string    `json:"slug"`
+	DefaultBranch string    `json:"default_branch"`
+}
+
+// The forge is the source of truth for the default branch: every enrolled
+// repository tracking this forge repo follows it. provider_id is matched
+// case-insensitively because it stores the forge's canonical provider key.
+func (q *Queries) SyncRepositoryDefaultBranch(ctx context.Context, arg SyncRepositoryDefaultBranchParams) ([]SyncRepositoryDefaultBranchRow, error) {
+	rows, err := q.db.QueryContext(ctx, syncRepositoryDefaultBranch, arg.DefaultBranch, arg.Provider, arg.ProviderKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SyncRepositoryDefaultBranchRow{}
+	for rows.Next() {
+		var i SyncRepositoryDefaultBranchRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.Slug,
+			&i.DefaultBranch,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateRepository = `-- name: UpdateRepository :one
 UPDATE repositories
 SET name = $2, slug = $3, default_branch = $4, sync_state = $5, team_id = $6, updated_at = NOW()

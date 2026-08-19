@@ -56,22 +56,45 @@ export function forgeRefUrl(htmlUrl: string | undefined | null, provider: ForgeP
   }
 }
 
-/** Link to a file's contents at an exact commit. */
-export function forgeBlobAtCommitUrl(htmlUrl: string | undefined | null, provider: ForgeProvider, sha: string, filePath: string): string | null {
+/**
+ * The line anchor a forge understands. GitHub-likes repeat the prefix on a
+ * range (#L10-L20); GitLab does not (#L10-20).
+ */
+function lineAnchor(provider: ForgeProvider, startLine?: number, endLine?: number): string {
+  if (!startLine || startLine < 1) return ''
+  const end = endLine && endLine > startLine ? endLine : 0
+  if (!end) return `#L${startLine}`
+  return provider === 'gitlab' ? `#L${startLine}-${end}` : `#L${startLine}-L${end}`
+}
+
+/**
+ * Link to a file's contents at an exact commit, optionally anchored on the
+ * lines a finding points at — the difference between "here is the file" and
+ * "here is the line".
+ */
+export function forgeBlobAtCommitUrl(
+  htmlUrl: string | undefined | null,
+  provider: ForgeProvider,
+  sha: string,
+  filePath: string,
+  lines?: { startLine?: number, endLine?: number },
+): string | null {
   const base = (htmlUrl ?? '').trim().replace(/\/+$/, '')
   const commit = (sha ?? '').trim()
   const path = (filePath ?? '').trim().replace(/^\/+/, '')
   if (!base || !commit || !path) return null
 
+  const anchor = lineAnchor(provider, lines?.startLine, lines?.endLine)
+
   switch (provider) {
     case 'gitlab':
-      return `${base}/-/blob/${commit}/${encodeRef(path)}`
+      return `${base}/-/blob/${commit}/${encodeRef(path)}${anchor}`
     case 'gitea':
     case 'forgejo':
       // Gitea's branch route rejects a raw sha; commit has its own path.
-      return `${base}/src/commit/${commit}/${encodeRef(path)}`
+      return `${base}/src/commit/${commit}/${encodeRef(path)}${anchor}`
     default:
-      return `${base}/blob/${commit}/${encodeRef(path)}`
+      return `${base}/blob/${commit}/${encodeRef(path)}${anchor}`
   }
 }
 

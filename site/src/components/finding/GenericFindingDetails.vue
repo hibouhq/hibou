@@ -1,5 +1,9 @@
 <template>
-  <div class="space-y-5">
+  <!-- Everything fits one screen; the modal hides its Details tab for this kind. -->
+  <div
+    v-if="section !== 'details'"
+    class="space-y-5"
+  >
     <FindingSection
       v-if="finding.description && finding.description !== finding.title"
       title="Description"
@@ -52,6 +56,8 @@ import FindingSection from '@/components/finding/FindingSection.vue'
 // instead of pretending it is a dependency or a code finding.
 const props = defineProps<{
   detail: FindingDetail
+  /** Which half the modal is rendering: the overview or the reference tab. */
+  section?: 'overview' | 'details'
   provider?: string
   slug?: string
   repoSlug?: string

@@ -1,5 +1,9 @@
 <template>
-  <div class="space-y-5">
+  <!-- Everything fits one screen; the modal hides its Details tab for this kind. -->
+  <div
+    v-if="section !== 'details'"
+    class="space-y-5"
+  >
     <!-- A leaked credential is an incident, not a defect: the first thing on
          screen is what to do about it, in order. -->
     <FindingSection
@@ -58,13 +62,6 @@
         class="mt-2"
         :facts="leakFacts"
       />
-      <a
-        v-if="blobUrl"
-        :href="blobUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="mt-2 inline-block text-xs text-accent underline underline-offset-2"
-      >View the file in the forge</a>
       <!-- Deliberately no inline source preview: rendering the surrounding
            lines would put the secret itself back on screen (and in caches) for
            everyone who can read this finding. -->
@@ -91,10 +88,12 @@ import type { FindingDetail } from '@/api/client'
 import type { Fact } from '@/components/finding/facts'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
-import { forgeBlobAtCommitUrl } from '@/lib/forgeLinks'
+import { forgeBlobAtCommitUrl, forgeCommitUrl } from '@/lib/forgeLinks'
 
 const props = defineProps<{
   detail: FindingDetail
+  /** Which half the modal is rendering: the overview or the reference tab. */
+  section?: 'overview' | 'details'
   provider?: string
   slug?: string
   repoSlug?: string
@@ -113,11 +112,14 @@ const resolved = computed(() => finding.value.status === 'resolved')
 const commitSha = computed(() => finding.value.commit_sha || props.detail.occurrences[0]?.commit_sha || '')
 
 const leakFacts = computed<Fact[]>(() => [
-  { label: 'File', value: location.value, mono: true, wide: true },
-  { label: 'Commit', value: commitSha.value ? commitSha.value.slice(0, 12) : '', mono: true },
+  // File and commit link straight into the forge when its URL is known.
+  { label: 'File', value: location.value, mono: true, wide: true, href: blobUrl.value || undefined },
+  { label: 'Commit', value: commitSha.value ? commitSha.value.slice(0, 12) : '', mono: true, href: commitUrl.value || undefined },
   { label: 'Author', value: finding.value.author_email, hint: 'Who committed the leak — ask them which system the credential belongs to' },
   { label: 'Scanner', value: finding.value.scanner_name },
 ])
+
+const commitUrl = computed(() => forgeCommitUrl(props.repoHtmlUrl, props.forgeProvider ?? 'github', commitSha.value))
 
 const location = computed(() => {
   const path = finding.value.file_path
@@ -127,7 +129,7 @@ const location = computed(() => {
 
 const blobUrl = computed(() =>
   finding.value.file_path && commitSha.value
-    ? forgeBlobAtCommitUrl(props.repoHtmlUrl, props.forgeProvider ?? 'github', commitSha.value, finding.value.file_path)
+    ? forgeBlobAtCommitUrl(props.repoHtmlUrl, props.forgeProvider ?? 'github', commitSha.value, finding.value.file_path, { startLine: finding.value.start_line })
     : '',
 )
 </script>

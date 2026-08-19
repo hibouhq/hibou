@@ -206,8 +206,10 @@ import { computed, inject, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api, type Organization, type OrgSettings } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 
+const { confirmDialog } = useDialog()
 const TLP_LABELS = ['TLP:CLEAR', 'TLP:GREEN', 'TLP:AMBER', 'TLP:AMBER+STRICT', 'TLP:RED']
 
 const route = useRoute()
@@ -278,11 +280,14 @@ const deleting = ref(false)
 const deleteError = ref('')
 
 async function deleteOrg() {
-  const expected = slug.value
-  const typed = window.prompt(
-    `This permanently deletes the organization and all its Hibou data.\n\nType "${expected}" to confirm:`,
-  )
-  if (typed !== expected) {
+  const confirmed = await confirmDialog({
+    title: 'Delete this organization',
+    message: 'This permanently deletes the organization and all its Hibou data.',
+    confirmLabel: 'Delete organization',
+    tone: 'danger',
+    requireText: slug.value,
+  })
+  if (!confirmed) {
     return
   }
   deleting.value = true

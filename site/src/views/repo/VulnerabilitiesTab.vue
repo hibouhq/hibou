@@ -51,7 +51,7 @@
       @confirm="confirmTriageDialog"
     />
 
-    <FindingDrawer
+    <FindingDetailModal
       v-if="drawerFingerprint"
       :provider="provider"
       :slug="slug"
@@ -376,13 +376,15 @@ import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 import { KeyRound } from 'lucide-vue-next'
 
 import { api, type AcceptanceReasonKind, type FindingAcceptance, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import FilterBar from '@/components/FilterBar.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
-import FindingDrawer from '@/components/FindingDrawer.vue'
+import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import { triageState } from '@/lib/triage'
 
+const { promptDialog } = useDialog()
 const route = useRoute()
 const router = useRouter()
 
@@ -1051,7 +1053,12 @@ function patchRowsAfterTriage(fingerprints: string[], acceptance: FindingAccepta
 }
 
 async function markSecretRevoked(vulnerability: Vulnerability) {
-  const comment = window.prompt('Attest revocation: how was this secret revoked/rotated? (recorded in the audit log)')
+  const comment = await promptDialog({
+    title: 'Attest secret revocation',
+    message: 'Recorded in the audit log.',
+    confirmLabel: 'Mark revoked',
+    input: { label: 'How was this secret revoked/rotated?' },
+  })
   if (comment === null) return
   batchMessage.value = ''
   try {

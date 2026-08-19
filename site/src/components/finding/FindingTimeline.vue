@@ -56,10 +56,13 @@
               v-if="event.ref_name"
               class="font-mono text-xs text-gray-500"
             >on {{ shortRef(event.ref_name) }}</span>
-            <span
+            <CommitLink
               v-if="event.commit_sha"
-              class="font-mono text-xs text-gray-600"
-            >{{ event.commit_sha.slice(0, 7) }}</span>
+              class="text-xs"
+              :sha="event.commit_sha"
+              :repo-html-url="repoHtmlUrl"
+              :provider="forgeProvider"
+            />
             <span
               class="ml-auto shrink-0 text-xs"
               :class="event.kind === 'first_detected' ? 'text-gray-300' : 'text-gray-500'"
@@ -109,6 +112,7 @@ import { ref, watch } from 'vue'
 import { History, Radar, UserCheck } from 'lucide-vue-next'
 
 import { api, type FindingHistoryEvent } from '@/api/client'
+import CommitLink from '@/components/CommitLink.vue'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
 
 // The finding's own timeline: scan observations merged with triage decisions.
@@ -119,6 +123,9 @@ const props = defineProps<{
   slug: string
   repoSlug: string
   fingerprint: string
+  // Forge coordinates so commit shas link to the commit.
+  repoHtmlUrl?: string
+  forgeProvider?: string
 }>()
 
 const events = ref<FindingHistoryEvent[]>([])

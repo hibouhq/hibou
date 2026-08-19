@@ -15,7 +15,7 @@
 
     <!-- Same detail drawer as the repository view; org-wide rows carry their own
          repository, so it is passed per row rather than read from the route. -->
-    <FindingDrawer
+    <FindingDetailModal
       v-if="drawer"
       :key="`${drawer.repoSlug}:${drawer.fingerprint}`"
       :provider="provider"
@@ -164,13 +164,15 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { api, type AcceptanceReasonKind, type FindingAcceptance, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
-import FindingDrawer from '@/components/FindingDrawer.vue'
+import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { useDialog } from '@/composables/useDialog'
 import { isComponentBacked } from '@/lib/findingDisplay'
 
+const { promptDialog } = useDialog()
 const route = useRoute()
 const router = useRouter()
 const { pushToast } = useToast()
@@ -368,7 +370,12 @@ async function reopenFinding(fingerprint: string) {
 async function markSecretRevoked(finding: Vulnerability) {
   const repoSlug = drawer.value?.repoSlug
   if (!repoSlug) return
-  const comment = window.prompt('Attest revocation: how was this secret revoked/rotated? (recorded in the audit log)')
+  const comment = await promptDialog({
+    title: 'Attest secret revocation',
+    message: 'Recorded in the audit log.',
+    confirmLabel: 'Mark revoked',
+    input: { label: 'How was this secret revoked/rotated?' },
+  })
   if (comment === null) return
   drawer.value = null
   try {

@@ -6,7 +6,9 @@ import { BadgeCheck, BadgeX, KeyRound, RefreshCw, ShieldAlert, Trash2 } from 'lu
 
 import type { ApiKey, TokenScope, UnscopedKeyExposure } from '@/api/client'
 import { api } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 
+const { confirmDialog } = useDialog()
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
@@ -44,7 +46,7 @@ async function load() {
 }
 
 async function rotate(key: ApiKey) {
-  if (!window.confirm(`Rotate "${key.name}"? The current secret stops working immediately.`)) return
+  if (!(await confirmDialog({ title: `Rotate "${key.name}"?`, message: 'The current secret stops working immediately.', confirmLabel: 'Rotate key', tone: 'danger' }))) return
   busyKeyID.value = key.id
   try {
     const response = await api.rotateOrgApiKey(provider.value, slug.value, key.id)
@@ -58,7 +60,7 @@ async function rotate(key: ApiKey) {
 }
 
 async function review(key: ApiKey, decision: 'approve' | 'reject') {
-  if (decision === 'reject' && !window.confirm(`Reject "${key.name}"? It will never authenticate.`)) return
+  if (decision === 'reject' && !(await confirmDialog({ title: `Reject "${key.name}"?`, message: 'It will never authenticate.', confirmLabel: 'Reject key', tone: 'danger' }))) return
   busyKeyID.value = key.id
   try {
     if (decision === 'approve') {
@@ -75,7 +77,7 @@ async function review(key: ApiKey, decision: 'approve' | 'reject') {
 }
 
 async function revoke(key: ApiKey) {
-  if (!window.confirm(`Revoke "${key.name}"? Anything using it stops working immediately.`)) return
+  if (!(await confirmDialog({ title: `Revoke "${key.name}"?`, message: 'Anything using it stops working immediately.', confirmLabel: 'Revoke key', tone: 'danger' }))) return
   busyKeyID.value = key.id
   try {
     await api.deleteOrgApiKey(provider.value, slug.value, key.id)

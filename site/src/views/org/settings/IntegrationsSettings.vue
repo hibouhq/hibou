@@ -189,10 +189,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { api, INTEGRATION_TYPES, type OrgIntegration } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 import { relativeTime } from '@/lib/datetime'
 
+const { confirmDialog } = useDialog()
 const route = useRoute()
 const { isOrgAdmin } = useOrgRole()
 const { pushToast } = useToast()
@@ -313,7 +315,7 @@ async function replay(integration: OrgIntegration) {
 }
 
 async function remove(integration: OrgIntegration) {
-  if (!window.confirm(`Delete integration "${integration.name}"? Notification rules pointing at it stop delivering.`)) {
+  if (!(await confirmDialog({ title: `Delete integration "${integration.name}"?`, message: 'Notification rules pointing at it stop delivering.', confirmLabel: 'Delete integration', tone: 'danger' }))) {
     return
   }
   busyID.value = integration.id

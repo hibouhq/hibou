@@ -101,6 +101,16 @@ describe('forgeFileUrl', () => {
 })
 
 describe('forgeBlobAtCommitUrl', () => {
+  it('anchors a blob link on the finding\'s lines', () => {
+    expect(forgeBlobAtCommitUrl(gh, 'github', 'abc1234', 'go/text.go', { startLine: 31 })).toBe(`${gh}/blob/abc1234/go/text.go#L31`)
+    // GitHub repeats the prefix on a range, GitLab does not.
+    expect(forgeBlobAtCommitUrl(gh, 'github', 'abc1234', 'go/text.go', { startLine: 31, endLine: 35 })).toBe(`${gh}/blob/abc1234/go/text.go#L31-L35`)
+    expect(forgeBlobAtCommitUrl(gl, 'gitlab', 'abc1234', 'go/text.go', { startLine: 31, endLine: 35 })).toBe(`${gl}/-/blob/abc1234/go/text.go#L31-35`)
+    // A single-line "range" and a missing line produce no range and no anchor.
+    expect(forgeBlobAtCommitUrl(gh, 'github', 'abc1234', 'go/text.go', { startLine: 31, endLine: 31 })).toBe(`${gh}/blob/abc1234/go/text.go#L31`)
+    expect(forgeBlobAtCommitUrl(gh, 'github', 'abc1234', 'go/text.go', {})).toBe(`${gh}/blob/abc1234/go/text.go`)
+  })
+
   it('links a blob at an exact commit', () => {
     expect(forgeBlobAtCommitUrl(gh, 'github', 'abc1234', 'go/text.go')).toBe(`${gh}/blob/abc1234/go/text.go`)
     expect(forgeBlobAtCommitUrl(gl, 'gitlab', 'abc1234', 'go/text.go')).toBe(`${gl}/-/blob/abc1234/go/text.go`)

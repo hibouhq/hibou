@@ -434,10 +434,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type Client, type ReleaseClient, type ReleaseWithRisk } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
 
+const { confirmDialog } = useDialog()
 const route = useRoute()
 const { pushToast } = useToast()
 const { isReleaseManager } = useOrgRole()
@@ -576,7 +578,7 @@ function shortSha(sha?: string) {
 }
 
 async function resolveDivergence(release: ReleaseWithRisk, action: 'adopt' | 'keep') {
-  if (action === 'adopt' && !window.confirm(`Point ${release.version} at ${shortSha(release.pending_commit_sha)}? Its risk posture will be recomputed from the new build; client records stay.`)) {
+  if (action === 'adopt' && !(await confirmDialog({ title: `Point ${release.version} at ${shortSha(release.pending_commit_sha)}?`, message: 'Its risk posture will be recomputed from the new build; client records stay.', confirmLabel: 'Adopt build' }))) {
     return
   }
   resolvingDivergence.value = true

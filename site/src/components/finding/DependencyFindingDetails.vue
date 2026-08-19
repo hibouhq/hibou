@@ -1,5 +1,9 @@
 <template>
-  <div class="space-y-5">
+  <!-- Overview: what is affected and what to do about it. -->
+  <div
+    v-if="section !== 'details'"
+    class="space-y-5"
+  >
     <!-- What is affected. For a dependency finding the package is the subject,
          so it leads; the file path a scanner may have attached is incidental. -->
     <FindingSection
@@ -52,7 +56,31 @@
       >Remediation guidance</a>
     </FindingSection>
 
-    <!-- Advisory -->
+    <!-- Reachability: the one signal that changes the verdict on an otherwise
+         identical CVE, so it gets a sentence rather than only the header chip. -->
+    <FindingSection
+      v-if="finding.reachability && finding.reachability !== 'unknown'"
+      title="Reachability"
+    >
+      <p
+        class="text-sm"
+        :class="finding.reachability === 'not_reachable' ? 'text-gray-400' : 'text-danger'"
+      >
+        <template v-if="finding.reachability === 'not_reachable'">
+          Call-graph analysis found no path from this code to the vulnerable symbol. Real, but not exploitable as used here.
+        </template>
+        <template v-else>
+          Call-graph analysis put the vulnerable symbol on this code's call path — treat as exploitable.
+        </template>
+      </p>
+    </FindingSection>
+  </div>
+
+  <!-- Details: the reference material — advisory record, full text, references. -->
+  <div
+    v-else
+    class="space-y-5"
+  >
     <FindingSection
       v-if="advisory || finding.primary_identifier_value"
       title="Advisory"
@@ -70,11 +98,22 @@
           v-else
           class="font-mono text-sm text-white"
         >{{ identifier }}</span>
-        <span
+        <template
           v-for="alias in aliases"
           :key="alias"
-          class="rounded-full bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-gray-400"
-        >{{ alias }}</span>
+        >
+          <a
+            v-if="advisoryUrl(alias)"
+            :href="advisoryUrl(alias)"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="rounded-full bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-gray-400 transition hover:text-accent hover:underline"
+          >{{ alias }}</a>
+          <span
+            v-else
+            class="rounded-full bg-surface-overlay px-2 py-0.5 font-mono text-[11px] text-gray-400"
+          >{{ alias }}</span>
+        </template>
       </div>
       <p
         v-if="advisoryTitle"
@@ -101,32 +140,12 @@
       </div>
     </FindingSection>
 
-    <!-- Reachability: the one signal that changes the verdict on an otherwise
-         identical CVE, so it gets a sentence rather than only the header chip. -->
-    <FindingSection
-      v-if="finding.reachability && finding.reachability !== 'unknown'"
-      title="Reachability"
-    >
-      <p
-        class="text-sm"
-        :class="finding.reachability === 'not_reachable' ? 'text-gray-400' : 'text-danger'"
-      >
-        <template v-if="finding.reachability === 'not_reachable'">
-          Call-graph analysis found no path from this code to the vulnerable symbol. Real, but not exploitable as used here.
-        </template>
-        <template v-else>
-          Call-graph analysis put the vulnerable symbol on this code's call path — treat as exploitable.
-        </template>
-      </p>
-    </FindingSection>
-
     <FindingSection
       v-if="description"
       title="Description"
     >
-      <p class="whitespace-pre-wrap text-sm text-gray-300">
-        {{ description }}
-      </p>
+      <!-- Advisory text is markdown (### Impact, lists, code spans). -->
+      <MarkdownText :text="description" />
     </FindingSection>
 
     <FindingSection
@@ -162,6 +181,7 @@
 import { computed, ref } from 'vue'
 
 import type { FindingDetail } from '@/api/client'
+import MarkdownText from '@/components/MarkdownText.vue'
 import type { Fact } from '@/components/finding/facts'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
@@ -171,6 +191,8 @@ import { advisoryUrl, cweUrl } from '@/lib/findingDisplay'
 // advisory, and a version to upgrade to.
 const props = defineProps<{
   detail: FindingDetail
+  /** Which half the modal is rendering: the overview or the reference tab. */
+  section?: 'overview' | 'details'
   provider?: string
   slug?: string
   repoSlug?: string

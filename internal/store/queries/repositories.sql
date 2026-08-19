@@ -66,6 +66,17 @@ SET name = $2, slug = $3, default_branch = $4, sync_state = $5, team_id = $6, up
 WHERE id = $1
 RETURNING id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at;
 
+-- name: SyncRepositoryDefaultBranch :many
+-- The forge is the source of truth for the default branch: every enrolled
+-- repository tracking this forge repo follows it. provider_id is matched
+-- case-insensitively because it stores the forge's canonical provider key.
+UPDATE repositories
+SET default_branch = sqlc.arg(default_branch), updated_at = NOW()
+WHERE provider = sqlc.arg(provider)
+  AND lower(provider_id) = lower(sqlc.arg(provider_key))
+  AND default_branch <> sqlc.arg(default_branch)
+RETURNING id, org_id, slug, default_branch;
+
 -- name: ListRepositoryRetentionUsage :many
 SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories

@@ -1,18 +1,25 @@
 <template>
   <div class="overflow-hidden rounded-lg border border-surface-border-subtle bg-surface">
     <div class="flex items-center gap-2 border-b border-surface-border-subtle bg-surface-overlay px-3 py-1.5">
-      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-gray-400">{{ path }}<span v-if="startLine">:{{ startLine }}</span></span>
-      <span
-        v-if="commitSha"
-        class="font-mono text-[11px] text-gray-600"
-      >{{ commitSha.slice(0, 7) }}</span>
+      <!-- The path IS the link: file:line goes straight to the anchored blob. -->
       <a
         v-if="blobUrl"
         :href="blobUrl"
         target="_blank"
         rel="noopener noreferrer"
-        class="text-[11px] text-accent underline underline-offset-2"
-      >Open in forge</a>
+        class="min-w-0 flex-1 truncate font-mono text-[11px] text-gray-300 underline decoration-transparent underline-offset-2 transition hover:text-white hover:decoration-gray-500"
+        :title="`Open ${path}${startLine ? ':' + startLine : ''} in the forge at this commit`"
+      >{{ path }}<span v-if="startLine">:{{ startLine }}</span></a>
+      <span
+        v-else
+        class="min-w-0 flex-1 truncate font-mono text-[11px] text-gray-400"
+      >{{ path }}<span v-if="startLine">:{{ startLine }}</span></span>
+      <CommitLink
+        v-if="commitSha"
+        :sha="commitSha"
+        :repo-html-url="repoHtmlUrl"
+        :provider="forgeProvider ?? provider"
+      />
     </div>
 
     <p
@@ -46,6 +53,7 @@
 import { computed, ref, watch } from 'vue'
 
 import { api } from '@/api/client'
+import CommitLink from '@/components/CommitLink.vue'
 import { forgeBlobAtCommitUrl } from '@/lib/forgeLinks'
 
 // The offending lines, in place. Source is streamed from the forge by the same
@@ -61,13 +69,17 @@ const props = defineProps<{
   endLine?: number
   repoHtmlUrl?: string
   forgeProvider?: string
+  // Commit to link against when the source fetch cannot supply one (forge
+  // unreachable, blob gone): the file:line link must not die with the preview.
+  fallbackSha?: string
 }>()
 
 /** Lines of context kept on each side of the finding. */
 const CONTEXT_LINES = 4
 
 const content = ref('')
-const commitSha = ref('')
+const loadedSha = ref('')
+const commitSha = computed(() => loadedSha.value || props.fallbackSha || '')
 const loading = ref(true)
 const error = ref('')
 
@@ -84,7 +96,7 @@ async function load() {
   try {
     const response = await api.getCoverageSource(props.provider, props.slug, props.repoSlug, props.snapshotId, props.path)
     content.value = response.data?.content ?? ''
-    commitSha.value = response.data?.commit_sha ?? ''
+    loadedSha.value = response.data?.commit_sha ?? ''
   } catch (loadError) {
     content.value = ''
     // A missing blob is ordinary — the commit can be gone, the file moved, or
@@ -109,5 +121,5 @@ const rows = computed(() => {
     .filter((row) => row.number >= from && row.number <= to)
 })
 
-const blobUrl = computed(() => forgeBlobAtCommitUrl(props.repoHtmlUrl, props.forgeProvider ?? props.provider, commitSha.value, props.path))
+const blobUrl = computed(() => forgeBlobAtCommitUrl(props.repoHtmlUrl, props.forgeProvider ?? props.provider, commitSha.value, props.path, { startLine: props.startLine, endLine: props.endLine }))
 </script>

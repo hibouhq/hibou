@@ -224,9 +224,11 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { api, type QualityGate, type QualityGateInput } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 
+const { confirmDialog } = useDialog()
 const route = useRoute()
 const { isOrgAdmin } = useOrgRole()
 const { pushToast } = useToast()
@@ -331,7 +333,7 @@ async function submit() {
 }
 
 async function remove(gate: QualityGate) {
-  if (!window.confirm(`Delete gate "${gate.name}"?`)) {
+  if (!(await confirmDialog({ title: `Delete gate "${gate.name}"?`, confirmLabel: 'Delete gate', tone: 'danger' }))) {
     return
   }
   busyID.value = gate.id

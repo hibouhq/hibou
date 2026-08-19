@@ -84,7 +84,8 @@
           >
           <p class="text-xs text-gray-500">
             The branch Hibou treats as the baseline: trends, "new code" comparisons and PR
-            gates are computed against it.
+            gates are computed against it. It follows the forge's default branch automatically;
+            a manual value only bridges the gap until the forge reports again.
           </p>
         </div>
 
@@ -152,6 +153,7 @@ import { computed, inject, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api, type Repository } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { relativeTime } from '@/lib/datetime'
 
@@ -163,6 +165,7 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 
 const repo = inject<Ref<Repository | null>>('repo', ref(null))
 const { isOrgAdmin } = useOrgRole()
+const { confirmDialog } = useDialog()
 
 const defaultBranch = ref('')
 const saving = ref(false)
@@ -203,11 +206,14 @@ const removing = ref(false)
 const removeError = ref('')
 
 async function removeRepo() {
-  const expected = repoSlug.value
-  const typed = window.prompt(
-    `This removes the repository and all its Hibou data (snapshots, findings, history).\n\nType "${expected}" to confirm:`,
-  )
-  if (typed !== expected) {
+  const confirmed = await confirmDialog({
+    title: 'Remove this repository from Hibou',
+    message: 'This removes the repository and all its Hibou data (snapshots, findings, history). The repository on the forge is untouched.',
+    confirmLabel: 'Remove repository',
+    tone: 'danger',
+    requireText: repoSlug.value,
+  })
+  if (!confirmed) {
     return
   }
   removing.value = true

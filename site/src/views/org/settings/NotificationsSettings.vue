@@ -196,9 +196,11 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { api, INTEGRATION_TYPES, NOTIFICATION_EVENT_TYPES, type NotificationRule } from '@/api/client'
+import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 
+const { confirmDialog } = useDialog()
 const route = useRoute()
 const { isOrgAdmin } = useOrgRole()
 const { pushToast } = useToast()
@@ -328,7 +330,7 @@ async function toggle(rule: NotificationRule) {
 }
 
 async function remove(rule: NotificationRule) {
-  if (!window.confirm(`Delete rule "${rule.name}"?`)) {
+  if (!(await confirmDialog({ title: `Delete rule "${rule.name}"?`, confirmLabel: 'Delete rule', tone: 'danger' }))) {
     return
   }
   busyID.value = rule.id
