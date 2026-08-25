@@ -70,7 +70,9 @@
     >
       <p class="text-sm text-red-200">
         The feed sweep has been failing
-        <template v-if="health?.failing_since">since {{ relative(health.failing_since) }}</template>.
+        <template v-if="health?.failing_since">
+          since {{ relative(health.failing_since) }}
+        </template>.
         Counts below are from the last pass that worked.
       </p>
       <p class="mt-1.5 break-all font-mono text-xs text-red-300/80">
