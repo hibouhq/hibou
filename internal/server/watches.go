@@ -73,10 +73,9 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 
 // handleListAdvisories answers "which advisories name this product?".
 //
-// Refuses an unfiltered list: §13 keeps the mirror as infrastructure, and a
-// browser over 382,000 records is a product nobody asked for. The filtered query
-// is what makes a wrong watch name visible before the watch exists — a typo
-// otherwise produces silence, which looks exactly like safety.
+// Refuses an unfiltered list (§13: the mirror is infrastructure, not a browser).
+// The filtered query is what makes a wrong watch name visible before the watch
+// exists — a typo otherwise produces silence, which looks like safety.
 func (s *Server) handleListAdvisories(w http.ResponseWriter, r *http.Request) {
 	keys := normalizedKeys(r.URL.Query()["product"])
 	if len(keys) == 0 {
@@ -140,7 +139,7 @@ func (s *Server) handleListWatchCandidates(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireInstanceAuthority(w, r)
+	user, ok := s.requireWatchWriter(w, r)
 	if !ok {
 		return
 	}
@@ -184,7 +183,7 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireInstanceAuthority(w, r); !ok {
+	if _, ok := s.requireWatchWriter(w, r); !ok {
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "watchID"))
@@ -208,22 +207,44 @@ func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// requireInstanceAuthority gates the writes that change what every organization
-// on this instance is told about.
+// requireInstanceAuthority gates changes to instance-wide state.
+//
+// The admin list, because roles are granted through this same gate: requiring a
+// granted role to pass it closes a loop with no entry point.
 func (s *Server) requireInstanceAuthority(w http.ResponseWriter, r *http.Request) (*store.User, bool) {
 	user := UserFromContext(r.Context())
 	if user == nil {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
 		return nil, false
 	}
-	allowed, err := s.enforcer.CheckPermission(user.ID.String(), rbac.InstanceObject, rbac.ActionAdmin)
+	if !s.isInstanceAdmin(r) {
+		api.JSONError(w, http.StatusForbidden, "instance admin required")
+		return nil, false
+	}
+	return user, true
+}
+
+// requireWatchWriter gates changes to what the instance watches.
+//
+// Write, not admin: a watch queues triage items and authors nothing.
+func (s *Server) requireWatchWriter(w http.ResponseWriter, r *http.Request) (*store.User, bool) {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return nil, false
+	}
+	if s.isInstanceAdmin(r) {
+		return user, true
+	}
+	allowed, err := s.enforcer.CheckPermission(user.ID.String(), rbac.InstanceObject, rbac.ActionWrite)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to check permissions")
 		return nil, false
 	}
 	if !allowed {
 		api.JSONError(w, http.StatusForbidden,
-			"changing what this instance watches requires instance authority")
+			"changing what this instance watches needs the "+rbac.RoleSubscriptionWriter+
+				" role, granted from instance settings")
 		return nil, false
 	}
 	return user, true

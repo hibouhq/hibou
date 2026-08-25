@@ -266,6 +266,34 @@ func (g *GitLab) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			Repo:   event.Project.toRepository(),
 			Sender: event.toUserInfo(),
 		}, nil
+	case "Pipeline Hook":
+		var event struct {
+			Project          gitlabProject `json:"project"`
+			ObjectAttributes struct {
+				ID     int64  `json:"id"`
+				SHA    string `json:"sha"`
+				Ref    string `json:"ref"`
+				Status string `json:"status"`
+			} `json:"object_attributes"`
+		}
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode gitlab pipeline event: %w", err)
+		}
+		status := strings.ToLower(event.ObjectAttributes.Status)
+		// Only terminal states; a pipeline reports running and pending too.
+		switch status {
+		case "success", "failed", "canceled", "cancelled", "skipped":
+		default:
+			return nil, ErrUnsupportedWebhookEvent
+		}
+		return BuildEvent{
+			Repo:       event.Project.toRepository(),
+			CommitSHA:  event.ObjectAttributes.SHA,
+			Ref:        event.ObjectAttributes.Ref,
+			RunID:      strconv.FormatInt(event.ObjectAttributes.ID, 10),
+			Succeeded:  status == "success",
+			Conclusion: status,
+		}, nil
 	case "Merge Request Hook":
 		var event gitlabMergeRequestEvent
 		if err := json.Unmarshal(payload, &event); err != nil {

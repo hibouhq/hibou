@@ -116,6 +116,13 @@ func (s *Server) registerDefaultWebhookHandlers() {
 		}
 		return s.handlePullRequestWebhookEvent(request, providerID, forgeType, typed)
 	})
+	s.registerWebhookHandler("build", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
+		typed, ok := event.(forge.BuildEvent)
+		if !ok {
+			return fmt.Errorf("unexpected build webhook event type %T", event)
+		}
+		return s.handleBuildWebhookEvent(ctx, providerID, typed)
+	})
 	s.registerWebhookHandler("release", func(ctx context.Context, providerID string, event forge.WebhookEvent) error {
 		typed, ok := event.(forge.ReleaseEvent)
 		if !ok {
@@ -174,6 +181,40 @@ func (s *Server) registerDefaultWebhookHandlers() {
 		}
 		return s.inventorySvc.ApplyRepository(ctx, providerID, typed)
 	})
+}
+
+// handleBuildWebhookEvent fails snapshots whose build ended without them.
+//
+// A pipeline that dies before its upload step leaves a pending snapshot that no
+// upload will ever complete. Without this it shows as in-progress until the
+// stale-pending window closes; with it, the chip turns red as the run does.
+func (s *Server) handleBuildWebhookEvent(ctx context.Context, providerID string, event forge.BuildEvent) error {
+	if event.Succeeded || strings.TrimSpace(event.CommitSHA) == "" {
+		// A successful run completes its own snapshot by uploading.
+		return nil
+	}
+	repo, err := s.queries.GetRepositoryByProvider(ctx, providerID, event.Repo.ProviderID)
+	if err != nil {
+		return err
+	}
+	if repo == nil {
+		return nil
+	}
+	failed, err := s.queries.FailPendingSnapshotsForBuild(ctx, repo.ID, event.CommitSHA, event.RunID)
+	if err != nil {
+		return err
+	}
+	if failed > 0 {
+		s.log.Info().
+			Str("provider", providerID).
+			Str("repository", event.Repo.FullName).
+			Str("commit_sha", event.CommitSHA).
+			Str("run_id", event.RunID).
+			Str("conclusion", event.Conclusion).
+			Int64("snapshots", failed).
+			Msg("failed pending snapshots after the build ended without them")
+	}
+	return nil
 }
 
 func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, event forge.PushEvent) error {

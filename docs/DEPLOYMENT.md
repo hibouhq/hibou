@@ -363,7 +363,7 @@ Fits a $5-10/mo VPS with k3s or a small managed K8s node pool.
 | Org/repo discovery | ✅ | Hibou calls GitHub API outbound via App installation tokens |
 | Commit statuses on PRs | ✅ | Hibou calls GitHub API outbound |
 | CI scan upload | ✅ | GitHub-hosted runner uploads to Hibou with API token auth |
-| Webhooks (push/PR events) | ✅ | GitHub sends to Hibou ingress, IP allowlisted + HMAC-validated |
+| Webhooks (push/PR/build events) | ✅ | GitHub sends to Hibou ingress, IP allowlisted + HMAC-validated. Enable the build event (`workflow_run` on GitHub, `Pipeline Hook` on GitLab, `workflow_run` on Forgejo) so a pipeline that dies before uploading fails its snapshot immediately instead of waiting out the stale-pending window. |
 | GitHub-hosted runners | ✅ | Upload directly to Hibou public URL |
 
 ## Full Public Deployment (Alternative)

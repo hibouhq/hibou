@@ -349,6 +349,21 @@ func (q *Queries) ClaimNextArtifactProcessingSnapshot(ctx context.Context, worke
 	return snapshotFromRow(row), nil
 }
 
+// FailPendingSnapshotsForBuild fails snapshots whose build ended without them.
+func (q *Queries) FailPendingSnapshotsForBuild(ctx context.Context, repoID uuid.UUID, commitSHA, runID string) (int64, error) {
+	return q.db.FailPendingSnapshotsForBuild(ctx, dbgen.FailPendingSnapshotsForBuildParams{
+		RepoID:    repoID,
+		CommitSha: commitSHA,
+		RunID:     runID,
+	})
+}
+
+// FinalizeUnreachableArtifactProcessing records snapshots as failed when they
+// are stuck in 'processing' and can no longer be claimed. Returns how many.
+func (q *Queries) FinalizeUnreachableArtifactProcessing(ctx context.Context, maxAttempts int32) (int64, error) {
+	return q.db.FinalizeUnreachableArtifactProcessing(ctx, maxAttempts)
+}
+
 func (q *Queries) CompleteArtifactProcessingSnapshot(ctx context.Context, snapshotID uuid.UUID, workerID string) (*Snapshot, error) {
 	row, err := q.db.CompleteArtifactProcessingSnapshot(ctx, dbgen.CompleteArtifactProcessingSnapshotParams{
 		SnapshotID: snapshotID,

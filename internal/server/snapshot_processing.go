@@ -68,6 +68,15 @@ func (s *Server) runArtifactProcessingLoop(ctx context.Context) {
 }
 
 func (s *Server) runArtifactProcessingPass(ctx context.Context) {
+	// Close out what the claimer can no longer reach, or it shows as
+	// in-progress for ever.
+	if finalized, err := s.queries.FinalizeUnreachableArtifactProcessing(ctx, artifactProcessingMaxAttempts); err != nil {
+		s.log.Warn().Err(err).Msg("failed to finalize unreachable artifact processing")
+	} else if finalized > 0 {
+		s.log.Info().Int64("snapshots", finalized).
+			Msg("recorded snapshots as failed after artifact processing stopped without finishing")
+	}
+
 	for {
 		processed, err := s.processNextArtifactSnapshot(ctx)
 		if err != nil {

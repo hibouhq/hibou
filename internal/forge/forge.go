@@ -199,6 +199,27 @@ func (PullRequestEvent) EventType() string {
 	return "pull_request"
 }
 
+// BuildEvent is a finished CI run, normalized across providers.
+//
+// Hibou learns a build failed only from this: without it a snapshot whose
+// pipeline died before uploading sits pending until a timeout sweep, showing as
+// in-progress for the whole window.
+type BuildEvent struct {
+	Repo       Repository
+	CommitSHA  string
+	Ref        string
+	RunID      string
+	RunAttempt string
+	// Succeeded is false for failure, cancellation and timeout alike: all three
+	// mean no artifacts are coming.
+	Succeeded  bool
+	Conclusion string
+}
+
+func (BuildEvent) EventType() string {
+	return "build"
+}
+
 // ReleaseEvent is a forge release lifecycle event (GitHub/Gitea/Forgejo
 // "release", GitLab "Release Hook"), normalized across providers (ADR-024 §5).
 type ReleaseEvent struct {

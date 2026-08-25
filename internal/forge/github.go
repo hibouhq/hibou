@@ -446,6 +446,18 @@ func (g *GitHub) ValidateWebhookPayload(r *http.Request, secret string) ([]byte,
 	return payload, nil
 }
 
+type githubWorkflowRunEvent struct {
+	Action      string           `json:"action"`
+	Repository  githubRepository `json:"repository"`
+	WorkflowRun struct {
+		ID         int64  `json:"id"`
+		HeadSHA    string `json:"head_sha"`
+		HeadBranch string `json:"head_branch"`
+		RunAttempt int    `json:"run_attempt"`
+		Conclusion string `json:"conclusion"`
+	} `json:"workflow_run"`
+}
+
 func (g *GitHub) ParseWebhookEvent(eventType string, payload []byte) (WebhookEvent, error) {
 	switch eventType {
 	case "push":
@@ -461,6 +473,23 @@ func (g *GitHub) ParseWebhookEvent(eventType string, payload []byte) (WebhookEve
 			Sender: event.Sender.toUserInfo(),
 		}
 		return parsed, nil
+	case "workflow_run":
+		var event githubWorkflowRunEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode github workflow_run event: %w", err)
+		}
+		if !strings.EqualFold(event.Action, "completed") {
+			return nil, ErrUnsupportedWebhookEvent
+		}
+		return BuildEvent{
+			Repo:       event.Repository.toRepository(),
+			CommitSHA:  event.WorkflowRun.HeadSHA,
+			Ref:        event.WorkflowRun.HeadBranch,
+			RunID:      strconv.FormatInt(event.WorkflowRun.ID, 10),
+			RunAttempt: strconv.Itoa(event.WorkflowRun.RunAttempt),
+			Succeeded:  strings.EqualFold(event.WorkflowRun.Conclusion, "success"),
+			Conclusion: event.WorkflowRun.Conclusion,
+		}, nil
 	case "pull_request":
 		var event githubPullRequestEvent
 		if err := json.Unmarshal(payload, &event); err != nil {

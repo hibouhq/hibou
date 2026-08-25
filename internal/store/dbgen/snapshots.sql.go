@@ -652,6 +652,68 @@ func (q *Queries) FailArtifactProcessingSnapshot(ctx context.Context, arg FailAr
 	return i, err
 }
 
+const failPendingSnapshotsForBuild = `-- name: FailPendingSnapshotsForBuild :execrows
+UPDATE snapshots s
+SET status = 'failed'
+FROM refs r
+WHERE s.ref_id = r.id
+	AND r.repo_id = $1
+	AND s.commit_sha = $2
+	AND s.status = 'pending'
+	AND ($3::text = '' OR s.run_id = $3::text)
+`
+
+type FailPendingSnapshotsForBuildParams struct {
+	RepoID    uuid.UUID `json:"repo_id"`
+	CommitSha string    `json:"commit_sha"`
+	RunID     string    `json:"run_id"`
+}
+
+// Fail snapshots whose build finished without them.
+//
+// Pending only: a snapshot already processing has artifacts worth keeping, and
+// the build's own outcome says nothing about them. Pending with no run left to
+// upload is over, so it is failed now rather than at the stale-pending window.
+func (q *Queries) FailPendingSnapshotsForBuild(ctx context.Context, arg FailPendingSnapshotsForBuildParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failPendingSnapshotsForBuild, arg.RepoID, arg.CommitSha, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finalizeUnreachableArtifactProcessing = `-- name: FinalizeUnreachableArtifactProcessing :execrows
+UPDATE snapshots
+SET status = 'failed',
+	artifact_processing_claimed_by = NULL,
+	artifact_processing_claim_expires_at = NULL,
+	artifact_processing_finished_at = NOW(),
+	artifact_processing_last_error = COALESCE(
+		NULLIF(artifact_processing_last_error, ''),
+		'artifact processing stopped before it finished and ran out of attempts'
+	)
+WHERE status = 'processing'
+	AND artifact_processing_finished_at IS NULL
+	AND artifact_processing_attempts >= $1
+	AND (
+		artifact_processing_claim_expires_at IS NULL
+		OR artifact_processing_claim_expires_at < NOW()
+	)
+`
+
+// Finalize snapshots stuck in 'processing' that can never be claimed again.
+//
+// The complement of ClaimNext's WHERE: unfinished, out of attempts, unclaimed.
+// Such a row is invisible to the claimer for ever, so without this it shows as
+// in-progress indefinitely.
+func (q *Queries) FinalizeUnreachableArtifactProcessing(ctx context.Context, maxAttempts int32) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeUnreachableArtifactProcessing, maxAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getLatestCompleteSnapshotByRef = `-- name: GetLatestCompleteSnapshotByRef :one
 SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id FROM snapshots WHERE ref_id = $1 AND status IN ('complete', 'active') ORDER BY created_at DESC LIMIT 1
 `

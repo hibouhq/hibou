@@ -408,3 +408,41 @@ UPDATE snapshots SET
 WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL
 	AND (status = 'pending' OR (status = 'failed' AND received_uploads = 0))
 RETURNING *;
+
+-- name: FinalizeUnreachableArtifactProcessing :execrows
+-- Finalize snapshots stuck in 'processing' that can never be claimed again.
+--
+-- The complement of ClaimNext's WHERE: unfinished, out of attempts, unclaimed.
+-- Such a row is invisible to the claimer for ever, so without this it shows as
+-- in-progress indefinitely.
+UPDATE snapshots
+SET status = 'failed',
+	artifact_processing_claimed_by = NULL,
+	artifact_processing_claim_expires_at = NULL,
+	artifact_processing_finished_at = NOW(),
+	artifact_processing_last_error = COALESCE(
+		NULLIF(artifact_processing_last_error, ''),
+		'artifact processing stopped before it finished and ran out of attempts'
+	)
+WHERE status = 'processing'
+	AND artifact_processing_finished_at IS NULL
+	AND artifact_processing_attempts >= sqlc.arg(max_attempts)
+	AND (
+		artifact_processing_claim_expires_at IS NULL
+		OR artifact_processing_claim_expires_at < NOW()
+	);
+
+-- name: FailPendingSnapshotsForBuild :execrows
+-- Fail snapshots whose build finished without them.
+--
+-- Pending only: a snapshot already processing has artifacts worth keeping, and
+-- the build's own outcome says nothing about them. Pending with no run left to
+-- upload is over, so it is failed now rather than at the stale-pending window.
+UPDATE snapshots s
+SET status = 'failed'
+FROM refs r
+WHERE s.ref_id = r.id
+	AND r.repo_id = sqlc.arg(repo_id)
+	AND s.commit_sha = sqlc.arg(commit_sha)
+	AND s.status = 'pending'
+	AND (sqlc.arg(run_id)::text = '' OR s.run_id = sqlc.arg(run_id)::text);

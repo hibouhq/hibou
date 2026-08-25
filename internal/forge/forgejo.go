@@ -278,6 +278,34 @@ func (f *Forgejo) ParseWebhookEvent(eventType string, payload []byte) (WebhookEv
 			Repo:   event.Repository.toRepository(),
 			Sender: event.Sender.toUserInfo(),
 		}, nil
+	case "workflow_run", "action_run":
+		var event struct {
+			Action      string            `json:"action"`
+			Repository  forgejoRepository `json:"repository"`
+			WorkflowRun struct {
+				ID         int64  `json:"id"`
+				HeadSHA    string `json:"head_sha"`
+				HeadBranch string `json:"head_branch"`
+				RunAttempt int    `json:"run_attempt"`
+				Conclusion string `json:"conclusion"`
+				Status     string `json:"status"`
+			} `json:"workflow_run"`
+		}
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("decode forgejo workflow_run event: %w", err)
+		}
+		if !strings.EqualFold(event.WorkflowRun.Status, "completed") && !strings.EqualFold(event.Action, "completed") {
+			return nil, ErrUnsupportedWebhookEvent
+		}
+		return BuildEvent{
+			Repo:       event.Repository.toRepository(),
+			CommitSHA:  event.WorkflowRun.HeadSHA,
+			Ref:        event.WorkflowRun.HeadBranch,
+			RunID:      strconv.FormatInt(event.WorkflowRun.ID, 10),
+			RunAttempt: strconv.Itoa(event.WorkflowRun.RunAttempt),
+			Succeeded:  strings.EqualFold(event.WorkflowRun.Conclusion, "success"),
+			Conclusion: event.WorkflowRun.Conclusion,
+		}, nil
 	case "pull_request":
 		var event forgejoPullRequestEvent
 		if err := json.Unmarshal(payload, &event); err != nil {
