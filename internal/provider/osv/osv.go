@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -276,6 +277,9 @@ func (p *Provider) executeQueryBatch(ctx context.Context, reqBody queryBatchRequ
 	return &batchResp, nil
 }
 
+// ErrVulnNotFound reports that OSV serves no record under an ID.
+var ErrVulnNotFound = errors.New("osv: vulnerability not found")
+
 func (p *Provider) fetchVuln(ctx context.Context, id string) (vulnerability, error) {
 	// baseURL is operator-configured and id is path-escaped, so neither the host
 	// nor the scheme can be influenced by the OSV response payload.
@@ -289,6 +293,12 @@ func (p *Provider) fetchVuln(ctx context.Context, id string) (vulnerability, err
 		return vulnerability{}, fmt.Errorf("osv: fetch vuln %s: %w", id, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// Distinguished from a failure on purpose: OSV not having a record is
+		// the ordinary answer for a CPE-only advisory, and a caller that counted
+		// it as an error would report every such advisory as a broken lookup.
+		return vulnerability{}, ErrVulnNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return vulnerability{}, fmt.Errorf("osv: fetch vuln %s returned status %d", id, resp.StatusCode)
 	}

@@ -12,7 +12,7 @@ DELETE FROM org_members
 WHERE org_id = $1 AND user_id = $2;
 
 -- name: ListOrgMembers :many
-SELECT om.org_id, om.user_id, om.role, om.created_at,
+SELECT om.org_id, om.user_id, om.role, om.created_at, om.source,
     u.id AS user_id_2, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at
 FROM org_members om
 JOIN users u ON u.id = om.user_id

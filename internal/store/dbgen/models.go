@@ -937,6 +937,28 @@ type AdvisoryCache struct {
 	ExpiresAt     time.Time       `json:"expires_at"`
 }
 
+type AdvisoryEvent struct {
+	ID         uuid.UUID       `json:"id"`
+	AdvisoryID uuid.NullUUID   `json:"advisory_id"`
+	CveID      string          `json:"cve_id"`
+	Kind       string          `json:"kind"`
+	OccurredAt time.Time       `json:"occurred_at"`
+	ObservedAt time.Time       `json:"observed_at"`
+	ActorID    uuid.NullUUID   `json:"actor_id"`
+	Detail     json.RawMessage `json:"detail"`
+}
+
+type AdvisoryEventsDefault struct {
+	ID         uuid.UUID       `json:"id"`
+	AdvisoryID uuid.NullUUID   `json:"advisory_id"`
+	CveID      string          `json:"cve_id"`
+	Kind       string          `json:"kind"`
+	OccurredAt time.Time       `json:"occurred_at"`
+	ObservedAt time.Time       `json:"observed_at"`
+	ActorID    uuid.NullUUID   `json:"actor_id"`
+	Detail     json.RawMessage `json:"detail"`
+}
+
 type AdvisorySource struct {
 	ID          uuid.UUID         `json:"id"`
 	AdvisoryID  uuid.UUID         `json:"advisory_id"`
@@ -1098,6 +1120,54 @@ type CoverageReport struct {
 	CreatedAt       time.Time       `json:"created_at"`
 }
 
+type CveAffectedProduct struct {
+	ID           uuid.UUID `json:"id"`
+	CveID        string    `json:"cve_id"`
+	Vendor       string    `json:"vendor"`
+	Product      string    `json:"product"`
+	VendorKey    string    `json:"vendor_key"`
+	ProductKey   string    `json:"product_key"`
+	Introduced   string    `json:"introduced"`
+	Fixed        string    `json:"fixed"`
+	LastAffected string    `json:"last_affected"`
+}
+
+type CveRecord struct {
+	CveID           string         `json:"cve_id"`
+	State           string         `json:"state"`
+	Assigner        string         `json:"assigner"`
+	PublishedAt     sql.NullTime   `json:"published_at"`
+	RecordUpdatedAt sql.NullTime   `json:"record_updated_at"`
+	FirstSeenAt     time.Time      `json:"first_seen_at"`
+	CvssScore       sql.NullString `json:"cvss_score"`
+	CvssVector      string         `json:"cvss_vector"`
+	Severity        string         `json:"severity"`
+	CweIds          []string       `json:"cwe_ids"`
+	Summary         string         `json:"summary"`
+	ReferenceUrls   []string       `json:"reference_urls"`
+}
+
+type CveSubscription struct {
+	ID            uuid.UUID     `json:"id"`
+	Label         string        `json:"label"`
+	ProductKeys   []string      `json:"product_keys"`
+	VendorKeys    []string      `json:"vendor_keys"`
+	CreatedBy     uuid.NullUUID `json:"created_by"`
+	CreatedAt     time.Time     `json:"created_at"`
+	LastMatchedAt sql.NullTime  `json:"last_matched_at"`
+}
+
+type CveTriageItem struct {
+	ID                     uuid.UUID     `json:"id"`
+	SubscriptionID         uuid.UUID     `json:"subscription_id"`
+	CveID                  string        `json:"cve_id"`
+	TriagedRecordUpdatedAt sql.NullTime  `json:"triaged_record_updated_at"`
+	State                  string        `json:"state"`
+	DecidedBy              uuid.NullUUID `json:"decided_by"`
+	DecidedAt              sql.NullTime  `json:"decided_at"`
+	CreatedAt              time.Time     `json:"created_at"`
+}
+
 type Deployment struct {
 	ID               uuid.UUID        `json:"id"`
 	ClientID         uuid.UUID        `json:"client_id"`
@@ -1206,6 +1276,17 @@ type LicensePolicy struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+type LocalRoleGrant struct {
+	ID              uuid.UUID     `json:"id"`
+	UserID          uuid.UUID     `json:"user_id"`
+	Role            string        `json:"role"`
+	OrgID           uuid.NullUUID `json:"org_id"`
+	GrantedBy       uuid.NullUUID `json:"granted_by"`
+	GrantedAt       time.Time     `json:"granted_at"`
+	SuspendedAt     sql.NullTime  `json:"suspended_at"`
+	SuspendedReason string        `json:"suspended_reason"`
+}
+
 type Notification struct {
 	ID        uuid.UUID         `json:"id"`
 	UserID    uuid.UUID         `json:"user_id"`
@@ -1282,6 +1363,17 @@ type PrCheck struct {
 type PrCheckResolvedFingerprint struct {
 	PrCheckID   uuid.UUID `json:"pr_check_id"`
 	Fingerprint string    `json:"fingerprint"`
+}
+
+type ProductPackageMapping struct {
+	ID             uuid.UUID       `json:"id"`
+	SubscriptionID uuid.UUID       `json:"subscription_id"`
+	Packages       json.RawMessage `json:"packages"`
+	DecidedFromCve string          `json:"decided_from_cve"`
+	DecidedBy      uuid.NullUUID   `json:"decided_by"`
+	DecidedAt      time.Time       `json:"decided_at"`
+	AutoApply      bool            `json:"auto_apply"`
+	RevokedAt      sql.NullTime    `json:"revoked_at"`
 }
 
 type QualityGate struct {

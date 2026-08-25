@@ -5,7 +5,9 @@
         Members
       </h2>
       <span class="text-xs text-gray-500">
-        {{ isOrgAdmin ? 'Members are synced from the forge; manage roles here' : 'Read-only — org admins can change roles' }}
+        {{ isOrgAdmin
+          ? 'Membership comes from the forge. Roles set here apply to people invited directly; forge-derived roles are overwritten on the next sync.'
+          : 'Read-only — org admins can change roles' }}
       </span>
     </div>
 
@@ -58,7 +60,22 @@
         </div>
 
         <template v-if="isOrgAdmin">
+          <!-- A forge-sourced role is owned by the sync and will be replaced on
+               its next run, so offering an editable control for it invites
+               operators to make a change that silently reverts. Capabilities
+               that no forge has an opinion about — who may author advisory
+               data — are granted instance-wide instead, under Settings →
+               Instance → People. -->
+          <span
+            v-if="member.source === 'forge'"
+            class="inline-flex items-center gap-1.5 rounded-md border border-surface-border-subtle bg-surface-overlay px-2 py-1 text-xs text-gray-400"
+            :title="'Synced from the forge — changing it here would be overwritten on the next sync'"
+          >
+            <Lock class="h-3 w-3 text-gray-600" />
+            {{ roleLabel(member.role) }}
+          </span>
           <select
+            v-else
             :value="member.role"
             class="rounded-md border border-surface-border bg-surface-raised px-2 py-1 text-xs text-gray-200 focus:border-accent/50 focus:outline-none"
             :disabled="busyUserID === member.user_id"
@@ -99,6 +116,7 @@
 </template>
 
 <script setup lang="ts">
+import { Lock } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 

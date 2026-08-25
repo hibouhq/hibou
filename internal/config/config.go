@@ -62,6 +62,7 @@ type Config struct {
 	RetentionPolicy      retention.RetentionPolicy
 	Background           BackgroundConfig
 	AdvisoryScan         AdvisoryScanConfig
+	CVEFeed              CVEFeedConfig
 	Worker               WorkerConfig
 	SecretScan           SecretScanConfig
 
@@ -82,6 +83,20 @@ type BackgroundConfig struct {
 type AdvisoryScanConfig struct {
 	Providers []string
 	Interval  time.Duration
+}
+
+// CVEFeedConfig configures the CVE Program feed sweep (ADR-028).
+//
+// The sweep always runs; there is no switch and no path to set. Its working
+// directory is derived, because it holds nothing worth configuring: the resume
+// point lives in the database, so the clone is a disposable ~10 MB cache that
+// costs six seconds to rebuild.
+type CVEFeedConfig struct {
+	// Remote defaults to the public cvelistV5 repository.
+	Remote string
+	// Interval between sweeps. Polling much faster than the upstream commits
+	// (~2.8 times an hour) only costs requests.
+	Interval time.Duration
 }
 
 type WorkerConfig struct {
@@ -136,6 +151,12 @@ type ForgeConfig struct {
 	ClientSecret string
 	// WebhookSecret is the secret used to validate webhook payloads.
 	WebhookSecret string
+	// Token is a forge API token the server authenticates its own calls with:
+	// commit statuses, PR comments, repository reads. It is distinct from the
+	// OAuth2 client credentials, which only authenticate a user login — a forge
+	// rejects an API write made with them. GitHub App forges mint installation
+	// tokens instead and leave this empty.
+	Token string
 	// AppID is the GitHub App ID. When set with PrivateKey, enables GitHub App mode.
 	AppID int64
 	// PrivateKey is the PEM-encoded private key for the GitHub App.
@@ -244,6 +265,8 @@ func Load() (Config, error) {
 	v.SetDefault("background.stale_pending.enabled", true)
 	v.SetDefault("advisory_scan.providers", []string{"osv", "trivy"})
 	v.SetDefault("advisory_scan.interval", "6h")
+	v.SetDefault("cve_feed.remote", "")
+	v.SetDefault("cve_feed.interval", "15m")
 	v.SetDefault("worker.lease.duration", "5m")
 	v.SetDefault("worker.heartbeat.interval", "100s")
 	v.SetDefault("retention.preset", "envelope")
@@ -304,6 +327,14 @@ func Load() (Config, error) {
 	if workerHeartbeatInterval >= workerLeaseDuration {
 		return Config{}, errors.New("parsing worker heartbeat: worker.heartbeat.interval must be shorter than worker.lease.duration")
 	}
+	cveFeedInterval, err := time.ParseDuration(v.GetString("cve_feed.interval"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing cve_feed.interval: %w", err)
+	}
+	if cveFeedInterval <= 0 {
+		return Config{}, errors.New("parsing cve_feed.interval: duration must be greater than zero")
+	}
+
 	advisoryScanInterval, err := time.ParseDuration(v.GetString("advisory_scan.interval"))
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing advisory_scan.interval: %w", err)
@@ -378,6 +409,10 @@ func Load() (Config, error) {
 			StaleScanEnabled:          v.GetBool("background.stale_scan.enabled"),
 			StalePendingEnabled:       v.GetBool("background.stale_pending.enabled"),
 			SecretScanEnabled:         v.GetBool("background.secret_scan.enabled"),
+		},
+		CVEFeed: CVEFeedConfig{
+			Remote:   v.GetString("cve_feed.remote"),
+			Interval: cveFeedInterval,
 		},
 		AdvisoryScan: AdvisoryScanConfig{
 			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),
@@ -736,6 +771,7 @@ func parseRetentionDuration(value string) (time.Duration, error) {
 //	HIBOU_FORGE_0_CLIENT_ID=abc
 //	HIBOU_FORGE_0_CLIENT_SECRET=def
 //	HIBOU_FORGE_0_WEBHOOK_SECRET=ghi
+//	HIBOU_FORGE_0_TOKEN=jkl
 func loadForgeConfigs() []ForgeConfig {
 	var configs []ForgeConfig
 
@@ -758,6 +794,7 @@ func loadForgeConfigs() []ForgeConfig {
 			ClientID:      strings.TrimSpace(os.Getenv(prefix + "CLIENT_ID")),
 			ClientSecret:  strings.TrimSpace(os.Getenv(prefix + "CLIENT_SECRET")),
 			WebhookSecret: strings.TrimSpace(os.Getenv(prefix + "WEBHOOK_SECRET")),
+			Token:         strings.TrimSpace(os.Getenv(prefix + "TOKEN")),
 			AppID:         parseForgeInt64(prefix + "APP_ID"),
 			PrivateKey:    strings.TrimSpace(os.Getenv(prefix + "PRIVATE_KEY")),
 			IPAllowlist:   strings.EqualFold(strings.TrimSpace(os.Getenv(prefix+"IP_ALLOWLIST")), "true"),

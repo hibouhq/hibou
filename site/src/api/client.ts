@@ -39,6 +39,12 @@ export interface OrgMember {
   org_id: string
   user_id: string
   role: string
+  /**
+   * 'forge' roles are owned by the permission sync and replaced on its next
+   * run, so they are shown read-only: offering to edit one offers a change
+   * that silently reverts.
+   */
+  source: 'forge' | 'invite'
   created_at: string
   user?: User
 }
@@ -621,6 +627,8 @@ export interface FindingAdvisory {
   fixed_versions?: string[]
   references?: string[]
   aliases?: string[]
+  /** When the advisory became public, on upstream's clock — not ours. */
+  published_at?: string
 }
 
 // One entry of a finding's timeline. `scan` events are what the scanners
@@ -1180,6 +1188,150 @@ export interface ServerVersion {
   checked_at?: string
 }
 
+/** A product watched because its advisories carry no package coordinates upstream. */
+export interface WatchedProduct {
+  id: string
+  label: string
+  product_keys: string[]
+  vendor_keys: string[]
+  /**
+   * Null means nothing has ever matched. That is either safety or a wrong name,
+   * and the distinction is the whole reason this field is on the row.
+   */
+  last_matched_at: string | null
+  created_at: string
+  pending_triage: number
+}
+
+export interface WatchPreviewItem {
+  cve_id: string
+  published_at: string | null
+  severity: string
+  cvss_score: string | null
+  summary: string
+}
+
+export interface WatchPreview {
+  total: number
+  matches: WatchPreviewItem[]
+}
+
+export interface WatchCandidate {
+  name: string
+  ecosystem: string
+  repo_count: number
+  version_count: number
+}
+
+export interface CreateWatchedProductInput {
+  label: string
+  product_keys?: string[]
+  vendor_keys?: string[]
+}
+
+export interface TriageQueueItem {
+  id: string
+  cve_id: string
+  label: string
+  severity: string
+  cvss_score: string | null
+  summary: string
+  published_at: string | null
+  queued_at: string
+}
+
+export interface TriageRange {
+  product: string
+  introduced: string
+  fixed: string
+  last_affected: string
+}
+
+export interface TriageCandidate {
+  name: string
+  ecosystem: string
+  version: string
+  repo_count: number
+}
+
+export interface TriagePackage {
+  ecosystem: string
+  name: string
+}
+
+export interface TriageDetail extends TriageQueueItem {
+  assigner: string
+  record_updated_at: string | null
+  first_seen_at: string
+  ranges: TriageRange[]
+  candidates: TriageCandidate[]
+  existing_mapping: TriagePackage[]
+}
+
+export interface AdvisoryActivityEvent {
+  cve_id: string
+  kind: string
+  /** True when the change happened upstream rather than here. */
+  external: boolean
+  occurred_at: string
+  observed_at: string
+  detail: Record<string, unknown> | null
+}
+
+export interface FeedHealth {
+  at: string
+  revision: string
+  seen: number
+  stored: number
+  queued: number
+  revised: number
+  withdrawn: number
+  failed: number
+  queued_ids: string[] | null
+  /** Reason the most recent sweep failed. Absent when it succeeded. */
+  error?: string
+  /** When the current run of failures began — how long it has been broken. */
+  failing_since?: string
+}
+
+/** Which commit the advisory corpus was seeded from, and how old it is. */
+export interface CorpusState {
+  commit: string
+  /** The upstream commit's own date — not when the seed ran. */
+  committed_at?: string
+}
+
+export interface AdvisoryActivity {
+  events: AdvisoryActivityEvent[]
+  health: FeedHealth | null
+  corpus: CorpusState | null
+}
+
+export interface InstanceMembership {
+  org_id: string
+  org_slug: string
+  provider: string
+  role: string
+}
+
+export interface InstanceGrant {
+  role: string
+  org_slug: string
+  org_id: string | null
+  suspended: boolean
+  reason: string
+}
+
+export interface InstanceMember {
+  user_id: string
+  email: string
+  display_name: string
+  /** Forge-derived and read-only: the sync owns these. */
+  memberships: InstanceMembership[]
+  /** Operator-owned; the sync never writes them. */
+  grants: InstanceGrant[]
+}
+
 class ApiClient {
   private async request<T>(path: string, opts?: RequestInit): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -1327,6 +1479,90 @@ class ApiClient {
 
   // Org members are forge-synced (permission sync / first login); the UI only
   // manages roles and removal. Mutations are admin-enforced server-side.
+  listTriageQueue(provider: string, slug: string) {
+    return this.request<ApiResponse<TriageQueueItem[]>>(`/orgs/${provider}/${slug}/triage`)
+  }
+
+  getTriageItem(provider: string, slug: string, itemID: string) {
+    return this.request<ApiResponse<TriageDetail>>(`/orgs/${provider}/${slug}/triage/${itemID}`)
+  }
+
+  decideTriageItem(
+    provider: string,
+    slug: string,
+    itemID: string,
+    body: { packages?: TriagePackage[]; dismiss?: boolean },
+  ) {
+    return this.request<void>(`/orgs/${provider}/${slug}/triage/${itemID}/decision`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  /** One advisory's history: what happened to it anywhere, upstream included. */
+  getAdvisoryEvents(advisoryID: string) {
+    return this.request<ApiResponse<AdvisoryActivityEvent[]>>(
+      `/instance/advisories/${encodeURIComponent(advisoryID)}/events`,
+    )
+  }
+
+  /** The whole instance's advisory activity, with feed health and corpus age. */
+  listAdvisoryEvents(limit = 50) {
+    return this.request<ApiResponse<AdvisoryActivity>>(`/instance/advisories/events?limit=${limit}`)
+  }
+
+  listInstanceMembers() {
+    return this.request<ApiResponse<InstanceMember[]>>('/instance/members')
+  }
+
+  grantLocalRole(body: { user_id: string; role: string; org_id?: string }) {
+    return this.request<void>('/instance/members/grants', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  revokeLocalRole(body: { user_id: string; role: string; org_id?: string }) {
+    return this.request<void>('/instance/members/revocations', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  listWatchCandidates() {
+    return this.request<ApiResponse<WatchCandidate[]>>('/instance/advisories/watches/candidates')
+  }
+
+  listWatches() {
+    return this.request<ApiResponse<WatchedProduct[]>>('/instance/advisories/watches')
+  }
+
+  /**
+   * Which advisories name a set of products. Used to answer "would this watch
+   * have caught anything?" before the watch exists — a wrong name otherwise
+   * produces silence, and silence looks exactly like safety.
+   *
+   * A filter on the advisories collection, not a browser: the server refuses an
+   * unfiltered list, because the corpus is ~382,000 records.
+   */
+  listAdvisories(products: string[], limit = 10) {
+    const params = new URLSearchParams()
+    products.forEach(product => params.append('product', product))
+    params.set('limit', String(limit))
+    return this.request<ApiResponse<WatchPreview>>(`/instance/advisories?${params.toString()}`)
+  }
+
+  createWatch(input: CreateWatchedProductInput) {
+    return this.request<ApiResponse<WatchedProduct>>('/instance/advisories/watches', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  deleteWatch(id: string) {
+    return this.request<void>(`/instance/advisories/watches/${id}`, { method: 'DELETE' })
+  }
+
   listOrgMembers(provider: string, slug: string) {
     return this.request<PaginatedResponse<OrgMember>>(`/orgs/${provider}/${slug}/members?per_page=100`)
   }

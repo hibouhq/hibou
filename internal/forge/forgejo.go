@@ -27,7 +27,12 @@ type Forgejo struct {
 	clientID      string
 	clientSecret  string
 	webhookSecret string
-	httpClient    *http.Client
+	// token authenticates the server's own API calls. The OAuth2 client
+	// credentials above only authenticate a user login; Forgejo answers
+	// "token is required" to any API call that arrives without this, so
+	// without it commit statuses and PR comments are silently dropped.
+	token      string
+	httpClient *http.Client
 }
 
 // CloneURL implements CloneURLProvider: Forgejo's apiURL is the web base
@@ -41,7 +46,7 @@ func (f *Forgejo) CloneURL(owner, name string) string {
 	return f.apiURL + "/" + owner + "/" + name + ".git"
 }
 
-func NewForgejo(apiURL, clientID, clientSecret, webhookSecret string) *Forgejo {
+func NewForgejo(apiURL, clientID, clientSecret, webhookSecret, token string) *Forgejo {
 	if apiURL == "" {
 		apiURL = "http://localhost:3030"
 	}
@@ -51,6 +56,7 @@ func NewForgejo(apiURL, clientID, clientSecret, webhookSecret string) *Forgejo {
 		clientID:      clientID,
 		clientSecret:  clientSecret,
 		webhookSecret: webhookSecret,
+		token:         strings.TrimSpace(token),
 		httpClient:    http.DefaultClient,
 	}
 }
@@ -370,6 +376,9 @@ func (f *Forgejo) newRequest(ctx context.Context, method, path string, body any)
 	request.Header.Set("Accept", "application/json")
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	if f.token != "" {
+		request.Header.Set("Authorization", "token "+f.token)
 	}
 
 	return request, nil

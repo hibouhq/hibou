@@ -238,3 +238,38 @@ affinity:
     {{- end }}
 {{- end }}
 {{- end -}}
+
+{{/*
+Guard the API pod's scratch volume against the clone it would have to hold.
+
+The CVE feed sweep keeps a ~10 MB blobless clone there, which is why scratch is
+always mounted and why its default sizeLimit is small. Secret scanning on the
+same pod clones whole repositories instead — up to secretScan.maxRepoMB, default
+2048 MB — so enabling it without raising the limit gives a volume that fills and
+a pod that is evicted. That is the Trivy-DB DiskPressure failure again, and it is
+cheaper to refuse the install than to debug it on a node.
+
+Fails rather than raising the limit silently: ephemeral-storage requests decide
+where the scheduler can place the pod, so the operator has to see the number.
+*/}}
+{{- define "hibou.validateScratchForSecretScan" -}}
+{{- if .Values.hibou.background.secretScan -}}
+{{- $limit := .Values.hibou.scratch.sizeLimit | toString -}}
+{{- $value := regexFind "^[0-9]+" $limit | int -}}
+{{- $megabytes := 0 -}}
+{{- if hasSuffix "Gi" $limit -}}
+{{- $megabytes = mul $value 1024 -}}
+{{- else if hasSuffix "Mi" $limit -}}
+{{- $megabytes = $value -}}
+{{- else -}}
+{{- fail (printf "hibou.scratch.sizeLimit %q must be expressed in Mi or Gi so it can be checked against the repository clones secret scanning writes there." $limit) -}}
+{{- end -}}
+{{- $needed := 2048 -}}
+{{- if .Values.hibou.secretScan.maxRepoMB -}}
+{{- $needed = .Values.hibou.secretScan.maxRepoMB | int -}}
+{{- end -}}
+{{- if lt $megabytes $needed -}}
+{{- fail (printf "hibou.background.secretScan is enabled on the request-serving pod, but hibou.scratch.sizeLimit is %s (%d Mi) and a single repository clone may reach %d Mi. Raise hibou.scratch.sizeLimit and hibou.resources.requests.ephemeral-storage together, or run secret scanning on a worker (hibou.worker.enabled with hibou.worker.background.secretScan)." $limit $megabytes $needed) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

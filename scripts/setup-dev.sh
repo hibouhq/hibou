@@ -106,6 +106,30 @@ generate_admin_token() {
   fi
 }
 
+# The setup token above is deleted when this script exits. The server needs its
+# own durable credential: Forgejo answers "token is required" to any API call
+# that arrives without one, so commit statuses and PR comments are dropped
+# silently without it. Recreated each run because Forgejo returns a token's
+# secret only at creation.
+generate_server_token() {
+  echo "==> Generating Hibou server API token..."
+  curl -sf "$FORGEJO_URL/api/v1/users/$FORGEJO_ADMIN_USER/tokens/hibou-server" \
+    -u "$FORGEJO_ADMIN_USER:$FORGEJO_ADMIN_PASS" \
+    -X DELETE >/dev/null 2>&1 || true
+
+  local response
+  response=$(curl -sf "$FORGEJO_URL/api/v1/users/$FORGEJO_ADMIN_USER/tokens" \
+    -u "$FORGEJO_ADMIN_USER:$FORGEJO_ADMIN_PASS" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"hibou-server","scopes":["write:repository","write:issue","read:user"]}')
+
+  SERVER_TOKEN=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha1', d.get('token','')))")
+  if [ -z "$SERVER_TOKEN" ]; then
+    echo "ERROR: Failed to create Hibou server token: $response" >&2
+    exit 1
+  fi
+}
+
 create_oauth_app() {
   echo "==> Creating OAuth2 application 'hibou'..."
   local existing_app
@@ -220,6 +244,7 @@ print_credentials() {
     echo "  HIBOU_FORGE_0_CLIENT_SECRET=(already set — kept from .env)"
   fi
   echo "  HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET"
+  echo "  HIBOU_FORGE_0_TOKEN=$SERVER_TOKEN"
   echo ""
   echo "Forgejo admin login: $FORGEJO_URL"
   echo "  Username: $FORGEJO_ADMIN_USER"
@@ -242,6 +267,10 @@ print_credentials() {
     if ! grep -q "^HIBOU_FORGE_0_WEBHOOK_SECRET=" .env; then
       echo "HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> .env
     fi
+    grep -q "^HIBOU_FORGE_0_TOKEN=" .env && sed -i "s|^HIBOU_FORGE_0_TOKEN=.*|HIBOU_FORGE_0_TOKEN=$SERVER_TOKEN|" .env
+    if ! grep -q "^HIBOU_FORGE_0_TOKEN=" .env; then
+      echo "HIBOU_FORGE_0_TOKEN=$SERVER_TOKEN" >> .env
+    fi
     if ! grep -q "^HIBOU_DEVELOPMENT=" .env; then
       echo "HIBOU_DEVELOPMENT=true" >> .env
     fi
@@ -261,6 +290,7 @@ HIBOU_FORGE_0_URL=$FORGEJO_URL
 HIBOU_FORGE_0_CLIENT_ID=$client_id
 HIBOU_FORGE_0_CLIENT_SECRET=$client_secret
 HIBOU_FORGE_0_WEBHOOK_SECRET=$WEBHOOK_SECRET
+HIBOU_FORGE_0_TOKEN=$SERVER_TOKEN
 FORGE_EOF
     echo "    Forge config appended to .env"
   else
@@ -279,6 +309,7 @@ main() {
   wait_for_forgejo
   create_admin_user
   generate_admin_token
+  generate_server_token
   create_oauth_app
   setup_webhooks
   print_credentials

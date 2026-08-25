@@ -33,7 +33,7 @@ func TestGitHubCloneURL(t *testing.T) {
 func TestForgejoCloneURL(t *testing.T) {
 	t.Parallel()
 
-	provider := NewForgejo("https://git.example.com/", "id", "secret", "hook")
+	provider := NewForgejo("https://git.example.com/", "id", "secret", "hook", "")
 	if got, want := provider.CloneURL("acme", "app"), "https://git.example.com/acme/app.git"; got != want {
 		t.Fatalf("CloneURL = %q, want %q", got, want)
 	}

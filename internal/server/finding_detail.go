@@ -44,6 +44,11 @@ type findingAdvisoryResponse struct {
 	FixedVersions []string `json:"fixed_versions,omitempty"`
 	References    []string `json:"references,omitempty"`
 	Aliases       []string `json:"aliases,omitempty"`
+	// When the advisory became public, on UPSTREAM's clock. The finding's own
+	// first_seen_at is ours, and the two beside each other invite the wrong
+	// reading — the gap between them is how long the flaw was public before
+	// this instance matched it.
+	PublishedAt string `json:"published_at,omitempty"`
 }
 
 type findingVEXResponse struct {
@@ -162,6 +167,9 @@ func (s *Server) advisoryDetail(ctx context.Context, advisory dbgen.Advisory) *f
 	}
 	if advisory.MalwareType.Valid {
 		detail.MalwareType = string(advisory.MalwareType.MalwareType)
+	}
+	if advisory.PublishedAt.Valid {
+		detail.PublishedAt = advisory.PublishedAt.Time.UTC().Format("2006-01-02T15:04:05Z")
 	}
 
 	// Fixed versions and references come from the same enrichment the

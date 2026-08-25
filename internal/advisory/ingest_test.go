@@ -506,3 +506,170 @@ func TestMalwareSeverityFloor(t *testing.T) {
 		t.Fatal("merged upsert lost is_malware")
 	}
 }
+
+// ADR-028's dedup guarantee, exercised end to end rather than asserted.
+//
+// A human-authored mapping is written through this same ingest path under a
+// "triage:*" source. If it minted a parallel identity, an org would carry two
+// advisories for one vulnerability and double-count the moment upstream
+// published coordinates. Carrying the CVE in Aliases is what prevents that:
+// both results converge on one advisory row, with the CVE canonical and each
+// source recorded separately.
+func TestIngesterConvergesAuthoredAdvisoryOntoUpstream(t *testing.T) {
+	store := newMockIngesterStore()
+	ingester := NewIngester(store, zerolog.Nop())
+	ctx := context.Background()
+
+	// Upstream arrives first, under its own GHSA identity.
+	upstreamIDs, err := ingester.Ingest(ctx, "osv", []IngestResult{{
+		ProviderID: "GHSA-cwxf-7cw2-7r32",
+		Aliases:    []string{"CVE-2026-59084"},
+		Title:      "Apache Tomcat",
+		AffectedRanges: []AffectedRange{{
+			Ecosystem:   "maven",
+			PackageName: "org.apache.tomcat:tomcat-catalina",
+			Introduced:  "11.0.0-M1",
+			Fixed:       "11.0.24",
+			Source:      "osv",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("upstream ingest: %v", err)
+	}
+	upstreamAdvisoryID := upstreamIDs["GHSA-cwxf-7cw2-7r32"]
+
+	// A triager then authors coordinates for the same CVE.
+	authoredIDs, err := ingester.Ingest(ctx, "triage:instance", []IngestResult{{
+		ProviderID: "CVE-2026-59084",
+		Aliases:    []string{"CVE-2026-59084"},
+		Title:      "Apache Tomcat",
+		AffectedRanges: []AffectedRange{{
+			Ecosystem:    "maven",
+			PackageName:  "org.apache.tomcat:tomcat-catalina",
+			Introduced:   "11.0.0-M1",
+			LastAffected: "11.0.23",
+			Source:       "triage:instance",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("authored ingest: %v", err)
+	}
+	authoredAdvisoryID := authoredIDs["CVE-2026-59084"]
+
+	if authoredAdvisoryID != upstreamAdvisoryID {
+		t.Fatalf("authored data created a second advisory (%s) instead of joining %s",
+			authoredAdvisoryID, upstreamAdvisoryID)
+	}
+	if stored := store.advisories[upstreamAdvisoryID]; stored.CanonicalID != "CVE-2026-59084" {
+		t.Fatalf("canonical ID = %q, want the CVE", stored.CanonicalID)
+	}
+	// Both sources are recorded against the one advisory, so provenance survives.
+	sources := store.sources[upstreamAdvisoryID]
+	if _, ok := sources["osv"]; !ok {
+		t.Error("upstream source was lost")
+	}
+	if _, ok := sources["triage:instance"]; !ok {
+		t.Error("authored source was not recorded")
+	}
+}
+
+// The reverse order matters just as much: a triager can author coordinates
+// before any upstream database has them — that is the entire point — and
+// upstream arriving later must join, not fork.
+func TestIngesterConvergesUpstreamOntoAuthoredAdvisory(t *testing.T) {
+	store := newMockIngesterStore()
+	ingester := NewIngester(store, zerolog.Nop())
+	ctx := context.Background()
+
+	authoredIDs, err := ingester.Ingest(ctx, "triage:instance", []IngestResult{{
+		ProviderID: "CVE-2026-59084",
+		Aliases:    []string{"CVE-2026-59084"},
+		AffectedRanges: []AffectedRange{{
+			Ecosystem:    "maven",
+			PackageName:  "org.apache.tomcat:tomcat-catalina",
+			LastAffected: "11.0.23",
+			Source:       "triage:instance",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("authored ingest: %v", err)
+	}
+
+	upstreamIDs, err := ingester.Ingest(ctx, "osv", []IngestResult{{
+		ProviderID: "GHSA-cwxf-7cw2-7r32",
+		Aliases:    []string{"CVE-2026-59084"},
+		AffectedRanges: []AffectedRange{{
+			Ecosystem:   "maven",
+			PackageName: "org.apache.tomcat:tomcat-catalina",
+			Fixed:       "11.0.24",
+			Source:      "osv",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("upstream ingest: %v", err)
+	}
+
+	if upstreamIDs["GHSA-cwxf-7cw2-7r32"] != authoredIDs["CVE-2026-59084"] {
+		t.Fatal("upstream forked a second advisory instead of joining the authored one")
+	}
+}
+
+// hibou's own identifier namespace is reserved but not yet issued, and it is
+// closed to providers from the start.
+//
+// The risk is not that a provider names one by accident; it is that anything
+// able to publish an advisory could join it to an identifier we intend to make
+// authoritative later. Discovered after minting begins, those rows would be
+// indistinguishable from real ones — so the namespace is closed before the
+// first one is issued rather than after.
+func TestIngesterRejectsReservedAliasesFromProviders(t *testing.T) {
+	store := newMockIngesterStore()
+	ingester := NewIngester(store, zerolog.Nop())
+
+	ids, err := ingester.Ingest(context.Background(), "osv", []IngestResult{{
+		ProviderID: "GHSA-aaaa-bbbb-cccc",
+		Aliases:    []string{"CVE-2026-9999", "HSA-2026-0001"},
+		Title:      "an advisory claiming a reserved identifier",
+		AffectedRanges: []AffectedRange{{
+			Ecosystem: "npm", PackageName: "leftpad", Fixed: "1.0.1",
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest returned error: %v", err)
+	}
+	advisoryID := ids["GHSA-aaaa-bbbb-cccc"]
+
+	if _, claimed := store.aliases["HSA-2026-0001"]; claimed {
+		t.Error("a provider claimed an identifier in hibou's reserved namespace")
+	}
+	// The rest of the record is still ingested: one stray alias must not block
+	// a feed.
+	if store.aliases["CVE-2026-9999"] != advisoryID {
+		t.Error("rejecting a reserved alias dropped the legitimate ones too")
+	}
+	if store.advisories[advisoryID].CanonicalID != "CVE-2026-9999" {
+		t.Errorf("canonical ID = %q", store.advisories[advisoryID].CanonicalID)
+	}
+}
+
+func TestIsReservedIdentifier(t *testing.T) {
+	for _, reserved := range []string{
+		"HSA-2026-0001", "hsa-2026-1", "  HSA-1999-12345  ",
+		// An instance's own namespace is reserved for the same reason ours is:
+		// whoever mints it, nothing arriving from a provider may claim it.
+		"HSAT-2026-0001", "hsat-2026-7",
+	} {
+		if !IsReservedIdentifier(reserved) {
+			t.Errorf("IsReservedIdentifier(%q) = false", reserved)
+		}
+	}
+	// Shape, not merely prefix: an unrelated vendor id is not ours to claim.
+	for _, other := range []string{
+		"", "CVE-2026-59084", "GHSA-cwxf-7cw2-7r32",
+		"HSA", "HSA-", "HSAT", "HSA-CORP-2026-1", "HSATX-2026-1",
+	} {
+		if IsReservedIdentifier(other) {
+			t.Errorf("IsReservedIdentifier(%q) = true, claiming an identifier that is not ours", other)
+		}
+	}
+}

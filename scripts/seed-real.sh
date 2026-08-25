@@ -324,12 +324,40 @@ seed_hibou_data() {
   fi
 
   echo "==> Creating Hibou upload API key..."
+  # Scoped tokens (ADR-020): a mint needs an org, a repo selection, at least one
+  # capability, and a bounded expiry — the old {"scopes":["upload"]} string list
+  # no longer parses. The seed's key is only ever sent to POST /api/v1/upload,
+  # so uploads:write is its whole authority, and repos.mode=all because an
+  # upload may enroll a repository that does not exist yet.
+  local key_payload
+  key_payload=$(python3 - <<'PY'
+import datetime
+import json
+
+expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+
+print(json.dumps({
+    "name": "seed-real",
+    "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "scopes": {
+        "org": "devtools",
+        "repos": {"mode": "all"},
+        "permissions": {"uploads": "write"},
+    },
+}))
+PY
+)
+
   local key_response
-  key_response=$(curl -sf -b "$COOKIE_JAR" "$HIBOU_URL/api/v1/users/me/api-keys" \
+  key_response=$(curl -s -b "$COOKIE_JAR" "$HIBOU_URL/api/v1/users/me/api-keys" \
     -H "Content-Type: application/json" \
-    -d '{"name":"seed-real","scopes":["upload"]}')
-  API_KEY=$(printf '%s' "$key_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])')
-  API_KEY_ID=$(printf '%s' "$key_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["api_key"]["id"])')
+    -d "$key_payload")
+  API_KEY=$(printf '%s' "$key_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])' 2>/dev/null || true)
+  API_KEY_ID=$(printf '%s' "$key_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["api_key"]["id"])' 2>/dev/null || true)
+  if [[ -z "$API_KEY" ]]; then
+    echo "ERROR: failed to mint upload API key: $key_response" >&2
+    exit 1
+  fi
 }
 
 create_prs() {

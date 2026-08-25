@@ -49,6 +49,25 @@ const (
 	RetentionProtected     Type = "retention.protected_exceeds_budget"
 	NotificationNew        Type = "notification.new"
 	TokenExpiring          Type = "token.expiring" // #nosec G101 -- event name, not a credential
+	// TriageQueued is a watched product's advisory arriving with nobody yet
+	// having said which packages it affects. Payload: org_id, cve_id, label,
+	// severity, pending (queue depth).
+	//
+	// Digest rather than per-record on purpose: the feed carries ~1,300 records
+	// a day, and even a well-targeted subscription bursts. A channel that cries
+	// wolf gets muted, and a muted channel is the same as no queue at all.
+	TriageQueued Type = "triage.queued"
+	// AdvisoryDiverged is upstream publishing coordinates that disagree with a
+	// mapping authored here. Neither side is retired automatically — that is
+	// the point of the event. Payload: org_id, cve_id, ours, theirs.
+	AdvisoryDiverged Type = "advisory.diverged"
+	// LocalGrantSuspended is a capability parked because the forge narrowed
+	// someone's standing. Payload: user_id, org_id, role, reason.
+	//
+	// It notifies rather than merely logging because the grant is now inert:
+	// somebody who could triage yesterday cannot today, and if nobody is told,
+	// the first symptom is a queue quietly going unworked.
+	LocalGrantSuspended Type = "rbac.local_grant.suspended"
 )
 
 type Event struct {

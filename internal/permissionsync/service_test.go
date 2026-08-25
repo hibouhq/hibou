@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -225,6 +226,9 @@ func TestSyncUserReordersRBACRoleChangesSafely(t *testing.T) {
 }
 
 type fakeStore struct {
+	localGrants         []store.LocalRoleGrant
+	suspendedReasons    []string
+	revokedForOrgs      []uuid.UUID
 	orgsBySlug          map[string]*store.Organization
 	reposByOrgAndSlug   map[string]*store.Repository
 	existingMemberships []store.ForgeOrgMembership
@@ -281,9 +285,15 @@ func (f *fakeStore) PruneForgeUserRepoAccess(_ context.Context, _ uuid.UUID, kee
 }
 
 type fakeRBAC struct {
-	added   []membershipCall
-	removed []membershipCall
-	addErr  error
+	removedLocal []string
+	added        []membershipCall
+	removed      []membershipCall
+	addErr       error
+}
+
+func (f *fakeRBAC) RemoveLocalRoleForUserInOrg(userID uuid.UUID, role string, orgID uuid.UUID) error {
+	f.removedLocal = append(f.removedLocal, role)
+	return nil
 }
 
 func (f *fakeRBAC) AddRoleForUserInOrg(userID uuid.UUID, role string, orgID uuid.UUID) error {
@@ -366,4 +376,122 @@ func testOrg(provider, slug string) *store.Organization {
 func testRepo(orgID uuid.UUID, slug string) *store.Repository {
 	now := time.Now().UTC()
 	return &store.Repository{ID: uuid.New(), OrgID: orgID, Slug: slug, Name: slug, CreatedAt: now, UpdatedAt: now}
+}
+
+func (f *fakeStore) SuspendLocalRoles(_ context.Context, _, _ uuid.UUID, reason string) ([]store.LocalRoleGrant, error) {
+	f.suspendedReasons = append(f.suspendedReasons, reason)
+	return f.localGrants, nil
+}
+
+func (f *fakeStore) RevokeLocalRolesForOrg(_ context.Context, _, orgID uuid.UUID) error {
+	f.revokedForOrgs = append(f.revokedForOrgs, orgID)
+	return nil
+}
+
+// A forge downgrade suspends privileged local grants rather than keeping or
+// revoking them.
+//
+// Keeping one leaves a demoted admin authoring findings across every repository.
+// Revoking outright silently breaks a triage queue whenever a team is
+// reorganised. Neither is right, because the forge does not say WHY someone's
+// standing changed — so the grant is parked, its policy dropped, and an operator
+// re-confirms.
+func TestForgeDowngradeSuspendsLocalGrants(t *testing.T) {
+	t.Parallel()
+
+	user := testUser()
+	org := testOrg("github", "acme")
+	storeFake := &fakeStore{
+		orgsBySlug:          map[string]*store.Organization{"github/acme": org},
+		existingMemberships: []store.ForgeOrgMembership{{OrgID: org.ID, UserID: user.ID, Role: "admin"}},
+		localGrants:         []store.LocalRoleGrant{{Role: "cve-triager", UserID: user.ID}},
+	}
+	rbacFake := &fakeRBAC{}
+	svc := NewService(storeFake, rbacFake, map[string]forge.Provider{
+		// GitHub reports org membership as admin or member; member maps to
+		// viewer, so this is a downgrade from the recorded admin.
+		"github": fakeProvider{access: forge.UserAccess{
+			Orgs: []forge.UserOrgAccess{{AccountLogin: "acme", Level: "member"}},
+		}},
+	}, zerolog.Nop())
+
+	if err := svc.SyncUser(context.Background(), user, "github", &oauth2.Token{AccessToken: "token"}); err != nil {
+		t.Fatalf("SyncUser: %v", err)
+	}
+
+	if len(storeFake.suspendedReasons) == 0 {
+		t.Fatal("a downgrade did not suspend the local grant")
+	}
+	if !strings.Contains(storeFake.suspendedReasons[0], "admin") ||
+		!strings.Contains(storeFake.suspendedReasons[0], "viewer") {
+		t.Errorf("suspension reason = %q, want it to name both roles", storeFake.suspendedReasons[0])
+	}
+	// Enforcement must never see a suspended grant.
+	if len(rbacFake.removedLocal) != 1 || rbacFake.removedLocal[0] != "cve-triager" {
+		t.Errorf("policy for the suspended grant was not dropped: %v", rbacFake.removedLocal)
+	}
+	// Parked, not deleted: an operator can restore it.
+	if len(storeFake.revokedForOrgs) != 0 {
+		t.Error("a downgrade deleted the grant instead of suspending it")
+	}
+}
+
+// An upgrade changes nothing about local grants: more standing is not a reason
+// to re-examine a capability somebody deliberately granted.
+func TestForgeUpgradeLeavesLocalGrantsAlone(t *testing.T) {
+	t.Parallel()
+
+	user := testUser()
+	org := testOrg("github", "acme")
+	storeFake := &fakeStore{
+		orgsBySlug:          map[string]*store.Organization{"github/acme": org},
+		existingMemberships: []store.ForgeOrgMembership{{OrgID: org.ID, UserID: user.ID, Role: "viewer"}},
+		localGrants:         []store.LocalRoleGrant{{Role: "cve-triager", UserID: user.ID}},
+	}
+	rbacFake := &fakeRBAC{}
+	svc := NewService(storeFake, rbacFake, map[string]forge.Provider{
+		"github": fakeProvider{access: forge.UserAccess{
+			Orgs: []forge.UserOrgAccess{{AccountLogin: "acme", Level: "admin"}},
+		}},
+	}, zerolog.Nop())
+
+	if err := svc.SyncUser(context.Background(), user, "github", &oauth2.Token{AccessToken: "token"}); err != nil {
+		t.Fatalf("SyncUser: %v", err)
+	}
+	if len(storeFake.suspendedReasons) != 0 {
+		t.Errorf("an upgrade suspended a local grant: %v", storeFake.suspendedReasons)
+	}
+	if len(rbacFake.removedLocal) != 0 {
+		t.Errorf("an upgrade dropped a local policy: %v", rbacFake.removedLocal)
+	}
+}
+
+// Losing membership is not ambiguous the way a downgrade is: the person may
+// have left the company, so the grant goes rather than waiting for a re-confirm
+// that will never come.
+func TestMembershipRemovalRevokesLocalGrants(t *testing.T) {
+	t.Parallel()
+
+	user := testUser()
+	org := testOrg("github", "acme")
+	storeFake := &fakeStore{
+		orgsBySlug:          map[string]*store.Organization{"github/acme": org},
+		existingMemberships: []store.ForgeOrgMembership{{OrgID: org.ID, UserID: user.ID, Role: "admin"}},
+		localGrants:         []store.LocalRoleGrant{{Role: "cve-triager", UserID: user.ID}},
+	}
+	rbacFake := &fakeRBAC{}
+	// The forge reports no orgs at all: membership ended.
+	svc := NewService(storeFake, rbacFake, map[string]forge.Provider{
+		"github": fakeProvider{access: forge.UserAccess{}},
+	}, zerolog.Nop())
+
+	if err := svc.SyncUser(context.Background(), user, "github", &oauth2.Token{AccessToken: "token"}); err != nil {
+		t.Fatalf("SyncUser: %v", err)
+	}
+	if len(storeFake.revokedForOrgs) != 1 || storeFake.revokedForOrgs[0] != org.ID {
+		t.Fatalf("membership removal did not revoke local grants: %v", storeFake.revokedForOrgs)
+	}
+	if len(rbacFake.removedLocal) != 1 {
+		t.Errorf("the revoked grant's policy was not dropped: %v", rbacFake.removedLocal)
+	}
 }

@@ -87,9 +87,24 @@ var routeScopes = map[string]routeScope{
 	"PUT /api/v1/instance/settings/banners": sessionOnlyRoute(),
 	"GET /api/v1/instance/settings/admins":  sessionOnlyRoute(),
 	"GET /api/v1/instance/audit-logs":       sessionOnlyRoute(),
-	"GET /api/v1/instance/jobs/overview":    sessionOnlyRoute(),
-	"GET /api/v1/instance/jobs/timeline":    sessionOnlyRoute(),
-	"GET /api/v1/instance/jobs/stats":       sessionOnlyRoute(),
+	// Watches change what every org on the instance is told about, so like the
+	// other instance surfaces they are session-only: no API token carries
+	// instance authority.
+	// ADR-028 advisory curation. All session-only: these are operator surfaces,
+	// not anything a CI token should reach.
+	"GET /api/v1/instance/advisories/":                     sessionOnlyRoute(),
+	"GET /api/v1/instance/advisories/events":               sessionOnlyRoute(),
+	"GET /api/v1/instance/advisories/{advisoryID}/events":  sessionOnlyRoute(),
+	"GET /api/v1/instance/advisories/watches/":             sessionOnlyRoute(),
+	"POST /api/v1/instance/advisories/watches/":            sessionOnlyRoute(),
+	"GET /api/v1/instance/advisories/watches/candidates":   sessionOnlyRoute(),
+	"DELETE /api/v1/instance/advisories/watches/{watchID}": sessionOnlyRoute(),
+	"GET /api/v1/instance/members":                         sessionOnlyRoute(),
+	"POST /api/v1/instance/members/grants":                 sessionOnlyRoute(),
+	"POST /api/v1/instance/members/revocations":            sessionOnlyRoute(),
+	"GET /api/v1/instance/jobs/overview":                   sessionOnlyRoute(),
+	"GET /api/v1/instance/jobs/timeline":                   sessionOnlyRoute(),
+	"GET /api/v1/instance/jobs/stats":                      sessionOnlyRoute(),
 
 	"GET /api/v1/notifications":              sessionOnlyRoute(),
 	"GET /api/v1/notifications/unread-count": sessionOnlyRoute(),
@@ -140,6 +155,13 @@ var routeScopes = map[string]routeScope{
 	"POST " + orgRoute + "/members/":             needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 	"PUT " + orgRoute + "/members/{userID}/role": needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 	"DELETE " + orgRoute + "/members/{userID}":   needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
+
+	// Triage. The decision endpoint additionally requires the cve-triager
+	// grant at request time — a token scope alone does not confer the ability
+	// to author advisory data for an org.
+	"GET " + orgRoute + "/triage/":                   needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
+	"GET " + orgRoute + "/triage/{itemID}":           needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
+	"POST " + orgRoute + "/triage/{itemID}/decision": needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 
 	"GET " + orgRoute + "/integrations/":                        needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
 	"POST " + orgRoute + "/integrations/":                       needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),

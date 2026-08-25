@@ -174,14 +174,43 @@
         Show {{ references.length - REFERENCE_PREVIEW }} more
       </button>
     </FindingSection>
+
+    <!-- The advisory's own history, which is not this finding's history. A
+         finding timeline says what happened to it here; this says what happened
+         to the advisory anywhere, and it is what explains a finding whose facts
+         changed underneath somebody with no code change. -->
+    <FindingSection
+      v-if="advisoryHistory.length"
+      title="Advisory history"
+    >
+      <ul class="space-y-2">
+        <li
+          v-for="(event, index) in advisoryHistory"
+          :key="`${event.kind}-${event.occurred_at}-${index}`"
+          class="flex items-baseline gap-2.5 text-xs"
+        >
+          <span
+            class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full"
+            :class="event.external ? 'bg-gray-600' : 'bg-accent'"
+          />
+          <span class="text-gray-300">{{ historyLabel(event.kind) }}</span>
+          <span
+            v-if="!event.external"
+            class="rounded-full bg-accent-muted/40 px-1.5 text-[10px] font-medium text-accent"
+          >here</span>
+          <span class="ml-auto shrink-0 text-gray-500">{{ historyDate(event.occurred_at) }}</span>
+        </li>
+      </ul>
+    </FindingSection>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
-import type { FindingDetail } from '@/api/client'
+import { api, type AdvisoryActivityEvent, type FindingDetail } from '@/api/client'
 import MarkdownText from '@/components/MarkdownText.vue'
+import { isLocallyCurated } from '@/lib/purl'
 import type { Fact } from '@/components/finding/facts'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
@@ -219,9 +248,58 @@ const visibleReferences = computed(() => (allReferences.value ? references.value
 // authoritative description when the scanner did not carry one.
 const description = computed(() => finding.value.description || advisory.value?.description || '')
 
+const locallyCurated = computed(() => isLocallyCurated(finding.value.scanner_name))
+
+/**
+ * The advisory's own history, which is not the finding's history.
+ *
+ * A finding's timeline says what happened to it here — detected, accepted,
+ * fixed. This says what happened to the advisory anywhere, upstream included,
+ * and it is the half that explains why a finding's facts changed underneath
+ * somebody without anyone touching the code.
+ */
+const advisoryHistory = ref<AdvisoryActivityEvent[]>([])
+
+const HISTORY_LABELS: Record<string, string> = {
+  published: 'Published upstream',
+  cna_revised: 'Vendor revised the record',
+  enriched: 'Enriched upstream',
+  withdrawn: 'Withdrawn upstream',
+  coordinates_upstreamed: 'Upstream published coordinates',
+  coordinates_authored: 'Packages mapped here',
+  superseded: 'Superseded by upstream',
+  diverged: 'Upstream disagrees with the mapping here',
+  mapping_revoked: 'Mapping revoked',
+}
+
+function historyLabel(kind: string): string {
+  return HISTORY_LABELS[kind] ?? kind
+}
+
+function historyDate(value: string): string {
+  return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+watch(() => finding.value.primary_identifier_value, async identifier => {
+  advisoryHistory.value = []
+  if (!identifier?.startsWith('CVE-')) return
+  try {
+    const response = await api.getAdvisoryEvents(identifier)
+    advisoryHistory.value = response.data ?? []
+  } catch {
+    // Supporting context: its absence must not break the finding view.
+  }
+}, { immediate: true })
+
 const packageFacts = computed<Fact[]>(() => [
   { label: 'Ecosystem', value: finding.value.ecosystem },
-  { label: 'Scanner', value: finding.value.scanner_name },
+  // Authored findings say who decided, not which feed reported: that is the
+  // whole difference between "a heuristic matched this" and "someone here
+  // decided this applies".
+  {
+    label: locallyCurated.value ? 'Source' : 'Scanner',
+    value: locallyCurated.value ? 'Curated here' : finding.value.scanner_name,
+  },
   { label: 'Package URL', value: finding.value.component_purl, mono: true, wide: true },
   { label: 'Manifest', value: finding.value.file_path, mono: true, wide: true, hint: 'The file the dependency was declared in' },
 ])

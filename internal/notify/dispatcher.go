@@ -681,6 +681,36 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 	case events.RetentionProtected:
 		payload.Title = "Protected snapshots exceed budget"
 		payload.Body = fmt.Sprintf("Protected snapshots keep repo %s above its retention budget", payload.RepoName)
+	case events.TriageQueued:
+		// Depth leads, not the individual advisory: the actionable fact is how
+		// much is waiting, and one message per record — from a feed carrying
+		// ~1,300 a day — is how a channel gets muted.
+		identifiers := stringSliceValue(data["identifiers"])
+		payload.Title = fmt.Sprintf("%d advisories awaiting triage", len(identifiers))
+		if len(identifiers) == 1 {
+			payload.Title = "An advisory is awaiting triage"
+		}
+		listed := identifiers
+		if len(listed) > 5 {
+			listed = listed[:5]
+		}
+		payload.Body = "Waiting on someone to say which packages they affect: " + strings.Join(listed, ", ")
+		if extra := len(identifiers) - len(listed); extra > 0 {
+			payload.Body += fmt.Sprintf(" (+%d more)", extra)
+		}
+		payload.Body += ". Until then they produce no findings."
+	case events.LocalGrantSuspended:
+		role := stringValue(data, "role", "a capability")
+		payload.Title = "A granted capability was suspended"
+		payload.Body = "The forge narrowed someone's standing, so " + role +
+			" was suspended for them: " + stringValue(data, "reason", "role changed") +
+			". It stays inert until an operator re-confirms it."
+	case events.AdvisoryDiverged:
+		cveID := stringValue(data, "cve_id", "an advisory")
+		payload.Title = "Upstream disagrees with a mapping made here"
+		payload.Body = fmt.Sprintf(
+			"%s now carries package coordinates upstream that differ from the ones triaged here. "+
+				"Neither has been retired — someone should decide which is right.", cveID)
 	default:
 		payload.Title = string(eventType)
 		payload.Body = stringValue(data, "message", string(eventType))

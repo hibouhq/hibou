@@ -34,6 +34,8 @@ import (
 	"github.com/hibouhq/hibou/internal/cache"
 	"github.com/hibouhq/hibou/internal/compliance"
 	"github.com/hibouhq/hibou/internal/config"
+	"github.com/hibouhq/hibou/internal/cvefeed"
+	"github.com/hibouhq/hibou/internal/cvetriage"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
@@ -80,6 +82,7 @@ type Server struct {
 	complianceSvc      *compliance.Service
 	toolCatalogSvc     *toolcatalog.Service
 	advisoryScanner    advisoryScanner
+	advisoryIngester   *advisory.Ingester
 	advisoryProviders  []string
 	secretScanner      *secretscan.Scanner
 	secretScanSlots    chan struct{}
@@ -218,12 +221,20 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.onboardingSvc = repoconfig.NewOnboardingService(s.forges, log)
 	s.inventorySvc = repoinventory.NewService(s.queries, s.forges, log)
 	s.orgProvisionSvc = orgprovision.NewService(orgprovision.NewStoreAdapter(s.queries), s.enforcer, s.forges, cfg.AutoProvisionOrgs, log)
-	s.permissionSyncSvc = permissionsync.NewService(permissionsync.NewStoreAdapter(s.queries), s.enforcer, s.forges, log)
+	s.permissionSyncSvc = permissionsync.NewService(permissionsync.NewStoreAdapter(s.queries), s.enforcer, s.forges, log).
+		// A suspended grant is inert: somebody who could triage yesterday
+		// cannot today, and without a notification the first symptom is a
+		// queue quietly going unworked.
+		WithPublisher(s.bus)
 	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
 	s.toolCatalogSvc = toolcatalog.NewService(toolcatalog.NewStoreAdapter(s.queries))
 	providers := buildAdvisoryProviders(cfg, log)
 	advisoryCache := cache.New(s.queries, cache.Config{DefaultTTL: cfg.CacheTTL}, log)
 	advisoryIngester := advisory.NewIngester(s.queries, log)
+	// Triage authors advisory data through the same ingester every provider
+	// uses, which is what makes an authored mapping indistinguishable
+	// downstream from one that arrived from OSV.
+	s.advisoryIngester = advisoryIngester
 	s.advisoryScanner = scanner.New(s.queries, advisoryCache, advisoryIngester, s.bus, providers, log)
 	s.advisoryProviders = configuredAdvisoryProviderNames(cfg.AdvisoryScan.Providers, providers)
 	if len(s.advisoryProviders) == 0 {
@@ -434,6 +445,28 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/instance/jobs/timeline", s.handleInstanceJobsTimeline)
 			r.Get("/instance/jobs/stats", s.handleInstanceJobsStats)
 			r.Get("/instance/audit-logs", s.handleListInstanceAuditLogs)
+			// ADR-028. `advisories` not `cves`: the namespace has to hold
+			// `HSA-*` once an advisory exists that no CVE covers (§10).
+			r.Route("/instance/advisories", func(r chi.Router) {
+				// Filtered by product only. An unfiltered list is refused:
+				// §13 keeps the mirror as infrastructure, not a browser.
+				r.Get("/", s.handleListAdvisories)
+				r.Get("/events", s.handleAdvisoryEvents)
+				// Instance-scoped: "Apache Tomcat means these artifacts" is a
+				// fact about the world, not about one organization.
+				r.Route("/watches", func(r chi.Router) {
+					r.Get("/", s.handleListWatches)
+					r.Post("/", s.handleCreateWatch)
+					r.Get("/candidates", s.handleListWatchCandidates)
+					r.Delete("/{watchID}", s.handleDeleteWatch)
+				})
+				r.Get("/{advisoryID}/events", s.handleAdvisoryTimeline)
+			})
+			// The cross-org answer to "what can this person do everywhere",
+			// and the only home for roles no forge has an opinion about.
+			r.Get("/instance/members", s.handleListInstanceMembers)
+			r.Post("/instance/members/grants", s.handleGrantLocalRole)
+			r.Post("/instance/members/revocations", s.handleRevokeLocalRole)
 			r.Get("/notifications", s.notifySvc.HandleListNotifications)
 			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)
 			r.Post("/notifications/{id}/read", s.notifySvc.HandleMarkRead)
@@ -480,6 +513,16 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Post("/", s.handleAddOrgMember)
 						r.Put("/{userID}/role", s.handleUpdateOrgMemberRole)
 						r.Delete("/{userID}", s.handleRemoveOrgMember)
+					})
+					// Watched software (ADR-028): products tracked by the name
+					// their vendor publishes advisories under, because no
+					// upstream record maps them to package coordinates.
+					// Triage: the queue where a person supplies the package
+					// identity no upstream record carries.
+					r.Route("/triage", func(r chi.Router) {
+						r.Get("/", s.handleListTriageQueue)
+						r.Get("/{itemID}", s.handleGetTriageItem)
+						r.Post("/{itemID}/decision", s.handleDecideTriageItem)
 					})
 					r.Route("/integrations", func(r chi.Router) {
 						r.Post("/", s.handleCreateIntegration)
@@ -664,6 +707,24 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		loops = append(loops, "stale_scan")
 		go s.staleScanChecker.Start(runtimeCtx)
+	}
+	// The CVE feed sweep (ADR-028). Always on: a scanner that silently watches
+	// nothing because a path was left unset is worse than a 10 MB clone.
+	if s.db != nil && s.queries != nil {
+		loops = append(loops, "cve_feed")
+		sweeper := &cvetriage.Sweeper{
+			Source: &cvefeed.GitSource{Dir: cveFeedDir(), Remote: s.cfg.CVEFeed.Remote},
+			Store: &cveSweepStore{
+				queries:  s.queries,
+				db:       s.db,
+				ingester: s.advisoryIngester,
+				// Stable so auto-applied advisories are attributable to the
+				// mechanism rather than to an arbitrary person.
+				autoApplyActor: autoApplyActorID,
+			},
+			Log: s.log,
+		}
+		go s.runCVEFeedLoop(runtimeCtx, sweeper, s.cfg.CVEFeed.Interval)
 	}
 	if s.tokenExpiryChecker != nil && s.cfg.Background.StaleScanEnabled {
 		loops = append(loops, "token_expiry")

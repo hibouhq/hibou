@@ -2,12 +2,15 @@ package permissionsync
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"golang.org/x/oauth2"
 
+	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -20,18 +23,40 @@ type Store interface {
 	GetRepositoryBySlug(ctx context.Context, orgID uuid.UUID, slug string) (*store.Repository, error)
 	UpsertForgeUserRepoAccess(ctx context.Context, userID, repoID uuid.UUID, role string) error
 	PruneForgeUserRepoAccess(ctx context.Context, userID uuid.UUID, keepRepoIDs []uuid.UUID) error
+
+	// Operator-granted roles. The sync never creates these — it only reacts to
+	// the forge changing someone's standing underneath them.
+	SuspendLocalRoles(ctx context.Context, userID, orgID uuid.UUID, reason string) ([]store.LocalRoleGrant, error)
+	RevokeLocalRolesForOrg(ctx context.Context, userID, orgID uuid.UUID) error
 }
 
 type RBAC interface {
 	AddRoleForUserInOrg(userID uuid.UUID, role string, orgID uuid.UUID) error
 	RemoveRoleForUserInOrg(userID uuid.UUID, role string, orgID uuid.UUID) error
+	RemoveLocalRoleForUserInOrg(userID uuid.UUID, role string, orgID uuid.UUID) error
+}
+
+// Publisher lets the sync announce a capability it parked. Optional: a nil bus
+// degrades to logging, which is right for the CLI paths that sync without a
+// running notification stack.
+type Publisher interface {
+	Publish(ctx context.Context, event events.Event)
 }
 
 type Service struct {
 	store  Store
 	rbac   RBAC
 	forges map[string]forge.Provider
+	bus    Publisher
 	log    zerolog.Logger
+}
+
+// WithPublisher attaches an event bus for suspension notifications.
+func (s *Service) WithPublisher(bus Publisher) *Service {
+	if s != nil {
+		s.bus = bus
+	}
+	return s
 }
 
 func NewService(store Store, rbac RBAC, forges map[string]forge.Provider, log zerolog.Logger) *Service {
@@ -115,6 +140,15 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 		}
 		if added := s.addOrgRole(user.ID, role, orgID); added && priorRole != "" && priorRole != role {
 			s.removeOrgRole(user.ID, priorRole, orgID)
+			// A downgrade says the person's standing changed, but not why: a
+			// narrowed remit and a team reorganisation look identical here.
+			// Keeping a privileged grant would leave a demoted admin authoring
+			// findings across every repository; revoking it would silently
+			// break a triage queue on a reorg. Suspension is safe in the
+			// meantime and recoverable in one click.
+			if roleRank(role) < roleRank(priorRole) {
+				s.suspendLocalGrants(ctx, user.ID, orgID, priorRole, role)
+			}
 		}
 	}
 
@@ -126,6 +160,10 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 			continue
 		}
 		s.removeOrgRole(user.ID, membership.Role, membership.OrgID)
+		// Losing membership is not ambiguous the way a downgrade is: the person
+		// may have left the company entirely, so their grants go with it rather
+		// than waiting for somebody to re-confirm.
+		s.revokeLocalGrants(ctx, user.ID, membership.OrgID)
 	}
 
 	desiredRepoRoles := make(map[uuid.UUID]string, len(access.Repos))
@@ -259,5 +297,67 @@ func roleRank(role string) int {
 		return 1
 	default:
 		return 0
+	}
+}
+
+// suspendLocalGrants parks a user's operator-granted roles in one org after the
+// forge narrowed their standing.
+//
+// The Casbin policy is dropped so enforcement never sees a suspended grant, and
+// the row is kept so an operator can see what was suspended and why, and restore
+// it without re-deriving the decision.
+func (s *Service) suspendLocalGrants(ctx context.Context, userID, orgID uuid.UUID, priorRole, newRole string) {
+	reason := fmt.Sprintf("forge role changed from %s to %s", priorRole, newRole)
+	suspended, err := s.store.SuspendLocalRoles(ctx, userID, orgID, reason)
+	if err != nil {
+		s.log.Warn().Err(err).Str("user_id", userID.String()).Str("org_id", orgID.String()).
+			Msg("failed to suspend local role grants after a forge downgrade")
+		return
+	}
+	for _, grant := range suspended {
+		if s.rbac == nil {
+			continue
+		}
+		if err := s.rbac.RemoveLocalRoleForUserInOrg(userID, grant.Role, orgID); err != nil {
+			s.log.Warn().Err(err).Str("role", grant.Role).
+				Msg("suspended a local grant but failed to drop its policy")
+			continue
+		}
+		s.log.Info().Str("user_id", userID.String()).Str("org_id", orgID.String()).
+			Str("role", grant.Role).Str("reason", reason).
+			Msg("suspended a local role grant; an operator must re-confirm it")
+		if s.bus != nil {
+			s.bus.Publish(ctx, events.Event{
+				Type: events.LocalGrantSuspended,
+				Payload: map[string]any{
+					"user_id":  userID.String(),
+					"org_id":   orgID.String(),
+					"role":     grant.Role,
+					"reason":   reason,
+					"severity": "medium",
+				},
+				Timestamp: time.Now().UTC(),
+			})
+		}
+	}
+}
+
+// revokeLocalGrants drops a user's operator-granted roles in an org they are no
+// longer a member of.
+func (s *Service) revokeLocalGrants(ctx context.Context, userID, orgID uuid.UUID) {
+	grants, err := s.store.SuspendLocalRoles(ctx, userID, orgID, "removed from the organization")
+	if err != nil {
+		s.log.Warn().Err(err).Msg("failed to read local grants while removing membership")
+	}
+	for _, grant := range grants {
+		if s.rbac != nil {
+			if err := s.rbac.RemoveLocalRoleForUserInOrg(userID, grant.Role, orgID); err != nil {
+				s.log.Warn().Err(err).Str("role", grant.Role).Msg("failed to drop a local grant policy")
+			}
+		}
+	}
+	if err := s.store.RevokeLocalRolesForOrg(ctx, userID, orgID); err != nil {
+		s.log.Warn().Err(err).Str("user_id", userID.String()).Str("org_id", orgID.String()).
+			Msg("failed to revoke local role grants after membership ended")
 	}
 }

@@ -43,3 +43,13 @@ func (a *StoreAdapter) UpsertForgeUserRepoAccess(ctx context.Context, userID, re
 func (a *StoreAdapter) PruneForgeUserRepoAccess(ctx context.Context, userID uuid.UUID, keepRepoIDs []uuid.UUID) error {
 	return a.queries.PruneForgeUserRepoAccess(ctx, userID, keepRepoIDs)
 }
+
+// SuspendLocalRoles parks a user's operator-granted roles in one org.
+func (a *StoreAdapter) SuspendLocalRoles(ctx context.Context, userID, orgID uuid.UUID, reason string) ([]store.LocalRoleGrant, error) {
+	return a.queries.SuspendLocalRoles(ctx, userID, orgID, reason)
+}
+
+// RevokeLocalRolesForOrg drops grants that ended with a membership.
+func (a *StoreAdapter) RevokeLocalRolesForOrg(ctx context.Context, userID, orgID uuid.UUID) error {
+	return a.queries.RevokeLocalRolesForOrg(ctx, userID, orgID)
+}

@@ -12,9 +12,13 @@ import (
 )
 
 type OrgMember struct {
-	OrgID     uuid.UUID `json:"org_id"`
-	UserID    uuid.UUID `json:"user_id"`
-	Role      string    `json:"role"`
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+	Role   string    `json:"role"`
+	// Source is "forge" or "invite". A forge-sourced role is owned by the
+	// permission sync and replaced on its next run, so a UI that offers to edit
+	// one is offering a change that silently reverts.
+	Source    string    `json:"source"`
 	CreatedAt time.Time `json:"created_at"`
 	User      *User     `json:"user,omitempty"`
 }
@@ -94,6 +98,7 @@ func (q *Queries) ListOrgMembers(ctx context.Context, orgID uuid.UUID, limit, of
 			OrgID:     row.OrgID,
 			UserID:    row.UserID,
 			Role:      row.Role,
+			Source:    row.Source,
 			CreatedAt: row.CreatedAt,
 			User: &User{
 				ID:          row.UserID2,

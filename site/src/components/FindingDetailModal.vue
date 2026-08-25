@@ -67,10 +67,14 @@
                     v-else
                     class="font-mono text-accent"
                   >{{ identifier }}</span>
+                  <!-- Every date says whose clock it is on. "First detected"
+                       is ours — the first scan that matched a component — and
+                       is easily read as "when the flaw appeared", which is a
+                       different and usually much earlier date. -->
                   <span v-if="firstSeen">
-                    first detected <span
+                    first detected here <span
                       class="text-gray-400"
-                      :title="formatDateTime(firstSeen)"
+                      :title="`The first scan that matched this component — ${formatDateTime(firstSeen)}`"
                     >{{ formatDate(firstSeen) }}</span>
                   </span>
                   <span v-if="lastSeen">
@@ -78,6 +82,13 @@
                       class="text-gray-400"
                       :title="formatDateTime(lastSeen)"
                     >{{ relativeTime(lastSeen) }}</span>
+                  </span>
+                  <span
+                    v-if="detectionLagDays"
+                    class="text-warn"
+                    :title="`Published upstream ${formatDate(advisoryPublished)}, first detected here ${formatDate(firstSeen)}`"
+                  >
+                    · {{ detectionLagDays }}d after publication
                   </span>
                 </div>
               </div>
@@ -532,6 +543,24 @@ const identifier = computed(() => detail.value?.finding.primary_identifier_value
 const identifierUrl = computed(() => advisoryUrl(detail.value?.advisory?.canonical_id || identifier.value))
 const firstSeen = computed(() => detail.value?.finding.first_seen_at || detail.value?.finding.detected_at || '')
 const lastSeen = computed(() => detail.value?.finding.last_seen_at || '')
+const advisoryPublished = computed(() => detail.value?.advisory?.published_at || '')
+
+/**
+ * How long the advisory was public before this instance matched it.
+ *
+ * Shown because the two dates beside each other invite the wrong reading:
+ * "first detected" is our clock, not the world's, and the gap between them is
+ * the number that actually says how exposed somebody was. Only rendered when
+ * positive — a negative or zero gap means the advisory arrived after we were
+ * already looking, which is unremarkable.
+ */
+const detectionLagDays = computed(() => {
+  if (!firstSeen.value || !advisoryPublished.value) return 0
+  const days = Math.floor(
+    (new Date(firstSeen.value).getTime() - new Date(advisoryPublished.value).getTime()) / 86_400_000,
+  )
+  return days > 0 ? days : 0
+})
 
 // A tab that would open empty is not offered: secret and generic findings put
 // everything on the overview, so only component- and code-shaped findings have

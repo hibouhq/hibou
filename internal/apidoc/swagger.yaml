@@ -519,6 +519,13 @@ definitions:
         type: boolean
       malware_type:
         type: string
+      published_at:
+        description: |-
+          When the advisory became public, on UPSTREAM's clock. The finding's own
+          first_seen_at is ours, and the two beside each other invite the wrong
+          reading — the gap between them is how long the flaw was public before
+          this instance matched it.
+        type: string
       references:
         items:
           type: string

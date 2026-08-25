@@ -508,3 +508,32 @@ func TestTriggerRescanInvalidatesCacheAndWritesAuditLog(t *testing.T) {
 	}
 	_ = sql.ErrNoRows
 }
+
+// A finding must be attributed to whatever produced the range that matched it,
+// not to the pass that happened to notice it. Ranges a person authored are
+// matched by the same query as OSV's, so without this a human decision is
+// reported as having come from an advisory database — provenance that is wrong
+// rather than merely vague.
+func TestAttributionFollowsTheRangeSource(t *testing.T) {
+	cases := []struct {
+		name        string
+		provider    string
+		rangeSource string
+		want        string
+	}{
+		{"authored here", "osv", "triage", "triage"},
+		{"authored, scoped source", "trivy", "triage:instance", "triage:instance"},
+		{"ordinary provider range", "osv", "osv", "osv"},
+		{"range from another provider", "osv", "trivy", "osv"},
+		{"range with no source recorded", "osv", "", "osv"},
+		{"a provider merely named like triage", "osv", "triagebot", "osv"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := attributionFor(testCase.provider, testCase.rangeSource); got != testCase.want {
+				t.Errorf("attributionFor(%q, %q) = %q, want %q",
+					testCase.provider, testCase.rangeSource, got, testCase.want)
+			}
+		})
+	}
+}

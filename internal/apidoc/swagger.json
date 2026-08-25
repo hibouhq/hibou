@@ -7975,6 +7975,10 @@
                 "malware_type": {
                     "type": "string"
                 },
+                "published_at": {
+                    "description": "When the advisory became public, on UPSTREAM's clock. The finding's own\nfirst_seen_at is ours, and the two beside each other invite the wrong\nreading — the gap between them is how long the flaw was public before\nthis instance matched it.",
+                    "type": "string"
+                },
                 "references": {
                     "type": "array",
                     "items": {

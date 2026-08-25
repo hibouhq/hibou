@@ -201,7 +201,12 @@ func (ing *Ingester) syncAdvisorySources(ctx context.Context, queries IngesterSt
 }
 
 func (ing *Ingester) upsertAdvisoryAliases(ctx context.Context, queries IngesterStore, advisoryID uuid.UUID, result IngestResult) error {
-	for _, alias := range uniqueAliases(result.ProviderID, result.Aliases) {
+	// hibou's own identifier namespace is closed to providers — see
+	// advisory.ReservedPrefix. Letting an external record claim one would join
+	// an arbitrary advisory to a name we intend to make authoritative, and the
+	// collision would only surface once we started issuing them.
+	aliases := rejectReservedAliases(uniqueAliases(result.ProviderID, result.Aliases))
+	for _, alias := range aliases {
 		if err := queries.UpsertAdvisoryAlias(ctx, dbgen.UpsertAdvisoryAliasParams{AdvisoryID: advisoryID, Alias: alias}); err != nil {
 			return fmt.Errorf("upsert advisory alias %s: %w", alias, err)
 		}

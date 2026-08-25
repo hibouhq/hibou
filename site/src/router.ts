@@ -25,6 +25,7 @@ const router = createRouter({
             { path: 'vulnerabilities', name: 'org-vulnerabilities', component: () => import('@/views/org/VulnerabilitiesTab.vue') },
             { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
             { path: 'clients', name: 'org-clients', component: () => import('@/views/org/ClientsTab.vue') },
+            { path: 'triage', name: 'org-triage', component: () => import('@/views/org/TriageTab.vue') },
             // The Access tab moved under Settings.
             { path: 'access', redirect: to => ({ name: 'org-settings-access', params: to.params }) },
             {
@@ -144,6 +145,10 @@ const router = createRouter({
             { path: 'admins', name: 'settings-instance-admins', component: () => import('@/views/settings/InstanceAdminsSettings.vue') },
             { path: 'audit', name: 'settings-instance-audit', component: () => import('@/views/settings/InstanceAuditSettings.vue') },
             { path: 'jobs', name: 'settings-instance-jobs', component: () => import('@/views/settings/InstanceJobsSettings.vue') },
+            { path: 'people', name: 'settings-instance-people', component: () => import('@/views/settings/InstanceMembersSettings.vue') },
+            // Mirrors the API: one subject, watches nested under it. See ADR-028.
+            { path: 'advisories', name: 'settings-instance-advisories', component: () => import('@/views/settings/AdvisoryActivitySettings.vue') },
+            { path: 'advisories/watches', name: 'settings-instance-watches', component: () => import('@/views/settings/WatchesSettings.vue') },
           ],
         },
         { path: '/:pathMatch(.*)*', redirect: '/orgs' },

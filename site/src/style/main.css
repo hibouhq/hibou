@@ -191,4 +191,12 @@
     background: #21262d;
     color: #8b949e;
   }
+
+  /* Authored here rather than by an advisory database. Stronger provenance than
+     any automated match — a named person decided it — so it reads as a claim
+     with an owner, not as a weaker signal. */
+  .source-triage {
+    background: rgb(63 185 80 / 0.14);
+    color: #3fb950;
+  }
 }

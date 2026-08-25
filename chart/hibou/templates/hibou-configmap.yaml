@@ -42,11 +42,15 @@ data:
   {{- if .Values.hibou.secretScan.timeout }}
   HIBOU_SECRET_SCAN_TIMEOUT: {{ .Values.hibou.secretScan.timeout | quote }}
   {{- end }}
-  {{- if .Values.hibou.scratch.enabled }}
-  HIBOU_SECRET_SCAN_TEMP_DIR: {{ .Values.hibou.scratch.mountPath | quote }}
-  {{- /* The rootfs is read-only, so /tmp does not exist writable. git, gitleaks and trufflehog all honor TMPDIR. */}}
-  TMPDIR: {{ .Values.hibou.scratch.mountPath | quote }}
+  {{- if .Values.hibou.cveFeed.remote }}
+  HIBOU_CVE_FEED_REMOTE: {{ .Values.hibou.cveFeed.remote | quote }}
   {{- end }}
+  HIBOU_CVE_FEED_INTERVAL: {{ .Values.hibou.cveFeed.interval | quote }}
+  HIBOU_SECRET_SCAN_TEMP_DIR: {{ .Values.hibou.scratch.mountPath | quote }}
+  {{- /* The rootfs is read-only, so /tmp is not writable. git, gitleaks and trufflehog
+         all honor TMPDIR, and Go's os.TempDir does too. Always set: the CVE feed sweep
+         is not optional, so a pod with nowhere to write would fail every sweep. */}}
+  TMPDIR: {{ .Values.hibou.scratch.mountPath | quote }}
   HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"true"{{ end }}
   {{- if .Values.hibou.instanceAdminsExistingSecret }}
   HIBOU_INSTANCE_ADMINS_FILE: "/etc/hibou/instance-admins/emails"

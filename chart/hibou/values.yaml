@@ -11,13 +11,19 @@ hibou:
     retention: true
     staleScan: true
     stalePending: true
-    # -- Secret scanning loop on the request-serving pod. Off by default: it clones repositories, which competes with request handling. Prefer worker.enabled with worker.background.secretScan. Enabling it here also requires scratch.enabled, since the root filesystem is read-only.
+    # -- Secret scanning loop on the request-serving pod. Off by default: it clones repositories, which competes with request handling. Prefer worker.enabled with worker.background.secretScan. Enabling it here also means raising scratch.sizeLimit, since repository clones are far larger than the default allows.
     secretScan: false
-  # -- Writable scratch volume for the request-serving pod. Only needed if you run clone-heavy loops here instead of on a worker.
+  # -- Writable scratch volume for the request-serving pod. Always mounted: the root filesystem is read-only, and the CVE feed sweep keeps a blobless clone of the CVE list (~10 MB, no file contents) that cannot be made optional without the feed silently watching nothing. TMPDIR points here, so anything else that needs temporary space lands here too and stays bounded by sizeLimit — the omission that caused the Trivy-DB DiskPressure eviction storm.
   scratch:
-    enabled: false
     mountPath: /var/tmp/hibou
-    sizeLimit: 10Gi
+    # -- Sized for the one-off CVE corpus seed (~300 MB, removed afterwards) plus the ~10 MB sweep clone. Raise to 10Gi or more before enabling background.secretScan on this pod, which clones whole repositories.
+    sizeLimit: 1Gi
+  # -- CVE Program feed (ADR-028). Always on; there is nothing to enable and no corpus to import by hand — the first sweep seeds itself and takes about fifteen minutes.
+  cveFeed:
+    # -- The repository to sweep and to seed from. Empty uses the public cvelistV5 list. For an instance with no outbound internet, mirror that list onto an internal git server and point this at it: everything follows this one setting.
+    remote: ""
+    # -- Sweep interval. Upstream commits roughly 2.8 times an hour, so polling faster only costs requests.
+    interval: 15m
   # -- Secret scanning feature config (shared by API and worker pods via the configmap). enabled gates enqueue + the feature as a whole; the loop that clones is gated separately by background.secretScan (API pod) / worker.background.secretScan (worker pod).
   secretScan:
     enabled: false
@@ -34,9 +40,15 @@ hibou:
     requests:
       cpu: 100m
       memory: 128Mi
+      # -- The scratch emptyDir draws on the node's ephemeral storage. Without an
+      # explicit request the kubelet picks this pod first when it evicts under
+      # disk pressure. Keep at or above scratch.sizeLimit, and raise both together
+      # before enabling background.secretScan here.
+      ephemeral-storage: 1Gi
     limits:
       cpu: 500m
       memory: 512Mi
+      ephemeral-storage: 2Gi
   logging:
     level: info
     format: json

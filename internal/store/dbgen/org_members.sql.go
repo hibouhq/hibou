@@ -131,7 +131,7 @@ func (q *Queries) ListOrgAdminIDs(ctx context.Context, orgID uuid.UUID) ([]uuid.
 }
 
 const listOrgMembers = `-- name: ListOrgMembers :many
-SELECT om.org_id, om.user_id, om.role, om.created_at,
+SELECT om.org_id, om.user_id, om.role, om.created_at, om.source,
     u.id AS user_id_2, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at
 FROM org_members om
 JOIN users u ON u.id = om.user_id
@@ -151,6 +151,7 @@ type ListOrgMembersRow struct {
 	UserID        uuid.UUID      `json:"user_id"`
 	Role          string         `json:"role"`
 	CreatedAt     time.Time      `json:"created_at"`
+	Source        string         `json:"source"`
 	UserID2       uuid.UUID      `json:"user_id_2"`
 	Email         string         `json:"email"`
 	DisplayName   string         `json:"display_name"`
@@ -175,6 +176,7 @@ func (q *Queries) ListOrgMembers(ctx context.Context, arg ListOrgMembersParams) 
 			&i.UserID,
 			&i.Role,
 			&i.CreatedAt,
+			&i.Source,
 			&i.UserID2,
 			&i.Email,
 			&i.DisplayName,

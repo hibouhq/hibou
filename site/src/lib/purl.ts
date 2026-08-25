@@ -110,5 +110,13 @@ export function isScannableEcosystem(ecosystem: string | undefined | null): bool
 /** Source/advisory-feed key for badge styling (trivy, nvd, ghsa, …). */
 export function sourceKey(source: string | undefined | null): string {
   const value = (source || '').trim().toLowerCase().replace(/[\s_]+/g, '')
+  // Authored ranges carry a scoped source ("triage", "triage:instance"); they
+  // all share one badge, since the scope is not what a reader needs here.
+  if (value.startsWith('triage')) return 'triage'
   return value || 'unknown'
+}
+
+/** Whether a finding came from a decision made here rather than a feed. */
+export function isLocallyCurated(source: string | undefined | null): boolean {
+  return sourceKey(source) === 'triage'
 }
