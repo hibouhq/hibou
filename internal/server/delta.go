@@ -96,6 +96,7 @@ func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
 		gateConfig = &delta.GateConfig{}
 	}
 	gateConfig.HeadSnapshotID = prSnapshotID
+	gateConfig.BaseSnapshotID = targetSnapshotID
 	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), repo.ID, org.ID, result, gateConfig)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate quality gates")

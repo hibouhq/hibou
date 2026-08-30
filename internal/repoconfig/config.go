@@ -87,7 +87,24 @@ type LicensePolicy struct {
 	// DenyUnknown defaults to TRUE: an unknown/missing license is an
 	// unreviewed legal risk. Set false explicitly to allow unknowns through.
 	DenyUnknown *bool `yaml:"deny_unknown,omitempty" json:"deny_unknown,omitempty"`
+	// ExemptPurls exempts specific packages (purl globs) from the policy. A
+	// license allow-list cannot express "this one dev tool is fine" because it
+	// matches license ids, not packages, so without this the only way to unblock
+	// a single dependency is to weaken the policy for everything.
+	ExemptPurls []string `yaml:"exempt_purls,omitempty" json:"exempt_purls,omitempty"`
+	// Evaluate scopes the gate: "new" (default) fails only on components this
+	// PR introduces, "all" fails on the whole head snapshot. Whole-tree was the
+	// original behaviour and it makes enabling a policy on an existing repo
+	// report years-old dependencies as if the PR had introduced them.
+	Evaluate string `yaml:"evaluate,omitempty" json:"evaluate,omitempty"`
 }
+
+const (
+	// LicenseEvaluateNew gates only components introduced by the change.
+	LicenseEvaluateNew = "new"
+	// LicenseEvaluateAll gates every component in the head snapshot.
+	LicenseEvaluateAll = "all"
+)
 
 // DenyUnknownValue applies the fail-closed default.
 func (p *LicensePolicy) DenyUnknownValue() bool {
@@ -95,6 +112,19 @@ func (p *LicensePolicy) DenyUnknownValue() bool {
 		return true
 	}
 	return *p.DenyUnknown
+}
+
+// EvaluateValue applies the delta-scoped default.
+func (p *LicensePolicy) EvaluateValue() string {
+	if p == nil {
+		return LicenseEvaluateNew
+	}
+	switch strings.ToLower(strings.TrimSpace(p.Evaluate)) {
+	case LicenseEvaluateAll:
+		return LicenseEvaluateAll
+	default:
+		return LicenseEvaluateNew
+	}
 }
 
 type CoverageConfig struct {
@@ -354,6 +384,13 @@ func validateLicensePolicy(policy *LicensePolicy, index int) error {
 		case "permissive", "weak-copyleft", "copyleft", "network-copyleft", "source-available", "public-domain", "unknown":
 		default:
 			return fmt.Errorf("quality_gates[%d].licenses.deny_categories: unknown category %q", index, category)
+		}
+	}
+	if value := strings.TrimSpace(policy.Evaluate); value != "" {
+		switch strings.ToLower(value) {
+		case LicenseEvaluateNew, LicenseEvaluateAll:
+		default:
+			return fmt.Errorf("quality_gates[%d].licenses.evaluate: must be %q or %q, got %q", index, LicenseEvaluateNew, LicenseEvaluateAll, value)
 		}
 	}
 	return nil

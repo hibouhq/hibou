@@ -52,9 +52,22 @@ var categoryByPrefix = map[string]Category{
 	"beerware":   CategoryPermissive,
 	"blueoak-":   CategoryPermissive,
 	"0bsd":       CategoryPermissive,
+	"unicode-":   CategoryPermissive,
+	"zpl-":       CategoryPermissive,
+	"ms-pl":      CategoryPermissive, // Microsoft Public License, NOT Ms-RL
+	"afl-":       CategoryPermissive,
+	"upl-":       CategoryPermissive,
+	"libpng":     CategoryPermissive,
+	"bzip2-":     CategoryPermissive,
+	"openldap":   CategoryPermissive,
+	// Creative Commons: attribution alone is permissive; share-alike is
+	// copyleft; non-commercial and no-derivatives are not open source at
+	// all. Longest-prefix matching keeps the family ordered correctly.
+	"cc-by-": CategoryPermissive,
 
 	// public domain
 	"cc0-":      CategoryPublicDomain,
+	"cc-pddc":   CategoryPublicDomain,
 	"unlicense": CategoryPublicDomain,
 	"wtfpl":     CategoryPublicDomain,
 
@@ -68,18 +81,26 @@ var categoryByPrefix = map[string]Category{
 	"ms-rl":  CategoryWeakCopyleft,
 	"osl-":   CategoryWeakCopyleft,
 	"cecill": CategoryWeakCopyleft,
+	"apsl-":  CategoryWeakCopyleft,
 
 	// copyleft
-	"gpl-": CategoryCopyleft,
+	"gpl-":      CategoryCopyleft,
+	"gfdl-":     CategoryCopyleft,
+	"cc-by-sa-": CategoryCopyleft,
+	"qpl-":      CategoryCopyleft,
+	"sleepycat": CategoryCopyleft,
 
 	// network copyleft
 	"agpl-": CategoryNetworkCopyleft,
 	"sspl-": CategoryNetworkCopyleft,
+	"cal-":  CategoryNetworkCopyleft,
 
 	// source-available (not open source)
 	"busl-":          CategorySourceAvailable,
 	"elastic-":       CategorySourceAvailable,
 	"commons-clause": CategorySourceAvailable,
+	"cc-by-nc":       CategorySourceAvailable,
+	"cc-by-nd":       CategorySourceAvailable,
 }
 
 // Categorize maps one license identifier (SPDX id, expression fragment, or
@@ -106,53 +127,60 @@ func Categorize(id string) Category {
 	return best
 }
 
-// CategorizeAll reduces a component's license list to its most restrictive
-// category; an empty list is unknown.
+// CategorizeAll reduces a component's license list to its effective category.
+// Separate list entries are conjunctive — every entry's obligations apply — so
+// the list takes the most restrictive entry. Within one entry, OR and AND are
+// resolved by CategorizeExpression.
 func CategorizeAll(ids []string) Category {
 	if len(ids) == 0 {
 		return CategoryUnknown
 	}
-	best := CategoryPermissive
-	seen := false
+	worst := CategoryPublicDomain
 	for _, id := range ids {
-		for _, part := range splitExpression(id) {
-			category := Categorize(part)
-			seen = true
-			if rank(category) > rank(best) {
-				best = category
-			}
+		if category := CategorizeExpression(id); rank(category) > rank(worst) {
+			worst = category
 		}
 	}
-	if !seen {
-		return CategoryUnknown
-	}
-	return best
+	return worst
 }
 
-// splitExpression breaks an SPDX expression ("MIT OR GPL-2.0-only") into
-// atomic ids; WITH-exception clauses stay attached to their license.
-func splitExpression(expression string) []string {
-	normalized := strings.ReplaceAll(expression, "(", " ")
-	normalized = strings.ReplaceAll(normalized, ")", " ")
-	fields := strings.Fields(normalized)
-	out := make([]string, 0, len(fields))
-	for i := 0; i < len(fields); i++ {
-		field := fields[i]
-		upper := strings.ToUpper(field)
-		if upper == "AND" || upper == "OR" {
-			continue
+// CategorizeExpression resolves one SPDX expression to the category a consumer
+// actually ends up under. OR takes the LEAST restrictive alternative (dual
+// licensing is a choice: "MIT OR GPL-3.0-only" is permissive in practice), AND
+// takes the most restrictive (both sets of obligations apply at once).
+func CategorizeExpression(expression string) Category {
+	return categorizeNode(parseExpression(expression))
+}
+
+func categorizeNode(node exprNode) Category {
+	switch typed := node.(type) {
+	case exprID:
+		return Categorize(typed.raw)
+	case exprUnparsed:
+		// An expression we could not read tells us nothing about its licences.
+		return CategoryUnknown
+	case exprOp:
+		if len(typed.children) == 0 {
+			return CategoryUnknown
 		}
-		if upper == "WITH" && len(out) > 0 && i+1 < len(fields) {
-			out[len(out)-1] += " WITH " + fields[i+1]
-			i++
-			continue
+		if typed.op == opOr {
+			best := categorizeNode(typed.children[0])
+			for _, child := range typed.children[1:] {
+				if category := categorizeNode(child); rank(category) < rank(best) {
+					best = category
+				}
+			}
+			return best
 		}
-		out = append(out, field)
+		worst := categorizeNode(typed.children[0])
+		for _, child := range typed.children[1:] {
+			if category := categorizeNode(child); rank(category) > rank(worst) {
+				worst = category
+			}
+		}
+		return worst
 	}
-	if len(out) == 0 {
-		return []string{expression}
-	}
-	return out
+	return CategoryUnknown
 }
 
 func rank(category Category) int {
@@ -192,12 +220,13 @@ type Violation struct {
 }
 
 // Evaluate checks one component's licenses against the policy. A nil result
-// means allowed. Semantics: atoms inside one expression are alternatives the
-// consumer may choose between ("MIT OR GPL-3.0-only" passes on MIT), while
-// separate list entries all apply — every entry must pass.
+// means allowed. Semantics follow SPDX: separate list entries are conjunctive
+// (every entry must pass), and within an entry OR is a choice while AND applies
+// both. Returns the most restrictive violation found, so the reported reason
+// names the worst problem rather than the first one seen.
 func (p Policy) Evaluate(licenses []string) *Violation {
 	if len(licenses) == 0 {
-		if p.DenyUnknown {
+		if p.DenyUnknown || p.deniesCategory(CategoryUnknown) {
 			return &Violation{License: "", Category: CategoryUnknown}
 		}
 		return nil
@@ -205,43 +234,79 @@ func (p Policy) Evaluate(licenses []string) *Violation {
 
 	var worst *Violation
 	for _, entry := range licenses {
-		violation := p.evaluateExpression(entry)
-		if violation == nil {
-			continue
-		}
-		if worst == nil || rank(violation.Category) > rank(worst.Category) {
-			worst = violation
-		}
+		worst = worseOf(worst, p.evaluateNode(parseExpression(entry)))
 	}
 	return worst
 }
 
-// evaluateExpression applies OR semantics across an expression's atoms:
-// explicit allow wins, one passing alternative clears the expression.
-func (p Policy) evaluateExpression(expression string) *Violation {
-	var worst *Violation
-	for _, atom := range splitExpression(expression) {
-		if matchesAny(atom, p.Allow) {
+// evaluateNode walks the expression tree. OR clears as soon as one alternative
+// passes; AND fails if any operand fails.
+func (p Policy) evaluateNode(node exprNode) *Violation {
+	switch typed := node.(type) {
+	case exprID:
+		return p.evaluateAtom(typed.raw)
+	case exprUnparsed:
+		// An explicit allow still clears it — an operator can name the exact
+		// string — but otherwise it is unknown and fails closed.
+		if matchesAny(typed.raw, p.Allow) {
 			return nil
 		}
-		violation := p.evaluateAtom(atom)
-		if violation == nil {
-			return nil
+		if p.DenyUnknown || p.deniesCategory(CategoryUnknown) {
+			return &Violation{License: typed.raw, Category: CategoryUnknown}
 		}
-		if worst == nil || rank(violation.Category) > rank(worst.Category) {
-			worst = violation
+		return nil
+	case exprOp:
+		var worst *Violation
+		if typed.op == opOr {
+			for _, child := range typed.children {
+				violation := p.evaluateNode(child)
+				if violation == nil {
+					return nil // one acceptable alternative clears the expression
+				}
+				worst = worseOf(worst, violation)
+			}
+			return worst
 		}
+		for _, child := range typed.children {
+			worst = worseOf(worst, p.evaluateNode(child))
+		}
+		return worst
 	}
-	return worst
+	return nil
 }
 
 func (p Policy) evaluateAtom(atom string) *Violation {
+	atom = NormalizeID(atom)
+	if matchesAny(atom, p.Allow) {
+		return nil
+	}
+	// An allow entry may name the bare license ("GPL-2.0-only") while the SBOM
+	// carries it with its linking exception attached.
+	if base, _, found := strings.Cut(atom, " WITH "); found && matchesAny(base, p.Allow) {
+		return nil
+	}
+	if atom == "" {
+		if p.DenyUnknown || p.deniesCategory(CategoryUnknown) {
+			return &Violation{Category: CategoryUnknown}
+		}
+		return nil
+	}
 	category := Categorize(atom)
+	// Deny gets the same bare-id fallback as Allow: the schema's own example is
+	// `deny: ["GPL-3.0-only"]`, and SBOMs routinely carry that licence with its
+	// linking exception attached. Without this, the documented form silently
+	// fails to match.
 	if matchesAny(atom, p.Deny) {
 		return &Violation{License: atom, Category: category}
 	}
+	if base, _, found := strings.Cut(atom, " WITH "); found && matchesAny(base, p.Deny) {
+		return &Violation{License: atom, Category: category}
+	}
 	if category == CategoryUnknown {
-		if p.DenyUnknown {
+		// deny_unknown is the ergonomic switch, but naming "unknown" in
+		// deny_categories must work too — it validates and it is in the schema
+		// enum, so silently ignoring it would be a config that lies.
+		if p.DenyUnknown || p.deniesCategory(CategoryUnknown) {
 			return &Violation{License: atom, Category: CategoryUnknown}
 		}
 		return nil
@@ -252,6 +317,18 @@ func (p Policy) evaluateAtom(atom string) *Violation {
 		}
 	}
 	return nil
+}
+
+// worseOf keeps the more restrictive of two violations; nil counts as no
+// violation and never wins.
+func worseOf(current, candidate *Violation) *Violation {
+	if candidate == nil {
+		return current
+	}
+	if current == nil || rank(candidate.Category) > rank(current.Category) {
+		return candidate
+	}
+	return current
 }
 
 func matchesAny(id string, globs []string) bool {
@@ -268,7 +345,33 @@ func matchesAny(id string, globs []string) bool {
 	return false
 }
 
+// deniesCategory reports whether the category is named in DenyCategories.
+func (p Policy) deniesCategory(category Category) bool {
+	for _, denied := range p.DenyCategories {
+		if strings.EqualFold(strings.TrimSpace(denied), string(category)) {
+			return true
+		}
+	}
+	return false
+}
+
 // Empty reports whether the policy denies nothing.
 func (p Policy) Empty() bool {
 	return len(p.DenyCategories) == 0 && len(p.Deny) == 0 && !p.DenyUnknown
+}
+
+// Categories lists every category from least to most restrictive. Callers that
+// render a partition of an inventory need a stable order that is not
+// alphabetical, and duplicating this ordering in a frontend would let the two
+// drift.
+func Categories() []Category {
+	return []Category{
+		CategoryPublicDomain,
+		CategoryPermissive,
+		CategoryWeakCopyleft,
+		CategoryCopyleft,
+		CategoryNetworkCopyleft,
+		CategorySourceAvailable,
+		CategoryUnknown,
+	}
 }

@@ -490,6 +490,11 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/vulnerabilities", s.handleListOrgVulnerabilities)
 					r.Get("/components", s.handleListOrgComponents)
 					r.Post("/components/scan", s.handleTriggerOrgComponentScan)
+					r.Get("/licenses", s.handleGetOrgLicenses)
+					r.Get("/licenses/components", s.handleListOrgLicenseComponents)
+					r.Get("/licenses/policy", s.handleGetOrgLicensePolicy)
+					r.Put("/licenses/policy", s.handleUpdateOrgLicensePolicy)
+					r.Post("/licenses/simulate", s.handleSimulateOrgLicensePolicy)
 					r.Get("/compliance/export", s.handleComplianceExport)
 					r.Get("/compliance/iso27001", s.handleISO27001Export)
 					r.Get("/compliance/soa", s.handleSoAExport)
@@ -628,6 +633,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/coverage", s.handleGetCoverage)
 						r.Get("/{repoSlug}/tests", s.handleGetTests)
 						r.Get("/{repoSlug}/config", s.handleGetRepoConfig)
+						r.Get("/{repoSlug}/config/effective", s.handleGetEffectiveRepoConfig)
 						r.Get("/{repoSlug}/onboard", s.handleGetOnboardingStatus)
 						r.Post("/{repoSlug}/onboard", s.handleOnboardRepo)
 						r.Route("/{repoSlug}/vex", func(r chi.Router) {
@@ -1049,6 +1055,12 @@ func (s *Server) runRetentionPass(ctx context.Context) {
 		if s.queries != nil {
 			if auditErr := s.queries.MaintainAuditLogPartitions(runCtx, time.Now(), s.cfg.AuditRetentionMonths); auditErr != nil {
 				s.log.Warn().Err(auditErr).Msg("audit log partition maintenance")
+			}
+			// advisory_events shipped with only its first two monthly partitions
+			// and no maintainer, so from the third month every insert landed in
+			// the default partition and monthly expiry was impossible.
+			if eventsErr := s.queries.MaintainAdvisoryEventPartitions(runCtx, time.Now(), s.cfg.AdvisoryEventRetentionMonths); eventsErr != nil {
+				s.log.Warn().Err(eventsErr).Msg("advisory event partition maintenance")
 			}
 		}
 		return s.retentionWorker.Run(runCtx)

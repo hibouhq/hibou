@@ -3077,6 +3077,220 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/licenses": {
+            "get": {
+                "description": "License exposure across the current default-branch snapshot of every enrolled repository: category partition, license expressions in use, per-repo posture, and the coverage denominators behind those numbers. Reports exposure, not gate enforcement.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Organization license overview",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.orgLicenseOverviewResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/licenses/components": {
+            "get": {
+                "description": "Paginated components behind the org license overview, filterable by license expression, category, repository, or missing metadata. A rollup without a drilldown is only half actionable.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Organization license drilldown",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "License expression to filter by",
+                        "name": "license",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "License category to filter by",
+                        "name": "category",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug to filter by",
+                        "name": "repo",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Only components with no license metadata",
+                        "name": "undeclared",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ListResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/licenses/policy": {
+            "get": {
+                "description": "The org's license policy. With include_repos=true it also reports, for every enrolled repository, whether it inherits or overrides the policy and in which direction — which costs one forge request per repository, so it is opt-in.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Organization license policy and repository overrides",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Also check each repository's .hibou.yaml for an override (one forge request per repository)",
+                        "name": "include_repos",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.orgLicensePolicyResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Writes the org's single active license policy. Repositories inherit it and may override it in their .hibou.yaml; overrides are reported by the policy compliance endpoint.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Set the organization license policy",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.orgLicensePolicyResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/licenses/simulate": {
+            "post": {
+                "description": "Reports how many components across the organization a candidate policy would flag, without saving it. Reads stored components only — no forge requests.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Simulate a license policy",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.orgLicenseSimulationResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/notification-rules": {
             "get": {
                 "security": [
@@ -4451,6 +4665,55 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/config/effective": {
+            "get": {
+                "description": "What actually applies to a branch: the matched .hibou.yaml gate, DB-managed quality gates (the repo's own or inherited from the org), defaults filled in by the server, and unconditional rules — each labelled with its source.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repositories"
+                ],
+                "summary": "Effective repository gate configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Branch to resolve for (defaults to the repository's default branch)",
+                        "name": "branch",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.effectiveConfigResponse"
                         }
                     }
                 }
@@ -7892,6 +8155,92 @@ const docTemplate = `{
                 }
             }
         },
+        "server.effectiveConfigResponse": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "description": "Branch the resolution was done for. Gate selection is branch-dependent, so\nan effective config without a branch is meaningless.",
+                    "type": "string"
+                },
+                "config_present": {
+                    "type": "boolean"
+                },
+                "enforcement": {
+                    "type": "string"
+                },
+                "enforcement_source": {
+                    "type": "string"
+                },
+                "file_gate_branches": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "file_gate_matched": {
+                    "description": "FileGateMatched is false when no ` + "`" + `.hibou.yaml` + "`" + ` gate covers this branch —\nin which case only DB gates and unconditional rules apply.",
+                    "type": "boolean"
+                },
+                "file_unavailable": {
+                    "description": "FileUnavailable distinguishes \"the file has no gates\" from \"we could not\nread the file\" — collapsing those two would report an unknown as an\nabsence.",
+                    "type": "boolean"
+                },
+                "gate_source": {
+                    "description": "GateSource says where the DB thresholds came from, since inheriting the\norg's gates is indistinguishable from having your own until you are told.",
+                    "type": "string"
+                },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.effectiveSection"
+                    }
+                },
+                "warnings": {
+                    "description": "Warnings call out interactions that surprise people — most of all a file\nweakness gate switching off DB findings gates it never mentions.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "server.effectiveRule": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.effectiveSection": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.effectiveRule"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "server.enrollRepoRequest": {
             "type": "object",
             "properties": {
@@ -8385,6 +8734,303 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/server.orgRepoScanResult"
                     }
+                }
+            }
+        },
+        "server.orgLicenseCategoryStat": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "components": {
+                    "type": "integer"
+                },
+                "repos": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.orgLicenseCoverage": {
+            "type": "object",
+            "properties": {
+                "components_total": {
+                    "type": "integer"
+                },
+                "repos_enrolled": {
+                    "description": "ReposEnrolled is the denominator that matters: every other count in this\nresponse is drawn only from repos that got as far as a usable snapshot.",
+                    "type": "integer"
+                },
+                "repos_with_components": {
+                    "type": "integer"
+                },
+                "repos_with_snapshot": {
+                    "type": "integer"
+                },
+                "undeclared": {
+                    "description": "Undeclared: the SBOM carried no license at all — a generator problem.",
+                    "type": "integer"
+                },
+                "unrecognized": {
+                    "description": "Unrecognized: a license string we could not map to a category — a catalog\nproblem. Both are CategoryUnknown, but they have different owners.",
+                    "type": "integer"
+                }
+            }
+        },
+        "server.orgLicenseDiff": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "description": "Added/Removed are the delta for set-valued axes. The full Base/Override\nlists are unreadable on a real policy, so the UI renders these.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "base": {
+                    "type": "string"
+                },
+                "direction": {
+                    "type": "string"
+                },
+                "field": {
+                    "type": "string"
+                },
+                "override": {
+                    "type": "string"
+                },
+                "removed": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "server.orgLicenseOverviewResponse": {
+            "type": "object",
+            "properties": {
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicenseCategoryStat"
+                    }
+                },
+                "coverage": {
+                    "$ref": "#/definitions/server.orgLicenseCoverage"
+                },
+                "licenses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicenseStat"
+                    }
+                },
+                "repos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicenseRepoStat"
+                    }
+                }
+            }
+        },
+        "server.orgLicensePolicyRepo": {
+            "type": "object",
+            "properties": {
+                "differences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicenseDiff"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "relation": {
+                    "description": "Relation is set only for a repository that declares its own policy:\nequivalent / stricter / looser / mixed against the org's.",
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source is \"organization\" when the repo inherits, \"repository\" when it\ndeclares its own, \"none\" when no policy applies at all.",
+                    "type": "string"
+                },
+                "unreadable": {
+                    "description": "Unreadable marks a repository whose config could not be fetched. Reported\nrather than assumed compliant — an unknown is not a pass.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.orgLicensePolicyResponse": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "boolean"
+                },
+                "departures": {
+                    "type": "integer"
+                },
+                "inheriting": {
+                    "type": "integer"
+                },
+                "overriding": {
+                    "type": "integer"
+                },
+                "policy": {
+                    "$ref": "#/definitions/server.orgLicensePolicySpec"
+                },
+                "repos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicensePolicyRepo"
+                    }
+                },
+                "repos_scanned": {
+                    "description": "ReposScanned distinguishes \"no repository overrides\" from \"repositories\nwere not checked\". Without it an empty list reads as an all-clear.",
+                    "type": "boolean"
+                },
+                "total": {
+                    "description": "Counts for the compliance headline. Departures is what someone is actually\nlooking for; the rest is denominator.",
+                    "type": "integer"
+                },
+                "unreadable": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.orgLicensePolicySpec": {
+            "type": "object",
+            "properties": {
+                "allow": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "deny": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "deny_categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "deny_unknown": {
+                    "type": "boolean"
+                },
+                "evaluate": {
+                    "type": "string"
+                },
+                "exempt_purls": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "server.orgLicenseRepoStat": {
+            "type": "object",
+            "properties": {
+                "by_category": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "components": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "snapshot_at": {
+                    "type": "string"
+                },
+                "snapshot_status": {
+                    "type": "string"
+                },
+                "undeclared": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.orgLicenseSimulationRepo": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.orgLicenseSimulationResponse": {
+            "type": "object",
+            "properties": {
+                "components_flagged": {
+                    "type": "integer"
+                },
+                "components_total": {
+                    "description": "ComponentsTotal is the denominator: an unqualified \"12 would be flagged\"\nmeans nothing without it.",
+                    "type": "integer"
+                },
+                "exempted": {
+                    "description": "Exempted counts components a rule would have flagged but exempt_purls\nclears, so the effect of that list is visible rather than inferred.",
+                    "type": "integer"
+                },
+                "licenses": {
+                    "description": "Licenses that would trip the policy, most components first.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicenseStat"
+                    }
+                },
+                "repos": {
+                    "description": "Repos lists only those with at least one flagged component, worst first.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.orgLicenseSimulationRepo"
+                    }
+                },
+                "repos_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.orgLicenseStat": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "components": {
+                    "type": "integer"
+                },
+                "has_and": {
+                    "description": "HasAnd marks a conjunctive expression: every operand's obligations apply\nat once. HasOr marks an elective one, where the reported category is the\nalternative a consumer would pick. Surfacing both stops the table looking\nlike it disagrees with the gate.",
+                    "type": "boolean"
+                },
+                "has_or": {
+                    "type": "boolean"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "repos": {
+                    "type": "integer"
                 }
             }
         },

@@ -15,6 +15,62 @@ import (
 	"github.com/lib/pq"
 )
 
+const backfillSubscriptionMatches = `-- name: BackfillSubscriptionMatches :many
+SELECT DISTINCT r.cve_id, r.published_at
+FROM cve_records r
+JOIN cve_affected_products a ON a.cve_id = r.cve_id
+WHERE a.product_key = ANY($1::text[])
+  AND (cardinality($2::text[]) = 0 OR a.vendor_key = ANY($2::text[]))
+  AND r.state = 'PUBLISHED'
+ORDER BY r.published_at DESC NULLS LAST
+LIMIT $3
+`
+
+type BackfillSubscriptionMatchesParams struct {
+	ProductKeys []string `json:"product_keys"`
+	VendorKeys  []string `json:"vendor_keys"`
+	MaxItems    int32    `json:"max_items"`
+}
+
+type BackfillSubscriptionMatchesRow struct {
+	CveID       string       `json:"cve_id"`
+	PublishedAt sql.NullTime `json:"published_at"`
+}
+
+// The stored records a NEW watch already covers, newest first.
+//
+// The sweeper only visits records the feed revises, and the corpus seed
+// deliberately queues nothing — so without this, a record published before the
+// watch existed is invisible until its vendor happens to revise it, and a watch
+// created today reads "never matched" while the CVE it was created FOR sits in
+// the corpus.
+//
+// Vendor narrowing matches MatchSubscriptionsForProductKeys exactly: an empty
+// vendor_keys means "any vendor", a non-empty one narrows. Diverging here would
+// make creation-time and sweep-time matching disagree about the same watch.
+func (q *Queries) BackfillSubscriptionMatches(ctx context.Context, arg BackfillSubscriptionMatchesParams) ([]BackfillSubscriptionMatchesRow, error) {
+	rows, err := q.db.QueryContext(ctx, backfillSubscriptionMatches, pq.Array(arg.ProductKeys), pq.Array(arg.VendorKeys), arg.MaxItems)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BackfillSubscriptionMatchesRow{}
+	for rows.Next() {
+		var i BackfillSubscriptionMatchesRow
+		if err := rows.Scan(&i.CveID, &i.PublishedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countPendingTriageItems = `-- name: CountPendingTriageItems :one
 SELECT COUNT(*) FROM cve_triage_items t
 WHERE t.state IN ('pending', 'reopened')
@@ -471,7 +527,7 @@ func (q *Queries) ListAdvisoryEventsForCVE(ctx context.Context, arg ListAdvisory
 }
 
 const listCVEAffectedProducts = `-- name: ListCVEAffectedProducts :many
-SELECT id, cve_id, vendor, product, vendor_key, product_key, introduced, fixed, last_affected FROM cve_affected_products WHERE cve_id = $1 ORDER BY product, introduced
+SELECT cve_id, vendor, product, vendor_key, product_key, introduced, fixed, last_affected FROM cve_affected_products WHERE cve_id = $1 ORDER BY product, introduced
 `
 
 func (q *Queries) ListCVEAffectedProducts(ctx context.Context, cveID string) ([]CveAffectedProduct, error) {
@@ -484,7 +540,6 @@ func (q *Queries) ListCVEAffectedProducts(ctx context.Context, cveID string) ([]
 	for rows.Next() {
 		var i CveAffectedProduct
 		if err := rows.Scan(
-			&i.ID,
 			&i.CveID,
 			&i.Vendor,
 			&i.Product,

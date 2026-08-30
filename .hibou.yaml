@@ -9,6 +9,13 @@ quality_gates:
     weaknesses:
       max_critical: 0
       max_high: 0
+    # licenses:
+    #   deny_categories: ["copyleft", "network-copyleft", "source-available"]
+    #   deny: ["LGPL-2.1-*"]           # narrows a category the policy otherwise allows
+    #   allow: ["Public Domain"]       # clears an id the catalog cannot categorize
+    #   deny_unknown: true             # the default: unreviewed is not the same as clean
+    #   exempt_purls: ["pkg:apk/*"]    # one package family, instead of loosening the policy
+    #   evaluate: new                  # new (default, only what the PR adds) | all
     # coverage:
     #   min_coverage: 60
     #   grace: 2

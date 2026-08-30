@@ -106,6 +106,7 @@ func (s *Server) computePRGate(ctx context.Context, orgID uuid.UUID, repo *store
 		gateConfig = &delta.GateConfig{}
 	}
 	gateConfig.HeadSnapshotID = prSnapshot.ID
+	gateConfig.BaseSnapshotID = targetSnapshot.ID
 	gate, err := s.deltaSvc.EvaluateGatesWithConfig(ctx, repo.ID, orgID, deltaResult, gateConfig)
 	if err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("evaluate PR gate")

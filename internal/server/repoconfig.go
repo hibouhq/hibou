@@ -218,6 +218,8 @@ func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.G
 			Deny:           gate.Licenses.Deny,
 			Allow:          gate.Licenses.Allow,
 			DenyUnknown:    gate.Licenses.DenyUnknownValue(),
+			ExemptPurls:    gate.Licenses.ExemptPurls,
+			Evaluate:       gate.Licenses.EvaluateValue(),
 		}
 	}
 	if gate.Secrets != nil {

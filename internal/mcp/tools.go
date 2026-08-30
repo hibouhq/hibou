@@ -16,6 +16,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -183,7 +184,9 @@ func (s *service) handleGetDependencyTree(ctx context.Context, request mcp.CallT
 			Name:      component.Name,
 			Version:   component.Version,
 			Ecosystem: component.Ecosystem,
-			Licenses:  component.Licenses,
+			// Normalized like every REST emission site, so the same component
+			// does not render differently over MCP than over HTTP.
+			Licenses:  license.NormalizeIDs(component.Licenses),
 			VulnCount: component.VulnCount,
 		})
 	}

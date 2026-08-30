@@ -52,8 +52,8 @@ func TestMaintainAuditLogPartitionsLive(t *testing.T) {
 		t.Fatalf("MaintainAuditLogPartitions: %v", err)
 	}
 	for _, month := range []time.Time{monthStartUTC(now), monthStartUTC(now).AddDate(0, 1, 0)} {
-		if !auditPartitionExists(t, db, auditPartitionName(month)) {
-			t.Fatalf("partition %s missing after maintenance", auditPartitionName(month))
+		if !auditPartitionExists(t, db, auditLogsTable.partitionName(month)) {
+			t.Fatalf("partition %s missing after maintenance", auditLogsTable.partitionName(month))
 		}
 	}
 	if !auditPartitionExists(t, db, "audit_logs_default") {
@@ -63,7 +63,7 @@ func TestMaintainAuditLogPartitionsLive(t *testing.T) {
 	// A replica that slept across a month boundary: rows for an unpartitioned
 	// old month land in default; maintenance for that month must move them.
 	oldMonth := monthStartUTC(now).AddDate(0, -13, 0)
-	oldName := auditPartitionName(oldMonth)
+	oldName := auditLogsTable.partitionName(oldMonth)
 	if auditPartitionExists(t, db, oldName) {
 		if _, err := db.Exec(`DROP TABLE ` + oldName); err != nil {
 			t.Fatalf("drop leftover partition: %v", err)
@@ -77,7 +77,7 @@ func TestMaintainAuditLogPartitionsLive(t *testing.T) {
 		t.Fatalf("insert stray row: %v", err)
 	}
 
-	if err := queries.ensureAuditPartition(ctx, oldMonth); err != nil {
+	if err := queries.ensurePartition(ctx, auditLogsTable, oldMonth); err != nil {
 		t.Fatalf("ensureAuditPartition with strays in default: %v", err)
 	}
 	if !auditPartitionExists(t, db, oldName) {
@@ -98,7 +98,7 @@ func TestMaintainAuditLogPartitionsLive(t *testing.T) {
 	if auditPartitionExists(t, db, oldName) {
 		t.Fatalf("partition %s should have been dropped by the 12-month window", oldName)
 	}
-	if !auditPartitionExists(t, db, auditPartitionName(monthStartUTC(now))) {
+	if !auditPartitionExists(t, db, auditLogsTable.partitionName(monthStartUTC(now))) {
 		t.Fatal("current month must survive retention")
 	}
 }
@@ -214,4 +214,60 @@ func TestAuditLogWriteWithAPIKeyActorLive(t *testing.T) {
 		t.Fatalf("cleanup: %v", err)
 	}
 	_ = queries
+}
+
+// advisory_events shipped with only its first two monthly partitions and no
+// maintainer — from the third month, every insert landed in the default
+// partition forever and monthly expiry was impossible. This drives the
+// generalized maintainer for a month far past what migration 00031 created.
+func TestMaintainAdvisoryEventPartitionsLive(t *testing.T) {
+	queries, db := newAuditPartitionTestDB(t)
+	ctx := context.Background()
+
+	// A month no migration has partitions for.
+	future := time.Date(2027, 3, 10, 12, 0, 0, 0, time.UTC)
+	if err := queries.MaintainAdvisoryEventPartitions(ctx, future, 0); err != nil {
+		t.Fatalf("MaintainAdvisoryEventPartitions: %v", err)
+	}
+
+	for _, name := range []string{"advisory_events_p202703", "advisory_events_p202704"} {
+		var exists bool
+		if err := db.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = $1)`, name,
+		).Scan(&exists); err != nil {
+			t.Fatalf("check %s: %v", name, err)
+		}
+		if !exists {
+			t.Errorf("partition %s was not created", name)
+		}
+	}
+
+	// Idempotent: the daily pass runs daily.
+	if err := queries.MaintainAdvisoryEventPartitions(ctx, future, 0); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+
+	// Expiry drops fully-aged monthly partitions but must never touch the
+	// default partition, which holds backfilled events about old CVEs by design.
+	if err := queries.MaintainAdvisoryEventPartitions(ctx, future.AddDate(2, 0, 0), 6); err != nil {
+		t.Fatalf("expiry run: %v", err)
+	}
+	var dropped bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'advisory_events_p202703')`,
+	).Scan(&dropped); err != nil {
+		t.Fatalf("check drop: %v", err)
+	}
+	if !dropped {
+		t.Error("an aged-out partition survived expiry")
+	}
+	var defaultExists bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'advisory_events_default')`,
+	).Scan(&defaultExists); err != nil {
+		t.Fatalf("check default: %v", err)
+	}
+	if !defaultExists {
+		t.Error("the default partition must never be dropped")
+	}
 }

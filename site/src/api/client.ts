@@ -493,6 +493,43 @@ export interface RepoConfigGate {
   coverage?: { min_coverage?: number | null; grace?: number | null; diff_minimum?: number | null }
 }
 
+// Where a value in the effective configuration came from. Provenance is the
+// point of the view: a threshold with no source is what makes a gate feel
+// arbitrary.
+export type EffectiveSource = 'file' | 'repo-gate' | 'org-gate' | 'org-policy' | 'default' | 'always'
+
+export type EffectiveSectionStatus = 'enforced' | 'not-configured' | 'disabled'
+
+export interface EffectiveRule {
+  label: string
+  value: string
+  source: EffectiveSource
+  detail?: string
+}
+
+export interface EffectiveSection {
+  name: string
+  status: EffectiveSectionStatus
+  rules: EffectiveRule[]
+  note?: string
+}
+
+export interface EffectiveConfig {
+  branch: string
+  file_gate_matched: boolean
+  file_gate_branches?: string[]
+  config_present: boolean
+  // true = the file could not be read, which is not the same as it having no
+  // gates. Collapsing the two would report an unknown as an absence.
+  file_unavailable: boolean
+  enforcement: 'advisory' | 'blocking'
+  enforcement_source: EffectiveSource
+  // Absent when no stored gate is enabled.
+  gate_source?: 'repo-gate' | 'org-gate'
+  sections: EffectiveSection[]
+  warnings: string[]
+}
+
 export interface RepoConfig {
   version: number
   quality_gates?: RepoConfigGate[]
@@ -740,6 +777,7 @@ export interface ComponentWithVulns {
   sources?: string[]
   fixed_versions?: string[]
   usage_paths?: string[][]
+  licenses?: string[]
 }
 
 export interface ComponentUpdate {
@@ -824,6 +862,170 @@ export interface OrgVulnerability extends Vulnerability {
 // Org-wide aggregated component: a component plus the repos it appears in.
 export interface OrgComponent extends ComponentWithVulns {
   repos: string[]
+}
+
+// Category names come from the backend (internal/license) rather than being
+// re-derived here — a duplicated SPDX prefix table would drift.
+export type LicenseCategory =
+  | 'public-domain'
+  | 'permissive'
+  | 'weak-copyleft'
+  | 'copyleft'
+  | 'network-copyleft'
+  | 'source-available'
+  | 'unknown'
+
+// The denominators behind every other number on the license page. Without them
+// "no AGPL found" is indistinguishable from "nothing was scanned".
+export interface OrgLicenseCoverage {
+  repos_enrolled: number
+  repos_with_snapshot: number
+  repos_with_components: number
+  components_total: number
+  // No license metadata at all — an SBOM generator problem.
+  undeclared: number
+  // Declared but unrecognized by the catalog — a catalog problem.
+  unrecognized: number
+}
+
+export interface OrgLicenseCategoryStat {
+  category: LicenseCategory
+  components: number
+  repos: number
+}
+
+export interface OrgLicenseStat {
+  license: string
+  category: LicenseCategory
+  components: number
+  repos: number
+  // Conjunctive: every operand's obligations apply at once.
+  has_and: boolean
+  // Elective: the category shown is the alternative a consumer would pick.
+  has_or: boolean
+}
+
+export interface OrgLicenseRepoStat {
+  slug: string
+  name: string
+  components: number
+  undeclared: number
+  by_category: Partial<Record<LicenseCategory, number>>
+  snapshot_at?: string
+  snapshot_status?: string
+}
+
+export interface OrgLicenseOverview {
+  coverage: OrgLicenseCoverage
+  categories: OrgLicenseCategoryStat[]
+  licenses: OrgLicenseStat[]
+  repos: OrgLicenseRepoStat[]
+}
+
+// One row of the license drilldown.
+export interface OrgLicenseComponent {
+  purl: string
+  name: string
+  version: string
+  ecosystem: string
+  licenses: string[]
+  category: LicenseCategory
+  repos: string[]
+  // false = the SBOM carried no license at all, as opposed to carrying one the
+  // catalog does not recognize.
+  declared: boolean
+}
+
+export interface OrgLicenseComponentQuery {
+  license?: string
+  category?: string
+  repo?: string
+  undeclared?: boolean
+  page?: number
+  per_page?: number
+}
+
+// How a repository's own license policy compares to the org's. Only 'looser'
+// and 'mixed' are compliance departures: a repository tightening its own policy
+// needs no attention.
+export type OrgLicenseRelation = 'equivalent' | 'stricter' | 'looser' | 'mixed'
+
+// One axis on which a repository's policy departs from the org's. base and
+// override are already rendered by the backend (set axes as comma-joined lists),
+// so the UI must not re-derive them.
+export interface OrgLicensePolicyDiff {
+  field: string
+  direction: OrgLicenseRelation
+  // The full sets on each side. Unreadable on a real policy — render added and
+  // removed instead, and keep these for a tooltip at most.
+  base: string
+  override: string
+  // The delta for set-valued axes; absent on scalar axes like deny_unknown.
+  added?: string[]
+  removed?: string[]
+}
+
+export interface OrgLicensePolicySpec {
+  deny_categories: string[]
+  deny: string[]
+  allow: string[]
+  exempt_purls: string[]
+  deny_unknown: boolean
+  evaluate: 'new' | 'all'
+}
+
+export interface OrgLicensePolicyRepo {
+  slug: string
+  name: string
+  // 'organization' = inherits, 'repository' = declares its own (replacing, not
+  // merging), 'none' = no policy applies at all.
+  source: 'organization' | 'repository' | 'none'
+  relation?: OrgLicenseRelation
+  differences?: OrgLicensePolicyDiff[]
+  // The repository's config could not be fetched — an unknown, not a pass.
+  unreadable: boolean
+}
+
+// What a candidate policy would flag, before anyone adopts it. Costs no forge
+// requests — it reads stored components.
+export interface OrgLicenseSimulation {
+  // The denominator: "12 would be flagged" means nothing without it.
+  components_total: number
+  components_flagged: number
+  // Components a rule would have flagged but exempt_purls clears.
+  exempted: number
+  repos_total: number
+  // Only repositories with at least one flagged component, worst first.
+  repos: Array<{ slug: string, name: string, count: number }>
+  licenses: OrgLicenseStat[]
+}
+
+export interface OrgLicensePolicyOverview {
+  configured: boolean
+  policy?: OrgLicensePolicySpec
+  // Already sorted departures-first by the backend; do not re-sort.
+  repos: OrgLicensePolicyRepo[]
+  // false = repositories were NOT checked (the scan is opt-in). An empty `repos`
+  // with repos_scanned false means "unknown", never "no overrides".
+  repos_scanned: boolean
+  total: number
+  inheriting: number
+  overriding: number
+  departures: number
+  unreadable: number
+}
+
+// The write body. A save REPLACES the policy wholesale — there is no partial
+// update, so every field travels on every save. enabled:false retires the
+// policy without deleting it.
+export interface OrgLicensePolicyInput {
+  deny_categories: string[]
+  deny: string[]
+  allow: string[]
+  exempt_purls: string[]
+  deny_unknown: boolean
+  evaluate: 'new' | 'all'
+  enabled: boolean
 }
 
 export interface RefSummary {
@@ -961,6 +1163,9 @@ export interface CompareResult {
     removed: ComponentEntry[]
     updated: ComponentUpdate[]
     unchanged: number
+    // Every license in the base snapshot, including the unchanged components
+    // the diff lists no entries for. Optional: older servers omit it.
+    base_licenses?: string[]
   }
   coverage_diff: CoverageDiff | null
   patch_coverage?: PatchCoverage | null
@@ -969,6 +1174,10 @@ export interface CompareResult {
     passed: boolean
     configured: boolean
     reasons: string[]
+    // Disclosures that must not fail the gate: license violations that were
+    // waived, exempted, or inherited from the target branch. Separate from
+    // `reasons` because `passed` is derived from that list's length.
+    notes?: string[]
   } | null
   // 'persisted' = same verdict the forge check shows; 'computed' = live.
   gate_source?: 'persisted' | 'computed'
@@ -1729,6 +1938,13 @@ class ApiClient {
     return this.request<ApiResponse<RepoConfig>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/config`)
   }
 
+  getEffectiveRepoConfig(provider: string, slug: string, repoSlug: string, branch?: string) {
+    const query = branch ? `?branch=${encodeURIComponent(branch)}` : ''
+    return this.request<ApiResponse<EffectiveConfig>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/config/effective${query}`,
+    )
+  }
+
   onboardRepo(provider: string, slug: string, repoSlug: string) {
     return this.request<ApiResponse<{ number: number; html_url: string; title: string }>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/onboard`,
@@ -2445,6 +2661,54 @@ class ApiClient {
 
   listOrgComponents(provider: string, slug: string) {
     return this.request<ApiResponse<OrgComponent[]>>(`/orgs/${provider}/${slug}/components`)
+  }
+
+  getOrgLicenses(provider: string, slug: string) {
+    return this.request<ApiResponse<OrgLicenseOverview>>(`/orgs/${provider}/${slug}/licenses`)
+  }
+
+  // Reads every repository's .hibou.yaml from the forge, one fetch per repo, so
+  // this must stay behind an explicit user action rather than a page load.
+  // includeRepos triggers a per-repository forge read to find overrides — one
+  // request per repository — so it is opt-in and never used for a plain policy
+  // read.
+  getOrgLicensePolicy(provider: string, slug: string, includeRepos = false) {
+    const query = includeRepos ? '?include_repos=true' : ''
+    return this.request<ApiResponse<OrgLicensePolicyOverview>>(
+      `/orgs/${provider}/${slug}/licenses/policy${query}`,
+    )
+  }
+
+  // Returns the written policy without the repository fan-out, so a save needs
+  // no follow-up read of the compliance list.
+  // Previews a policy without saving it, so an admin is not adopting a legal
+  // stance blind.
+  simulateOrgLicensePolicy(provider: string, slug: string, body: OrgLicensePolicyInput) {
+    return this.request<ApiResponse<OrgLicenseSimulation>>(
+      `/orgs/${provider}/${slug}/licenses/simulate`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )
+  }
+
+  updateOrgLicensePolicy(provider: string, slug: string, body: OrgLicensePolicyInput) {
+    return this.request<ApiResponse<OrgLicensePolicyOverview>>(
+      `/orgs/${provider}/${slug}/licenses/policy`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    )
+  }
+
+  listOrgLicenseComponents(provider: string, slug: string, params?: OrgLicenseComponentQuery) {
+    const query = new URLSearchParams()
+    if (params?.license) query.set('license', params.license)
+    if (params?.category) query.set('category', params.category)
+    if (params?.repo) query.set('repo', params.repo)
+    if (params?.undeclared) query.set('undeclared', 'true')
+    if (params?.page) query.set('page', String(params.page))
+    if (params?.per_page) query.set('per_page', String(params.per_page))
+    const qs = query.toString()
+    return this.request<PaginatedResponse<OrgLicenseComponent>>(
+      `/orgs/${provider}/${slug}/licenses/components${qs ? `?${qs}` : ''}`,
+    )
   }
 
   getUnreadNotificationCount() {

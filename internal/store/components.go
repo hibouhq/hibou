@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/google/uuid"
 
@@ -21,10 +22,14 @@ func (q *Queries) UpsertComponent(ctx context.Context, purl, name, version, ecos
 	})
 }
 
-func (q *Queries) AttachComponentToSnapshot(ctx context.Context, snapshotID, componentID uuid.UUID) error {
+// AttachComponentToSnapshot records a component's presence in a snapshot.
+// labels may be nil; when set it is merged into any labels already recorded for
+// this pair (see the query for why the merge is shallow).
+func (q *Queries) AttachComponentToSnapshot(ctx context.Context, snapshotID, componentID uuid.UUID, labels json.RawMessage) error {
 	return q.db.AttachComponentToSnapshot(ctx, dbgen.AttachComponentToSnapshotParams{
 		SnapshotID:  snapshotID,
 		ComponentID: componentID,
+		Labels:      labels,
 	})
 }
 

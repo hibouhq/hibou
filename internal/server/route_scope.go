@@ -136,6 +136,11 @@ var routeScopes = map[string]routeScope{
 	"GET " + orgRoute + "/compliance/iso27001": needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/compliance/soa":      needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/components":          needsOrgWide(apitoken.CapComponents, apitoken.AccessRead),
+	"GET " + orgRoute + "/licenses":            needsOrgWide(apitoken.CapComponents, apitoken.AccessRead),
+	"GET " + orgRoute + "/licenses/components": needsOrgWide(apitoken.CapComponents, apitoken.AccessRead),
+	"GET " + orgRoute + "/licenses/policy":     needsOrgWide(apitoken.CapComponents, apitoken.AccessRead),
+	"PUT " + orgRoute + "/licenses/policy":     needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
+	"POST " + orgRoute + "/licenses/simulate":  needsOrgWide(apitoken.CapComponents, apitoken.AccessRead),
 	"POST " + orgRoute + "/components/scan":    needsOrgWide(apitoken.CapComponents, apitoken.AccessWrite),
 	"GET " + orgRoute + "/tool-catalog":        orgWideAnyRoute(),
 	"GET " + orgRoute + "/settings":            needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
@@ -214,6 +219,9 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute + "/onboard":  needs(apitoken.CapAdmin, apitoken.AccessRead),
 	"POST " + repoRoute + "/onboard": needs(apitoken.CapAdmin, apitoken.AccessWrite),
 	"GET " + repoRoute + "/config":   anyGrantRoute(),
+	// Effective config exposes org-inherited thresholds, so it needs the admin
+	// read grant rather than the any-grant treatment the raw file gets.
+	"GET " + repoRoute + "/config/effective": needs(apitoken.CapAdmin, apitoken.AccessRead),
 
 	"GET " + repoRoute + "/refs":          anyGrantRoute(),
 	"GET " + repoRoute + "/refs/enhanced": anyGrantRoute(),

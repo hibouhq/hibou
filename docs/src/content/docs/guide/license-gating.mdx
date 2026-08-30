@@ -1,0 +1,308 @@
+---
+title: License Gating
+description: Deny license categories and SPDX ids on the dependencies a pull request introduces
+---
+
+Hibou reads the license of every component in a snapshot's SBOM and can fail a pull
+request that introduces a dependency your policy does not accept. The policy lives in
+the repository's `.hibou.yaml`, next to the weakness and coverage gates.
+
+```yaml
+version: 1
+
+quality_gates:
+  - branches: ["main"]
+    enforcement: blocking
+    licenses:
+      deny_categories: ["copyleft", "network-copyleft", "source-available"]
+```
+
+The organization's **Licenses** tab (`/orgs/{provider}/{slug}/licenses`) shows what you
+are actually under today, per category and per repository. It reports exposure, not
+enforcement — a component listed under `copyleft` there says nothing about whether any
+repository denies that category.
+
+## Categories
+
+Enumerating every GPL variant in a deny-list is unmaintainable, so policies are written
+against seven categories. They are ordered from least to most restrictive, and that
+order is what "most restrictive" means everywhere below.
+
+| Category | Meaning | Examples |
+|----------|---------|----------|
+| `public-domain` | No conditions at all. | `CC0-1.0`, `Unlicense`, `WTFPL` |
+| `permissive` | Attribution only; no obligation on your own source. | `MIT`, `Apache-2.0`, `BSD-3-Clause`, `ISC` |
+| `weak-copyleft` | Reciprocal for changes to the component, but linking does not infect your code. | `MPL-2.0`, `LGPL-3.0-only`, `EPL-2.0`, `CDDL-1.1` |
+| `copyleft` | Distributing a work that includes it obliges you to offer your source under the same terms. | `GPL-3.0-only`, `GFDL-1.3-only`, `CC-BY-SA-4.0` |
+| `network-copyleft` | Same, and triggered by offering the software over a network — not just by shipping it. | `AGPL-3.0-only`, `SSPL-1.0` |
+| `source-available` | Source you can read, with use restrictions. Not open source. | `BUSL-1.1`, `Elastic-2.0`, `CC-BY-NC-4.0`, `Commons-Clause` |
+| `unknown` | No license metadata, or an identifier Hibou's catalog does not recognize. | `Proprietary`, `SEE LICENSE IN LICENSE.txt`, no value at all |
+
+Two refinements are worth knowing because they surprise people:
+
+- **A GPL with a linking exception is treated as weak copyleft.** `GPL-2.0-only WITH
+  Classpath-exception-2.0` lands in `weak-copyleft`, not `copyleft`, because that is how
+  it behaves for a consumer who links it.
+- **Creative Commons is split across three categories.** `CC-BY-*` is permissive,
+  `CC-BY-SA-*` is copyleft, and `CC-BY-NC*` / `CC-BY-ND*` are source-available.
+
+## Configuration
+
+Every key is optional and lives under a `quality_gates` entry's `licenses:` block.
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `deny_categories` | list of category names | empty | Deny whole categories. The seven names above are the only accepted values; anything else is a config error. |
+| `deny` | list of SPDX ids or globs | empty | Deny specific ids on top of the categories, e.g. `["LGPL-2.1-*"]` to carve one family out of a `weak-copyleft` you otherwise allow. |
+| `allow` | list of SPDX ids or globs | empty | Ids that pass even when a deny rule matches. Allow beats both `deny` and `deny_categories`. |
+| `deny_unknown` | boolean | **`true`** | Whether a component with no usable license fails the gate. Naming `unknown` in `deny_categories` has the same effect. |
+| `exempt_purls` | list of purls or globs | empty | Packages the policy does not apply to at all. |
+| `evaluate` | `new` \| `all` | `new` | Whether the gate judges only what the change introduces, or the whole tree. |
+
+A policy that denies nothing — no categories, no ids, and `deny_unknown: false` — is
+skipped entirely rather than evaluated as a pass.
+
+:::caution
+An invalid `.hibou.yaml` is ignored *in full*, with a server-side warning. A check is
+still published — the DB-managed vulnerability gates and the unconditional malware block
+still run — so it goes **green** with the file-managed sections simply absent. Unknown
+keys are rejected too, so a typo like `deny_categorys:` silently disables every
+file-managed gate in the repository, not just the license one, without any visible
+failure. Keep the
+`# yaml-language-server: $schema=…` line at the top of the file so your editor catches
+this before it is pushed.
+:::
+
+A failing license gate is **advisory** unless the gate entry sets
+`enforcement: blocking`. Advisory publishes an informational check that does not block
+the merge; use it while a new policy settles.
+
+## Where the policy lives
+
+A policy can be set in two places, and the resolution order is:
+
+1. The repository's `.hibou.yaml` `licenses:` section, if the matching gate has one.
+2. Otherwise, the organization's policy.
+3. Otherwise, no license gate runs.
+
+An organization policy therefore applies to a repository whose `.hibou.yaml` says
+nothing about licenses — that is the point of setting one. Set it under
+**Organization → Settings → License policy**.
+
+A repository section **replaces** the organization's policy rather than merging
+with it. Merging two partial policies would produce a third that neither side
+wrote, so "which policy applies here?" always has a one-word answer.
+
+:::note
+Overriding is allowed on purpose — an internal build tool and a published SDK are
+not under the same obligations — but it is never silent. When a repository's
+policy is **looser** than the organization's, the comparison view's
+"Noted, not blocking" panel names which rules were loosened, and the
+organization's Licenses tab lists every repository that has departed from the
+policy. These disclosures do not appear on the forge check run itself.
+
+Use a **waiver** for one package that is acceptable in an otherwise-compliant
+repository, and an **override** for a repository whose obligations genuinely
+differ. An organization policy that denies nothing is not a policy and does not
+switch the gate on — the settings page says so when you save one.
+
+To see who has departed from the policy, open **Organization → Licenses** and use
+*Check repository overrides*. It is not automatic because it reads every enrolled
+repository's `.hibou.yaml` from the forge, one request each. The result reports,
+per repository, whether it inherits or overrides and in which direction:
+
+| Result | Meaning |
+|---|---|
+| inherits | Governed by the organization policy. |
+| stricter | Declares its own, tighter policy. Not a departure — no action needed. |
+| looser | Declares its own, weaker policy. **This is what to chase.** |
+| mixed | Tighter on some rules, weaker on others. Also a departure. |
+| unreadable | Its configuration could not be fetched, so its stance is unknown — not a pass. |
+
+Before adopting a policy, use **Preview impact** on the settings page: it reports
+how many components across the organization the draft would flag, and which
+repositories carry them, without saving anything. It evaluates the policy the same
+way the gate does — so `MIT OR GPL-3.0-only` counts as passing there too — and it
+reads stored components, so it costs no forge requests. Note that it reports
+standing exposure against each repository's current snapshot; with the default
+`evaluate: new`, a pull request only fails on what it introduces.
+
+Retiring the organization policy stops license checks in every repository that
+inherits it. A repository with its own `licenses:` block keeps enforcing that one.
+
+## `deny_unknown` defaults to true
+
+An unreviewed license is not a clean license. Absent metadata is the single most common
+way a copyleft or source-available dependency enters a codebase unnoticed, so
+`deny_unknown` fails closed: a component Hibou cannot categorize blocks until someone
+looks at it, exempts the package, or waives it.
+
+This is the key most teams will want to flip while rolling out. Do it explicitly:
+
+```yaml
+    licenses:
+      deny_categories: ["network-copyleft", "source-available"]
+      deny_unknown: false   # accepts that unknowns are un-reviewed, not that they are safe
+```
+
+Note that `allow` cannot rescue a component whose SBOM entry has **no license value at
+all** — there is no id to match. Only `deny_unknown: false`, `exempt_purls`, or a waiver clears
+those. `allow` does work for a component that carries an unrecognized string, which is
+why `allow: ["Public Domain"]` is a useful entry.
+
+The check output distinguishes the two failure modes: *"no license metadata
+(unreviewed)"* means the SBOM generator produced nothing and the pipeline is what needs
+fixing; *"unrecognized license X (category unknown)"* means Hibou's catalog does not
+know that identifier yet.
+
+## The gate is delta-scoped
+
+With the default `evaluate: new`, only components the change **introduces** can fail the
+gate. Turning a policy on in an existing repository otherwise reports dependencies that
+have been on the main branch for years as if this pull request had added them, which is
+the fastest way to get a license gate switched back off.
+
+Pre-existing violations are still counted and disclosed as *"N pre-existing license
+violation(s) on the target branch were not counted"*. That line is a gate **note**, not a
+failure reason: notes are reported whether the gate passes or fails, precisely because
+the backlog matters most when nothing is failing. They are carried on the comparison
+API's `gate.notes` and are deliberately kept out of `gate.reasons`, since a gate passes
+exactly when `reasons` is empty.
+
+Identity for "new" is the pair (purl, version). A version bump therefore counts as
+introduced, on purpose: a dependency can change its license between releases, so an
+upgrade is a fresh decision.
+
+`evaluate: all` fails on every component in the head snapshot. Use it for a repository
+that starts clean, or for a release branch where you want the whole bill of materials to
+hold. Internally the gate also falls back to whole-tree evaluation if no base snapshot is
+available — it cannot tell new from old, and it fails closed rather than passing
+everything — but every caller resolves a target snapshot before evaluating, so this is a
+safety net rather than something you will observe.
+
+Reason lines are capped at 20, with the remainder summarized as a count, so a policy
+rollout over a large tree cannot produce a check run nobody can read.
+
+## `exempt_purls` versus `allow`
+
+They look interchangeable and are not:
+
+- `allow` matches **license ids**. `allow: ["MPL-2.0"]` means *this license is fine
+  anywhere in this repository*.
+- `exempt_purls` matches **packages**. `exempt_purls: ["pkg:npm/eslint-*"]` means *this
+  dependency is fine whatever its license says*.
+
+An allow-list cannot express "this one build tool is acceptable", because it matches
+licenses rather than packages. Without `exempt_purls` the only way to unblock a single
+dependency is to weaken the policy for every dependency — so reach for `exempt_purls`
+whenever the thing you actually trust is the package.
+
+The common case is components you do not link against at all. Container image SBOMs
+carry the whole base distribution, and distributions ship GPL utilities:
+
+```yaml
+    licenses:
+      deny_categories: ["copyleft", "network-copyleft", "source-available"]
+      # OS packages the app runs on top of are not linked dependencies of its code.
+      exempt_purls: ["pkg:apk/*", "pkg:deb/*", "pkg:rpm/*"]
+```
+
+Purl globs use `*` as a wildcard that crosses `/`, so `pkg:maven/com.example/*` matches
+a whole group.
+
+Exemptions are never silent: *"N component(s) exempted by policy"* is reported as a
+gate note whenever any exemption applied — passing gates included — because a
+suppression nobody can see is worse than the finding it hides. Like every note, it
+appears on the comparison view rather than on the forge check.
+
+## Waivers
+
+Exempting a package disables the policy for it permanently and for every license it may
+ever carry. The narrower, sanctioned unblock is a **waiver**: an accepted finding, with a
+reason and an optional expiry, keyed to one (package, license) pair. The gate skips
+waived violations and reports *"N license violation(s) accepted with a reason"*.
+
+The waiver key deliberately excludes the version. A waiver survives patch bumps of the
+same dependency — otherwise every upgrade would re-break the gate on a decision someone
+already made — but a change to a *different* denied license produces a different key and
+re-fires the gate. Expired waivers are excluded when the gate runs, so a lapsed waiver
+resurfaces as a failure on its own.
+
+:::caution
+There is currently no UI or API route that creates a license waiver: the acceptance
+endpoints key on the fingerprint of an existing vulnerability finding, and license
+violations are not stored as findings. The gate honours license waivers, but until that
+path ships, `exempt_purls` is the only unblock you can apply yourself.
+:::
+
+## SPDX expressions
+
+A license field is not a bag of words; it is an expression with precedence. `AND` binds
+tighter than `OR`, and the two mean opposite things for a policy:
+
+- **`MIT OR GPL-3.0-only` passes a copyleft-denying policy.** The component is
+  dual-licensed: the consumer picks, the consumer picks MIT, and the copyleft terms never
+  apply. `OR` resolves to the **least** restrictive alternative.
+- **`MPL-2.0 AND MIT` is judged on `MPL-2.0`.** Both sets of obligations apply at once,
+  so `AND` resolves to the **most** restrictive operand. A policy that denies
+  `weak-copyleft` fails this component; one that only denies `copyleft` and above lets it
+  through.
+
+Against a policy denying `copyleft`, `network-copyleft` and `source-available`:
+
+| Expression | Effective category | Result |
+|------------|--------------------|--------|
+| `MIT OR GPL-3.0-only` | `permissive` | pass |
+| `MPL-2.0 AND MIT` | `weak-copyleft` | pass |
+| `GPL-3.0-only AND MIT` | `copyleft` | **fail** on `GPL-3.0-only` |
+| `AGPL-3.0-only` | `network-copyleft` | **fail** |
+| `(MIT OR Apache-2.0) AND Unicode-DFS-2016` | `permissive` | pass |
+| `SEE LICENSE IN LICENSE.txt` | `unknown` | **fail** while `deny_unknown` is true |
+
+Three consequences:
+
+- **`allow` matches operands, not expressions.** `allow: ["MIT"]` does not rescue
+  `GPL-3.0-only AND MIT` — every operand of an `AND` has to clear the policy, and the GPL
+  operand does not.
+- **Separate list entries are conjunctive.** When an SBOM gives a component several
+  license entries instead of one expression, every entry's obligations apply, so the
+  component takes the most restrictive entry — there is no implied `OR`. Distribution
+  packages do this constantly: Alpine's `musl-utils` declares `MIT`,
+  `BSD-2-Clause` and `GPL-2.0-or-later` as three entries, so it reads as copyleft.
+  Debian's `util-linux` declares fifteen, two of which (`public-domain`, `BSLA`)
+  this catalog does not recognize — so it reads as **unknown**, not copyleft, and
+  is denied by `deny_unknown` rather than by a category.
+- **A free-form string stays one identifier.** `SEE LICENSE IN LICENSE.txt` is not
+  tokenized into four words; it is a single unrecognized id, which you can `allow`
+  verbatim once you have read the file.
+
+## Limitations
+
+License gating is only as good as the SBOM it reads. These are properties of dependency
+scanners in general, not settings you can turn up.
+
+**Dev-only dependencies are typically omitted, so a clean result is not proof of a clean
+tree.** Scanners default to production dependencies. Scanning a `package-lock.json` that
+declares `lodash` alongside `typescript`, `vitest` and several `@types/*` packages yields
+exactly one component: `lodash`. Build tooling, test frameworks and code generators —
+where copyleft and source-available licenses are most common — never reach the gate. If
+those matter to your policy, generate the SBOM with dev dependencies included.
+
+**A missing lockfile yields zero components, silently.** A Rust crate scanned before
+`cargo build` has written `Cargo.lock` produces an SBOM with no components at all. The
+gate then passes because there is nothing to judge — not because the dependencies are
+acceptable. Generate SBOMs *after* the build resolves dependencies, and watch the
+component count per repository on the Licenses tab: an ecosystem showing zero is a
+pipeline bug, not a clean bill of health.
+
+**License data quality varies by ecosystem.** npm and Maven Central carry a declared
+license field and are mostly reliable. Go modules often carry nothing at all — a
+scan of a two-dependency `go.mod` can still yield a transitive module with no license,
+and a project's own module or reactor POM usually has none either. Linux distributions
+go the other way and declare every license found in the package, producing entries that
+categorize far more restrictively than the code you actually use. Jars and binaries
+discovered inside a container image generally carry no license metadata whatsoever.
+
+The practical consequence: treat the first `unknown` count you see as a measurement of
+your SBOM pipeline, not of your legal exposure, and fix the generator before tightening
+`deny_unknown`.

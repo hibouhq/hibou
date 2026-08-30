@@ -1,18 +1,146 @@
 <template>
   <div class="space-y-6">
+    <!-- Effective configuration: the merge of every source, with provenance.
+         Rendered above the file because "what applies" is the question people
+         actually arrive with, and the file alone cannot answer it. -->
     <section>
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-surface-border pb-2">
         <h2 class="text-base font-semibold text-white">
           Effective configuration
         </h2>
+        <div class="flex items-center gap-2">
+          <label
+            for="effective-branch"
+            class="text-xs text-gray-500"
+          >Branch</label>
+          <input
+            id="effective-branch"
+            v-model="branchInput"
+            type="text"
+            class="w-40 rounded border border-surface-border bg-surface-overlay/40 px-2 py-1 font-mono text-xs text-gray-200 focus:border-gray-600 focus:outline-none"
+            :placeholder="repo?.default_branch || 'main'"
+            @keyup.enter="loadEffective"
+            @blur="loadEffective"
+          >
+        </div>
+      </div>
+      <p class="mt-2 text-sm text-gray-400">
+        Everything that decides a gate outcome on
+        <span class="font-mono text-xs text-gray-300">{{ effective?.branch || branchInput }}</span>,
+        merged from the matching <code class="rounded bg-surface-overlay px-1 py-0.5 font-mono text-xs">.hibou.yml</code>
+        gate, stored quality gates, and defaults Hibou applies on your behalf. Every value is
+        labelled with where it came from.
+      </p>
+
+      <div
+        v-if="effectiveLoading"
+        class="mt-4 text-sm text-gray-500"
+      >
+        Resolving configuration…
+      </div>
+      <div
+        v-else-if="effectiveError"
+        class="mt-4 rounded-md border border-surface-border bg-surface-overlay/40 px-4 py-3 text-sm text-gray-400"
+      >
+        {{ effectiveError }}
+      </div>
+      <template v-else-if="effective">
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <span
+            class="rounded-full border px-2.5 py-0.5 text-xs"
+            :class="effective.enforcement === 'blocking'
+              ? 'border-danger/40 bg-danger/10 text-danger'
+              : 'border-surface-border bg-surface-overlay/40 text-warn'"
+          >
+            {{ effective.enforcement === 'blocking' ? 'Blocking' : 'Advisory' }}
+          </span>
+          <span class="text-xs text-gray-500">
+            enforcement · {{ sourceLabel(effective.enforcement_source) }}
+          </span>
+          <span
+            v-if="effective.file_gate_matched && effective.file_gate_branches?.length"
+            class="text-xs text-gray-500"
+          >
+            · matched <code class="font-mono text-gray-400">{{ effective.file_gate_branches.join(', ') }}</code>
+          </span>
+        </div>
+
+        <!-- Warnings sit above the tables: they are the reason someone opened
+             this page, not a footnote to it. -->
+        <ul
+          v-if="effective.warnings.length"
+          class="mt-4 space-y-1.5"
+        >
+          <li
+            v-for="warning in effective.warnings"
+            :key="warning"
+            class="flex gap-2 rounded-md border border-surface-border bg-surface-overlay/30 px-3 py-2 text-xs leading-relaxed text-gray-400"
+          >
+            <span class="text-warn">!</span>
+            <span>{{ warning }}</span>
+          </li>
+        </ul>
+
+        <div class="mt-4 space-y-3">
+          <div
+            v-for="section in effective.sections"
+            :key="section.name"
+            class="overflow-hidden rounded-lg border border-surface-border"
+          >
+            <div class="flex items-center justify-between gap-2 border-b border-surface-border bg-surface-overlay/30 px-3 py-2">
+              <span class="text-sm font-medium text-gray-200">{{ section.name }}</span>
+              <span
+                class="text-[11px] uppercase tracking-wide"
+                :class="statusClass(section.status)"
+              >{{ statusLabel(section.status) }}</span>
+            </div>
+            <div
+              v-if="section.rules.length === 0"
+              class="px-3 py-2 text-xs text-gray-500"
+            >
+              {{ section.note || 'Nothing set — this axis cannot fail a pull request.' }}
+            </div>
+            <template v-else>
+              <div
+                v-for="(rule, index) in section.rules"
+                :key="section.name + rule.label + index"
+                class="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-surface-border/50 px-3 py-2 text-xs last:border-0"
+              >
+                <span class="w-44 shrink-0 text-gray-400">{{ rule.label }}</span>
+                <span class="font-mono text-gray-200">{{ rule.value }}</span>
+                <span
+                  class="rounded border px-1.5 py-0.5 text-[10px]"
+                  :class="sourceClass(rule.source)"
+                >{{ sourceLabel(rule.source) }}</span>
+                <span
+                  v-if="rule.detail"
+                  class="text-gray-600"
+                >{{ rule.detail }}</span>
+              </div>
+              <p
+                v-if="section.note"
+                class="border-t border-surface-border/50 px-3 py-2 text-[11px] leading-relaxed text-gray-500"
+              >
+                {{ section.note }}
+              </p>
+            </template>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <section>
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-surface-border pb-2">
+        <h2 class="text-base font-semibold text-white">
+          Declared in the repository
+        </h2>
         <code class="rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-xs text-gray-400">.hibou.yml</code>
       </div>
       <p class="mt-2 text-sm text-gray-400">
-        What Hibou applies to this repository right now — quality gates, coverage rules and
-        upload policy, resolved from
-        <code class="rounded bg-surface-overlay px-1 py-0.5 font-mono text-xs">.hibou.yml</code>
-        on <span class="font-mono text-xs text-gray-300">{{ repo?.default_branch || 'the default branch' }}</span>.
-        Changes are made by editing that file, so they are reviewed like any other code change.
+        The file as written, read from
+        <span class="font-mono text-xs text-gray-300">{{ repo?.default_branch || 'the default branch' }}</span>.
+        This is only part of what applies — stored gates and defaults are in the section above.
+        Changes are made by editing the file, so they are reviewed like any other code change.
       </p>
 
       <div
@@ -157,7 +285,15 @@ import type { Ref } from 'vue'
 import { computed, inject, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { api, type RepoConfig, type RepoConfigGate, type Repository } from '@/api/client'
+import {
+  api,
+  type EffectiveConfig,
+  type EffectiveSectionStatus,
+  type EffectiveSource,
+  type RepoConfig,
+  type RepoConfigGate,
+  type Repository,
+} from '@/api/client'
 import { useOrgRole } from '@/composables/useOrgRole'
 
 const route = useRoute()
@@ -176,6 +312,80 @@ const onboardError = ref('')
 const onboardedPR = ref<{ number: number; html_url: string } | null>(null)
 const existingPR = ref<{ number: number; html_url: string } | null>(null)
 
+const effective = ref<EffectiveConfig | null>(null)
+const effectiveLoading = ref(true)
+const effectiveError = ref('')
+const branchInput = ref('')
+
+const SOURCE_LABELS: Record<EffectiveSource, string> = {
+  'file': '.hibou.yml',
+  'repo-gate': 'repository gate',
+  'org-gate': 'inherited from org',
+  'org-policy': 'org license policy',
+  'default': 'Hibou default',
+  'always': 'always on',
+}
+
+function sourceLabel(source: EffectiveSource): string {
+  return SOURCE_LABELS[source] ?? source
+}
+
+function sourceClass(source: EffectiveSource): string {
+  switch (source) {
+    // Inherited and defaulted values are the ones people do not know are in
+    // play, so they get the visual weight rather than the ones they wrote.
+    case 'org-gate':
+    case 'org-policy':
+      return 'border-warn/40 bg-warn/10 text-warn'
+    case 'default':
+      return 'border-surface-border bg-surface-overlay/40 text-gray-400'
+    case 'always':
+      return 'border-surface-border bg-surface-overlay/40 text-gray-400'
+    default:
+      return 'border-surface-border bg-surface-overlay/40 text-gray-300'
+  }
+}
+
+const STATUS_LABELS: Record<EffectiveSectionStatus, string> = {
+  'enforced': 'enforced',
+  'not-configured': 'not configured',
+  'disabled': 'disabled',
+}
+
+function statusLabel(status: EffectiveSectionStatus): string {
+  return STATUS_LABELS[status] ?? status
+}
+
+function statusClass(status: EffectiveSectionStatus): string {
+  switch (status) {
+    case 'enforced':
+      return 'text-ok'
+    case 'disabled':
+      return 'text-warn'
+    default:
+      return 'text-gray-600'
+  }
+}
+
+async function loadEffective() {
+  if (!provider.value || !slug.value || !repoSlug.value) return
+  const branch = branchInput.value.trim()
+  // Skip a redundant fetch when a blur fires without the branch having changed.
+  if (effective.value && effective.value.branch === branch && !effectiveError.value) return
+  effectiveLoading.value = true
+  effectiveError.value = ''
+  try {
+    const res = await api.getEffectiveRepoConfig(provider.value, slug.value, repoSlug.value, branch || undefined)
+    effective.value = res.data
+    branchInput.value = res.data.branch
+  } catch {
+    effective.value = null
+    effectiveError.value = 'The effective configuration could not be resolved right now. Try again later.'
+  } finally {
+    effectiveLoading.value = false
+  }
+}
+
 const hasGates = computed(() => (config.value?.quality_gates?.length ?? 0) > 0)
 // PR opened in this session wins over the one replayed from the audit log.
 const openPR = computed(() => onboardedPR.value ?? existingPR.value)
@@ -185,6 +395,10 @@ watch(
   async () => {
     loading.value = true
     loadFailed.value = false
+    // Reset so a stale branch from the previous repo cannot be reused.
+    effective.value = null
+    branchInput.value = ''
+    void loadEffective()
     try {
       const res = await api.getRepoConfig(provider.value, slug.value, repoSlug.value)
       config.value = res.data

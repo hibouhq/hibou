@@ -21,6 +21,36 @@ type orgRepoSnapshot struct {
 
 // currentRepoSnapshots resolves the current snapshot for every enrolled repo in
 // the org, reusing the same resolution the per-repo data views use.
+// currentRepoSnapshotsWithEnrolledCount also returns how many repos were
+// enrolled, which callers that report coverage denominators need. Walking the
+// inventory is a forge-backed listing, so doing it once beats doing it twice.
+func (s *Server) currentRepoSnapshotsWithEnrolledCount(r *http.Request, org *store.Organization) ([]orgRepoSnapshot, int, error) {
+	repos, _, err := s.listRepositoryInventory(r, org)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	enrolled := 0
+	pairs := make([]orgRepoSnapshot, 0, len(repos))
+	for _, entry := range repos {
+		if !entry.Enrolled || entry.ID == nil {
+			continue
+		}
+		enrolled++
+		repo, err := s.queries.GetRepositoryByID(r.Context(), *entry.ID)
+		if err != nil || repo == nil {
+			continue
+		}
+		_, snapshot, err := s.resolveSnapshotForRepo(r, repo, repo.DefaultBranch)
+		if err != nil || snapshot == nil {
+			continue
+		}
+		pairs = append(pairs, orgRepoSnapshot{repo: repo, snapshot: snapshot})
+	}
+
+	return pairs, enrolled, nil
+}
+
 func (s *Server) currentRepoSnapshots(r *http.Request, org *store.Organization) ([]orgRepoSnapshot, error) {
 	repos, _, err := s.listRepositoryInventory(r, org)
 	if err != nil {

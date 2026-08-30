@@ -59,12 +59,17 @@ type Config struct {
 	// partitions fully older than this many months are dropped by the retention
 	// pass. 0 (the default) keeps everything forever.
 	AuditRetentionMonths int
-	RetentionPolicy      retention.RetentionPolicy
-	Background           BackgroundConfig
-	AdvisoryScan         AdvisoryScanConfig
-	CVEFeed              CVEFeedConfig
-	Worker               WorkerConfig
-	SecretScan           SecretScanConfig
+	// AdvisoryEventRetentionMonths is the same window for the advisory activity
+	// timeline (advisory_events). It is a narrative, not a compliance record,
+	// so it gets its own knob rather than riding the audit one. 0 keeps
+	// everything forever.
+	AdvisoryEventRetentionMonths int
+	RetentionPolicy              retention.RetentionPolicy
+	Background                   BackgroundConfig
+	AdvisoryScan                 AdvisoryScanConfig
+	CVEFeed                      CVEFeedConfig
+	Worker                       WorkerConfig
+	SecretScan                   SecretScanConfig
 
 	Forges []ForgeConfig
 }
@@ -393,16 +398,17 @@ func Load() (Config, error) {
 			UsePathStyle:    v.GetBool("artifact.s3.use_path_style"),
 			UseSSL:          v.GetBool("artifact.s3.use_ssl"),
 		},
-		UploadWindow:         uploadWindow,
-		ShutdownTimeout:      shutdownTimeout,
-		MaxUploadSize:        v.GetInt64("max.upload.size"),
-		SessionSecret:        v.GetString("session.secret"),
-		AutoProvisionOrgs:    v.GetBool("auto.provision.orgs"),
-		InstanceAdmins:       ParseEmailList(v.GetString("instance.admins")),
-		InstanceAdminsFile:   strings.TrimSpace(v.GetString("instance.admins_file")),
-		CoverageStoreLines:   v.GetBool("coverage.store_lines"),
-		AuditRetentionMonths: v.GetInt("audit.retention_months"),
-		RetentionPolicy:      retentionPolicy,
+		UploadWindow:                 uploadWindow,
+		ShutdownTimeout:              shutdownTimeout,
+		MaxUploadSize:                v.GetInt64("max.upload.size"),
+		SessionSecret:                v.GetString("session.secret"),
+		AutoProvisionOrgs:            v.GetBool("auto.provision.orgs"),
+		InstanceAdmins:               ParseEmailList(v.GetString("instance.admins")),
+		InstanceAdminsFile:           strings.TrimSpace(v.GetString("instance.admins_file")),
+		CoverageStoreLines:           v.GetBool("coverage.store_lines"),
+		AuditRetentionMonths:         v.GetInt("audit.retention_months"),
+		AdvisoryEventRetentionMonths: v.GetInt("advisories.event_retention_months"),
+		RetentionPolicy:              retentionPolicy,
 		Background: BackgroundConfig{
 			ArtifactProcessingEnabled: v.GetBool("background.artifact_processing.enabled"),
 			RetentionEnabled:          v.GetBool("background.retention.enabled"),

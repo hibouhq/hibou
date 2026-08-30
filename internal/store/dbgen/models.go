@@ -1121,15 +1121,14 @@ type CoverageReport struct {
 }
 
 type CveAffectedProduct struct {
-	ID           uuid.UUID `json:"id"`
-	CveID        string    `json:"cve_id"`
-	Vendor       string    `json:"vendor"`
-	Product      string    `json:"product"`
-	VendorKey    string    `json:"vendor_key"`
-	ProductKey   string    `json:"product_key"`
-	Introduced   string    `json:"introduced"`
-	Fixed        string    `json:"fixed"`
-	LastAffected string    `json:"last_affected"`
+	CveID        string `json:"cve_id"`
+	Vendor       string `json:"vendor"`
+	Product      string `json:"product"`
+	VendorKey    string `json:"vendor_key"`
+	ProductKey   string `json:"product_key"`
+	Introduced   string `json:"introduced"`
+	Fixed        string `json:"fixed"`
+	LastAffected string `json:"last_affected"`
 }
 
 type CveRecord struct {
@@ -1266,14 +1265,19 @@ type LicenseException struct {
 }
 
 type LicensePolicy struct {
-	ID              uuid.UUID `json:"id"`
-	OrgID           uuid.UUID `json:"org_id"`
-	Name            string    `json:"name"`
-	AllowedLicenses []string  `json:"allowed_licenses"`
-	DeniedLicenses  []string  `json:"denied_licenses"`
-	Enabled         bool      `json:"enabled"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               uuid.UUID     `json:"id"`
+	OrgID            uuid.UUID     `json:"org_id"`
+	Name             string        `json:"name"`
+	AllowedLicenses  []string      `json:"allowed_licenses"`
+	DeniedLicenses   []string      `json:"denied_licenses"`
+	Enabled          bool          `json:"enabled"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        time.Time     `json:"updated_at"`
+	DeniedCategories []string      `json:"denied_categories"`
+	ExemptPurls      []string      `json:"exempt_purls"`
+	DenyUnknown      bool          `json:"deny_unknown"`
+	Evaluate         string        `json:"evaluate"`
+	UpdatedBy        uuid.NullUUID `json:"updated_by"`
 }
 
 type LocalRoleGrant struct {

@@ -64,6 +64,27 @@ SELECT COUNT(DISTINCT r.cve_id) FROM cve_records r
 JOIN cve_affected_products a ON a.cve_id = r.cve_id
 WHERE a.product_key = ANY($1::text[]) AND r.state = 'PUBLISHED';
 
+-- name: BackfillSubscriptionMatches :many
+-- The stored records a NEW watch already covers, newest first.
+--
+-- The sweeper only visits records the feed revises, and the corpus seed
+-- deliberately queues nothing — so without this, a record published before the
+-- watch existed is invisible until its vendor happens to revise it, and a watch
+-- created today reads "never matched" while the CVE it was created FOR sits in
+-- the corpus.
+--
+-- Vendor narrowing matches MatchSubscriptionsForProductKeys exactly: an empty
+-- vendor_keys means "any vendor", a non-empty one narrows. Diverging here would
+-- make creation-time and sweep-time matching disagree about the same watch.
+SELECT DISTINCT r.cve_id, r.published_at
+FROM cve_records r
+JOIN cve_affected_products a ON a.cve_id = r.cve_id
+WHERE a.product_key = ANY(sqlc.arg(product_keys)::text[])
+  AND (cardinality(sqlc.arg(vendor_keys)::text[]) = 0 OR a.vendor_key = ANY(sqlc.arg(vendor_keys)::text[]))
+  AND r.state = 'PUBLISHED'
+ORDER BY r.published_at DESC NULLS LAST
+LIMIT sqlc.arg(max_items);
+
 -- name: CreateCVESubscription :one
 INSERT INTO cve_subscriptions (label, product_keys, vendor_keys, created_by)
 VALUES ($1, $2, $3, $4)

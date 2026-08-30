@@ -204,7 +204,7 @@
               "unknown"
             ]
           },
-          "description": "License categories to deny wholesale."
+          "description": "License categories to deny wholesale. The server compares case-insensitively; write them lowercase so editors validating against this schema agree."
         },
         "deny": {
           "type": "array",
@@ -225,9 +225,25 @@
         "deny_unknown": {
           "type": "boolean",
           "description": "Whether components with unknown or missing license metadata fail the gate. Defaults to true \u2014 an unreviewed license is a legal risk until someone looks at it."
+        },
+        "exempt_purls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Package purls or globs exempt from this policy (e.g. pkg:npm/eslint*). Use when one specific dependency is acceptable, instead of weakening the policy for everything."
+        },
+        "evaluate": {
+          "type": "string",
+          "enum": [
+            "new",
+            "all"
+          ],
+          "description": "Scope of the gate: \"new\" (default) fails only on components the change introduces, \"all\" fails on every component in the head snapshot. The server compares case-insensitively; write it lowercase so editors validating against this schema agree."
         }
       },
-      "description": "License policy evaluated against every component of the head snapshot."
+      "description": "License policy for the matching branches. Evaluated against the components a change introduces by default; see `evaluate`."
     },
     "secretThresholds": {
       "type": "object",

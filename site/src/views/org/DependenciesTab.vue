@@ -126,6 +126,9 @@
                   Version
                 </th>
                 <th class="px-3 py-2 font-medium">
+                  License
+                </th>
+                <th class="px-3 py-2 font-medium">
                   Repositories
                 </th>
                 <th class="px-3 py-2 font-medium">
@@ -179,6 +182,30 @@
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs text-gray-300">
                   {{ component.version }}
+                </td>
+                <td class="px-3 py-2.5">
+                  <div
+                    v-if="component.licenses?.length"
+                    class="flex flex-wrap gap-1"
+                  >
+                    <span
+                      v-for="licenseId in component.licenses.slice(0, 2)"
+                      :key="licenseId"
+                      class="rounded-full border border-surface-border px-2 py-0.5 font-mono text-[11px] text-gray-300"
+                    >{{ licenseId }}</span>
+                    <span
+                      v-if="component.licenses.length > 2"
+                      class="text-[11px] text-gray-500"
+                      :title="component.licenses.join(', ')"
+                    >+{{ component.licenses.length - 2 }}</span>
+                  </div>
+                  <!-- Absent metadata is a gate-relevant state, not a blank:
+                       deny_unknown defaults to true. -->
+                  <span
+                    v-else
+                    class="text-warn"
+                    title="No license metadata — fails the gate when deny_unknown is on"
+                  >unknown</span>
                 </td>
                 <td class="px-3 py-2.5">
                   <div class="flex flex-wrap gap-1">
@@ -257,11 +284,17 @@ const SEVERITY_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3,
 
 const ecosystemOptions = computed(() => Array.from(new Set(components.value.map((c) => ecosystemKey(c.ecosystem)))).sort())
 const repoOptions = computed(() => Array.from(new Set(components.value.flatMap((c) => c.repos))).sort())
+// "unknown" is a real, selectable value here rather than an absence: it is the
+// set a deny_unknown policy would flag.
+const licenseOptions = computed(() =>
+  Array.from(new Set(components.value.map((c) => (c.licenses?.length ? c.licenses : ['unknown'])).flat())).sort(),
+)
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
 
 const filterDefs = computed(() => [
   { key: 'ecosystem', label: 'Ecosystem', options: ecosystemOptions.value, multi: true },
   { key: 'repo', label: 'Repository', options: repoOptions.value, multi: true },
+  { key: 'license', label: 'License', options: licenseOptions.value, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
   { key: 'vulnerable', label: 'Vulnerable', options: ['yes', 'no'], multi: false },
 ])
@@ -341,6 +374,13 @@ function matchesFilters(component: OrgComponent): boolean {
   if (repoFilter.length && !repoFilter.some((repoSlug) => component.repos.includes(repoSlug))) {
     return false
   }
+  const licenseFilter = splitFilter(activeFilters.value.license)
+  if (licenseFilter.length) {
+    const componentLicenses = component.licenses?.length ? component.licenses : ['unknown']
+    if (!licenseFilter.some((licenseId) => componentLicenses.includes(licenseId))) {
+      return false
+    }
+  }
   const vulnerable = activeFilters.value.vulnerable
   if (vulnerable === 'yes' && component.vuln_count === 0) {
     return false
@@ -350,7 +390,7 @@ function matchesFilters(component: OrgComponent): boolean {
   }
   const query = searchQuery.value.trim().toLowerCase()
   if (query) {
-    const haystack = [component.name, component.version, component.purl, ...component.repos]
+    const haystack = [component.name, component.version, component.purl, ...component.repos, ...(component.licenses ?? [])]
     if (!haystack.some((value) => value.toLowerCase().includes(query))) {
       return false
     }

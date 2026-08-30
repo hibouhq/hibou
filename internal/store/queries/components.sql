@@ -8,9 +8,15 @@ ON CONFLICT (purl, version) DO UPDATE SET
 RETURNING *;
 
 -- name: AttachComponentToSnapshot :exec
+-- labels accumulates rather than overwrites: one snapshot ingests several SBOM
+-- artifacts, and a component present in more than one must record all of them.
+-- `||` is a shallow merge, which is why provenance is stored as a flat key set
+-- ("sbom:<filename>": true) instead of a nested array — an array-valued key
+-- would be replaced by the last writer, silently losing the earlier artifact.
 INSERT INTO snapshot_components (snapshot_id, component_id, labels)
-VALUES ($1, $2, '{}'::jsonb)
-ON CONFLICT (snapshot_id, component_id) DO NOTHING;
+VALUES (sqlc.arg(snapshot_id), sqlc.arg(component_id), COALESCE(sqlc.arg(labels)::jsonb, '{}'::jsonb))
+ON CONFLICT (snapshot_id, component_id) DO UPDATE
+SET labels = snapshot_components.labels || EXCLUDED.labels;
 
 -- name: UpsertComponentDependency :exec
 INSERT INTO component_dependencies (snapshot_id, component_id, depends_on_component_id)

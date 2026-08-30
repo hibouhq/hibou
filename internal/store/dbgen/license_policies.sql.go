@@ -7,84 +7,123 @@ package dbgen
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
-const createLicenseException = `-- name: CreateLicenseException :one
-INSERT INTO license_exceptions (
-    policy_id,
-    component_purl,
-    license_id,
-    justification,
-    expires_at,
-    created_by
-)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, policy_id, component_purl, license_id, justification, expires_at, created_by, created_at
+const disableOrgLicensePolicy = `-- name: DisableOrgLicensePolicy :exec
+UPDATE license_policies SET enabled = FALSE, updated_at = NOW(), updated_by = $2
+WHERE org_id = $1 AND enabled
 `
 
-type CreateLicenseExceptionParams struct {
-	PolicyID      uuid.UUID     `json:"policy_id"`
-	ComponentPurl string        `json:"component_purl"`
-	LicenseID     string        `json:"license_id"`
-	Justification string        `json:"justification"`
-	ExpiresAt     sql.NullTime  `json:"expires_at"`
-	CreatedBy     uuid.NullUUID `json:"created_by"`
+type DisableOrgLicensePolicyParams struct {
+	OrgID     uuid.UUID     `json:"org_id"`
+	UpdatedBy uuid.NullUUID `json:"updated_by"`
 }
 
-func (q *Queries) CreateLicenseException(ctx context.Context, arg CreateLicenseExceptionParams) (LicenseException, error) {
-	row := q.db.QueryRowContext(ctx, createLicenseException,
-		arg.PolicyID,
-		arg.ComponentPurl,
-		arg.LicenseID,
-		arg.Justification,
-		arg.ExpiresAt,
-		arg.CreatedBy,
-	)
-	var i LicenseException
+// Retire rather than delete: the row keeps its id and updated_by so the last
+// enforced policy is still inspectable, and re-enabling revives it. The change
+// history itself is in audit_logs.
+func (q *Queries) DisableOrgLicensePolicy(ctx context.Context, arg DisableOrgLicensePolicyParams) error {
+	_, err := q.db.ExecContext(ctx, disableOrgLicensePolicy, arg.OrgID, arg.UpdatedBy)
+	return err
+}
+
+const getOrgLicensePolicy = `-- name: GetOrgLicensePolicy :one
+SELECT id, org_id, name, allowed_licenses, denied_licenses, enabled, created_at, updated_at, denied_categories, exempt_purls, deny_unknown, evaluate, updated_by FROM license_policies WHERE org_id = $1 AND enabled ORDER BY updated_at DESC LIMIT 1
+`
+
+// The org's single active policy. A partial unique index guarantees at most one
+// enabled row per org, so this cannot be ambiguous.
+func (q *Queries) GetOrgLicensePolicy(ctx context.Context, orgID uuid.UUID) (LicensePolicy, error) {
+	row := q.db.QueryRowContext(ctx, getOrgLicensePolicy, orgID)
+	var i LicensePolicy
 	err := row.Scan(
 		&i.ID,
-		&i.PolicyID,
-		&i.ComponentPurl,
-		&i.LicenseID,
-		&i.Justification,
-		&i.ExpiresAt,
-		&i.CreatedBy,
+		&i.OrgID,
+		&i.Name,
+		pq.Array(&i.AllowedLicenses),
+		pq.Array(&i.DeniedLicenses),
+		&i.Enabled,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+		pq.Array(&i.DeniedCategories),
+		pq.Array(&i.ExemptPurls),
+		&i.DenyUnknown,
+		&i.Evaluate,
+		&i.UpdatedBy,
 	)
 	return i, err
 }
 
-const createLicensePolicy = `-- name: CreateLicensePolicy :one
+const upsertOrgLicensePolicy = `-- name: UpsertOrgLicensePolicy :one
 INSERT INTO license_policies (
     org_id,
     name,
     allowed_licenses,
     denied_licenses,
-    enabled
+    denied_categories,
+    exempt_purls,
+    deny_unknown,
+    evaluate,
+    enabled,
+    updated_by
 )
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, org_id, name, allowed_licenses, denied_licenses, enabled, created_at, updated_at
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    TRUE,
+    $9
+)
+ON CONFLICT (org_id, name) DO UPDATE SET
+    enabled = TRUE,
+    name = EXCLUDED.name,
+    allowed_licenses = EXCLUDED.allowed_licenses,
+    denied_licenses = EXCLUDED.denied_licenses,
+    denied_categories = EXCLUDED.denied_categories,
+    exempt_purls = EXCLUDED.exempt_purls,
+    deny_unknown = EXCLUDED.deny_unknown,
+    evaluate = EXCLUDED.evaluate,
+    updated_by = EXCLUDED.updated_by,
+    updated_at = NOW()
+RETURNING id, org_id, name, allowed_licenses, denied_licenses, enabled, created_at, updated_at, denied_categories, exempt_purls, deny_unknown, evaluate, updated_by
 `
 
-type CreateLicensePolicyParams struct {
-	OrgID           uuid.UUID `json:"org_id"`
-	Name            string    `json:"name"`
-	AllowedLicenses []string  `json:"allowed_licenses"`
-	DeniedLicenses  []string  `json:"denied_licenses"`
-	Enabled         bool      `json:"enabled"`
+type UpsertOrgLicensePolicyParams struct {
+	OrgID            uuid.UUID     `json:"org_id"`
+	Name             string        `json:"name"`
+	AllowedLicenses  []string      `json:"allowed_licenses"`
+	DeniedLicenses   []string      `json:"denied_licenses"`
+	DeniedCategories []string      `json:"denied_categories"`
+	ExemptPurls      []string      `json:"exempt_purls"`
+	DenyUnknown      bool          `json:"deny_unknown"`
+	Evaluate         string        `json:"evaluate"`
+	UpdatedBy        uuid.NullUUID `json:"updated_by"`
 }
 
-func (q *Queries) CreateLicensePolicy(ctx context.Context, arg CreateLicensePolicyParams) (LicensePolicy, error) {
-	row := q.db.QueryRowContext(ctx, createLicensePolicy,
+// Conflict on (org_id, name), the constraint the table has shipped with since
+// 00001. Targeting the partial enabled-index instead would miss a RETIRED row of
+// the same name and fail the insert against that older constraint. Re-enabling
+// here is deliberate: it revives the retired row rather than accumulating one
+// dead row per toggle. The history of who changed what lives in audit_logs.
+func (q *Queries) UpsertOrgLicensePolicy(ctx context.Context, arg UpsertOrgLicensePolicyParams) (LicensePolicy, error) {
+	row := q.db.QueryRowContext(ctx, upsertOrgLicensePolicy,
 		arg.OrgID,
 		arg.Name,
 		pq.Array(arg.AllowedLicenses),
 		pq.Array(arg.DeniedLicenses),
-		arg.Enabled,
+		pq.Array(arg.DeniedCategories),
+		pq.Array(arg.ExemptPurls),
+		arg.DenyUnknown,
+		arg.Evaluate,
+		arg.UpdatedBy,
 	)
 	var i LicensePolicy
 	err := row.Scan(
@@ -96,157 +135,11 @@ func (q *Queries) CreateLicensePolicy(ctx context.Context, arg CreateLicensePoli
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const deleteLicenseException = `-- name: DeleteLicenseException :exec
-DELETE FROM license_exceptions WHERE id = $1
-`
-
-func (q *Queries) DeleteLicenseException(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, deleteLicenseException, id)
-	return err
-}
-
-const deleteLicensePolicy = `-- name: DeleteLicensePolicy :exec
-DELETE FROM license_policies WHERE id = $1
-`
-
-func (q *Queries) DeleteLicensePolicy(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, deleteLicensePolicy, id)
-	return err
-}
-
-const getLicensePolicyByID = `-- name: GetLicensePolicyByID :one
-SELECT id, org_id, name, allowed_licenses, denied_licenses, enabled, created_at, updated_at FROM license_policies WHERE id = $1
-`
-
-func (q *Queries) GetLicensePolicyByID(ctx context.Context, id uuid.UUID) (LicensePolicy, error) {
-	row := q.db.QueryRowContext(ctx, getLicensePolicyByID, id)
-	var i LicensePolicy
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.Name,
-		pq.Array(&i.AllowedLicenses),
-		pq.Array(&i.DeniedLicenses),
-		&i.Enabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const listLicenseExceptionsByPolicy = `-- name: ListLicenseExceptionsByPolicy :many
-SELECT id, policy_id, component_purl, license_id, justification, expires_at, created_by, created_at FROM license_exceptions WHERE policy_id = $1 ORDER BY created_at DESC
-`
-
-func (q *Queries) ListLicenseExceptionsByPolicy(ctx context.Context, policyID uuid.UUID) ([]LicenseException, error) {
-	rows, err := q.db.QueryContext(ctx, listLicenseExceptionsByPolicy, policyID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []LicenseException{}
-	for rows.Next() {
-		var i LicenseException
-		if err := rows.Scan(
-			&i.ID,
-			&i.PolicyID,
-			&i.ComponentPurl,
-			&i.LicenseID,
-			&i.Justification,
-			&i.ExpiresAt,
-			&i.CreatedBy,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLicensePoliciesByOrg = `-- name: ListLicensePoliciesByOrg :many
-SELECT id, org_id, name, allowed_licenses, denied_licenses, enabled, created_at, updated_at FROM license_policies WHERE org_id = $1 ORDER BY name ASC
-`
-
-func (q *Queries) ListLicensePoliciesByOrg(ctx context.Context, orgID uuid.UUID) ([]LicensePolicy, error) {
-	rows, err := q.db.QueryContext(ctx, listLicensePoliciesByOrg, orgID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []LicensePolicy{}
-	for rows.Next() {
-		var i LicensePolicy
-		if err := rows.Scan(
-			&i.ID,
-			&i.OrgID,
-			&i.Name,
-			pq.Array(&i.AllowedLicenses),
-			pq.Array(&i.DeniedLicenses),
-			&i.Enabled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updateLicensePolicy = `-- name: UpdateLicensePolicy :one
-UPDATE license_policies
-SET name = $2,
-    allowed_licenses = $3,
-    denied_licenses = $4,
-    enabled = $5,
-    updated_at = NOW()
-WHERE id = $1
-RETURNING id, org_id, name, allowed_licenses, denied_licenses, enabled, created_at, updated_at
-`
-
-type UpdateLicensePolicyParams struct {
-	ID              uuid.UUID `json:"id"`
-	Name            string    `json:"name"`
-	AllowedLicenses []string  `json:"allowed_licenses"`
-	DeniedLicenses  []string  `json:"denied_licenses"`
-	Enabled         bool      `json:"enabled"`
-}
-
-func (q *Queries) UpdateLicensePolicy(ctx context.Context, arg UpdateLicensePolicyParams) (LicensePolicy, error) {
-	row := q.db.QueryRowContext(ctx, updateLicensePolicy,
-		arg.ID,
-		arg.Name,
-		pq.Array(arg.AllowedLicenses),
-		pq.Array(arg.DeniedLicenses),
-		arg.Enabled,
-	)
-	var i LicensePolicy
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.Name,
-		pq.Array(&i.AllowedLicenses),
-		pq.Array(&i.DeniedLicenses),
-		&i.Enabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
+		pq.Array(&i.DeniedCategories),
+		pq.Array(&i.ExemptPurls),
+		&i.DenyUnknown,
+		&i.Evaluate,
+		&i.UpdatedBy,
 	)
 	return i, err
 }

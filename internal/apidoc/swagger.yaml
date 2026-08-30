@@ -454,6 +454,75 @@ definitions:
       status:
         $ref: '#/definitions/store.DeploymentStatus'
     type: object
+  server.effectiveConfigResponse:
+    properties:
+      branch:
+        description: |-
+          Branch the resolution was done for. Gate selection is branch-dependent, so
+          an effective config without a branch is meaningless.
+        type: string
+      config_present:
+        type: boolean
+      enforcement:
+        type: string
+      enforcement_source:
+        type: string
+      file_gate_branches:
+        items:
+          type: string
+        type: array
+      file_gate_matched:
+        description: |-
+          FileGateMatched is false when no `.hibou.yaml` gate covers this branch —
+          in which case only DB gates and unconditional rules apply.
+        type: boolean
+      file_unavailable:
+        description: |-
+          FileUnavailable distinguishes "the file has no gates" from "we could not
+          read the file" — collapsing those two would report an unknown as an
+          absence.
+        type: boolean
+      gate_source:
+        description: |-
+          GateSource says where the DB thresholds came from, since inheriting the
+          org's gates is indistinguishable from having your own until you are told.
+        type: string
+      sections:
+        items:
+          $ref: '#/definitions/server.effectiveSection'
+        type: array
+      warnings:
+        description: |-
+          Warnings call out interactions that surprise people — most of all a file
+          weakness gate switching off DB findings gates it never mentions.
+        items:
+          type: string
+        type: array
+    type: object
+  server.effectiveRule:
+    properties:
+      detail:
+        type: string
+      label:
+        type: string
+      source:
+        type: string
+      value:
+        type: string
+    type: object
+  server.effectiveSection:
+    properties:
+      name:
+        type: string
+      note:
+        type: string
+      rules:
+        items:
+          $ref: '#/definitions/server.effectiveRule'
+        type: array
+      status:
+        type: string
+    type: object
   server.enrollRepoRequest:
     properties:
       default_branch:
@@ -806,6 +875,231 @@ definitions:
         items:
           $ref: '#/definitions/server.orgRepoScanResult'
         type: array
+    type: object
+  server.orgLicenseCategoryStat:
+    properties:
+      category:
+        type: string
+      components:
+        type: integer
+      repos:
+        type: integer
+    type: object
+  server.orgLicenseCoverage:
+    properties:
+      components_total:
+        type: integer
+      repos_enrolled:
+        description: |-
+          ReposEnrolled is the denominator that matters: every other count in this
+          response is drawn only from repos that got as far as a usable snapshot.
+        type: integer
+      repos_with_components:
+        type: integer
+      repos_with_snapshot:
+        type: integer
+      undeclared:
+        description: 'Undeclared: the SBOM carried no license at all — a generator
+          problem.'
+        type: integer
+      unrecognized:
+        description: |-
+          Unrecognized: a license string we could not map to a category — a catalog
+          problem. Both are CategoryUnknown, but they have different owners.
+        type: integer
+    type: object
+  server.orgLicenseDiff:
+    properties:
+      added:
+        description: |-
+          Added/Removed are the delta for set-valued axes. The full Base/Override
+          lists are unreadable on a real policy, so the UI renders these.
+        items:
+          type: string
+        type: array
+      base:
+        type: string
+      direction:
+        type: string
+      field:
+        type: string
+      override:
+        type: string
+      removed:
+        items:
+          type: string
+        type: array
+    type: object
+  server.orgLicenseOverviewResponse:
+    properties:
+      categories:
+        items:
+          $ref: '#/definitions/server.orgLicenseCategoryStat'
+        type: array
+      coverage:
+        $ref: '#/definitions/server.orgLicenseCoverage'
+      licenses:
+        items:
+          $ref: '#/definitions/server.orgLicenseStat'
+        type: array
+      repos:
+        items:
+          $ref: '#/definitions/server.orgLicenseRepoStat'
+        type: array
+    type: object
+  server.orgLicensePolicyRepo:
+    properties:
+      differences:
+        items:
+          $ref: '#/definitions/server.orgLicenseDiff'
+        type: array
+      name:
+        type: string
+      relation:
+        description: |-
+          Relation is set only for a repository that declares its own policy:
+          equivalent / stricter / looser / mixed against the org's.
+        type: string
+      slug:
+        type: string
+      source:
+        description: |-
+          Source is "organization" when the repo inherits, "repository" when it
+          declares its own, "none" when no policy applies at all.
+        type: string
+      unreadable:
+        description: |-
+          Unreadable marks a repository whose config could not be fetched. Reported
+          rather than assumed compliant — an unknown is not a pass.
+        type: boolean
+    type: object
+  server.orgLicensePolicyResponse:
+    properties:
+      configured:
+        type: boolean
+      departures:
+        type: integer
+      inheriting:
+        type: integer
+      overriding:
+        type: integer
+      policy:
+        $ref: '#/definitions/server.orgLicensePolicySpec'
+      repos:
+        items:
+          $ref: '#/definitions/server.orgLicensePolicyRepo'
+        type: array
+      repos_scanned:
+        description: |-
+          ReposScanned distinguishes "no repository overrides" from "repositories
+          were not checked". Without it an empty list reads as an all-clear.
+        type: boolean
+      total:
+        description: |-
+          Counts for the compliance headline. Departures is what someone is actually
+          looking for; the rest is denominator.
+        type: integer
+      unreadable:
+        type: integer
+    type: object
+  server.orgLicensePolicySpec:
+    properties:
+      allow:
+        items:
+          type: string
+        type: array
+      deny:
+        items:
+          type: string
+        type: array
+      deny_categories:
+        items:
+          type: string
+        type: array
+      deny_unknown:
+        type: boolean
+      evaluate:
+        type: string
+      exempt_purls:
+        items:
+          type: string
+        type: array
+    type: object
+  server.orgLicenseRepoStat:
+    properties:
+      by_category:
+        additionalProperties:
+          type: integer
+        type: object
+      components:
+        type: integer
+      name:
+        type: string
+      slug:
+        type: string
+      snapshot_at:
+        type: string
+      snapshot_status:
+        type: string
+      undeclared:
+        type: integer
+    type: object
+  server.orgLicenseSimulationRepo:
+    properties:
+      count:
+        type: integer
+      name:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.orgLicenseSimulationResponse:
+    properties:
+      components_flagged:
+        type: integer
+      components_total:
+        description: |-
+          ComponentsTotal is the denominator: an unqualified "12 would be flagged"
+          means nothing without it.
+        type: integer
+      exempted:
+        description: |-
+          Exempted counts components a rule would have flagged but exempt_purls
+          clears, so the effect of that list is visible rather than inferred.
+        type: integer
+      licenses:
+        description: Licenses that would trip the policy, most components first.
+        items:
+          $ref: '#/definitions/server.orgLicenseStat'
+        type: array
+      repos:
+        description: Repos lists only those with at least one flagged component, worst
+          first.
+        items:
+          $ref: '#/definitions/server.orgLicenseSimulationRepo'
+        type: array
+      repos_total:
+        type: integer
+    type: object
+  server.orgLicenseStat:
+    properties:
+      category:
+        type: string
+      components:
+        type: integer
+      has_and:
+        description: |-
+          HasAnd marks a conjunctive expression: every operand's obligations apply
+          at once. HasOr marks an elective one, where the reported category is the
+          alternative a consumer would pick. Surfacing both stops the table looking
+          like it disagrees with the gate.
+        type: boolean
+      has_or:
+        type: boolean
+      license:
+        type: string
+      repos:
+        type: integer
     type: object
   server.orgRepoScanResult:
     properties:
@@ -3907,6 +4201,162 @@ paths:
       summary: Update integration
       tags:
       - integrations
+  /orgs/{provider}/{slug}/licenses:
+    get:
+      description: 'License exposure across the current default-branch snapshot of
+        every enrolled repository: category partition, license expressions in use,
+        per-repo posture, and the coverage denominators behind those numbers. Reports
+        exposure, not gate enforcement.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.orgLicenseOverviewResponse'
+      summary: Organization license overview
+      tags:
+      - organizations
+  /orgs/{provider}/{slug}/licenses/components:
+    get:
+      description: Paginated components behind the org license overview, filterable
+        by license expression, category, repository, or missing metadata. A rollup
+        without a drilldown is only half actionable.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: License expression to filter by
+        in: query
+        name: license
+        type: string
+      - description: License category to filter by
+        in: query
+        name: category
+        type: string
+      - description: Repository slug to filter by
+        in: query
+        name: repo
+        type: string
+      - description: Only components with no license metadata
+        in: query
+        name: undeclared
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ListResponse'
+      summary: Organization license drilldown
+      tags:
+      - organizations
+  /orgs/{provider}/{slug}/licenses/policy:
+    get:
+      description: The org's license policy. With include_repos=true it also reports,
+        for every enrolled repository, whether it inherits or overrides the policy
+        and in which direction — which costs one forge request per repository, so
+        it is opt-in.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Also check each repository's .hibou.yaml for an override (one
+          forge request per repository)
+        in: query
+        name: include_repos
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.orgLicensePolicyResponse'
+      summary: Organization license policy and repository overrides
+      tags:
+      - organizations
+    put:
+      consumes:
+      - application/json
+      description: Writes the org's single active license policy. Repositories inherit
+        it and may override it in their .hibou.yaml; overrides are reported by the
+        policy compliance endpoint.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.orgLicensePolicyResponse'
+      summary: Set the organization license policy
+      tags:
+      - organizations
+  /orgs/{provider}/{slug}/licenses/simulate:
+    post:
+      consumes:
+      - application/json
+      description: Reports how many components across the organization a candidate
+        policy would flag, without saving it. Reads stored components only — no forge
+        requests.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.orgLicenseSimulationResponse'
+      summary: Simulate a license policy
+      tags:
+      - organizations
   /orgs/{provider}/{slug}/notification-rules:
     get:
       description: List notification rules in an organization visible to organization
@@ -4722,6 +5172,42 @@ paths:
       security:
       - BearerAuth: []
       summary: Update repository
+      tags:
+      - repositories
+  /orgs/{provider}/{slug}/repos/{repoSlug}/config/effective:
+    get:
+      description: 'What actually applies to a branch: the matched .hibou.yaml gate,
+        DB-managed quality gates (the repo''s own or inherited from the org), defaults
+        filled in by the server, and unconditional rules — each labelled with its
+        source.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Branch to resolve for (defaults to the repository's default branch)
+        in: query
+        name: branch
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.effectiveConfigResponse'
+      summary: Effective repository gate configuration
       tags:
       - repositories
   /orgs/{provider}/{slug}/repos/{repoSlug}/finding-acceptances:

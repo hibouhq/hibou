@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -14,17 +15,24 @@ import (
 
 const attachComponentToSnapshot = `-- name: AttachComponentToSnapshot :exec
 INSERT INTO snapshot_components (snapshot_id, component_id, labels)
-VALUES ($1, $2, '{}'::jsonb)
-ON CONFLICT (snapshot_id, component_id) DO NOTHING
+VALUES ($1, $2, COALESCE($3::jsonb, '{}'::jsonb))
+ON CONFLICT (snapshot_id, component_id) DO UPDATE
+SET labels = snapshot_components.labels || EXCLUDED.labels
 `
 
 type AttachComponentToSnapshotParams struct {
-	SnapshotID  uuid.UUID `json:"snapshot_id"`
-	ComponentID uuid.UUID `json:"component_id"`
+	SnapshotID  uuid.UUID       `json:"snapshot_id"`
+	ComponentID uuid.UUID       `json:"component_id"`
+	Labels      json.RawMessage `json:"labels"`
 }
 
+// labels accumulates rather than overwrites: one snapshot ingests several SBOM
+// artifacts, and a component present in more than one must record all of them.
+// `||` is a shallow merge, which is why provenance is stored as a flat key set
+// ("sbom:<filename>": true) instead of a nested array — an array-valued key
+// would be replaced by the last writer, silently losing the earlier artifact.
 func (q *Queries) AttachComponentToSnapshot(ctx context.Context, arg AttachComponentToSnapshotParams) error {
-	_, err := q.db.ExecContext(ctx, attachComponentToSnapshot, arg.SnapshotID, arg.ComponentID)
+	_, err := q.db.ExecContext(ctx, attachComponentToSnapshot, arg.SnapshotID, arg.ComponentID, arg.Labels)
 	return err
 }
 

@@ -342,6 +342,30 @@
           </ul>
         </div>
 
+        <!-- Gate notes: disclosures that deliberately do NOT fail the gate —
+             license violations that were waived, exempted, or inherited from the
+             target branch, and whether a repository's policy loosens the
+             organization's. They matter most when the gate PASSES, which is why
+             they are rendered outside the failure block. -->
+        <div
+          v-if="gateNotes.length > 0"
+          class="rounded-2xl border border-surface-border-subtle bg-surface-overlay/40 p-4 text-sm"
+        >
+          <p class="font-medium text-gray-300">
+            Noted, not blocking
+          </p>
+          <ul class="mt-2 space-y-1">
+            <li
+              v-for="note in gateNotes"
+              :key="note"
+              class="flex gap-2 text-xs leading-relaxed text-gray-400"
+            >
+              <span class="text-warn">·</span>
+              <span>{{ note }}</span>
+            </li>
+          </ul>
+        </div>
+
         <div class="compare-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <button
             type="button"
@@ -1358,6 +1382,7 @@ import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
 import { forgeFileUrl, forgeLabel, forgeRefUrl } from '@/lib/forgeLinks'
+import { newLicensesIntroduced } from '@/lib/licenses'
 
 type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
 type ComponentRow = Omit<ComponentEntry, 'version'> & {
@@ -1546,6 +1571,10 @@ const coverageDiff = computed(() => comparison.value?.coverage_diff ?? null)
 const patchCoverage = computed(() => comparison.value?.patch_coverage ?? null)
 const testDiff = computed(() => comparison.value?.test_diff ?? null)
 const gateReasons = computed(() => comparison.value?.gate?.reasons ?? [])
+// Disclosures the gate deliberately keeps out of `reasons`, since `passed` is
+// derived from that list's length. Absent on the persisted-verdict path, which
+// does not store them.
+const gateNotes = computed(() => comparison.value?.gate?.notes ?? [])
 
 // The QG badge explains where its verdict comes from — the page/forge
 // disagreement (dogfood bug #5) must never be silent again.
@@ -1770,22 +1799,18 @@ const filteredComponentRows = computed(() => {
   })
 })
 
-// Licenses this PR introduces that main does not have anywhere — the
-// reviewable event for license policy.
+// Licenses this PR introduces that the base snapshot does not have anywhere —
+// the reviewable event for license policy. The rule lives in lib/licenses so it
+// can be tested; see newLicensesIntroduced for why AND splits and OR does not.
 const newLicenses = computed(() => {
   const diff = comparison.value?.component_diff
   if (!diff) return []
-  const baseLicenses = new Set<string>()
-  for (const c of diff.removed) for (const l of c.licenses ?? []) baseLicenses.add(l)
-  // removed = base-only; unchanged components exist on both sides so their
-  // licenses cannot be new. Added + updated carry the head side.
-  const introduced = new Map<string, number>()
-  for (const c of [...diff.added, ...(diff.updated ?? [])]) {
-    for (const l of c.licenses ?? []) {
-      if (!baseLicenses.has(l)) introduced.set(l, (introduced.get(l) ?? 0) + 1)
-    }
-  }
-  return Array.from(introduced.entries()).sort((a, b) => b[1] - a[1])
+  // An ABSENT base_licenses (an older server, or a field dropped in transit) is
+  // not "the base had none": treating it so reports every license on every
+  // added component as introduced by this change. Say nothing rather than
+  // something false.
+  if (!diff.base_licenses) return []
+  return newLicensesIntroduced(diff.base_licenses, [...diff.added, ...(diff.updated ?? [])])
 })
 
 const headScanRunning = computed(() => {

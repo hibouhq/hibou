@@ -52,6 +52,10 @@ func (q *Queries) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.
 	return q.db.ListComponentsBySnapshot(ctx, snapshotID)
 }
 
+func (q *Queries) ListComponentLicensesBySnapshots(ctx context.Context, snapshotIDs []uuid.UUID) ([]dbgen.ListComponentLicensesBySnapshotsRow, error) {
+	return q.db.ListComponentLicensesBySnapshots(ctx, snapshotIDs)
+}
+
 func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListComponentsBySnapshotWithVulnsRow, error) {
 	return q.db.ListComponentsBySnapshotWithVulns(ctx, snapshotID)
 }

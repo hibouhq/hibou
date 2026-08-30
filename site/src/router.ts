@@ -24,6 +24,7 @@ const router = createRouter({
             { path: 'insights', name: 'org-insights', component: () => import('@/views/org/InsightsTab.vue') },
             { path: 'vulnerabilities', name: 'org-vulnerabilities', component: () => import('@/views/org/VulnerabilitiesTab.vue') },
             { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
+            { path: 'licenses', name: 'org-licenses', component: () => import('@/views/org/LicensesTab.vue') },
             { path: 'clients', name: 'org-clients', component: () => import('@/views/org/ClientsTab.vue') },
             { path: 'triage', name: 'org-triage', component: () => import('@/views/org/TriageTab.vue') },
             // The Access tab moved under Settings.
@@ -37,6 +38,7 @@ const router = createRouter({
                 { path: 'access', name: 'org-settings-access', component: () => import('@/views/org/settings/AccessSettings.vue') },
                 { path: 'members', name: 'org-settings-members', component: () => import('@/views/org/settings/MembersSettings.vue') },
                 { path: 'quality-gates', name: 'org-settings-gates', component: () => import('@/views/org/settings/GatesSettings.vue') },
+                { path: 'license-policy', name: 'org-settings-license-policy', component: () => import('@/views/org/settings/LicensePolicySettings.vue') },
                 { path: 'integrations', name: 'org-settings-integrations', component: () => import('@/views/org/settings/IntegrationsSettings.vue') },
                 { path: 'notifications', name: 'org-settings-notifications', component: () => import('@/views/org/settings/NotificationsSettings.vue') },
                 { path: 'audit', name: 'org-settings-audit', component: () => import('@/views/org/settings/AuditSettings.vue') },

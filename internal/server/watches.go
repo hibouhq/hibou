@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -162,25 +163,72 @@ func (s *Server) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	vendorKeys := normalizedKeys(input.VendorKeys)
 	created, err := s.queries.CreateCVESubscription(r.Context(), dbgen.CreateCVESubscriptionParams{
 		Label:       label,
 		ProductKeys: productKeys,
-		VendorKeys:  normalizedKeys(input.VendorKeys),
+		VendorKeys:  vendorKeys,
 		CreatedBy:   uuid.NullUUID{UUID: user.ID, Valid: true},
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to create the watch")
 		return
 	}
-	api.JSON(w, http.StatusCreated, toWatch(dbgen.ListCVESubscriptionsRow{
-		ID:          created.ID,
-		Label:       created.Label,
-		ProductKeys: created.ProductKeys,
-		VendorKeys:  created.VendorKeys,
-		CreatedBy:   created.CreatedBy,
-		CreatedAt:   created.CreatedAt,
-	}))
+
+	// Backfill against the stored corpus. The sweeper only sees records the
+	// feed revises and the seed deliberately queues nothing, so without this a
+	// watch created today never matches a CVE published yesterday — it reads
+	// "never matched" while the very record it was created for sits in the
+	// corpus, waiting for a vendor revision that may never come.
+	//
+	// Capped, newest first, honouring the seed's principle: a new watch on a
+	// twenty-year-old product must not dump its whole history on a person. One
+	// triage decision plus auto-apply is the intended way through the rest.
+	queued := 0
+	matches, backfillErr := s.queries.BackfillSubscriptionMatches(r.Context(), productKeys, vendorKeys, watchBackfillCap)
+	if backfillErr != nil {
+		// The watch itself was created; a failed backfill degrades to the old
+		// behaviour rather than failing the request, but it must say so.
+		s.log.Error().Err(backfillErr).Str("label", label).Msg("watch created but the corpus backfill failed; existing records will not be queued")
+	} else {
+		for _, cveID := range matches {
+			if queueErr := s.queries.QueueTriageItem(r.Context(), created.ID, cveID); queueErr != nil {
+				s.log.Error().Err(queueErr).Str("cve_id", cveID).Msg("failed to queue a backfilled triage item")
+				continue
+			}
+			queued++
+		}
+		if queued > 0 {
+			// The corpus matched, and "last matched: never" would be false.
+			if touchErr := s.queries.TouchSubscriptionMatched(r.Context(), created.ID); touchErr != nil {
+				s.log.Warn().Err(touchErr).Msg("failed to update the watch's last-matched time")
+			}
+		}
+	}
+
+	lastMatched := created.LastMatchedAt
+	if queued > 0 {
+		// The touch above set it; the create RETURNING predates that write, and
+		// answering "never matched" beside a non-zero queue would be false.
+		lastMatched = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	}
+	response := toWatch(dbgen.ListCVESubscriptionsRow{
+		ID:            created.ID,
+		Label:         created.Label,
+		ProductKeys:   created.ProductKeys,
+		VendorKeys:    created.VendorKeys,
+		CreatedBy:     created.CreatedBy,
+		CreatedAt:     created.CreatedAt,
+		LastMatchedAt: lastMatched,
+	})
+	response.PendingTriage = int64(queued)
+	api.JSON(w, http.StatusCreated, response)
 }
+
+// watchBackfillCap bounds how much history a new watch queues. Big enough that
+// a product's recent advisories all surface, small enough that watching
+// something with two decades of CVEs stays a work list rather than a wall.
+const watchBackfillCap = 100
 
 func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireWatchWriter(w, r); !ok {

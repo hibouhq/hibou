@@ -18,6 +18,7 @@ import (
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/comparison"
 	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -98,6 +99,11 @@ type componentDiffResponse struct {
 	Removed   []componentEntryResponse  `json:"removed"`
 	Updated   []componentUpdateResponse `json:"updated"`
 	Unchanged int                       `json:"unchanged"`
+	// BaseLicenses is every license present anywhere in the base snapshot.
+	// Without it the only base-side licenses a client could see were those on
+	// removed components, so a license carried by an unchanged dependency read
+	// as "introduced by this change".
+	BaseLicenses []string `json:"base_licenses"`
 }
 
 type compareResultResponse struct {
@@ -864,6 +870,7 @@ func (s *Server) enrichComparePR(r *http.Request, w http.ResponseWriter, in comp
 		gateConfig = &delta.GateConfig{}
 	}
 	gateConfig.HeadSnapshotID = in.headSnapshot.ID
+	gateConfig.BaseSnapshotID = in.baseSnapshot.ID
 	gate, err := s.deltaSvc.EvaluateGatesWithConfig(r.Context(), in.repo.ID, in.org.ID, in.deltaResult, gateConfig)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to evaluate pull request gate")
@@ -1170,23 +1177,23 @@ func reverseSnapshots(snapshots []store.Snapshot) {
 
 func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithVulnsRow) componentDiffResponse {
 	toEntry := func(row store.ListComponentsBySnapshotWithVulnsRow) componentEntryResponse {
-		licenses := row.Licenses
-		if licenses == nil {
-			licenses = []string{}
-		}
 		return componentEntryResponse{
 			Name:      row.Name,
 			Version:   row.Version,
 			Ecosystem: row.Ecosystem,
 			Purl:      row.Purl,
 			VulnCount: int(row.VulnCount),
-			Licenses:  licenses,
+			Licenses:  normalizeLicenses(row.Licenses),
 		}
 	}
 	baseByKey := make(map[string]componentEntryResponse, len(baseRows))
+	baseLicenses := make(map[string]struct{})
 	for _, row := range baseRows {
 		entry := toEntry(row)
 		baseByKey[componentDiffKey(entry)] = entry
+		for _, id := range entry.Licenses {
+			baseLicenses[id] = struct{}{}
+		}
 	}
 	headByKey := make(map[string]componentEntryResponse, len(headRows))
 	for _, row := range headRows {
@@ -1197,9 +1204,10 @@ func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithV
 	// Initialize as empty (not nil) so the JSON arrays are [] rather than null,
 	// which the frontend maps over directly.
 	result := componentDiffResponse{
-		Added:   []componentEntryResponse{},
-		Removed: []componentEntryResponse{},
-		Updated: []componentUpdateResponse{},
+		Added:        []componentEntryResponse{},
+		Removed:      []componentEntryResponse{},
+		Updated:      []componentUpdateResponse{},
+		BaseLicenses: sortedLicenseIDs(baseLicenses),
 	}
 	for key, head := range headByKey {
 		base, ok := baseByKey[key]
@@ -1242,6 +1250,21 @@ func buildComponentDiff(baseRows, headRows []store.ListComponentsBySnapshotWithV
 	})
 
 	return result
+}
+
+// normalizeLicenses is the compare view's entry point into the shared
+// canonicalization; see license.NormalizeIDs.
+func normalizeLicenses(licenses []string) []string {
+	return license.NormalizeIDs(licenses)
+}
+
+func sortedLicenseIDs(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // componentDiffKey identifies a package independent of its version, so a

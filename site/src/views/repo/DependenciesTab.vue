@@ -183,6 +183,9 @@
                   Version
                 </th>
                 <th class="px-3 py-2 font-medium">
+                  License
+                </th>
+                <th class="px-3 py-2 font-medium">
                   Fixed
                 </th>
                 <th class="px-3 py-2 font-medium">
@@ -247,6 +250,30 @@
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs text-gray-300">
                   {{ component.version }}
+                </td>
+                <td class="px-3 py-2.5">
+                  <div
+                    v-if="component.licenses?.length"
+                    class="flex flex-wrap gap-1"
+                  >
+                    <span
+                      v-for="licenseId in component.licenses.slice(0, 2)"
+                      :key="licenseId"
+                      class="rounded-full border border-surface-border px-2 py-0.5 font-mono text-[11px] text-gray-300"
+                    >{{ licenseId }}</span>
+                    <span
+                      v-if="component.licenses.length > 2"
+                      class="text-[11px] text-gray-500"
+                      :title="component.licenses.join(', ')"
+                    >+{{ component.licenses.length - 2 }}</span>
+                  </div>
+                  <!-- Absent metadata is a gate-relevant state, not a blank:
+                       deny_unknown defaults to true. -->
+                  <span
+                    v-else
+                    class="text-warn text-[11px]"
+                    title="No license metadata — fails the gate when deny_unknown is on"
+                  >unknown</span>
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs">
                   <span :class="component.fixed_versions?.length ? 'text-ok' : 'text-gray-600'">
@@ -399,6 +426,7 @@ function matchesFilters(component: ComponentWithVulns): boolean {
       component.name,
       component.version,
       component.purl,
+      ...(component.licenses ?? []),
       ...(component.advisories?.map((advisory) => `${advisory.canonical_id} ${advisory.title}`) ?? []),
     ]
     if (!haystack.some((value) => value.toLowerCase().includes(query))) {

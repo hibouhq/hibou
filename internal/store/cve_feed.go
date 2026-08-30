@@ -68,6 +68,27 @@ func (q *Queries) PreviewSubscription(ctx context.Context, productKeys []string,
 
 // QueueTriageItem records that a subscription matched a record. Idempotent: the
 // same record arriving twice must not queue the same decision twice.
+// BackfillSubscriptionMatches lists the stored, published records a new watch's
+// keys already cover, newest first, capped. See the query for why this exists.
+func (q *Queries) BackfillSubscriptionMatches(ctx context.Context, productKeys, vendorKeys []string, maxItems int32) ([]string, error) {
+	if vendorKeys == nil {
+		vendorKeys = []string{}
+	}
+	rows, err := q.db.BackfillSubscriptionMatches(ctx, dbgen.BackfillSubscriptionMatchesParams{
+		ProductKeys: productKeys,
+		VendorKeys:  vendorKeys,
+		MaxItems:    maxItems,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.CveID)
+	}
+	return ids, nil
+}
+
 func (q *Queries) QueueTriageItem(ctx context.Context, subscriptionID uuid.UUID, cveID string) error {
 	return q.db.UpsertTriageItem(ctx, dbgen.UpsertTriageItemParams{
 		SubscriptionID: subscriptionID,

@@ -17,6 +17,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/filterquery"
+	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/versioncmp"
@@ -61,6 +62,7 @@ type componentWithVulnsResponse struct {
 	Sources         []string           `json:"sources,omitempty"`
 	FixedVersions   []string           `json:"fixed_versions,omitempty"`
 	UsagePaths      [][]string         `json:"usage_paths,omitempty"`
+	Licenses        []string           `json:"licenses,omitempty"`
 }
 
 type componentGraphNodeResponse struct {
@@ -1023,6 +1025,7 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 			Version:   component.Version,
 			Ecosystem: component.Ecosystem,
 			Purl:      component.Purl,
+			Licenses:  license.NormalizeIDs(component.Licenses),
 		}
 		populateComponentVulnerabilityDetails(&response, component, countedAdvisories)
 		response.UsagePaths = computeComponentUsagePaths(rootRef, adjacency, nodeLabels, component.Purl)

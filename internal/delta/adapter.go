@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -15,6 +16,39 @@ type StoreAdapter struct {
 
 func NewStoreAdapter(queries *store.Queries) *StoreAdapter {
 	return &StoreAdapter{queries: queries}
+}
+
+// The gate reaches these two through optional interface assertions on the store,
+// so a missing method degrades to "no license gating" instead of a compile
+// error. That is exactly how the license gate silently never ran: the adapter
+// simply did not forward ListComponentsBySnapshot. These assertions make the
+// omission a build failure.
+// GateStore is pinned too, and it is not optional hygiene: commit 6a8efc6 added
+// GetOrganizationByID to the interface without forwarding it here, the
+// `store.(GateStore)` assertion in NewService silently went nil, and EVERY gate
+// evaluation in production — the PR compare and the forge check publisher —
+// failed with "gate store is not configured" from that release on.
+var (
+	_ GateStore           = (*StoreAdapter)(nil)
+	_ componentLister     = (*StoreAdapter)(nil)
+	_ acceptanceLister    = (*StoreAdapter)(nil)
+	_ licensePolicyReader = (*StoreAdapter)(nil)
+)
+
+func (a *StoreAdapter) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Component, error) {
+	return a.queries.ListComponentsBySnapshot(ctx, snapshotID)
+}
+
+func (a *StoreAdapter) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID uuid.UUID) ([]store.FindingAcceptance, error) {
+	return a.queries.ListActiveFindingAcceptancesByRepo(ctx, repoID)
+}
+
+func (a *StoreAdapter) GetOrgLicensePolicy(ctx context.Context, orgID uuid.UUID) (*license.Spec, error) {
+	return a.queries.GetOrgLicensePolicy(ctx, orgID)
+}
+
+func (a *StoreAdapter) GetOrganizationByID(ctx context.Context, id uuid.UUID) (*store.Organization, error) {
+	return a.queries.GetOrganizationByID(ctx, id)
 }
 
 func (a *StoreAdapter) ListAllVulnerabilitiesBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]store.Vulnerability, error) {

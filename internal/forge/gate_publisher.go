@@ -747,6 +747,7 @@ func (a *GatePublisher) evaluateGate(ctx context.Context, annotation *gateContex
 		gateConfig = &delta.GateConfig{}
 	}
 	gateConfig.HeadSnapshotID = annotation.snapshot.ID
+	gateConfig.BaseSnapshotID = annotation.targetSnapshot.ID
 	gateResult, err := a.delta.EvaluateGatesWithConfig(ctx, annotation.repo.ID, annotation.repo.OrgID, deltaResult, gateConfig)
 	if err != nil {
 		a.log.Error().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("evaluate PR gates")

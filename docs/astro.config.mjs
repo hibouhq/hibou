@@ -47,6 +47,7 @@ export default defineConfig({
                         { label: "Organizations", slug: "guide/organizations" },
                         { label: "Repositories", slug: "guide/repositories" },
                         { label: "Security Scans", slug: "guide/security-scans" },
+                        { label: "License Gating", slug: "guide/license-gating" },
                         { label: "Webhooks", slug: "guide/webhooks" },
                     ],
                 },

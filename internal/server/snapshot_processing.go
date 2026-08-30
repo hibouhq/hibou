@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -621,18 +622,50 @@ func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries,
 	return int(componentsAfter - componentsBefore), nil
 }
 
+// componentProvenanceLabels records WHICH uploaded artifact a component came
+// from. A snapshot routinely ingests several SBOMs (one per language tree, plus
+// a container image), and after ingest they collapse into one flat component
+// set — so today there is no way to tell a Go dependency from a frontend one, or
+// a shipped image layer from a source-tree scan. Storing the artifact's own
+// filename is the smallest thing that makes that recoverable, and it is the
+// prerequisite for ever attaching a distribution ("shipped" vs "source") to an
+// upload.
+//
+// The key set is flat because the column is merged with jsonb `||`; see the
+// AttachComponentToSnapshot query.
+func componentProvenanceLabels(artifact store.SnapshotArtifact) json.RawMessage {
+	filename := strings.TrimSpace(artifact.Filename)
+	if filename == "" {
+		// Nothing worth recording — an unnamed upload tells us no more than the
+		// snapshot already does.
+		return nil
+	}
+	labels := map[string]any{"sbom:" + filename: true}
+	if kind := strings.TrimSpace(artifact.Kind); kind != "" {
+		labels["sbom_kind:"+kind] = true
+	}
+	encoded, err := json.Marshal(labels)
+	if err != nil {
+		// A map of strings cannot fail to marshal; degrade to no labels rather
+		// than failing an ingest over provenance metadata.
+		return nil
+	}
+	return encoded
+}
+
 func (s *Server) ingestCycloneDXSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) error {
 	components, dependencies, rootBomRef, bomRefIndex, err := sbom.ParseCycloneDXJSONGraph(artifact.content)
 	if err != nil {
 		return fmt.Errorf("parse sbom artifact %s: %w", artifact.artifact.ID, err)
 	}
 	componentIDsByBomRef := make(map[string]uuid.UUID, len(bomRefIndex))
+	provenance := componentProvenanceLabels(artifact.artifact)
 	for _, component := range components {
 		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem, component.Licenses)
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}
-		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID); err != nil {
+		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID, provenance); err != nil {
 			return fmt.Errorf("attach component %s to snapshot: %w", component.PURL, err)
 		}
 		for _, bomRef := range component.BomRefs {
@@ -653,12 +686,13 @@ func (s *Server) ingestSPDXSBOMArtifact(ctx context.Context, queries *store.Quer
 	if err != nil {
 		return fmt.Errorf("parse sbom artifact %s: %w", artifact.artifact.ID, err)
 	}
+	provenance := componentProvenanceLabels(artifact.artifact)
 	for _, component := range components {
 		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem, component.Licenses)
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}
-		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID); err != nil {
+		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID, provenance); err != nil {
 			return fmt.Errorf("attach component %s to snapshot: %w", component.PURL, err)
 		}
 	}
