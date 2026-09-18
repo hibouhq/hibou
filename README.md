@@ -1,11 +1,24 @@
-# hibou
+# hibou (HIBOU Is Basically Observant & Unsleeping)
 
-An Open Security Intelligence Platform for the Software Lifecycle. Unify dependency risk, code findings, PR analysis, and release impact into a single multi-tenant system.
+> **Status:** Early development. The core backend (API, auth, multi-tenant org management) and build pipeline are mostly in place. Ingestion, findings, and the full UI are under active development — see [TODO.md](TODO.md) for the roadmap.  
 
-> **Status:** Early development. The core backend (API, auth, multi-tenant org management) and build pipeline are in place. Ingestion, findings, and the full UI are under active development — see [TODO.md](TODO.md) for the roadmap.
-> **Disclaimer:** This project uses LLM-assisted development to iterate quickly on user experience, automation, and proactive workflows. The current focus is shipping core capabilities first, then hardening stability, security, and dogfooding practices as the project matures.
+An Open Security Intelligence Platform for the Software Lifecycle. Unify dependency risk, code findings, PR analysis, and release impact into a single multi-tenant system.  
 
-## Features
+
+> **NOTE:** This is a one-person experiment, developed on spare time — no roadmap promises, no support guarantees. Forks welcome.  
+
+Read [COMPARISON.md](https://github.com/hibouhq/hibou/blob/main/docs/COMPARISON.md) to see where hibou stands against existing products.
+
+> **Disclaimer 2:** I'm alone on that experiment, I'll be more than happy to get any feedbacks and new ideas, but don't expect anything from me, feel free to fork.  
+
+> **Disclaimer 3:** This project uses LLM-assisted development to iterate quickly on user experience, automation, and proactive workflows. The current focus is shipping core capabilities first, then hardening stability, security, and dogfooding practices as the project matures.  
+
+> **Disclaimer 4 :** The doc is best efforts, even not yet hosted, do not consider it up to date. Feel free to ask questions in [Discussions](https://github.com/hibouhq/hibou/discussions)  .
+
+
+## Features 
+
+> **Note:** Some feats are still roadmap, WIP and maybe buggy, the UI/UX is absolutely not yet which is why alpha releases only.
 
 - **Multi-tenant** — organization → team → repository hierarchy with RBAC (admin, developer, auditor, release_manager, viewer)
 - **Single binary** — Go backend embeds the Vue 3 SPA; one artifact to deploy
