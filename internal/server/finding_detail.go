@@ -18,8 +18,12 @@ import (
 // round trip: the finding, its advisory, the triage decision, VEX statements,
 // and where the fingerprint is currently detected.
 type findingDetailResponse struct {
-	Finding    *store.Vulnerability     `json:"finding"`
-	Advisory   *findingAdvisoryResponse `json:"advisory,omitempty"`
+	Finding  *store.Vulnerability     `json:"finding"`
+	Advisory *findingAdvisoryResponse `json:"advisory,omitempty"`
+	// KEV sits on the detail, not on the advisory: the gate also blocks
+	// findings that have no advisory row (matched on the bare identifier), and
+	// the exploited badge must appear on exactly the findings the gate blocks.
+	KEV        *findingKEVResponse      `json:"kev,omitempty"`
 	Acceptance *store.FindingAcceptance `json:"acceptance,omitempty"`
 	// Dispute is the human-axis override of an in-source suppression
 	// (ADR-026): present when someone contested the scanner's suppression.
@@ -49,6 +53,23 @@ type findingAdvisoryResponse struct {
 	// reading — the gap between them is how long the flaw was public before
 	// this instance matched it.
 	PublishedAt string `json:"published_at,omitempty"`
+}
+
+// findingKEVResponse says the finding's vulnerability is on an
+// exploited-vulnerabilities catalog — evidence of active exploitation, which
+// is what the gate blocks on unconditionally. Its presence is the flag.
+type findingKEVResponse struct {
+	// Sources names the catalogs that list it ("cisa", "euvd"), deduplicated —
+	// two aliases on one catalog are still one source.
+	Sources []string `json:"sources"`
+	// DateAdded is when the first-listed catalog recorded it; DueDate is
+	// CISA's remediation deadline for US federal agencies (CISA rows only),
+	// carried as an urgency signal.
+	DateAdded string `json:"date_added,omitempty"`
+	DueDate   string `json:"due_date,omitempty"`
+	// RansomwareUse is true when CISA marks the entry as used in ransomware
+	// campaigns (CISA rows only).
+	RansomwareUse bool `json:"ransomware_use,omitempty"`
 }
 
 type findingVEXResponse struct {
@@ -135,6 +156,8 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	response.KEV = s.findingKEV(r.Context(), finding, response.Advisory)
+
 	api.JSON(w, http.StatusOK, response)
 }
 
@@ -190,4 +213,59 @@ func (s *Server) advisoryDetail(ctx context.Context, advisory dbgen.Advisory) *f
 		}
 	}
 	return detail
+}
+
+// findingKEV resolves the exploited-catalog listing for a finding, matching
+// exactly the set the gate blocks (ADR-032): through the advisory's
+// identifiers when one is loaded, else the bare primary identifier — the gate
+// blocks identifier-matched findings too, and a badge that depends on
+// enrichment the block never needed would mark the wrong set. Best-effort: a
+// failed lookup costs the badge, not the response.
+func (s *Server) findingKEV(ctx context.Context, finding *store.Vulnerability, advisory *findingAdvisoryResponse) *findingKEVResponse {
+	identifiers := make([]string, 0, 4)
+	switch {
+	case advisory != nil:
+		identifiers = append(identifiers, strings.ToUpper(advisory.CanonicalID))
+		for _, alias := range advisory.Aliases {
+			identifiers = append(identifiers, strings.ToUpper(alias))
+		}
+	case isAdvisoryBackedFindingType(finding.Type):
+		if id := strings.ToUpper(strings.TrimSpace(finding.PrimaryIdentifierValue)); id != "" {
+			identifiers = append(identifiers, id)
+		}
+	}
+	entries, err := s.queries.ListKEVEntriesForIdentifiers(ctx, identifiers)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	response := &findingKEVResponse{Sources: make([]string, 0, 2)}
+	// Deduplicated: two CVE aliases on one catalog are still one source.
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		if _, dup := seen[entry.Source]; dup {
+			continue
+		}
+		seen[entry.Source] = struct{}{}
+		response.Sources = append(response.Sources, entry.Source)
+	}
+	// The rows come 'cisa' first; its entry carries the richest facts
+	// (due date, ransomware use), so the scalar fields read from it.
+	first := entries[0]
+	response.RansomwareUse = first.KnownRansomwareCampaignUse
+	if first.DateAdded.Valid {
+		response.DateAdded = first.DateAdded.Time.UTC().Format("2006-01-02")
+	}
+	if first.DueDate.Valid {
+		response.DueDate = first.DueDate.Time.UTC().Format("2006-01-02")
+	}
+	return response
+}
+
+// isAdvisoryBackedFindingType mirrors the gate's KEV scope (internal/delta's
+// isAdvisoryBackedFinding): the finding types an advisory can stand behind.
+func isAdvisoryBackedFindingType(findingType string) bool {
+	trimmed := strings.TrimSpace(findingType)
+	return strings.EqualFold(trimmed, "dependency") ||
+		strings.EqualFold(trimmed, "malware") ||
+		strings.EqualFold(trimmed, "container")
 }

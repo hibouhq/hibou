@@ -21,6 +21,21 @@
         </div>
 
         <div class="space-y-3 px-4 py-4">
+          <!-- Waiving a known-exploited vulnerability stays possible — the
+               waiver IS the sanctioned unblock path — but never accidental. -->
+          <div
+            v-if="exploited"
+            class="flex gap-2.5 rounded-md border border-danger/40 bg-danger/10 px-3 py-2.5"
+          >
+            <Flame class="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+            <p class="text-xs leading-relaxed text-red-200">
+              <strong class="font-semibold">This vulnerability is actively exploited in the wild.</strong>
+              {{ kind === 'risk_accepted'
+                ? 'Accepting it merges code carrying a known-exploited vulnerability. The waiver is recorded with your name and shown on every gate it unblocks.'
+                : 'A false-positive claim on an exploited advisory generates a not_affected VEX statement — make the justification stand on its own.' }}
+            </p>
+          </div>
+
           <div v-if="presets.length > 0">
             <p class="mb-1.5 text-[11px] uppercase tracking-wide text-gray-500">
               Common reasons
@@ -149,6 +164,7 @@
 </template>
 
 <script setup lang="ts">
+import { Flame } from 'lucide-vue-next'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 
 import type { AcceptanceReasonKind, VexJustification } from '@/api/client'
@@ -164,6 +180,8 @@ const props = defineProps<{
   /** Error from a failed submit, rendered in-dialog so the typed reason survives. */
   error?: string
   submitting?: boolean
+  /** True when the advisory is on a known-exploited catalog (ADR-032). */
+  exploited?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -174,7 +192,16 @@ const emit = defineEmits<{
 const reason = ref('')
 const labelsInput = ref('')
 const vexJustification = ref<'' | VexJustification>('')
-const expiresAt = ref('')
+// An exploited waiver defaults to a 30-day expiry so the acceptance resurfaces
+// for review instead of standing forever against a moving threat. Clearable —
+// a default is a nudge, not a policy.
+const expiresAt = ref(props.exploited && props.kind === 'risk_accepted' ? thirtyDaysOut() : '')
+
+function thirtyDaysOut(): string {
+  const date = new Date()
+  date.setDate(date.getDate() + 30)
+  return date.toISOString().slice(0, 10)
+}
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 

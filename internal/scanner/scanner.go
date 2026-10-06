@@ -189,7 +189,11 @@ func (s *Service) TriggerRescan(ctx context.Context, snapshotID uuid.UUID, provi
 }
 
 func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, providerName string, components []dbgen.Component, advisoryMap map[string]uuid.UUID) (map[string][]uuid.UUID, []createdFinding, error) {
-	if len(advisoryMap) == 0 || len(components) == 0 {
+	// An empty advisoryMap must not short-circuit: locally authored ranges
+	// (ADR-028) exist precisely because no provider returns their advisory, so
+	// they are matched from the stored ranges even on a pass that fetched
+	// nothing.
+	if len(components) == 0 {
 		return nil, nil, nil
 	}
 
@@ -481,8 +485,22 @@ func (s *Service) matchComponentRanges(ctx context.Context, snapshotID uuid.UUID
 		return err
 	}
 	for _, affectedRange := range ranges {
-		if _, ok := state.advisorySet[affectedRange.AdvisoryID]; !ok {
-			continue
+		if _, fromThisPass := state.advisorySet[affectedRange.AdvisoryID]; !fromThisPass {
+			// Ranges authored here (ADR-028 §7) have no provider echo — no
+			// upstream database carries their coordinates, which is why they
+			// were authored at all — so they are eligible on every pass.
+			if !triageAuthored(affectedRange.Source) {
+				continue
+			}
+			advisoryRecord, err := s.loadMatchedAdvisory(ctx, affectedRange.AdvisoryID, state)
+			if err != nil {
+				return err
+			}
+			// A provider lane never serves a withdrawn advisory; this lane
+			// reads stored data, so it must check.
+			if advisoryRecord.WithdrawnAt.Valid {
+				continue
+			}
 		}
 		if !s.componentMatchesAffectedRange(component, affectedRange) {
 			continue
@@ -830,8 +848,14 @@ func attributionFor(providerName, rangeSource string) string {
 	}
 	// Authored ranges are the case that matters: they must never be reported as
 	// having come from an advisory database.
-	if source == "triage" || strings.HasPrefix(source, "triage:") {
+	if triageAuthored(source) {
 		return source
 	}
 	return providerName
+}
+
+// triageAuthored reports whether a range's source names a decision a person
+// made here rather than an advisory database.
+func triageAuthored(source string) bool {
+	return source == "triage" || strings.HasPrefix(source, "triage:")
 }

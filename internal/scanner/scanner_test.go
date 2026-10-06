@@ -537,3 +537,94 @@ func TestAttributionFollowsTheRangeSource(t *testing.T) {
 		})
 	}
 }
+
+// A range authored by triage (ADR-028) has no provider echo — no upstream
+// database carries its coordinates, which is why it was authored at all. The
+// scan must match it from the stored ranges even when every provider returns
+// nothing for the snapshot.
+func TestRunScanMatchesTriageAuthoredRangesWithoutProviderEcho(t *testing.T) {
+	store := newMockScannerStore()
+	cache := newMockCache()
+	ingester := newMockIngester()
+	componentID := uuid.New()
+	advisoryID := uuid.New()
+	rangeID := uuid.New()
+	snapshotID := uuid.New()
+
+	store.components = []dbgen.Component{{
+		ID: componentID, Name: "org.apache.tomcat:tomcat-catalina", Version: "11.0.22", Ecosystem: "maven",
+	}}
+	store.affectedRanges[packageKey("maven", "org.apache.tomcat:tomcat-catalina")] = []dbgen.AffectedRange{{
+		ID:           rangeID,
+		AdvisoryID:   advisoryID,
+		Ecosystem:    "maven",
+		PackageName:  "org.apache.tomcat:tomcat-catalina",
+		Introduced:   "11.0.0-M1",
+		LastAffected: "11.0.22",
+		Source:       "triage",
+	}}
+	store.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "CVE-2026-53434", Severity: dbgen.SeverityLevelCritical}
+	// The provider returns nothing: the CVE has no package coordinates upstream.
+	cache.results["osv"] = nil
+	ingester.results["osv"] = map[string]uuid.UUID{}
+
+	service := New(store, cache, ingester, &mockBus{}, map[string]provider.AdvisoryProvider{"osv": mockProvider{name: "osv"}}, zerolog.Nop())
+	if _, err := service.RunScan(context.Background(), snapshotID, []string{"osv"}, "user"); err != nil {
+		t.Fatalf("RunScan returned error: %v", err)
+	}
+	if len(store.vulnerabilities) != 1 {
+		t.Fatalf("expected one vulnerability from the authored range, got %d", len(store.vulnerabilities))
+	}
+	finding := store.vulnerabilities[0]
+	if finding.ScannerName != "triage" {
+		t.Errorf("scanner_name = %q, want %q", finding.ScannerName, "triage")
+	}
+	if finding.PrimaryIdentifierValue != "CVE-2026-53434" {
+		t.Errorf("identifier = %q, want the CVE", finding.PrimaryIdentifierValue)
+	}
+	if !finding.AffectedRangeID.Valid || finding.AffectedRangeID.UUID != rangeID {
+		t.Errorf("affected range = %#v, want %s", finding.AffectedRangeID, rangeID)
+	}
+	// The finding must count as fresh, or the same pass's stale sweep would
+	// resolve it moments after creating it.
+	if got := freshCountForType(store.markStaleCalls, "dependency"); got != 1 {
+		t.Errorf("fresh dependency IDs = %d, want 1", got)
+	}
+}
+
+// A withdrawn advisory's authored ranges stay in the store until the review
+// pass retires them; matching must not resurrect the finding meanwhile.
+func TestRunScanSkipsWithdrawnTriageAuthoredAdvisories(t *testing.T) {
+	store := newMockScannerStore()
+	cache := newMockCache()
+	ingester := newMockIngester()
+	advisoryID := uuid.New()
+	snapshotID := uuid.New()
+
+	store.components = []dbgen.Component{{
+		ID: uuid.New(), Name: "org.apache.tomcat:tomcat-catalina", Version: "11.0.22", Ecosystem: "maven",
+	}}
+	store.affectedRanges[packageKey("maven", "org.apache.tomcat:tomcat-catalina")] = []dbgen.AffectedRange{{
+		ID:           uuid.New(),
+		AdvisoryID:   advisoryID,
+		Ecosystem:    "maven",
+		PackageName:  "org.apache.tomcat:tomcat-catalina",
+		Introduced:   "11.0.0-M1",
+		LastAffected: "11.0.22",
+		Source:       "triage",
+	}}
+	store.advisories[advisoryID] = dbgen.Advisory{
+		ID: advisoryID, CanonicalID: "CVE-2026-53434", Severity: dbgen.SeverityLevelCritical,
+		WithdrawnAt: sql.NullTime{Time: time.Now().UTC(), Valid: true},
+	}
+	cache.results["osv"] = nil
+	ingester.results["osv"] = map[string]uuid.UUID{}
+
+	service := New(store, cache, ingester, &mockBus{}, map[string]provider.AdvisoryProvider{"osv": mockProvider{name: "osv"}}, zerolog.Nop())
+	if _, err := service.RunScan(context.Background(), snapshotID, []string{"osv"}, "user"); err != nil {
+		t.Fatalf("RunScan returned error: %v", err)
+	}
+	if len(store.vulnerabilities) != 0 {
+		t.Fatalf("expected no findings from a withdrawn advisory, got %d", len(store.vulnerabilities))
+	}
+}

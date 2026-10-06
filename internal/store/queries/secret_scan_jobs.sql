@@ -31,7 +31,21 @@ WITH candidate AS (
 			-- failure as status 'failed' with finished_at NULL. Without this
 			-- arm those rows were never claimed again — zombies that the jobs
 			-- view showed as running for weeks.
-			OR (j.status = 'failed' AND j.finished_at IS NULL)
+			--
+			-- The backoff (5·attempts² minutes: 5m, then 20m) exists because a
+			-- clone fails for host-level reasons — fork EAGAIN under pid or
+			-- memory pressure, DNS blips — that outlast an immediate retry.
+			-- Without it all attempts burn within seconds of each other inside
+			-- the same crunch and a transient condition becomes a terminal
+			-- failure. started_at is the previous claim's timestamp, so the
+			-- window is measured from the attempt that failed.
+			OR (
+				j.status = 'failed' AND j.finished_at IS NULL
+				AND (
+					j.started_at IS NULL
+					OR j.started_at < NOW() - make_interval(mins => 5 * j.attempts * j.attempts)
+				)
+			)
 		)
 		AND j.attempts < sqlc.arg(max_attempts)
 		AND (

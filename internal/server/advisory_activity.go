@@ -38,6 +38,11 @@ type activityResponse struct {
 	// Without this an empty stream is ambiguous: nothing changed, or the corpus
 	// is months stale.
 	Corpus *corpusState `json:"corpus"`
+	// KEV is the exploited-catalog sync state, one entry per source (ADR-032):
+	// when each catalog last synced, how many entries it carries, and what has
+	// been failing since when. Same reason health is here at all — "no
+	// exploited findings" and "catalogs never synced" must not look alike.
+	KEV *KEVHealth `json:"kev,omitempty"`
 }
 
 type corpusState struct {
@@ -78,6 +83,17 @@ func (s *Server) handleAdvisoryEvents(w http.ResponseWriter, r *http.Request) {
 		var health FeedHealth
 		if json.Unmarshal(raw, &health) == nil {
 			response.Health = &health
+		}
+	}
+	// Skipped when the sync is disabled: the stored record describes a loop
+	// that no longer runs, and a permanent "failing"/"stale" card for a
+	// deliberately disabled feature is noise, not health.
+	if s.cfg.KEV.Enabled {
+		if raw, kevErr := s.queries.GetInstanceSettingValue(r.Context(), kevHealthKey); kevErr == nil && len(raw) > 0 {
+			var kevHealth KEVHealth
+			if json.Unmarshal(raw, &kevHealth) == nil {
+				response.KEV = &kevHealth
+			}
 		}
 	}
 	if raw, seedErr := s.queries.GetInstanceSettingValue(r.Context(), cvetriage.FeedSeedSettingKey); seedErr == nil && len(raw) > 0 {

@@ -39,6 +39,7 @@ import (
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/kev"
 	"github.com/hibouhq/hibou/internal/notify"
 	"github.com/hibouhq/hibou/internal/objstore"
 	"github.com/hibouhq/hibou/internal/orgprovision"
@@ -731,6 +732,29 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 			Log: s.log,
 		}
 		go s.runCVEFeedLoop(runtimeCtx, sweeper, s.cfg.CVEFeed.Interval)
+	}
+	// The exploited-catalog mirrors (ADR-032): CISA KEV and the ENISA EUVD
+	// exploited set by default. Per-source switches, unlike the CVE feed: the
+	// sync calls external services, and an air-gapped instance without a
+	// mirror should silence a source rather than have it fail forever.
+	if s.db != nil && s.queries != nil {
+		sources := make([]kev.Source, 0, 2)
+		if s.cfg.KEV.Enabled && s.cfg.KEV.CISA.Enabled {
+			sources = append(sources, kev.NewCISA(s.cfg.KEV.CISA.URL, s.log))
+		}
+		if s.cfg.KEV.Enabled && s.cfg.KEV.EUVD.Enabled {
+			sources = append(sources, kev.NewEUVD(s.cfg.KEV.EUVD.URL, s.log))
+		}
+		if len(sources) > 0 {
+			loops = append(loops, "kev_sync")
+			go s.runKEVSyncLoop(runtimeCtx, sources, s.cfg.KEV.Interval)
+		} else {
+			// Disabled means DISABLED: stored rows would otherwise keep
+			// failing gates on a frozen catalog nobody refreshes, forever.
+			// One-shot, leader-locked — a no-op on an instance that never
+			// synced.
+			go s.purgeKEVWhenDisabled(runtimeCtx)
+		}
 	}
 	if s.tokenExpiryChecker != nil && s.cfg.Background.StaleScanEnabled {
 		loops = append(loops, "token_expiry")

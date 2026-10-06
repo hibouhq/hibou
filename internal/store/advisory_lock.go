@@ -15,6 +15,7 @@ const (
 	LockAdvisoryScanPass = "hibou:advisory-scan-pass"
 	LockRetentionPass    = "hibou:retention-pass"
 	LockCVEFeedSweep     = "hibou:cve-feed-sweep"
+	LockKEVSync          = "hibou:kev-sync"
 )
 
 // WithLeaderLock runs fn only if this connection wins a Postgres session-level

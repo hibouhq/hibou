@@ -668,6 +668,23 @@ export interface FindingAdvisory {
   published_at?: string
 }
 
+/**
+ * The finding's exploited-catalog listing (ADR-032). On the detail, not the
+ * advisory: the gate also blocks findings matched on a bare identifier with no
+ * advisory row, and the badge must cover exactly what the gate blocks.
+ * Presence is the flag.
+ */
+export interface FindingKEV {
+  /** Catalogs listing it ("cisa", "euvd"), deduplicated. */
+  sources: string[]
+  /** When the first-listed catalog recorded it as exploited (YYYY-MM-DD). */
+  date_added?: string
+  /** CISA BOD 22-01 remediation deadline — binding on US federal agencies only. */
+  due_date?: string
+  /** True when CISA marks the entry as used in ransomware campaigns. */
+  ransomware_use?: boolean
+}
+
 // One entry of a finding's timeline. `scan` events are what the scanners
 // observed across snapshots; `activity` events are decisions a human or a token
 // recorded — the audit log, narrowed to this one finding.
@@ -695,6 +712,7 @@ export interface FindingHistory {
 export interface FindingDetail {
   finding: Vulnerability
   advisory?: FindingAdvisory
+  kev?: FindingKEV
   acceptance?: FindingAcceptance
   dispute?: FindingDispute
   vex?: Array<{ status: string; justification?: string; source: string; statement?: string }>
@@ -1510,10 +1528,32 @@ export interface CorpusState {
   committed_at?: string
 }
 
+/** One exploited-catalog mirror's sync state (ADR-032). */
+export interface KEVSourceHealth {
+  source: string
+  /** Last SUCCESSFUL sync; stays in place while error is set. */
+  at?: string
+  catalog_version?: string
+  released?: string
+  entries?: number
+  skipped?: number
+  error?: string
+  failing_since?: string
+}
+
+export interface KEVHealth {
+  /** When the sync loop last completed a pass, successful or not. */
+  at: string
+  sources: KEVSourceHealth[]
+  /** The configured sync cadence, so staleness is judged against the schedule. */
+  interval_seconds?: number
+}
+
 export interface AdvisoryActivity {
   events: AdvisoryActivityEvent[]
   health: FeedHealth | null
   corpus: CorpusState | null
+  kev?: KEVHealth | null
 }
 
 export interface InstanceMembership {

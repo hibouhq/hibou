@@ -1253,6 +1253,19 @@ type Integration struct {
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
+type KevEntry struct {
+	Source                     string       `json:"source"`
+	CveID                      string       `json:"cve_id"`
+	VendorProject              string       `json:"vendor_project"`
+	Product                    string       `json:"product"`
+	VulnerabilityName          string       `json:"vulnerability_name"`
+	DateAdded                  sql.NullTime `json:"date_added"`
+	DueDate                    sql.NullTime `json:"due_date"`
+	KnownRansomwareCampaignUse bool         `json:"known_ransomware_campaign_use"`
+	// When the source's catalog last contained this row (last seen), not when its fields last changed.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type LicenseException struct {
 	ID            uuid.UUID     `json:"id"`
 	PolicyID      uuid.UUID     `json:"policy_id"`

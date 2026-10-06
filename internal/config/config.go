@@ -68,6 +68,7 @@ type Config struct {
 	Background                   BackgroundConfig
 	AdvisoryScan                 AdvisoryScanConfig
 	CVEFeed                      CVEFeedConfig
+	KEV                          KEVConfig
 	Worker                       WorkerConfig
 	SecretScan                   SecretScanConfig
 
@@ -102,6 +103,31 @@ type CVEFeedConfig struct {
 	// Interval between sweeps. Polling much faster than the upstream commits
 	// (~2.8 times an hour) only costs requests.
 	Interval time.Duration
+}
+
+// KEVConfig configures the exploited-vulnerabilities catalog sync (ADR-032).
+// CISA KEV and the ENISA EUVD exploited set are mirrored by default with
+// nothing to configure — the Dependency-Track stance. Per-source toggles exist
+// because the sync calls external services (cisa.gov, enisa.europa.eu), and an
+// air-gapped instance with no mirror should be able to silence a failing
+// source rather than carry a permanently red health entry.
+type KEVConfig struct {
+	// Enabled is the master switch, default true.
+	Enabled bool
+	// Interval between syncs, shared by all sources. Both catalogs update a
+	// few times a week, so polling faster than hours only costs requests.
+	Interval time.Duration
+	CISA     KEVSourceConfig
+	EUVD     KEVSourceConfig
+}
+
+// KEVSourceConfig is one catalog's switch and mirror override.
+type KEVSourceConfig struct {
+	// Enabled defaults to true.
+	Enabled bool
+	// URL defaults to the source's public endpoint; point it at a mirror
+	// serving the same document/API for an instance with no outbound internet.
+	URL string
 }
 
 type WorkerConfig struct {
@@ -272,6 +298,12 @@ func Load() (Config, error) {
 	v.SetDefault("advisory_scan.interval", "6h")
 	v.SetDefault("cve_feed.remote", "")
 	v.SetDefault("cve_feed.interval", "15m")
+	v.SetDefault("kev.enabled", true)
+	v.SetDefault("kev.interval", "6h")
+	v.SetDefault("kev.cisa.enabled", true)
+	v.SetDefault("kev.cisa.url", "")
+	v.SetDefault("kev.euvd.enabled", true)
+	v.SetDefault("kev.euvd.url", "")
 	v.SetDefault("worker.lease.duration", "5m")
 	v.SetDefault("worker.heartbeat.interval", "100s")
 	v.SetDefault("retention.preset", "envelope")
@@ -338,6 +370,13 @@ func Load() (Config, error) {
 	}
 	if cveFeedInterval <= 0 {
 		return Config{}, errors.New("parsing cve_feed.interval: duration must be greater than zero")
+	}
+	kevInterval, err := time.ParseDuration(v.GetString("kev.interval"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parsing kev.interval: %w", err)
+	}
+	if kevInterval <= 0 {
+		return Config{}, errors.New("parsing kev.interval: duration must be greater than zero")
 	}
 
 	advisoryScanInterval, err := time.ParseDuration(v.GetString("advisory_scan.interval"))
@@ -419,6 +458,18 @@ func Load() (Config, error) {
 		CVEFeed: CVEFeedConfig{
 			Remote:   v.GetString("cve_feed.remote"),
 			Interval: cveFeedInterval,
+		},
+		KEV: KEVConfig{
+			Enabled:  v.GetBool("kev.enabled"),
+			Interval: kevInterval,
+			CISA: KEVSourceConfig{
+				Enabled: v.GetBool("kev.cisa.enabled"),
+				URL:     strings.TrimSpace(v.GetString("kev.cisa.url")),
+			},
+			EUVD: KEVSourceConfig{
+				Enabled: v.GetBool("kev.euvd.enabled"),
+				URL:     strings.TrimSpace(v.GetString("kev.euvd.url")),
+			},
 		},
 		AdvisoryScan: AdvisoryScanConfig{
 			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),

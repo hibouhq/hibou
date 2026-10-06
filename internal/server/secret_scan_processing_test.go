@@ -129,6 +129,45 @@ func TestProcessClaimedSecretScanJobRetryableFailureStaysClaimable(t *testing.T)
 	}
 }
 
+func TestClaimNextSecretScanJobBacksOffAfterFailure(t *testing.T) {
+	srv, org := newSecretScanTestServer(t)
+	enqueueTestSecretScanJob(t, srv, org)
+	job := claimTestSecretScanJob(t, srv)
+	ctx := context.Background()
+
+	withSecretScanHook(t, func(context.Context, *Server, *store.SecretScanJob) error {
+		return errors.New("clone repository: cannot fork(): Resource temporarily unavailable")
+	})
+	srv.processClaimedSecretScanJob(ctx, job)
+
+	// A host-level failure (fork EAGAIN, DNS blip) outlasts an immediate
+	// retry. Claiming right back would burn every attempt inside the same
+	// crunch and turn a transient condition into a terminal failure.
+	claimed, err := srv.queries.ClaimNextSecretScanJob(ctx, srv.artifactWorkerID, time.Now().Add(time.Minute), int32(srv.cfg.SecretScan.MaxAttempts))
+	if err != nil {
+		t.Fatalf("ClaimNextSecretScanJob: %v", err)
+	}
+	if claimed != nil {
+		t.Fatalf("claimed %s immediately after a failure; want the backoff window respected", claimed.ID)
+	}
+
+	// Past the window (5·1² minutes for the first retry) the job is claimable
+	// again. Backdate the failed attempt rather than waiting.
+	if _, err := srv.db.ExecContext(ctx, `UPDATE secret_scan_jobs SET started_at = NOW() - interval '6 minutes' WHERE id = $1`, job.ID); err != nil {
+		t.Fatalf("backdate failed attempt: %v", err)
+	}
+	claimed, err = srv.queries.ClaimNextSecretScanJob(ctx, srv.artifactWorkerID, time.Now().Add(time.Minute), int32(srv.cfg.SecretScan.MaxAttempts))
+	if err != nil {
+		t.Fatalf("ClaimNextSecretScanJob after window: %v", err)
+	}
+	if claimed == nil || claimed.ID != job.ID {
+		t.Fatalf("claimed = %v, want job %s claimable once the backoff elapsed", claimed, job.ID)
+	}
+	if claimed.Attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 on the first retry", claimed.Attempts)
+	}
+}
+
 func TestProcessClaimedSecretScanJobTerminalAtMaxAttempts(t *testing.T) {
 	srv, org := newSecretScanTestServer(t)
 	enqueueTestSecretScanJob(t, srv, org)

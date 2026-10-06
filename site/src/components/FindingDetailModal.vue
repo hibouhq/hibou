@@ -32,6 +32,18 @@
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span :class="severityBadgeClass(detail.finding.severity)">{{ detail.finding.severity }}</span>
+                  <!-- Exploited is an orthogonal axis, not a sixth severity: a
+                       solid pill beside the outline severity chip, so a
+                       "medium + exploited" finding reads as two facts, never as
+                       a severity contradiction. -->
+                  <span
+                    v-if="detail.kev"
+                    class="inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-semibold text-white"
+                    :title="`Listed on a known-exploited catalog (${kevSourceNames}) — exploitation in the wild is documented, whatever the CVSS score says`"
+                  >
+                    <Flame class="h-3 w-3" />
+                    exploited
+                  </span>
                   <span :class="findingTypeBadgeClass(detail.finding.type)">{{ detail.finding.type }}</span>
                   <span
                     class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium"
@@ -402,14 +414,14 @@
                   type="button"
                   class="rounded-l-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
                   title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
-                  @click="emit('accept', 'risk_accepted', detail.finding)"
+                  @click="emit('accept', 'risk_accepted', detail.finding, Boolean(detail.kev))"
                 >
                   Accept risk…
                 </button>
                 <button
                   type="button"
                   class="-ml-2 rounded-r-lg border border-l-0 border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
-                  @click="emit('accept', 'false_positive', detail.finding)"
+                  @click="emit('accept', 'false_positive', detail.finding, Boolean(detail.kev))"
                 >
                   False positive…
                 </button>
@@ -435,7 +447,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 
-import { X } from 'lucide-vue-next'
+import { Flame, X } from 'lucide-vue-next'
 
 import { api, type AcceptanceReasonKind, type FindingDetail, type FindingDispute, type Repository, type Vulnerability } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
@@ -449,6 +461,7 @@ import SecretFindingDetails from '@/components/finding/SecretFindingDetails.vue'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
 import { advisoryUrl, findingShape, findingTypeBadgeClass, isComponentBacked, severityBadgeClass } from '@/lib/findingDisplay'
 import { forgeRefUrl } from '@/lib/forgeLinks'
+import { kevSourceLabel } from '@/lib/kev'
 import { triageState } from '@/lib/triage'
 
 const props = defineProps<{
@@ -467,7 +480,10 @@ const emit = defineEmits<{
   // The finding travels with the event: the modal is deep-linkable, so the
   // list behind it may not hold this row, and a parent-side lookup would
   // silently drop the VEX option (or do nothing at all on revoke).
-  accept: [kind: AcceptanceReasonKind, finding: Vulnerability]
+  // `exploited` rides along for the same reason: only the modal's loaded
+  // detail knows the advisory is KEV-listed, and the triage dialog the parent
+  // opens must warn before someone waives a known-exploited vulnerability.
+  accept: [kind: AcceptanceReasonKind, finding: Vulnerability, exploited?: boolean]
   reopen: [fingerprint: string]
   revoke: [finding: Vulnerability]
   // ADR-026: the dispute is written by the modal itself (it owns the inline
@@ -485,6 +501,11 @@ const forgeProvider = computed(() => props.forgeProvider || injectedRepo?.value?
 type TabKey = 'overview' | 'details' | 'occurrences' | 'history'
 
 const detail = ref<FindingDetail | null>(null)
+
+// Catalog names for the exploited pill's tooltip; the pill itself says only
+// "exploited" — one concept, provenance on demand.
+const kevSourceNames = computed(() =>
+  (detail.value?.kev?.sources ?? []).map(kevSourceLabel).join(', ') || 'CISA KEV / ENISA EUVD')
 const loading = ref(true)
 const error = ref('')
 const tab = ref<TabKey>('overview')

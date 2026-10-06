@@ -8362,6 +8362,14 @@
                 "finding": {
                     "$ref": "#/definitions/store.Vulnerability"
                 },
+                "kev": {
+                    "description": "KEV sits on the detail, not on the advisory: the gate also blocks\nfindings that have no advisory row (matched on the bare identifier), and\nthe exploited badge must appear on exactly the findings the gate blocks.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.findingKEVResponse"
+                        }
+                    ]
+                },
                 "occurrences": {
                     "type": "array",
                     "items": {
@@ -8463,6 +8471,29 @@
                 "truncated": {
                     "description": "Truncated says a cap was hit, so the UI never implies the timeline is\ncomplete when it is not.",
                     "type": "boolean"
+                }
+            }
+        },
+        "server.findingKEVResponse": {
+            "type": "object",
+            "properties": {
+                "date_added": {
+                    "description": "DateAdded is when the first-listed catalog recorded it; DueDate is\nCISA's remediation deadline for US federal agencies (CISA rows only),\ncarried as an urgency signal.",
+                    "type": "string"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "ransomware_use": {
+                    "description": "RansomwareUse is true when CISA marks the entry as used in ransomware\ncampaigns (CISA rows only).",
+                    "type": "boolean"
+                },
+                "sources": {
+                    "description": "Sources names the catalogs that list it (\"cisa\", \"euvd\"), deduplicated —\ntwo aliases on one catalog are still one source.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

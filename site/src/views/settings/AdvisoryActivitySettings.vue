@@ -62,6 +62,63 @@
       </div>
     </div>
 
+    <!-- Exploited-catalog mirrors (ADR-032), one card per source: "CISA synced
+         an hour ago, EUVD failing since Tuesday" is the actual state, and a
+         merged status would hide exactly the half that is broken. These are
+         status, not switches — sources are configured in hibou-server.yaml. -->
+    <div
+      v-if="kev && kev.sources.length > 0"
+      class="grid gap-3 sm:grid-cols-2"
+    >
+      <div
+        v-for="source in kev.sources"
+        :key="source.source"
+        class="rounded-md border bg-surface-raised px-4 py-3"
+        :class="kevSyncTone(source) === 'failing' ? 'border-danger/40' : 'border-surface-border'"
+      >
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium text-gray-200">{{ kevSourceLabel(source.source) }}</span>
+          <span
+            class="flex items-center gap-1.5 text-xs"
+            :class="kevToneText(source)"
+          >
+            <span
+              class="h-1.5 w-1.5 rounded-full"
+              :class="kevToneDot(source)"
+            />
+            {{ kevToneLabel(source) }}
+          </span>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
+          <span v-if="source.at">
+            Synced <span class="text-gray-200">{{ relative(source.at) }}</span>
+          </span>
+          <span v-if="source.entries">
+            <span class="font-mono text-gray-200">{{ source.entries.toLocaleString() }}</span> exploited entries
+          </span>
+          <span
+            v-if="source.catalog_version"
+            class="font-mono"
+          >{{ source.catalog_version }}</span>
+        </div>
+        <div
+          v-if="source.error"
+          class="mt-2 border-t border-danger/20 pt-2"
+        >
+          <p class="text-xs text-red-200">
+            Failing
+            <template v-if="source.failing_since">
+              since {{ relative(source.failing_since) }}
+            </template>
+            — the gate keeps blocking on the last good catalog.
+          </p>
+          <p class="mt-1 break-all font-mono text-[11px] text-red-300/80">
+            {{ source.error }}
+          </p>
+        </div>
+      </div>
+    </div>
+
     <!-- Why it is failing. A status colour tells someone to look; only the
          reason tells them where. -->
     <div
@@ -163,11 +220,28 @@
 import { Check, Plus, RefreshCw, TriangleAlert, X } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 
-import { api, type AdvisoryActivityEvent, type CorpusState, type FeedHealth } from '@/api/client'
+import { api, type AdvisoryActivityEvent, type CorpusState, type FeedHealth, type KEVHealth, type KEVSourceHealth } from '@/api/client'
+import { kevSourceLabel, kevSyncTone } from '@/lib/kev'
 
 const events = ref<AdvisoryActivityEvent[]>([])
 const health = ref<FeedHealth | null>(null)
 const corpus = ref<CorpusState | null>(null)
+const kev = ref<KEVHealth | null>(null)
+
+function kevToneDot(source: KEVSourceHealth): string {
+  const tone = kevSyncTone(source, kev.value?.interval_seconds)
+  return tone === 'failing' ? 'bg-danger' : tone === 'stale' ? 'bg-warn' : 'bg-ok'
+}
+
+function kevToneText(source: KEVSourceHealth): string {
+  const tone = kevSyncTone(source, kev.value?.interval_seconds)
+  return tone === 'failing' ? 'text-danger' : tone === 'stale' ? 'text-warn' : 'text-ok'
+}
+
+function kevToneLabel(source: KEVSourceHealth): string {
+  const tone = kevSyncTone(source, kev.value?.interval_seconds)
+  return tone === 'failing' ? 'Failing' : tone === 'stale' ? 'Stale' : 'Up to date'
+}
 
 /**
  * The corpus is the answer to every watch preview, so its age bounds how much a
@@ -262,6 +336,7 @@ onMounted(async () => {
     events.value = response.data.events ?? []
     health.value = response.data.health
     corpus.value = response.data.corpus
+    kev.value = response.data.kev ?? null
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load advisory activity'
   } finally {

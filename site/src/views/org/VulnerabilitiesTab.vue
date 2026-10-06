@@ -47,6 +47,7 @@
       :kind="dialog.kind"
       :count="1"
       :component-backed="dialog.componentBacked"
+      :exploited="dialog.exploited"
       :error="dialogError"
       :submitting="dialogSubmitting"
       @cancel="closeTriageDialog"
@@ -312,16 +313,16 @@ function navigateDrawer(delta: number) {
 // already knows — bouncing to that repository's view just to click the same
 // button again is not a workflow. Same dialog and same endpoints as the
 // repository view; only the repo slug is per row.
-const dialog = ref<{ kind: AcceptanceReasonKind; finding: Vulnerability; repoSlug: string; componentBacked: boolean } | null>(null)
+const dialog = ref<{ kind: AcceptanceReasonKind; finding: Vulnerability; repoSlug: string; componentBacked: boolean; exploited?: boolean } | null>(null)
 const dialogError = ref('')
 const dialogSubmitting = ref(false)
 
-function openTriageDialog(kind: AcceptanceReasonKind, finding: Vulnerability) {
+function openTriageDialog(kind: AcceptanceReasonKind, finding: Vulnerability, exploited?: boolean) {
   const repoSlug = drawer.value?.repoSlug
   if (!repoSlug || !finding.fingerprint) return
   dialogError.value = ''
   drawer.value = null
-  dialog.value = { kind, finding, repoSlug, componentBacked: isComponentBacked(finding.type) }
+  dialog.value = { kind, finding, repoSlug, componentBacked: isComponentBacked(finding.type), exploited: exploited === true }
 }
 
 function closeTriageDialog() {

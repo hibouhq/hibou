@@ -33,6 +33,7 @@ var (
 	_ componentLister     = (*StoreAdapter)(nil)
 	_ acceptanceLister    = (*StoreAdapter)(nil)
 	_ licensePolicyReader = (*StoreAdapter)(nil)
+	_ kevLister           = (*StoreAdapter)(nil)
 )
 
 func (a *StoreAdapter) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Component, error) {
@@ -77,6 +78,14 @@ func (a *StoreAdapter) GetRepositoryByID(ctx context.Context, id uuid.UUID) (*st
 
 func (a *StoreAdapter) GetComponentByID(ctx context.Context, id uuid.UUID) (dbgen.Component, error) {
 	return a.queries.GetComponentByID(ctx, id)
+}
+
+func (a *StoreAdapter) FilterKEVAdvisoryIDs(ctx context.Context, advisoryIDs []uuid.UUID) ([]uuid.UUID, error) {
+	return a.queries.FilterKEVAdvisoryIDs(ctx, advisoryIDs)
+}
+
+func (a *StoreAdapter) FilterKEVIdentifiers(ctx context.Context, identifiers []string) ([]string, error) {
+	return a.queries.FilterKEVIdentifiers(ctx, identifiers)
 }
 
 func (a *StoreAdapter) ListQualityGatesByRepo(ctx context.Context, repoID uuid.UUID) ([]dbgen.QualityGate, error) {

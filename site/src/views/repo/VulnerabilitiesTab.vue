@@ -59,6 +59,7 @@
       :kind="dialog.kind"
       :count="dialog.fingerprints.length"
       :component-backed="dialog.componentBacked"
+      :exploited="dialog.exploited"
       :error="dialogError"
       :submitting="dialogSubmitting"
       @cancel="closeTriageDialog"
@@ -72,7 +73,7 @@
       :repo-slug="repoSlug"
       :fingerprint="drawerFingerprint"
       @close="closeDrawer"
-      @accept="(kind, finding) => { closeDrawer(); openTriageDialog(kind, [finding.fingerprint], finding) }"
+      @accept="(kind, finding, exploited) => { closeDrawer(); openTriageDialog(kind, [finding.fingerprint], finding, exploited) }"
       @reopen="(fingerprint) => { closeDrawer(); void reopenFindings([fingerprint]) }"
       @revoke="(finding) => { closeDrawer(); void markSecretRevoked(finding) }"
       @disputed="applyDisputeToRows"
@@ -846,7 +847,7 @@ const selected = reactive(new Set<string>())
 // Targets are fingerprints, not row objects: a filter-wide selection includes
 // findings that are not on the current page, and keying off rows would have
 // silently triaged only the visible subset.
-const dialog = ref<{ kind: AcceptanceReasonKind; fingerprints: string[]; componentBacked: boolean; vulnID?: string } | null>(null)
+const dialog = ref<{ kind: AcceptanceReasonKind; fingerprints: string[]; componentBacked: boolean; vulnID?: string; exploited?: boolean } | null>(null)
 
 // ── Finding detail drawer: deep-linkable (?finding=<fingerprint>) so
 // notifications, gate comments, and search can land on it open.
@@ -972,7 +973,7 @@ function clearSelection() {
   selectAllError.value = ''
 }
 
-function openTriageDialog(kind: AcceptanceReasonKind, fingerprints: string[], vulnerability?: Vulnerability) {
+function openTriageDialog(kind: AcceptanceReasonKind, fingerprints: string[], vulnerability?: Vulnerability, exploited?: boolean) {
   const unique = [...new Set(fingerprints.filter(Boolean))]
   if (unique.length === 0) return
   dialogError.value = ''
@@ -984,6 +985,9 @@ function openTriageDialog(kind: AcceptanceReasonKind, fingerprints: string[], vu
     // decisions never carry per-component statements.
     componentBacked: unique.length === 1 && !!vulnerability && (vulnerability.type === 'dependency' || vulnerability.type === 'container'),
     vulnID: unique.length === 1 ? vulnerability?.id : undefined,
+    // Only the drawer knows the advisory is KEV-listed (the flag lives on the
+    // loaded detail, not on list rows); batch decisions never carry it.
+    exploited: unique.length === 1 && exploited === true,
   }
 }
 

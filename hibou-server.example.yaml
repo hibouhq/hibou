@@ -86,6 +86,37 @@ cve_feed:
   # Upstream commits ~2.8 times an hour; polling faster only costs requests.
   interval: 15m
 
+# Known-exploited-vulnerabilities catalogs, mirrored locally. A listed
+# vulnerability means the publisher has evidence of active exploitation; the
+# quality gate blocks a PR that introduces one unconditionally, regardless of
+# CVSS, and the finding detail carries the listing. Waiving the finding remains
+# the way to merge past it.
+#
+# Both catalogs are mirrored by default with nothing to configure. Sync state
+# (per source: last sync, entry count, what has been failing since when) is on
+# the advisory activity endpoint next to the CVE feed's health.
+kev:
+  # Master switch for the whole sync loop. Disabling (here or per source)
+  # PURGES that scope's stored rows: the gate genuinely stops blocking on
+  # exploited catalogs rather than freezing on stale ones nobody refreshes.
+  enabled: true
+  # Both catalogs update a few times a week; hours is the right unit.
+  interval: 6h
+  # CISA KEV — the US catalog, and the richest one: it carries the listing
+  # date, a remediation due date, and known-ransomware-campaign use.
+  cisa:
+    enabled: true
+    # Defaults to CISA's published feed; point it at a mirror serving the same
+    # JSON document for an instance with no outbound internet:
+    #   https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    url: ""
+  # ENISA EUVD exploited set — the EU catalog the CRA's coordinated disclosure
+  # regime builds on. Walked through the EUVD search API.
+  euvd:
+    enabled: true
+    # Defaults to https://euvdservices.enisa.europa.eu/api
+    url: ""
+
 
 # Delayed background loops.
 # Leave enabled for a single combined deployment. Disable on API-only pods and

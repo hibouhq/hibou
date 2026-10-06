@@ -144,6 +144,19 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	// evaluation, so Configured can account for a policy the repo never declared.
 	licensePolicyApplied := false
 	reasons := evaluateMalwareBlock(delta.New)
+	// KEV blocks unconditionally for the same reason malware does: CISA having
+	// evidence of active exploitation is a stronger fact than any CVSS score,
+	// so a KEV-listed vulnerability is merge-blocking regardless of which gate
+	// sections are configured (TODO: "always critical regardless of CVSS").
+	// Accepted findings were filtered out of the delta upstream, so a waiver
+	// remains the sanctioned way to merge past one.
+	kevReasons, err := s.evaluateKEVBlock(ctx, delta.New)
+	if err != nil {
+		// FAIL CLOSED, like the license policy read: a KEV lookup that errors
+		// must not become "nothing is exploited".
+		return nil, err
+	}
+	reasons = append(reasons, kevReasons...)
 	reasons = append(reasons, evaluateStoredVulnerabilityGates(gates, delta.New)...)
 	reasons = append(reasons, evaluateConfiguredWeaknessGates(gates, delta.New, weaknessGate)...)
 	if cfg != nil && cfg.Vulnerabilities != nil {
@@ -225,14 +238,116 @@ func evaluateMalwareBlock(newVulns []store.Vulnerability) []string {
 	return []string{fmt.Sprintf("%d malicious packages introduced: %s", len(malware), strings.Join(malware, ", "))}
 }
 
+// kevLister is satisfied by the store when the local exploited-catalog mirror
+// (CISA KEV, ENISA EUVD) is available. A separate optional interface, like
+// componentLister: a store that cannot answer simply skips the block rather
+// than failing every gate.
+type kevLister interface {
+	FilterKEVAdvisoryIDs(ctx context.Context, advisoryIDs []uuid.UUID) ([]uuid.UUID, error)
+	FilterKEVIdentifiers(ctx context.Context, identifiers []string) ([]string, error)
+}
+
+// evaluateKEVBlock fails the gate for every new dependency finding whose
+// advisory is on an exploited-vulnerabilities catalog. Matching goes
+// through the advisory (canonical id plus aliases) when the finding carries
+// one, and falls back to the primary identifier otherwise — a GHSA-canonical
+// advisory is KEV-listed when its CVE alias is.
+//
+// An empty kev_entries table (sync disabled, or never run) matches nothing and
+// blocks nothing; only a lookup ERROR propagates.
+func (s *Service) evaluateKEVBlock(ctx context.Context, newVulns []store.Vulnerability) ([]string, error) {
+	lister, ok := s.store.(kevLister)
+	if !ok {
+		return nil, nil
+	}
+
+	advisoryIDs := make([]uuid.UUID, 0, len(newVulns))
+	identifiers := make([]string, 0, len(newVulns))
+	for _, vuln := range newVulns {
+		if !isAdvisoryBackedFinding(vuln) {
+			continue
+		}
+		if vuln.AdvisoryID != nil {
+			advisoryIDs = append(advisoryIDs, *vuln.AdvisoryID)
+		} else if id := strings.ToUpper(strings.TrimSpace(vuln.PrimaryIdentifierValue)); id != "" {
+			identifiers = append(identifiers, id)
+		}
+	}
+	if len(advisoryIDs) == 0 && len(identifiers) == 0 {
+		return nil, nil
+	}
+
+	listedAdvisories, err := lister.FilterKEVAdvisoryIDs(ctx, advisoryIDs)
+	if err != nil {
+		return nil, fmt.Errorf("kev advisory lookup: %w", err)
+	}
+	listedIdentifiers, err := lister.FilterKEVIdentifiers(ctx, identifiers)
+	if err != nil {
+		return nil, fmt.Errorf("kev identifier lookup: %w", err)
+	}
+	if len(listedAdvisories) == 0 && len(listedIdentifiers) == 0 {
+		return nil, nil
+	}
+
+	advisoryHits := make(map[uuid.UUID]struct{}, len(listedAdvisories))
+	for _, id := range listedAdvisories {
+		advisoryHits[id] = struct{}{}
+	}
+	identifierHits := make(map[string]struct{}, len(listedIdentifiers))
+	for _, id := range listedIdentifiers {
+		identifierHits[id] = struct{}{}
+	}
+
+	listed := make([]string, 0, 2)
+	for _, vuln := range newVulns {
+		if !isAdvisoryBackedFinding(vuln) {
+			continue
+		}
+		var hit bool
+		if vuln.AdvisoryID != nil {
+			_, hit = advisoryHits[*vuln.AdvisoryID]
+		} else {
+			_, hit = identifierHits[strings.ToUpper(strings.TrimSpace(vuln.PrimaryIdentifierValue))]
+		}
+		if hit {
+			listed = append(listed, vulnLabel(vuln))
+		}
+	}
+	if len(listed) == 0 {
+		return nil, nil
+	}
+	return []string{fmt.Sprintf("%d known-exploited vulnerabilities introduced (listed on a KEV catalog): %s",
+		len(listed), strings.Join(listed, ", "))}, nil
+}
+
+// isDependencyFinding limits vulnerability-threshold counting to dependency
+// and malware findings — the pre-KEV scope of the stored and file-managed
+// gates, kept unchanged so a threshold someone tuned does not silently start
+// counting container findings.
+func isDependencyFinding(vuln store.Vulnerability) bool {
+	vulnType := strings.TrimSpace(vuln.Type)
+	return strings.EqualFold(vulnType, "dependency") || strings.EqualFold(vulnType, "malware")
+}
+
+// isAdvisoryBackedFinding is the KEV block's scope: every finding type an
+// advisory can stand behind. Wider than isDependencyFinding on purpose — a
+// KEV-listed CVE in a base image (type "container") is exactly as exploited
+// as the same CVE in a manifest, and the finding drawer renders both with the
+// same "the gate blocks this" wording.
+func isAdvisoryBackedFinding(vuln store.Vulnerability) bool {
+	vulnType := strings.TrimSpace(vuln.Type)
+	return strings.EqualFold(vulnType, "dependency") ||
+		strings.EqualFold(vulnType, "malware") ||
+		strings.EqualFold(vulnType, "container")
+}
+
 func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *VulnerabilityGate) []string {
 	counts := map[store.SeverityLevel]int{}
 	total := 0
 	for _, vuln := range newVulns {
-		vulnType := strings.TrimSpace(vuln.Type)
 		// Malware counts toward the same thresholds as dependency findings; its
 		// unconditional block lives in evaluateMalwareBlock.
-		if !strings.EqualFold(vulnType, "dependency") && !strings.EqualFold(vulnType, "malware") {
+		if !isDependencyFinding(vuln) {
 			continue
 		}
 		counts[vuln.Severity]++

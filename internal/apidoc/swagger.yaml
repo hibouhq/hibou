@@ -618,6 +618,13 @@ definitions:
           (ADR-026): present when someone contested the scanner's suppression.
       finding:
         $ref: '#/definitions/store.Vulnerability'
+      kev:
+        allOf:
+        - $ref: '#/definitions/server.findingKEVResponse'
+        description: |-
+          KEV sits on the detail, not on the advisory: the gate also blocks
+          findings that have no advisory row (matched on the bare identifier), and
+          the exploited badge must appear on exactly the findings the gate blocks.
       occurrences:
         items:
           $ref: '#/definitions/store.FindingOccurrence'
@@ -697,6 +704,29 @@ definitions:
           Truncated says a cap was hit, so the UI never implies the timeline is
           complete when it is not.
         type: boolean
+    type: object
+  server.findingKEVResponse:
+    properties:
+      date_added:
+        description: |-
+          DateAdded is when the first-listed catalog recorded it; DueDate is
+          CISA's remediation deadline for US federal agencies (CISA rows only),
+          carried as an urgency signal.
+        type: string
+      due_date:
+        type: string
+      ransomware_use:
+        description: |-
+          RansomwareUse is true when CISA marks the entry as used in ransomware
+          campaigns (CISA rows only).
+        type: boolean
+      sources:
+        description: |-
+          Sources names the catalogs that list it ("cisa", "euvd"), deduplicated —
+          two aliases on one catalog are still one source.
+        items:
+          type: string
+        type: array
     type: object
   server.findingVEXResponse:
     properties:

@@ -158,6 +158,63 @@ Backend ready: per-repo VEX CRUD + export. No client/UI.
 - [ ] **VEX statements view** ❌ — list/create/edit/delete VEX statements on a repo,
   plus **Export** (`GET /repos/{repo}/vex/export`). Add as a repo tab.
 
+## P1 — Known-exploited vulnerabilities (KEV, ADR-032)
+
+Backend ready: the gate already blocks new KEV-listed findings; the finding
+detail carries a top-level `kev` block (`sources`, `date_added`, `due_date`,
+`ransomware_use`) covering advisory-matched AND identifier-matched findings;
+per-source sync health rides the advisory activity response (`kev` field).
+See [docs/adr/032](docs/adr/032-kev-catalog-and-exploited-gate.md).
+
+Design stance — deliberately NOT a copy of Dependency-Track/Sonar:
+
+- **The primary KEV encounter is a developer's failed PR check, not a security
+  dashboard.** DT and Sonar are portfolio tools; hibou is gate-first. The gate
+  reason text (already shipped) and the compare view are the surfaces that
+  matter most — they must read as "what do I do next" (upgrade target, waiver
+  path), not as a red flag with a federal acronym.
+- **"Exploited" is an orthogonal axis, not a sixth severity.** Render it as its
+  own badge next to the severity chip, never by inflating severity (Sonar
+  conflates them into "Blocker"). Severity answers "how bad if exploited"; KEV
+  answers "it IS being exploited" — a reader needs both to reason.
+- **One concept, sources as provenance.** The badge says "Actively exploited".
+  Which catalog (CISA / EUVD) belongs in the drawer as a citation, not in list
+  columns (DT's "YES (CISA Catalog)" column mixes provenance into the signal).
+- **Status, not switches.** No admin toggle screen (DT has one; hibou is
+  config-file managed). What the UI owes the operator is freshness: per-source
+  last sync, entry count, failing-since — loud when a source is enabled but
+  failing, explicit when disabled.
+- **The CISA due date is BOD 22-01, a US-federal deadline.** Label it as such;
+  an EU org reading it as their own compliance deadline is a misread the UI
+  must not invite. For CRA users the relevant line is "actively exploited →
+  Article 14 reporting obligations".
+
+Items:
+
+- [x] **"Actively exploited" badge in the finding detail drawer** ✅ — solid
+  `exploited` pill beside the outline severity chip
+  ([FindingDetailModal.vue](site/src/components/FindingDetailModal.vue)) and an
+  "Actively exploited" section leading the overview
+  ([DependencyFindingDetails.vue](site/src/components/finding/DependencyFindingDetails.vue)):
+  catalogs, listed-on date, ransomware flag, CISA due date labeled
+  "BOD 22-01 — US federal agencies only", CRA Article 14 note.
+- [x] **KEV sync freshness on the advisory activity view** ✅ — per-source cards
+  (last sync, entries, catalog version, failing-since + error, "gate keeps
+  blocking on the last good catalog") in
+  [AdvisoryActivitySettings.vue](site/src/views/settings/AdvisoryActivitySettings.vue);
+  tone logic in [lib/kev.ts](site/src/lib/kev.ts) with tests.
+- [x] **Waiver friction for exploited findings** ✅ — flame banner in
+  [TriageDialog.vue](site/src/components/TriageDialog.vue) when the finding is
+  KEV-listed (distinct wording for risk-accept vs false-positive), plus a
+  clearable 30-day default expiry on exploited risk acceptance. Wired from the
+  drawer through both VulnerabilitiesTab views.
+- [ ] **Exploited badge + filter on findings lists** ❌ — needs backend: list
+  rows don't carry `kev`; add batched enrichment like `FixedInPRs`
+  ([internal/server/analysis.go](internal/server/analysis.go)).
+- [ ] **Org-level exploited count** ❌ — needs backend: surface "N exploited
+  findings" on the org vulnerability aggregation for the security team's
+  portfolio view.
+
 ## P1 — Notifications, rules, integrations, quality gates
 
 - [ ] **Notifications center** 🟡 — store exists ([site/src/stores/notifications.ts](site/src/stores/notifications.ts));
@@ -220,6 +277,16 @@ Backend ready: secret scanning (`internal/secretscan`, on-push). No UI.
 - [ ] Toast/notification system (if not already present) for action feedback.
 - [ ] Slug live-validation helper shared between org/client/repo create forms.
 - [ ] Surface provider/forge identity consistently (icons + forge links).
+  - [x] Forge deep links from any selected ref: `site/src/lib/forgeLinks.ts`
+    (pure, unit-tested per provider) wired into `BranchPRSelector` (selected ref
+    + every row), the compare/PR-diff header (base and head), each patch-diff
+    file row, and the coverage source modal (commit + blob at that commit).
+    PR refs link to the PR / its file list rather than a blob: `refs/pull/N/head`
+    is not a browsable path and the merge commit a PR snapshot records can be
+    garbage-collected after a rebase.
+  - [ ] Remaining: provider icons (GitHub/GitLab/Forgejo marks) instead of the
+    generic external-link glyph, and forge links on the vulnerability and
+    dependency detail rows.
 
 ---
 
