@@ -4,29 +4,6 @@
     v-if="section !== 'details'"
     class="space-y-5"
   >
-    <!-- Exploitation first: like reachability it changes the verdict on an
-         otherwise identical CVE, and unlike reachability it is never "unknown"
-         — a catalog either lists the advisory or it does not. -->
-    <FindingSection
-      v-if="kev"
-      title="Actively exploited"
-      boxed
-      class="!border-danger/40 !bg-danger/5"
-    >
-      <p class="text-sm text-gray-300">
-        Exploitation in the wild is documented for this vulnerability — that is a recorded fact,
-        not a prediction, whatever the CVSS score says. The quality gate blocks new findings on
-        exploited advisories unconditionally; an accepted waiver is the only way past it.
-      </p>
-      <FindingFacts
-        class="mt-2"
-        :facts="kevFacts"
-      />
-      <p class="mt-2 border-t border-danger/20 pt-2 text-xs text-gray-500">
-        Actively exploited findings may fall under CRA Article&nbsp;14 reporting obligations.
-      </p>
-    </FindingSection>
-
     <!-- What is affected. For a dependency finding the package is the subject,
          so it leads; the file path a scanner may have attached is incidental. -->
     <FindingSection
@@ -238,7 +215,6 @@ import type { Fact } from '@/components/finding/facts'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
 import { advisoryUrl, cweUrl } from '@/lib/findingDisplay'
-import { kevSourceLabel } from '@/lib/kev'
 
 // Component-backed findings (dependency, container, malware): a package, an
 // advisory, and a version to upgrade to.
@@ -258,9 +234,6 @@ const allReferences = ref(false)
 
 const finding = computed(() => props.detail.finding)
 const advisory = computed(() => props.detail.advisory)
-// Top-level on the detail, not the advisory: the gate also blocks findings
-// matched on a bare identifier with no advisory row (ADR-032).
-const kev = computed(() => props.detail.kev)
 const identifier = computed(() => advisory.value?.canonical_id || finding.value.primary_identifier_value || finding.value.scanner_name || 'unknown')
 const identifierUrl = computed(() => advisoryUrl(identifier.value))
 const aliases = computed(() => advisory.value?.aliases ?? [])
@@ -297,6 +270,8 @@ const HISTORY_LABELS: Record<string, string> = {
   superseded: 'Superseded by upstream',
   diverged: 'Upstream disagrees with the mapping here',
   mapping_revoked: 'Mapping revoked',
+  kev_listed: 'Listed as actively exploited (KEV)',
+  kev_delisted: 'Removed from exploited catalogs',
 }
 
 function historyLabel(kind: string): string {
@@ -329,19 +304,6 @@ const packageFacts = computed<Fact[]>(() => [
   },
   { label: 'Package URL', value: finding.value.component_purl, mono: true, wide: true },
   { label: 'Manifest', value: finding.value.file_path, mono: true, wide: true, hint: 'The file the dependency was declared in' },
-])
-
-// The due date is CISA's BOD 22-01 deadline, binding on US federal agencies
-// only — labeled so an EU org cannot misread it as their own compliance clock.
-const kevFacts = computed<Fact[]>(() => [
-  { label: 'Listed by', value: (kev.value?.sources ?? []).map(kevSourceLabel).join(', ') },
-  { label: 'Listed on', value: kev.value?.date_added },
-  ...(kev.value?.ransomware_use
-    ? [{ label: 'Ransomware use', value: 'Known campaigns', hint: 'CISA records use of this vulnerability in ransomware campaigns' } satisfies Fact]
-    : []),
-  ...(kev.value?.due_date
-    ? [{ label: 'US federal due date', value: kev.value.due_date, hint: 'CISA BOD 22-01 — binding on US federal agencies only; shown as an urgency signal' } satisfies Fact]
-    : []),
 ])
 
 const advisoryFacts = computed<Fact[]>(() => [

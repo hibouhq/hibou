@@ -1,5 +1,15 @@
 # Hibou architecture
 
+![Hibou architecture diagram](architecture.drawio.svg)
+
+*The diagram is an editable draw.io SVG: open it in [diagrams.net](https://app.diagrams.net)
+or the VS Code draw.io extension to modify it — the model is embedded in the
+file, so the picture and the source can't drift apart. It maps the SDLC strip
+(code → PR → CI → gate → merge → release → deploy → operate, with the
+"new advisory re-gates open PRs" feedback loop) onto the three lanes below:
+sources & inputs, the hibou server, and outputs & consumers (including the
+MCP server exposing findings/gates as tools to AI agents).*
+
 A current-state map of the codebase for engineers working on it. Decisions and
 their rationale live in [docs/adr/](adr/); this document describes what exists
 today and where. Deployment topology is in [DEPLOYMENT.md](DEPLOYMENT.md), the

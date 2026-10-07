@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
-import { kevSourceLabel, kevSyncTone } from './kev'
+import { kevSourceLabel, kevSourceUrl, kevSyncTone } from './kev'
+
+describe('kevSourceUrl', () => {
+  it('links each source to its own identifier', () => {
+    expect(kevSourceUrl('euvd', 'EUVD-2026-73069')).toBe('https://euvd.enisa.europa.eu/vulnerability/EUVD-2026-73069')
+    expect(kevSourceUrl('cisa', 'CVE-2020-11023')).toContain('search_api_fulltext=CVE-2020-11023')
+    expect(kevSourceUrl('euvd', 'CVE-2020-11023')).toBe('')
+    expect(kevSourceUrl('custom', 'EUVD-2026-73069')).toBe('')
+    expect(kevSourceUrl('euvd', 'EUVD-2026-73069?redirect=evil')).toBe('')
+  })
+})
 
 describe('kevSourceLabel', () => {
   it('names the known catalogs', () => {

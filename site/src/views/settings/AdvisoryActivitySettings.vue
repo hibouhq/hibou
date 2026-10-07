@@ -217,7 +217,7 @@
 </template>
 
 <script setup lang="ts">
-import { Check, Plus, RefreshCw, TriangleAlert, X } from 'lucide-vue-next'
+import { Check, Flame, Plus, RefreshCw, TriangleAlert, X } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 
 import { api, type AdvisoryActivityEvent, type CorpusState, type FeedHealth, type KEVHealth, type KEVSourceHealth } from '@/api/client'
@@ -268,6 +268,8 @@ const KINDS: Record<string, string> = {
   cna_revised: 'Vendor revised the record',
   enriched: 'Enriched upstream',
   withdrawn: 'Withdrawn upstream',
+  kev_listed: 'Listed as actively exploited (KEV)',
+  kev_delisted: 'Removed from exploited catalogs',
   coordinates_upstreamed: 'Upstream published coordinates',
   coordinates_authored: 'Packages mapped here',
   superseded: 'Our mapping superseded',
@@ -287,6 +289,10 @@ function tone(kind: string) {
       return { icon: RefreshCw, bg: 'bg-warn/15', fg: 'text-warn' }
     case 'diverged':
       return { icon: TriangleAlert, bg: 'bg-danger/15', fg: 'text-danger' }
+    case 'kev_listed':
+      return { icon: Flame, bg: 'bg-danger/15', fg: 'text-danger' }
+    case 'kev_delisted':
+      return { icon: Flame, bg: 'bg-gray-500/15', fg: 'text-gray-400' }
     case 'coordinates_authored':
     case 'coordinates_upstreamed':
     case 'superseded':

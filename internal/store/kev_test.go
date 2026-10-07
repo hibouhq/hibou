@@ -42,10 +42,16 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 		{CVEID: sharedCVE, VulnerabilityName: "EUVD-2099-00001"},
 		{CVEID: euvdOnlyCVE, VulnerabilityName: "EUVD-2099-00002"},
 	}
-	if err := queries.ReplaceKEVSource(ctx, db, "cisa", cisaEntries, 0); err != nil {
+	seed, err := queries.ReplaceKEVSource(ctx, db, "cisa", cisaEntries, 0)
+	if err != nil {
 		t.Fatalf("ReplaceKEVSource (cisa): %v", err)
 	}
-	if err := queries.ReplaceKEVSource(ctx, db, "euvd", euvdEntries, 24*time.Hour); err != nil {
+	// Day-one population: everything is "added" but flagged as the seed, so
+	// the caller does not flood the timeline.
+	if !seed.InitialSeed || len(seed.Added) != 2 {
+		t.Fatalf("seed diff = %+v, want initial seed with 2 added", seed)
+	}
+	if _, err := queries.ReplaceKEVSource(ctx, db, "euvd", euvdEntries, 24*time.Hour); err != nil {
 		t.Fatalf("ReplaceKEVSource (euvd): %v", err)
 	}
 
@@ -110,8 +116,12 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 	// CISA withdrawing an entry must remove it on the next replace (grace 0:
 	// the catalog is one atomic document) — and must not touch the other
 	// source's rows.
-	if err := queries.ReplaceKEVSource(ctx, db, "cisa", cisaEntries[:1], 0); err != nil {
+	withdrawal, err := queries.ReplaceKEVSource(ctx, db, "cisa", cisaEntries[:1], 0)
+	if err != nil {
 		t.Fatalf("ReplaceKEVSource (withdrawal): %v", err)
+	}
+	if withdrawal.InitialSeed || len(withdrawal.Added) != 0 || len(withdrawal.Removed) != 1 || withdrawal.Removed[0] != cisaOnlyCVE {
+		t.Fatalf("withdrawal diff = %+v, want exactly the withdrawn CVE removed", withdrawal)
 	}
 	hits, err = queries.FilterKEVIdentifiers(ctx, []string{cisaOnlyCVE, euvdOnlyCVE})
 	if err != nil {
@@ -123,8 +133,12 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 
 	// EUVD's grace window: an entry absent from one fetch SURVIVES while its
 	// last-seen is fresh (a skipped page must not un-list an exploited CVE)…
-	if err := queries.ReplaceKEVSource(ctx, db, "euvd", euvdEntries[:1], 24*time.Hour); err != nil {
+	graced, err := queries.ReplaceKEVSource(ctx, db, "euvd", euvdEntries[:1], 24*time.Hour)
+	if err != nil {
 		t.Fatalf("ReplaceKEVSource (euvd, graced withdrawal): %v", err)
+	}
+	if len(graced.Removed) != 0 {
+		t.Fatalf("a grace-protected entry must not report as removed: %+v", graced)
 	}
 	hits, err = queries.FilterKEVIdentifiers(ctx, []string{euvdOnlyCVE})
 	if err != nil {
@@ -137,8 +151,12 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE kev_entries SET updated_at = NOW() - interval '25 hours' WHERE source = 'euvd' AND cve_id = $1`, euvdOnlyCVE); err != nil {
 		t.Fatalf("backdate euvd entry: %v", err)
 	}
-	if err := queries.ReplaceKEVSource(ctx, db, "euvd", euvdEntries[:1], 24*time.Hour); err != nil {
+	expired, err := queries.ReplaceKEVSource(ctx, db, "euvd", euvdEntries[:1], 24*time.Hour)
+	if err != nil {
 		t.Fatalf("ReplaceKEVSource (euvd, expired grace): %v", err)
+	}
+	if len(expired.Removed) != 1 || expired.Removed[0] != euvdOnlyCVE {
+		t.Fatalf("expired-grace diff = %+v, want the unseen CVE removed", expired)
 	}
 	hits, err = queries.FilterKEVIdentifiers(ctx, []string{euvdOnlyCVE})
 	if err != nil {
@@ -169,7 +187,7 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 	}
 
 	// The guard against clearing a source on a bad fetch.
-	if err := queries.ReplaceKEVSource(ctx, db, "cisa", nil, 0); err == nil {
+	if _, err := queries.ReplaceKEVSource(ctx, db, "cisa", nil, 0); err == nil {
 		t.Fatal("ReplaceKEVSource with zero entries must refuse")
 	}
 }

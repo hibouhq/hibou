@@ -36,6 +36,9 @@ describe('advisoryUrl', () => {
   it('links each identifier namespace to its home', () => {
     expect(advisoryUrl('CVE-2024-1234')).toBe('https://nvd.nist.gov/vuln/detail/CVE-2024-1234')
     expect(advisoryUrl('GHSA-abcd-efgh-ijkl')).toBe('https://github.com/advisories/GHSA-abcd-efgh-ijkl')
+    expect(advisoryUrl('EUVD-2026-73069')).toBe('https://euvd.enisa.europa.eu/vulnerability/EUVD-2026-73069')
+    expect(advisoryUrl(' euvd-2026-73069 ')).toBe('https://euvd.enisa.europa.eu/vulnerability/EUVD-2026-73069')
+    expect(advisoryUrl('EUVD-invalid')).toBe('')
     expect(advisoryUrl('GO-2024-0001')).toBe('https://pkg.go.dev/vuln/GO-2024-0001')
     expect(advisoryUrl('PYSEC-2024-1')).toBe('https://osv.dev/vulnerability/PYSEC-2024-1')
     expect(advisoryUrl('RUSTSEC-2024-0001')).toBe('https://rustsec.org/advisories/RUSTSEC-2024-0001.html')

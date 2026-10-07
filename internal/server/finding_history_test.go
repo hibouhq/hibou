@@ -8,11 +8,13 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	internalauth "github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/kev"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -232,6 +234,198 @@ func TestFindingHistoryMergesScanAndTriage(t *testing.T) {
 	if len(labels) != 1 || labels[0] != "q4-review" {
 		t.Fatalf("labels = %+v", history.Events[0].Detail["labels"])
 	}
+}
+
+func TestFindingHistoryIncludesKEVCatalogEvents(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFindingHistoryFixture(t)
+	ctx := t.Context()
+	cveID := "CVE-" + strings.ToUpper(uuid.NewString())
+	canonicalID := "GHSA-" + uuid.NewString()
+	advisory, err := fixture.srv.queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
+		CanonicalID: canonicalID, Title: "history test", Severity: dbgen.SeverityLevelHigh, CweIds: []string{},
+	})
+	if err != nil {
+		t.Fatalf("UpsertAdvisory: %v", err)
+	}
+	if err := fixture.srv.queries.UpsertAdvisoryAlias(ctx, dbgen.UpsertAdvisoryAliasParams{AdvisoryID: advisory.ID, Alias: cveID}); err != nil {
+		t.Fatalf("UpsertAdvisoryAlias: %v", err)
+	}
+	seedHistoryKEVFinding(t, fixture.srv, fixture.repo, fixture.fingerprint, advisory.ID, cveID)
+	for _, event := range []store.AdvisoryEvent{
+		{CVEID: cveID, Kind: store.EventKEVListed, OccurredAt: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC), Detail: json.RawMessage(`{"source":"history-cisa"}`)},
+		{CVEID: cveID, Kind: store.EventKEVListed, OccurredAt: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC), Detail: json.RawMessage(`{"source":"history-cisa"}`)},
+		{CVEID: cveID, Kind: store.EventKEVDelisted, OccurredAt: time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC), Detail: json.RawMessage(`{"source":"history-euvd"}`)},
+		{CVEID: "CVE-2099-41999", Kind: store.EventKEVListed, OccurredAt: time.Date(2025, 4, 1, 0, 0, 0, 0, time.UTC), Detail: json.RawMessage(`{"source":"other"}`)},
+	} {
+		if err := fixture.srv.queries.RecordAdvisoryEvent(ctx, event); err != nil {
+			t.Fatalf("RecordAdvisoryEvent: %v", err)
+		}
+	}
+	seedKEVEntries(t, fixture.srv, "history-cisa", []kev.Entry{{CVEID: cveID, DateAdded: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)}})
+	seedKEVEntries(t, fixture.srv, "history-euvd", []kev.Entry{{CVEID: cveID, DateAdded: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}})
+	seedKEVEntries(t, fixture.srv, "history-undated", []kev.Entry{{CVEID: cveID}})
+
+	history := decodeFindingHistory(t, callFindingHistory(t, fixture.srv, fixture.admin, fixture.org, fixture.repo.Slug, fixture.fingerprint))
+	got := map[string]findingHistoryEvent{}
+	for _, event := range history.Events {
+		if event.Source == "advisory" {
+			got[event.Kind+":"+event.Detail["source"].(string)] = event
+		}
+	}
+	if len(got) != 3 || got["kev_listed:history-cisa"].At.IsZero() || got["kev_delisted:history-euvd"].At.IsZero() {
+		t.Fatalf("advisory events = %+v", got)
+	}
+	if listed := got["kev_listed:history-cisa"]; listed.At.Format("2006-01-02") != "2025-02-01" {
+		t.Fatalf("stored listing = %+v", listed)
+	}
+	if listed := got["kev_listed:history-euvd"]; listed.At.Format("2006-01-02") != "2025-01-01" {
+		t.Fatalf("source-specific seed anchor = %+v", listed)
+	}
+	if _, ok := got["kev_listed:history-undated"]; ok {
+		t.Fatalf("undated catalog row fabricated listing event: %+v", got)
+	}
+}
+
+func TestFindingHistoryKEVSeedDelistRetainsListingDate(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFindingHistoryFixture(t)
+	ctx := t.Context()
+	cveID := "CVE-" + strings.ToUpper(uuid.NewString())
+	undatedCVEID := "CVE-" + strings.ToUpper(uuid.NewString())
+	advisory, err := fixture.srv.queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
+		CanonicalID: "GHSA-" + uuid.NewString(), Title: "history delist test", Severity: dbgen.SeverityLevelHigh, CweIds: []string{},
+	})
+	if err != nil {
+		t.Fatalf("UpsertAdvisory: %v", err)
+	}
+	if err := fixture.srv.queries.UpsertAdvisoryAlias(ctx, dbgen.UpsertAdvisoryAliasParams{AdvisoryID: advisory.ID, Alias: cveID}); err != nil {
+		t.Fatalf("UpsertAdvisoryAlias: %v", err)
+	}
+	seedHistoryKEVFinding(t, fixture.srv, fixture.repo, fixture.fingerprint, advisory.ID, cveID)
+	source := "history-durable-" + uuid.NewString()
+	entries := []kev.Entry{
+		{CVEID: cveID, DateAdded: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)},
+		{CVEID: undatedCVEID},
+	}
+	seedKEVEntries(t, fixture.srv, source, entries)
+	fixture.srv.recordKEVEvents(ctx, source, kev.Catalog{Entries: entries}, store.KEVReplaceResult{Added: []string{cveID, undatedCVEID}})
+	if _, err := fixture.srv.db.ExecContext(ctx, `DELETE FROM kev_entries WHERE source = $1 AND cve_id = ANY($2::text[])`, source, []string{cveID, undatedCVEID}); err != nil {
+		t.Fatalf("remove KEV fixture entries: %v", err)
+	}
+	diff := store.KEVReplaceResult{
+		Removed: []string{cveID, undatedCVEID},
+		RemovedDateAdded: map[string]time.Time{
+			cveID: entries[0].DateAdded,
+		},
+	}
+	if dateAdded := diff.RemovedDateAdded[cveID]; dateAdded.Format("2006-01-02") != "2025-01-02" {
+		t.Fatalf("removed date added = %s", dateAdded)
+	}
+	fixture.srv.recordKEVEvents(ctx, source, kev.Catalog{}, diff)
+
+	history := decodeFindingHistory(t, callFindingHistory(t, fixture.srv, fixture.admin, fixture.org, fixture.repo.Slug, fixture.fingerprint))
+	var listings, delistings int
+	for _, event := range history.Events {
+		if event.Source != "advisory" || event.Detail["source"] != source {
+			continue
+		}
+		switch event.Kind {
+		case "kev_listed":
+			listings++
+			if event.At.Format("2006-01-02") != "2025-01-02" {
+				t.Fatalf("listing = %+v", event)
+			}
+		case "kev_delisted":
+			delistings++
+		}
+	}
+	if listings != 1 || delistings != 1 {
+		t.Fatalf("history durable KEV events = %+v", history.Events)
+	}
+	events, err := fixture.srv.queries.ListKEVAdvisoryEventsForCVEs(ctx, []string{cveID, undatedCVEID}, 10)
+	if err != nil {
+		t.Fatalf("ListKEVAdvisoryEventsForCVEs: %v", err)
+	}
+	foundUndatedDelist := false
+	for _, event := range events {
+		if event.CveID != undatedCVEID {
+			continue
+		}
+		foundUndatedDelist = true
+		var detail map[string]string
+		if err := json.Unmarshal(event.Detail, &detail); err != nil {
+			t.Fatalf("decode undated delist detail: %v", err)
+		}
+		if detail["date_added"] != "" {
+			t.Fatalf("undated delist fabricated date: %s", event.Detail)
+		}
+	}
+	if !foundUndatedDelist {
+		t.Fatal("missing undated delist event")
+	}
+}
+
+func TestFindingHistoryKEVBareIdentifierOnlyForComponentFindings(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFindingHistoryFixture(t)
+	seedHistoryBareKEVFinding(t, fixture.srv, fixture.repo, fixture.fingerprint, "dependency", "CVE-2099-42001")
+	if err := fixture.srv.queries.RecordAdvisoryEvent(t.Context(), store.AdvisoryEvent{CVEID: "CVE-2099-42001", Kind: store.EventKEVListed, OccurredAt: time.Now().UTC(), Detail: json.RawMessage(`{"source":"cisa"}`)}); err != nil {
+		t.Fatalf("RecordAdvisoryEvent: %v", err)
+	}
+	history := decodeFindingHistory(t, callFindingHistory(t, fixture.srv, fixture.admin, fixture.org, fixture.repo.Slug, fixture.fingerprint))
+	if !findingHistoryHasEvent(history, "advisory", "kev_listed", "cisa") {
+		t.Fatalf("dependency history = %+v", history.Events)
+	}
+
+	other := newFindingHistoryFixture(t)
+	seedHistoryBareKEVFinding(t, other.srv, other.repo, other.fingerprint, "sast", "CVE-2099-42001")
+	history = decodeFindingHistory(t, callFindingHistory(t, other.srv, other.admin, other.org, other.repo.Slug, other.fingerprint))
+	if findingHistoryHasEvent(history, "advisory", "kev_listed", "cisa") {
+		t.Fatalf("sast history leaked bare identifier event: %+v", history.Events)
+	}
+}
+
+func seedHistoryKEVFinding(t *testing.T, srv *Server, repo *store.Repository, fingerprint string, advisoryID uuid.UUID, identifier string) {
+	t.Helper()
+	seedHistoryBareKEVFinding(t, srv, repo, fingerprint, "dependency", identifier)
+	if _, err := srv.db.ExecContext(t.Context(), `UPDATE vulnerabilities SET advisory_id = $1 WHERE repo_id = $2 AND fingerprint = $3`, advisoryID, repo.ID, fingerprint); err != nil {
+		t.Fatalf("attach advisory: %v", err)
+	}
+}
+
+func seedHistoryBareKEVFinding(t *testing.T, srv *Server, repo *store.Repository, fingerprint, findingType, identifier string) {
+	t.Helper()
+	ctx := t.Context()
+	ref, err := srv.queries.GetRefByRepoAndName(ctx, repo.ID, "kev-history", store.RefTypeBranch)
+	if err != nil {
+		t.Fatalf("GetRefByRepoAndName: %v", err)
+	}
+	if ref == nil {
+		ref, err = srv.queries.CreateRef(ctx, repo.ID, "kev-history", store.RefTypeBranch, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("CreateRef: %v", err)
+		}
+	}
+	snapshot, err := srv.queries.CreateSnapshot(ctx, ref.ID, "kev-history-sha", store.SnapshotStatusComplete)
+	if err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	if _, err := srv.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{Type: findingType, SnapshotID: snapshot.ID, Title: "kev finding", PrimaryIdentifierKind: "advisory", PrimaryIdentifierValue: identifier, OriginalSeverity: dbgen.SeverityLevelHigh, Severity: dbgen.SeverityLevelHigh, Status: "detected", ScannerName: "trivy", Fingerprint: fingerprint}); err != nil {
+		t.Fatalf("CreateVulnerability: %v", err)
+	}
+}
+
+func findingHistoryHasEvent(history findingHistoryResponse, source, kind, catalog string) bool {
+	for _, event := range history.Events {
+		if event.Source == source && event.Kind == kind && event.Detail["source"] == catalog {
+			return true
+		}
+	}
+	return false
 }
 
 // The endpoint is a keyhole onto the audit log, not a second door into it: an

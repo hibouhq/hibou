@@ -24,6 +24,10 @@ const (
 	EventEnriched   AdvisoryEventKind = "enriched"
 	EventWithdrawn  AdvisoryEventKind = "withdrawn"
 	EventUpstreamed AdvisoryEventKind = "coordinates_upstreamed"
+	// A catalog (CISA KEV / ENISA EUVD) listed or withdrew the CVE as
+	// actively exploited (ADR-032) — the Art. 14 "becoming aware" trigger.
+	EventKEVListed   AdvisoryEventKind = "kev_listed"
+	EventKEVDelisted AdvisoryEventKind = "kev_delisted"
 
 	// Ours.
 	EventAuthored   AdvisoryEventKind = "coordinates_authored"
@@ -37,7 +41,8 @@ const (
 // audit log: an audit entry always has an actor, these often have none.
 func (k AdvisoryEventKind) External() bool {
 	switch k {
-	case EventPublished, EventCNARevised, EventEnriched, EventWithdrawn, EventUpstreamed:
+	case EventPublished, EventCNARevised, EventEnriched, EventWithdrawn, EventUpstreamed,
+		EventKEVListed, EventKEVDelisted:
 		return true
 	}
 	return false

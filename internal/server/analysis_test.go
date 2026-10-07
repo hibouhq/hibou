@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/kev"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -444,8 +447,11 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	}
 	componentID, componentVersion := seedSnapshotComponentWithID(t, srv, snapshot.ID, "pkg:gomod/github.com/example/lib", "example-lib", "1.2.3", "go")
 
+	enrichedCanonicalID := "GHSA-" + uuid.NewString()
+	kevID := "CVE-2099-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	euvdID := "EUVD-" + kevID[len("CVE-"):]
 	enrichedAdvisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
-		CanonicalID: "GHSA-abcd-1234-wxyz",
+		CanonicalID: enrichedCanonicalID,
 		Title:       "Example advisory",
 		Description: "Summary from advisory description",
 		Severity:    dbgen.SeverityLevelHigh,
@@ -457,13 +463,14 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertAdvisory(enriched): %v", err)
 	}
-	if err := srv.queries.UpsertAdvisoryAlias(context.Background(), dbgen.UpsertAdvisoryAliasParams{AdvisoryID: enrichedAdvisory.ID, Alias: "CVE-2026-1111"}); err != nil {
+	if err := srv.queries.UpsertAdvisoryAlias(context.Background(), dbgen.UpsertAdvisoryAliasParams{AdvisoryID: enrichedAdvisory.ID, Alias: kevID}); err != nil {
 		t.Fatalf("UpsertAdvisoryAlias: %v", err)
 	}
+	seedKEVEntries(t, srv, "euvd", []kev.Entry{{CVEID: kevID, VulnerabilityName: euvdID}})
 	if err := srv.queries.UpsertAdvisorySource(context.Background(), dbgen.UpsertAdvisorySourceParams{
 		AdvisoryID: enrichedAdvisory.ID,
 		Provider:   "GHSA",
-		ProviderID: "GHSA-abcd-1234-wxyz",
+		ProviderID: enrichedCanonicalID,
 		CvssVector: "",
 		RawData:    json.RawMessage(`{"references":[{"url":"https://example.test/advisories/secondary"},{"url":"https://example.test/advisories/primary"},{"url":"not-a-url"}]}`),
 		FetchedAt:  snapshot.CreatedAt,
@@ -473,7 +480,7 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	if err := srv.queries.UpsertAdvisorySource(context.Background(), dbgen.UpsertAdvisorySourceParams{
 		AdvisoryID: enrichedAdvisory.ID,
 		Provider:   "NVD",
-		ProviderID: "CVE-2026-1111",
+		ProviderID: kevID,
 		CvssVector: "",
 		RawData:    json.RawMessage(`{"references":[{"url":"https://example.test/advisories/primary"}]}`),
 		FetchedAt:  snapshot.CreatedAt,
@@ -576,6 +583,9 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	}
 	if !reflect.DeepEqual(enriched.References, []string{"https://example.test/advisories/primary", "https://example.test/advisories/secondary"}) {
 		t.Fatalf("enriched references = %v, want %v", enriched.References, []string{"https://example.test/advisories/primary", "https://example.test/advisories/secondary"})
+	}
+	if !reflect.DeepEqual(enriched.Aliases, []string{kevID, euvdID}) {
+		t.Fatalf("enriched aliases = %v, want CVE and mirrored EUVD aliases", enriched.Aliases)
 	}
 	plain := advisoriesByID[plainAdvisory.ID]
 	if plain.Source != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -62,6 +63,9 @@ type findingKEVResponse struct {
 	// Sources names the catalogs that list it ("cisa", "euvd"), deduplicated —
 	// two aliases on one catalog are still one source.
 	Sources []string `json:"sources"`
+	// Entries retain each catalog record's publisher identifier so clients can
+	// link to the exact source record rather than only the source homepage.
+	Entries []findingKEVEntryResponse `json:"entries"`
 	// DateAdded is when the first-listed catalog recorded it; DueDate is
 	// CISA's remediation deadline for US federal agencies (CISA rows only),
 	// carried as an urgency signal.
@@ -71,6 +75,14 @@ type findingKEVResponse struct {
 	// campaigns (CISA rows only).
 	RansomwareUse bool `json:"ransomware_use,omitempty"`
 }
+
+type findingKEVEntryResponse struct {
+	Source     string `json:"source"`
+	Identifier string `json:"identifier"`
+	CVEID      string `json:"cve_id"`
+}
+
+var euvdIdentifierPattern = regexp.MustCompile(`^EUVD-\d{4}-\d+$`)
 
 type findingVEXResponse struct {
 	Status        string `json:"status"`
@@ -204,13 +216,7 @@ func (s *Server) advisoryDetail(ctx context.Context, advisory dbgen.Advisory) *f
 		enrichment := enrichmentByID[advisory.ID]
 		detail.FixedVersions = enrichment.FixedVersions
 		detail.References = enrichment.References
-	}
-	if aliases, err := s.queries.ListAliasesByAdvisoryIDs(ctx, advisoryIDs); err == nil {
-		for _, alias := range aliases {
-			if value := strings.TrimSpace(alias.Alias); value != "" && value != advisory.CanonicalID {
-				detail.Aliases = append(detail.Aliases, value)
-			}
-		}
+		detail.Aliases = enrichment.Aliases
 	}
 	return detail
 }
@@ -238,15 +244,26 @@ func (s *Server) findingKEV(ctx context.Context, finding *store.Vulnerability, a
 	if err != nil || len(entries) == 0 {
 		return nil
 	}
-	response := &findingKEVResponse{Sources: make([]string, 0, 2)}
+	response := &findingKEVResponse{
+		Sources: make([]string, 0, 2),
+		Entries: make([]findingKEVEntryResponse, 0, len(entries)),
+	}
 	// Deduplicated: two CVE aliases on one catalog are still one source.
 	seen := map[string]struct{}{}
 	for _, entry := range entries {
-		if _, dup := seen[entry.Source]; dup {
+		if _, dup := seen[entry.Source]; !dup {
+			seen[entry.Source] = struct{}{}
+			response.Sources = append(response.Sources, entry.Source)
+		}
+		identifier, ok := kevEntryIdentifier(entry)
+		if !ok {
 			continue
 		}
-		seen[entry.Source] = struct{}{}
-		response.Sources = append(response.Sources, entry.Source)
+		response.Entries = append(response.Entries, findingKEVEntryResponse{
+			Source:     entry.Source,
+			Identifier: identifier,
+			CVEID:      entry.CveID,
+		})
 	}
 	// The rows come 'cisa' first; its entry carries the richest facts
 	// (due date, ransomware use), so the scalar fields read from it.
@@ -259,6 +276,14 @@ func (s *Server) findingKEV(ctx context.Context, finding *store.Vulnerability, a
 		response.DueDate = first.DueDate.Time.UTC().Format("2006-01-02")
 	}
 	return response
+}
+
+func kevEntryIdentifier(entry dbgen.KevEntry) (string, bool) {
+	if entry.Source != "euvd" {
+		return entry.CveID, true
+	}
+	identifier := strings.ToUpper(strings.TrimSpace(entry.VulnerabilityName))
+	return identifier, euvdIdentifierPattern.MatchString(identifier)
 }
 
 // isAdvisoryBackedFindingType mirrors the gate's KEV scope (internal/delta's

@@ -105,11 +105,37 @@
                   </td>
                   <td class="px-3 py-2 text-xs">
                     <a
-                      :href="advisoryLink(advisory.canonical_id)"
+                      v-if="advisoryUrl(advisory.canonical_id)"
+                      :href="advisoryUrl(advisory.canonical_id)"
                       class="font-mono text-accent hover:underline"
                       target="_blank"
                       rel="noopener"
                     >{{ advisory.canonical_id }}</a>
+                    <span
+                      v-else
+                      class="font-mono text-gray-300"
+                    >{{ advisory.canonical_id }}</span>
+                    <div
+                      v-if="advisory.aliases?.length"
+                      class="mt-1 flex flex-wrap gap-1"
+                    >
+                      <template
+                        v-for="alias in advisory.aliases"
+                        :key="alias"
+                      >
+                        <a
+                          v-if="advisoryUrl(alias)"
+                          :href="advisoryUrl(alias)"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-[11px] text-accent hover:underline"
+                        >{{ alias }}</a>
+                        <span
+                          v-else
+                          class="rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-[11px] text-gray-400"
+                        >{{ alias }}</span>
+                      </template>
+                    </div>
                   </td>
                   <td class="px-3 py-2 text-xs">
                     <a
@@ -208,6 +234,7 @@
 import { computed, onMounted, onUnmounted } from 'vue'
 
 import type { ComponentWithVulns } from '@/api/client'
+import { advisoryUrl } from '@/lib/findingDisplay'
 import { ecosystemKey, sourceKey } from '@/lib/purl'
 
 const props = defineProps<{
@@ -235,13 +262,6 @@ function sevKey(severity: string): string {
   if (value === 'medium' || value === 'moderate') return 'medium'
   if (value === 'info' || value === 'informational' || value === 'none') return 'info'
   return 'low'
-}
-
-function advisoryLink(id: string): string {
-  if (!id) return '#'
-  if (id.startsWith('GHSA-')) return `https://github.com/advisories/${id}`
-  if (id.startsWith('CVE-')) return `https://nvd.nist.gov/vuln/detail/${id}`
-  return `https://osv.dev/vulnerability/${id}`
 }
 
 function cweLink(cwe: string): string {

@@ -713,6 +713,15 @@ definitions:
           complete when it is not.
         type: boolean
     type: object
+  server.findingKEVEntryResponse:
+    properties:
+      cve_id:
+        type: string
+      identifier:
+        type: string
+      source:
+        type: string
+    type: object
   server.findingKEVResponse:
     properties:
       date_added:
@@ -723,6 +732,13 @@ definitions:
         type: string
       due_date:
         type: string
+      entries:
+        description: |-
+          Entries retain each catalog record's publisher identifier so clients can
+          link to the exact source record rather than only the source homepage.
+        items:
+          $ref: '#/definitions/server.findingKEVEntryResponse'
+        type: array
       ransomware_use:
         description: |-
           RansomwareUse is true when CISA marks the entry as used in ransomware

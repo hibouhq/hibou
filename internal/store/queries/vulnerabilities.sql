@@ -97,7 +97,22 @@ WHERE v.snapshot_id = $1
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
        OR (@acceptance::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = @acceptance::text)
+  AND (NOT @exploited_only::bool OR (
+       v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id))))
 ORDER BY
+  CASE WHEN @sort::text IN ('', 'detected_desc', 'severity_desc')
+       AND v.type::text IN ('dependency', 'container', 'malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id))
+    THEN 0 ELSE 1 END ASC,
   CASE WHEN @sort::text = 'severity_asc' THEN v.severity_rank END ASC,
   CASE WHEN @sort::text = 'severity_desc' THEN v.severity_rank END DESC,
   CASE WHEN @sort::text = 'status_asc' THEN v.status END ASC,
@@ -126,7 +141,14 @@ WHERE v.snapshot_id = $1
        OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
        OR (@acceptance::text = 'disputed' AND fd.fingerprint IS NOT NULL)
-       OR fa.reason_kind::text = @acceptance::text);
+       OR fa.reason_kind::text = @acceptance::text)
+  AND (NOT @exploited_only::bool OR (
+       v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id))));
 
 -- name: ListAllVulnerabilitiesBySnapshot :many
 SELECT * FROM vulnerabilities

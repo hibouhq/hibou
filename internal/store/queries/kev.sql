@@ -28,7 +28,12 @@ ON CONFLICT (source, cve_id) DO UPDATE SET
     known_ransomware_campaign_use = EXCLUDED.known_ransomware_campaign_use,
     updated_at = now();
 
--- name: DeleteKEVSourceEntriesNotSeen :exec
+-- name: ListKEVSourceCVEIDs :many
+-- The pre-replace listing a sync pass diffs against to emit listed/delisted
+-- advisory events (PLAN follow-up / ADR-031 "becoming aware" trigger).
+SELECT cve_id FROM kev_entries WHERE source = $1;
+
+-- name: DeleteKEVSourceEntriesNotSeen :many
 -- Withdrawal, scoped to one source and grace-aware. grace_seconds = 0 deletes
 -- immediately (CISA: one atomic document, absence IS withdrawal). A positive
 -- grace keeps an unseen row until it has been missing for the window (EUVD:
@@ -39,7 +44,8 @@ ON CONFLICT (source, cve_id) DO UPDATE SET
 DELETE FROM kev_entries
 WHERE source = sqlc.arg(source)
   AND NOT (cve_id = ANY(sqlc.arg(keep)::text[]))
-  AND updated_at < now() - make_interval(secs => sqlc.arg(grace_seconds)::int);
+  AND updated_at < now() - make_interval(secs => sqlc.arg(grace_seconds)::int)
+RETURNING cve_id, date_added;
 
 -- name: DeleteKEVEntriesForOtherSources :exec
 -- A source an operator disabled must stop gating: its sync no longer runs, so
@@ -91,3 +97,9 @@ SELECT DISTINCT cve_id FROM kev_entries WHERE cve_id = ANY($1::text[]);
 SELECT * FROM kev_entries
 WHERE cve_id = ANY($1::text[])
 ORDER BY (source <> 'cisa'), source, cve_id;
+
+-- name: ListKEVEntriesForIdentifiersLimited :many
+SELECT * FROM kev_entries
+WHERE cve_id = ANY(sqlc.arg(identifiers)::text[])
+ORDER BY (source <> 'cisa'), source, cve_id
+LIMIT sqlc.arg(entry_limit);

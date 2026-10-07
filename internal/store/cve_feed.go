@@ -345,6 +345,13 @@ func (q *Queries) ListAdvisoryEventsForCVE(ctx context.Context, cveID string, li
 	return q.db.ListAdvisoryEventsForCVE(ctx, dbgen.ListAdvisoryEventsForCVEParams{CveID: cveID, Limit: limit})
 }
 
+func (q *Queries) ListKEVAdvisoryEventsForCVEs(ctx context.Context, cveIDs []string, limit int32) ([]dbgen.AdvisoryEvent, error) {
+	if len(cveIDs) == 0 {
+		return []dbgen.AdvisoryEvent{}, nil
+	}
+	return q.db.ListKEVAdvisoryEventsForCVEs(ctx, dbgen.ListKEVAdvisoryEventsForCVEsParams{CveIds: cveIDs, EventLimit: limit})
+}
+
 // GrantLocalRole records an operator-granted role, clearing any suspension.
 func (q *Queries) GrantLocalRole(ctx context.Context, userID uuid.UUID, role string, orgID *uuid.UUID, grantedBy uuid.UUID) error {
 	return q.db.UpsertLocalRoleGrant(ctx, dbgen.UpsertLocalRoleGrantParams{

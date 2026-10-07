@@ -116,14 +116,22 @@
                 @click="openDrawer(vulnerability)"
               >
                 <td class="px-3 py-2.5">
-                  <span :class="severityClass(vulnerability.severity)">{{ vulnerability.severity }}</span>
-                  <span
-                    v-if="vulnerability.kev"
-                    class="ml-1 inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-semibold text-white"
-                    title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD) — exploitation in the wild is documented"
-                  >
-                    <Flame class="h-3 w-3" />
-                    exploited
+                  <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                      <span
+                        v-if="vulnerability.kev"
+                        class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-danger-muted text-white"
+                        role="img"
+                        aria-label="Known exploited vulnerability"
+                        title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD) — exploitation in the wild is documented"
+                      >
+                        <Flame
+                          class="h-3 w-3"
+                          aria-hidden="true"
+                        />
+                      </span>
+                    </span>
+                    <span :class="severityClass(vulnerability.severity)">{{ vulnerability.severity }}</span>
                   </span>
                 </td>
                 <td class="px-3 py-2.5">
@@ -220,13 +228,21 @@ const slug = computed(() => route.params.slug as string)
 // filtered view can be bookmarked.
 const exploitedOnly = ref(route.query.exploited === 'true')
 function toggleExploitedOnly() {
-  exploitedOnly.value = !exploitedOnly.value
+  setExploitedOnly(!exploitedOnly.value)
+}
+function setExploitedOnly(on: boolean) {
+  if (exploitedOnly.value === on) return
+  exploitedOnly.value = on
   pagination.value.page = 1
-  void router.replace({ query: { ...route.query, exploited: exploitedOnly.value ? 'true' : undefined } })
+  void router.replace({ query: { ...route.query, exploited: on ? 'true' : undefined } })
 }
 const vulnerabilities = ref<OrgVulnerability[]>([])
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected' })
+watch(() => activeFilters.value.exploited, (token) => {
+  if (token === 'true') setExploitedOnly(true)
+  else if (token === 'false' || token === '') setExploitedOnly(false)
+})
 const searchQuery = ref('')
 const currentSort = ref('severity')
 const currentSortDirection = ref('desc')
@@ -242,6 +258,7 @@ const filterDefs = computed(() => [
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
+  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], hidden: true },
 ])
 const sortOptions = [
   { key: 'severity', label: 'Severity' },

@@ -242,8 +242,24 @@
                   >
                 </td>
                 <td class="px-3 py-2.5">
-                  <span :class="severityClass(vulnerability.severity)">
-                    {{ vulnerability.severity }}
+                  <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                      <span
+                        v-if="vulnerability.kev"
+                        class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-danger-muted text-white"
+                        role="img"
+                        aria-label="Known exploited vulnerability"
+                        title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD) — exploitation in the wild is documented"
+                      >
+                        <Flame
+                          class="h-3 w-3"
+                          aria-hidden="true"
+                        />
+                      </span>
+                    </span>
+                    <span :class="severityClass(vulnerability.severity)">
+                      {{ vulnerability.severity }}
+                    </span>
                   </span>
                 </td>
                 <td class="px-3 py-2.5">
@@ -287,14 +303,6 @@
                     :class="triageFor(vulnerability).badgeClass"
                     :title="triageTitle(vulnerability)"
                   >{{ triageFor(vulnerability).label }}</span>
-                  <span
-                    v-if="vulnerability.kev"
-                    class="ml-1 inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-semibold text-white"
-                    title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD) — exploitation in the wild is documented"
-                  >
-                    <Flame class="h-3 w-3" />
-                    exploited
-                  </span>
                   <RouterLink
                     v-if="vulnerability.fixed_in_prs?.length"
                     :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: vulnerability.fixed_in_prs[0].ref_name } }"
@@ -428,9 +436,13 @@ const vulnerabilities = ref<Vulnerability[]>([])
 // bookmarked/shared, like ref and snapshot.
 const exploitedOnly = ref(route.query.exploited === 'true')
 function toggleExploitedOnly() {
-  exploitedOnly.value = !exploitedOnly.value
+  setExploitedOnly(!exploitedOnly.value)
+}
+function setExploitedOnly(on: boolean) {
+  if (exploitedOnly.value === on) return
+  exploitedOnly.value = on
   pagination.value.page = 1
-  void router.replace({ query: { ...route.query, exploited: exploitedOnly.value ? 'true' : undefined } })
+  void router.replace({ query: { ...route.query, exploited: on ? 'true' : undefined } })
 }
 
 const secretScanRunning = ref(false)
@@ -484,6 +496,10 @@ async function runSecretScan() {
 
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected' })
+watch(() => activeFilters.value.exploited, (token) => {
+  if (token === 'true') setExploitedOnly(true)
+  else if (token === 'false' || token === '') setExploitedOnly(false)
+})
 const searchQuery = ref('')
 // Non-empty while the filter bar holds an OR/parenthesised query (ADR-023
 // filterquery grammar); sent verbatim as `q`, superseding discrete params.
@@ -525,6 +541,9 @@ const filterDefs = computed(() => [
   { key: 'acceptance', label: 'Triage', options: acceptanceOptions },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
+  // hidden: no dropdown pill (the red toggle is the UI) — the def exists so a
+  // typed `exploited:true` token validates and lands in activeFilters.
+  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], hidden: true },
 ])
 const sortOptions = [
   { key: 'detected', label: 'Detected', ascLabel: 'Oldest', descLabel: 'Newest' },

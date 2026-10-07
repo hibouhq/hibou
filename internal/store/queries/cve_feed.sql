@@ -185,6 +185,13 @@ WHERE cve_id = $1
 ORDER BY occurred_at DESC
 LIMIT $2;
 
+-- name: ListKEVAdvisoryEventsForCVEs :many
+SELECT * FROM advisory_events
+WHERE cve_id = ANY(sqlc.arg(cve_ids)::text[])
+  AND kind IN ('kev_listed', 'kev_delisted')
+ORDER BY occurred_at DESC
+LIMIT sqlc.arg(event_limit);
+
 -- name: ListRecentAdvisoryEvents :many
 -- The activity stream: what moved since you last looked. Unmatched records are
 -- counted elsewhere, never listed here — ~1,300 records a day would drown it.

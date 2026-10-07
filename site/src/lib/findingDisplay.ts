@@ -77,6 +77,8 @@ export function advisoryUrl(id: string | undefined): string {
   const value = (id ?? '').trim()
   if (!value) return ''
   const upper = value.toUpperCase()
+  if (/^EUVD-\d{4}-\d+$/.test(upper)) return `https://euvd.enisa.europa.eu/vulnerability/${upper}`
+  if (upper.startsWith('EUVD-')) return ''
   if (upper.startsWith('CVE-')) return `https://nvd.nist.gov/vuln/detail/${value}`
   if (upper.startsWith('GHSA-')) return `https://github.com/advisories/${value}`
   if (upper.startsWith('GO-')) return `https://pkg.go.dev/vuln/${value}`

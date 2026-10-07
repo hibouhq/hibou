@@ -236,7 +236,10 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 		FileQuery:  escapeLikeFragment(opts.FileQuery),
 		Search:     escapeLikeFragment(opts.Search),
 		Acceptance: normalizeAcceptanceFilter(opts.Acceptance),
-		Sort:       normalizeVulnerabilitySort(opts.Sort),
+		// Known-exploited membership (ADR-032); implies the dependency-shaped
+		// finding types, so sast/secret rows drop out while it is on.
+		ExploitedOnly: opts.ExploitedOnly,
+		Sort:          normalizeVulnerabilitySort(opts.Sort),
 	}
 
 	rows, err := q.db.ListVulnerabilitiesBySnapshot(ctx, params)
@@ -253,15 +256,16 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 	}
 
 	total, err := q.db.CountVulnerabilitiesBySnapshot(ctx, dbgen.CountVulnerabilitiesBySnapshotParams{
-		SnapshotID: params.SnapshotID,
-		Statuses:   params.Statuses,
-		Types:      params.Types,
-		Severities: params.Severities,
-		Scanners:   params.Scanners,
-		Languages:  params.Languages,
-		FileQuery:  params.FileQuery,
-		Search:     params.Search,
-		Acceptance: params.Acceptance,
+		SnapshotID:    params.SnapshotID,
+		Statuses:      params.Statuses,
+		Types:         params.Types,
+		Severities:    params.Severities,
+		Scanners:      params.Scanners,
+		Languages:     params.Languages,
+		FileQuery:     params.FileQuery,
+		Search:        params.Search,
+		Acceptance:    params.Acceptance,
+		ExploitedOnly: params.ExploitedOnly,
 	})
 	if err != nil {
 		return nil, 0, err
@@ -764,6 +768,16 @@ func vulnerabilityOrderByClause(sortParam int) string {
 	// row anyone sees. Ascending severity and status sorts are deliberate user
 	// choices and stay untouched.
 	return fmt.Sprintf(`ORDER BY
+	CASE WHEN ($%d::text IN ('', 'detected_desc', 'severity_desc'))
+		AND type IN ('dependency', 'container', 'malware') AND (
+			EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(primary_identifier_value))
+			OR EXISTS (
+				SELECT 1 FROM advisories a
+				LEFT JOIN advisory_aliases al ON al.advisory_id = a.id
+				JOIN kev_entries k2 ON k2.cve_id IN (upper(a.canonical_id), upper(al.alias))
+				WHERE a.id = advisory_id
+			)
+		) THEN 0 ELSE 1 END ASC,
   CASE WHEN ($%d::text IN ('', 'detected_asc', 'detected_desc', 'severity_desc')) AND type = 'malware' AND status = 'detected' THEN 0 ELSE 1 END ASC,
   CASE WHEN $%d::text = 'severity_asc' THEN CASE severity
     WHEN 'info' THEN 1
@@ -785,7 +799,7 @@ func vulnerabilityOrderByClause(sortParam int) string {
   CASE WHEN $%d::text = 'status_desc' THEN status END DESC,
   CASE WHEN $%d::text = 'detected_asc' THEN detected_at END ASC,
   CASE WHEN $%d::text = 'detected_desc' OR $%d::text = '' THEN detected_at END DESC,
-  id DESC`, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam)
+	id DESC`, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam)
 }
 
 func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {

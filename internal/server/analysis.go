@@ -47,6 +47,7 @@ type advisoryResponse struct {
 	Summary       *string   `json:"summary,omitempty"`
 	FixedVersions []string  `json:"fixed_versions,omitempty"`
 	References    []string  `json:"references,omitempty"`
+	Aliases       []string  `json:"aliases,omitempty"`
 	Source        *string   `json:"source,omitempty"`
 }
 
@@ -1435,6 +1436,7 @@ type countedVulnerabilityPair struct {
 type advisoryEnrichment struct {
 	FixedVersions []string
 	References    []string
+	Aliases       []string
 	Sources       []string
 	Source        *string
 }
@@ -1576,6 +1578,10 @@ func (s *Server) loadAdvisoryEnrichment(ctx context.Context, advisoryIDs []uuid.
 	for _, alias := range aliases {
 		aliasesByAdvisory[alias.AdvisoryID] = append(aliasesByAdvisory[alias.AdvisoryID], alias)
 	}
+	euvdAliasesByAdvisory, err := s.loadEUVDKEVAliases(ctx, advisoryByID, aliasesByAdvisory)
+	if err != nil {
+		return nil, err
+	}
 
 	enrichmentByID := make(map[uuid.UUID]advisoryEnrichment, len(advisoryIDs))
 	for advisoryID, advisory := range advisoryByID {
@@ -1583,12 +1589,55 @@ func (s *Server) loadAdvisoryEnrichment(ctx context.Context, advisoryIDs []uuid.
 		enrichmentByID[advisoryID] = advisoryEnrichment{
 			FixedVersions: collectAffectedRangeFixedVersions(rangesByAdvisory[advisoryID]),
 			References:    collectAdvisoryReferences(advisory, aliasesByAdvisory[advisoryID], sourcesByAdvisory[advisoryID]),
+			Aliases:       mergeAdvisoryAliases(advisory.CanonicalID, aliasesByAdvisory[advisoryID], euvdAliasesByAdvisory[advisoryID]),
 			Sources:       normalizedSources,
 			Source:        selectPrimaryProvider(normalizedSources),
 		}
 	}
 
 	return enrichmentByID, nil
+}
+
+func (s *Server) loadEUVDKEVAliases(ctx context.Context, advisoryByID map[uuid.UUID]dbgen.Advisory, aliasesByAdvisory map[uuid.UUID][]dbgen.AdvisoryAlias) (map[uuid.UUID][]string, error) {
+	identifiers := make([]string, 0, len(advisoryByID)*2)
+	for advisoryID, advisory := range advisoryByID {
+		identifiers = append(identifiers, strings.ToUpper(strings.TrimSpace(advisory.CanonicalID)))
+		for _, alias := range aliasesByAdvisory[advisoryID] {
+			identifiers = append(identifiers, strings.ToUpper(strings.TrimSpace(alias.Alias)))
+		}
+	}
+	entries, err := s.queries.ListKEVEntriesForIdentifiers(ctx, sortedUniqueNonEmptyStrings(identifiers))
+	if err != nil {
+		return nil, err
+	}
+	aliasesByCVE := make(map[string][]string)
+	for _, entry := range entries {
+		identifier, ok := kevEntryIdentifier(entry)
+		if !ok || entry.Source != "euvd" {
+			continue
+		}
+		aliasesByCVE[entry.CveID] = append(aliasesByCVE[entry.CveID], identifier)
+	}
+	result := make(map[uuid.UUID][]string, len(advisoryByID))
+	for advisoryID, advisory := range advisoryByID {
+		matched := aliasesByCVE[strings.ToUpper(strings.TrimSpace(advisory.CanonicalID))]
+		for _, alias := range aliasesByAdvisory[advisoryID] {
+			matched = append(matched, aliasesByCVE[strings.ToUpper(strings.TrimSpace(alias.Alias))]...)
+		}
+		result[advisoryID] = sortedUniqueNonEmptyStrings(matched)
+	}
+	return result, nil
+}
+
+func mergeAdvisoryAliases(canonicalID string, aliases []dbgen.AdvisoryAlias, euvdAliases []string) []string {
+	values := make([]string, 0, len(aliases)+len(euvdAliases))
+	for _, alias := range aliases {
+		if value := strings.TrimSpace(alias.Alias); value != "" && value != canonicalID {
+			values = append(values, value)
+		}
+	}
+	values = append(values, euvdAliases...)
+	return sortedUniqueNonEmptyStrings(values)
 }
 
 func collectCountedAdvisoryIDs(vulnerabilities []store.Vulnerability) []uuid.UUID {
@@ -1686,6 +1735,7 @@ func advisoryToResponse(advisory dbgen.Advisory, enrichment advisoryEnrichment) 
 		Summary:       summary,
 		FixedVersions: enrichment.FixedVersions,
 		References:    enrichment.References,
+		Aliases:       enrichment.Aliases,
 		Source:        enrichment.Source,
 	}
 }

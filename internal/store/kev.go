@@ -29,19 +29,41 @@ import (
 // The caller (via each kev.Source's Fetch) guarantees entries is non-empty, so
 // the delete can never clear the source; the guard here keeps that invariant
 // local.
-func (q *Queries) ReplaceKEVSource(ctx context.Context, db *sql.DB, source string, entries []kev.Entry, grace time.Duration) error {
+// KEVReplaceResult is what a sync pass changed, for the advisory timeline:
+// Added CVEs became listed, Removed stopped being listed (post-grace).
+// InitialSeed marks the source's very first population — thousands of "listed"
+// events on day one would bury the timeline, so the caller skips them.
+type KEVReplaceResult struct {
+	Added            []string
+	Removed          []string
+	RemovedDateAdded map[string]time.Time
+	InitialSeed      bool
+}
+
+func (q *Queries) ReplaceKEVSource(ctx context.Context, db *sql.DB, source string, entries []kev.Entry, grace time.Duration) (KEVReplaceResult, error) {
+	var result KEVReplaceResult
 	if source == "" {
-		return errors.New("kev source name is required")
+		return result, errors.New("kev source name is required")
 	}
 	if len(entries) == 0 {
-		return fmt.Errorf("refusing to replace kev source %q with zero entries", source)
+		return result, fmt.Errorf("refusing to replace kev source %q with zero entries", source)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin kev catalog tx: %w", err)
+		return result, fmt.Errorf("begin kev catalog tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	queries := q.WithTx(tx)
+
+	existingIDs, err := queries.db.ListKEVSourceCVEIDs(ctx, source)
+	if err != nil {
+		return result, fmt.Errorf("list existing kev entries for %s: %w", source, err)
+	}
+	existing := make(map[string]struct{}, len(existingIDs))
+	for _, id := range existingIDs {
+		existing[id] = struct{}{}
+	}
+	result.InitialSeed = len(existing) == 0
 
 	params := dbgen.UpsertKEVEntriesParams{
 		Source:             source,
@@ -54,6 +76,9 @@ func (q *Queries) ReplaceKEVSource(ctx context.Context, db *sql.DB, source strin
 		RansomwareUses:     make([]bool, 0, len(entries)),
 	}
 	for _, entry := range entries {
+		if _, known := existing[entry.CVEID]; !known {
+			result.Added = append(result.Added, entry.CVEID)
+		}
 		params.CveIds = append(params.CveIds, entry.CVEID)
 		params.VendorProjects = append(params.VendorProjects, entry.VendorProject)
 		params.Products = append(params.Products, entry.Product)
@@ -63,19 +88,29 @@ func (q *Queries) ReplaceKEVSource(ctx context.Context, db *sql.DB, source strin
 		params.RansomwareUses = append(params.RansomwareUses, entry.KnownRansomwareCampaignUse)
 	}
 	if err := queries.db.UpsertKEVEntries(ctx, params); err != nil {
-		return fmt.Errorf("upsert kev entries for %s: %w", source, err)
+		return result, fmt.Errorf("upsert kev entries for %s: %w", source, err)
 	}
-	if err := queries.db.DeleteKEVSourceEntriesNotSeen(ctx, dbgen.DeleteKEVSourceEntriesNotSeenParams{
+	removed, err := queries.db.DeleteKEVSourceEntriesNotSeen(ctx, dbgen.DeleteKEVSourceEntriesNotSeenParams{
 		Source:       source,
 		Keep:         params.CveIds,
 		GraceSeconds: int32(grace / time.Second), // #nosec G115 -- grace is a small constant per source
-	}); err != nil {
-		return fmt.Errorf("delete withdrawn kev entries for %s: %w", source, err)
+	})
+	if err != nil {
+		return result, fmt.Errorf("delete withdrawn kev entries for %s: %w", source, err)
+	}
+	for _, entry := range removed {
+		result.Removed = append(result.Removed, entry.CveID)
+		if entry.DateAdded.Valid {
+			if result.RemovedDateAdded == nil {
+				result.RemovedDateAdded = make(map[string]time.Time)
+			}
+			result.RemovedDateAdded[entry.CveID] = entry.DateAdded.Time
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit kev catalog for %s: %w", source, err)
+		return result, fmt.Errorf("commit kev catalog for %s: %w", source, err)
 	}
-	return nil
+	return result, nil
 }
 
 // dateOrEmpty encodes a date for the text[] leg of the batch upsert; ” maps
@@ -127,6 +162,16 @@ func (q *Queries) ListKEVEntriesForIdentifiers(ctx context.Context, identifiers 
 		return nil, nil
 	}
 	return q.db.ListKEVEntriesForIdentifiers(ctx, identifiers)
+}
+
+func (q *Queries) ListKEVEntriesForIdentifiersLimited(ctx context.Context, identifiers []string, limit int32) ([]dbgen.KevEntry, error) {
+	if len(identifiers) == 0 {
+		return []dbgen.KevEntry{}, nil
+	}
+	return q.db.ListKEVEntriesForIdentifiersLimited(ctx, dbgen.ListKEVEntriesForIdentifiersLimitedParams{
+		Identifiers: identifiers,
+		EntryLimit:  limit,
+	})
 }
 
 // CountKEVEntries reports the stored catalog size across sources, for sync

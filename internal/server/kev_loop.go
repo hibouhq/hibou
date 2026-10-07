@@ -101,8 +101,9 @@ func (s *Server) runKEVSync(ctx context.Context, sources []kev.Source, interval 
 		for _, source := range sources {
 			entry := health.source(source.Name())
 			catalog, fetchErr := source.Fetch(runCtx)
+			var diff store.KEVReplaceResult
 			if fetchErr == nil {
-				fetchErr = s.queries.ReplaceKEVSource(runCtx, s.db, source.Name(), catalog.Entries, source.WithdrawalGrace())
+				diff, fetchErr = s.queries.ReplaceKEVSource(runCtx, s.db, source.Name(), catalog.Entries, source.WithdrawalGrace())
 			}
 			if fetchErr != nil {
 				s.log.Error().Err(fetchErr).Str("source", source.Name()).Msg("kev catalog sync failed")
@@ -112,6 +113,7 @@ func (s *Server) runKEVSync(ctx context.Context, sources []kev.Source, interval 
 				}
 				continue
 			}
+			s.recordKEVEvents(runCtx, source.Name(), catalog, diff)
 			// Success clears the failure fields by construction.
 			*entry = KEVSourceHealth{
 				Source:         source.Name(),
@@ -157,6 +159,51 @@ func (s *Server) purgeKEVWhenDisabled(ctx context.Context) {
 	})
 	if err != nil {
 		s.log.Warn().Err(err).Msg("failed to purge kev entries while the sync is disabled; stored entries keep gating until this succeeds")
+	}
+}
+
+// recordKEVEvents writes listed/delisted rows onto the advisory timeline —
+// ADR-031's "becoming aware" trigger (Art. 14): a CVE joining an exploited
+// catalog is an event someone may have a 24-hour clock on, and it belongs in
+// the same per-advisory history as upstream revisions. The source's very
+// first population is skipped (thousands of day-one events would bury the
+// timeline — same anchor-without-reporting stance as the CVE feed seed).
+// Best-effort: a failed event write must not fail the sync.
+func (s *Server) recordKEVEvents(ctx context.Context, sourceName string, catalog kev.Catalog, diff store.KEVReplaceResult) {
+	if diff.InitialSeed {
+		return
+	}
+	dateAdded := make(map[string]time.Time, len(catalog.Entries))
+	for _, entry := range catalog.Entries {
+		dateAdded[entry.CVEID] = entry.DateAdded
+	}
+	now := time.Now().UTC()
+	for _, cve := range diff.Added {
+		occurred := dateAdded[cve]
+		if occurred.IsZero() {
+			occurred = now
+		}
+		detail, _ := json.Marshal(map[string]string{"source": sourceName})
+		if err := s.queries.RecordAdvisoryEvent(ctx, store.AdvisoryEvent{
+			CVEID: cve, Kind: store.EventKEVListed, OccurredAt: occurred, Detail: detail,
+		}); err != nil {
+			s.log.Warn().Err(err).Str("cve", cve).Msg("record kev_listed event")
+		}
+	}
+	for _, cve := range diff.Removed {
+		detailValues := map[string]string{"source": sourceName}
+		if dateAdded, ok := diff.RemovedDateAdded[cve]; ok {
+			detailValues["date_added"] = dateAdded.UTC().Format("2006-01-02")
+		}
+		detail, _ := json.Marshal(detailValues)
+		if err := s.queries.RecordAdvisoryEvent(ctx, store.AdvisoryEvent{
+			CVEID: cve, Kind: store.EventKEVDelisted, OccurredAt: now, Detail: detail,
+		}); err != nil {
+			s.log.Warn().Err(err).Str("cve", cve).Msg("record kev_delisted event")
+		}
+	}
+	if len(diff.Added) > 0 || len(diff.Removed) > 0 {
+		s.log.Info().Str("source", sourceName).Int("listed", len(diff.Added)).Int("delisted", len(diff.Removed)).Msg("kev catalog movement")
 	}
 }
 

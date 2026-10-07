@@ -683,6 +683,7 @@ export interface FindingAdvisory {
 export interface FindingKEV {
   /** Catalogs listing it ("cisa", "euvd"), deduplicated. */
   sources: string[]
+  entries?: Array<{ source: string; identifier: string; cve_id: string }>
   /** When the first-listed catalog recorded it as exploited (YYYY-MM-DD). */
   date_added?: string
   /** CISA BOD 22-01 remediation deadline — binding on US federal agencies only. */
@@ -695,7 +696,7 @@ export interface FindingKEV {
 // observed across snapshots; `activity` events are decisions a human or a token
 // recorded — the audit log, narrowed to this one finding.
 export interface FindingHistoryEvent {
-  source: 'scan' | 'activity'
+  source: 'scan' | 'activity' | 'advisory'
   kind: string
   at: string
   ref_name?: string
@@ -773,6 +774,7 @@ export interface VulnerabilityFacets {
 export interface Advisory {
   id: string
   canonical_id: string
+  aliases?: string[]
   title: string
   severity: string
   cvss_score?: number

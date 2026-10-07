@@ -1,15 +1,19 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 // A finding's timeline has two sources that must stay distinguishable: what the
@@ -19,6 +23,7 @@ import (
 const (
 	maxFindingScanEvents     = 100
 	maxFindingActivityEvents = 100
+	maxFindingAdvisoryEvents = 100
 )
 
 // findingActivityActions is the closed set of audit actions this endpoint may
@@ -176,6 +181,84 @@ func (s *Server) handleGetFindingHistory(w http.ResponseWriter, r *http.Request)
 		response.Events = append(response.Events, activityHistoryEvent(entry))
 	}
 
+	identifiers, err := s.findingKEVIdentifiers(r.Context(), finding)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+	advisoryEvents, err := s.queries.ListKEVAdvisoryEventsForCVEs(r.Context(), identifiers, maxFindingAdvisoryEvents+1)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+	if len(advisoryEvents) > maxFindingAdvisoryEvents {
+		advisoryEvents = advisoryEvents[:maxFindingAdvisoryEvents]
+		response.Truncated = true
+	}
+	listed := make(map[string]struct{}, len(advisoryEvents))
+	seen := make(map[string]struct{}, len(advisoryEvents))
+	for _, entry := range advisoryEvents {
+		event := advisoryHistoryEvent(entry)
+		source, _ := event.Detail["source"].(string)
+		key := event.Kind + "\x00" + source + "\x00" + entry.CveID + "\x00" + event.At.UTC().Format(time.RFC3339Nano)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		response.Events = append(response.Events, event)
+		if event.Kind == string(store.EventKEVListed) {
+			if source != "" {
+				listed[source+"\x00"+entry.CveID] = struct{}{}
+			}
+		}
+	}
+	for _, entry := range advisoryEvents {
+		if entry.Kind != string(store.EventKEVDelisted) {
+			continue
+		}
+		event := advisoryHistoryEvent(entry)
+		source, _ := event.Detail["source"].(string)
+		dateAdded, _ := event.Detail["date_added"].(string)
+		occurred, err := time.Parse("2006-01-02", dateAdded)
+		if source == "" || err != nil {
+			continue
+		}
+		key := source + "\x00" + entry.CveID
+		if _, ok := listed[key]; ok {
+			continue
+		}
+		listed[key] = struct{}{}
+		response.Events = append(response.Events, findingHistoryEvent{
+			Source: "advisory",
+			Kind:   string(store.EventKEVListed),
+			At:     occurred,
+			Detail: map[string]any{"source": source},
+		})
+	}
+	anchors, err := s.queries.ListKEVEntriesForIdentifiersLimited(r.Context(), identifiers, maxFindingAdvisoryEvents+1)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+	if len(anchors) > maxFindingAdvisoryEvents {
+		anchors = anchors[:maxFindingAdvisoryEvents]
+		response.Truncated = true
+	}
+	for _, anchor := range anchors {
+		if !anchor.DateAdded.Valid {
+			continue
+		}
+		if _, ok := listed[anchor.Source+"\x00"+anchor.CveID]; ok {
+			continue
+		}
+		response.Events = append(response.Events, findingHistoryEvent{
+			Source: "advisory",
+			Kind:   string(store.EventKEVListed),
+			At:     anchor.DateAdded.Time,
+			Detail: map[string]any{"source": anchor.Source},
+		})
+	}
+
 	// Newest first, with activity ahead of the scan that observed its effect
 	// when both land in the same instant.
 	sort.SliceStable(response.Events, func(i, j int) bool {
@@ -186,6 +269,48 @@ func (s *Server) handleGetFindingHistory(w http.ResponseWriter, r *http.Request)
 	})
 
 	api.JSON(w, http.StatusOK, response)
+}
+
+func (s *Server) findingKEVIdentifiers(ctx context.Context, finding *store.Vulnerability) ([]string, error) {
+	if finding.AdvisoryID == nil {
+		switch finding.Type {
+		case "dependency", "container", "malware":
+			if identifier := strings.ToUpper(strings.TrimSpace(finding.PrimaryIdentifierValue)); identifier != "" {
+				return []string{identifier}, nil
+			}
+		}
+		return nil, nil
+	}
+	advisory, err := s.queries.GetAdvisoryByID(ctx, *finding.AdvisoryID)
+	if err != nil {
+		return nil, err
+	}
+	aliases, err := s.queries.ListAliasesByAdvisoryIDs(ctx, []uuid.UUID{*finding.AdvisoryID})
+	if err != nil {
+		return nil, err
+	}
+	identifiers := make([]string, 0, len(aliases)+1)
+	seen := make(map[string]struct{}, len(aliases)+1)
+	for _, identifier := range append([]string{advisory.CanonicalID}, advisoryAliases(aliases)...) {
+		identifier = strings.ToUpper(strings.TrimSpace(identifier))
+		if identifier == "" {
+			continue
+		}
+		if _, ok := seen[identifier]; ok {
+			continue
+		}
+		seen[identifier] = struct{}{}
+		identifiers = append(identifiers, identifier)
+	}
+	return identifiers, nil
+}
+
+func advisoryAliases(aliases []dbgen.AdvisoryAlias) []string {
+	identifiers := make([]string, len(aliases))
+	for index, alias := range aliases {
+		identifiers[index] = alias.Alias
+	}
+	return identifiers
 }
 
 func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
@@ -253,6 +378,25 @@ func activityHistoryEvent(entry store.FindingActivityEntry) findingHistoryEvent 
 		ActorType:    entry.ActorType,
 		ActorDisplay: entry.ActorDisplay,
 		Detail:       detail,
+	}
+}
+
+func advisoryHistoryEvent(entry dbgen.AdvisoryEvent) findingHistoryEvent {
+	detail := map[string]any{}
+	var stored map[string]any
+	if json.Unmarshal(entry.Detail, &stored) == nil {
+		if source, ok := stored["source"].(string); ok && strings.TrimSpace(source) != "" {
+			detail["source"] = source
+		}
+	}
+	if len(detail) == 0 {
+		detail = nil
+	}
+	return findingHistoryEvent{
+		Source: "advisory",
+		Kind:   entry.Kind,
+		At:     entry.OccurredAt,
+		Detail: detail,
 	}
 }
 

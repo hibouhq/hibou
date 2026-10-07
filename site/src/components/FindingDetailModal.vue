@@ -32,18 +32,6 @@
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <span :class="severityBadgeClass(detail.finding.severity)">{{ detail.finding.severity }}</span>
-                  <!-- Exploited is an orthogonal axis, not a sixth severity: a
-                       solid pill beside the outline severity chip, so a
-                       "medium + exploited" finding reads as two facts, never as
-                       a severity contradiction. -->
-                  <span
-                    v-if="detail.kev"
-                    class="inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-semibold text-white"
-                    :title="`Listed on a known-exploited catalog (${kevSourceNames}) — exploitation in the wild is documented, whatever the CVSS score says`"
-                  >
-                    <Flame class="h-3 w-3" />
-                    exploited
-                  </span>
                   <span :class="findingTypeBadgeClass(detail.finding.type)">{{ detail.finding.type }}</span>
                   <span
                     class="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium"
@@ -68,17 +56,31 @@
                 </h2>
 
                 <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
-                  <a
-                    v-if="identifierUrl"
-                    :href="identifierUrl"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="font-mono text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent"
-                  >{{ identifier }}</a>
-                  <span
-                    v-else
-                    class="font-mono text-accent"
-                  >{{ identifier }}</span>
+                  <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <a
+                      v-if="identifierUrl"
+                      :href="identifierUrl"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="font-mono text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent"
+                    >{{ identifier }}</a>
+                    <span
+                      v-else
+                      class="font-mono text-accent"
+                    >{{ identifier }}</span>
+                    <span
+                      v-if="detail.kev"
+                      class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-danger-muted text-white"
+                      role="img"
+                      aria-label="Known exploited vulnerability"
+                      :title="`Exploitation documented by ${kevSourceNames}`"
+                    >
+                      <Flame
+                        class="h-3 w-3"
+                        aria-hidden="true"
+                      />
+                    </span>
+                  </span>
                   <!-- Every date says whose clock it is on. "First detected"
                        is ours — the first scan that matched a component — and
                        is easily read as "when the flaw appeared", which is a
@@ -135,6 +137,11 @@
           </header>
 
           <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            <FindingKEVDetails
+              v-if="detail.kev && (tab === 'overview' || tab === 'details')"
+              :kev="detail.kev"
+              :identifier="detail.advisory?.aliases?.find(value => value.startsWith('CVE-')) || identifier"
+            />
             <!-- Overview: the finding and the decision it asks for -->
             <template v-if="tab === 'overview'">
               <component
@@ -460,6 +467,7 @@ import CommitLink from '@/components/CommitLink.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import CodeFindingDetails from '@/components/finding/CodeFindingDetails.vue'
 import DependencyFindingDetails from '@/components/finding/DependencyFindingDetails.vue'
+import FindingKEVDetails from '@/components/finding/FindingKEVDetails.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
 import FindingTimeline from '@/components/finding/FindingTimeline.vue'
 import GenericFindingDetails from '@/components/finding/GenericFindingDetails.vue'
@@ -508,8 +516,6 @@ type TabKey = 'overview' | 'details' | 'occurrences' | 'history'
 
 const detail = ref<FindingDetail | null>(null)
 
-// Catalog names for the exploited pill's tooltip; the pill itself says only
-// "exploited" — one concept, provenance on demand.
 // The base commit the fix-in-flight claims were verified against (PLAN §5) —
 // shown so the claim is an assertion about merging NOW, not whenever.
 const fixClaimsBase = computed(() => detail.value?.finding.fixed_in_prs?.find((fix) => fix.verified_base_sha)?.verified_base_sha ?? '')

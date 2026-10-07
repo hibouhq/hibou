@@ -8487,6 +8487,20 @@ const docTemplate = `{
                 }
             }
         },
+        "server.findingKEVEntryResponse": {
+            "type": "object",
+            "properties": {
+                "cve_id": {
+                    "type": "string"
+                },
+                "identifier": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                }
+            }
+        },
         "server.findingKEVResponse": {
             "type": "object",
             "properties": {
@@ -8496,6 +8510,13 @@ const docTemplate = `{
                 },
                 "due_date": {
                     "type": "string"
+                },
+                "entries": {
+                    "description": "Entries retain each catalog record's publisher identifier so clients can\nlink to the exact source record rather than only the source homepage.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.findingKEVEntryResponse"
+                    }
                 },
                 "ransomware_use": {
                     "description": "RansomwareUse is true when CISA marks the entry as used in ransomware\ncampaigns (CISA rows only).",

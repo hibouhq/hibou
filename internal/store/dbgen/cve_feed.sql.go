@@ -675,6 +675,51 @@ func (q *Queries) ListInstanceMembers(ctx context.Context) ([]ListInstanceMember
 	return items, nil
 }
 
+const listKEVAdvisoryEventsForCVEs = `-- name: ListKEVAdvisoryEventsForCVEs :many
+SELECT id, advisory_id, cve_id, kind, occurred_at, observed_at, actor_id, detail FROM advisory_events
+WHERE cve_id = ANY($1::text[])
+  AND kind IN ('kev_listed', 'kev_delisted')
+ORDER BY occurred_at DESC
+LIMIT $2
+`
+
+type ListKEVAdvisoryEventsForCVEsParams struct {
+	CveIds     []string `json:"cve_ids"`
+	EventLimit int32    `json:"event_limit"`
+}
+
+func (q *Queries) ListKEVAdvisoryEventsForCVEs(ctx context.Context, arg ListKEVAdvisoryEventsForCVEsParams) ([]AdvisoryEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listKEVAdvisoryEventsForCVEs, pq.Array(arg.CveIds), arg.EventLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdvisoryEvent{}
+	for rows.Next() {
+		var i AdvisoryEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.AdvisoryID,
+			&i.CveID,
+			&i.Kind,
+			&i.OccurredAt,
+			&i.ObservedAt,
+			&i.ActorID,
+			&i.Detail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLocalRoleGrantsForUser = `-- name: ListLocalRoleGrantsForUser :many
 SELECT id, user_id, role, org_id, granted_by, granted_at, suspended_at, suspended_reason FROM local_role_grants WHERE user_id = $1 ORDER BY org_id NULLS FIRST, role
 `

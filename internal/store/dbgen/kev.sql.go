@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -46,17 +47,23 @@ func (q *Queries) DeleteKEVEntriesForOtherSources(ctx context.Context, sources [
 	return err
 }
 
-const deleteKEVSourceEntriesNotSeen = `-- name: DeleteKEVSourceEntriesNotSeen :exec
+const deleteKEVSourceEntriesNotSeen = `-- name: DeleteKEVSourceEntriesNotSeen :many
 DELETE FROM kev_entries
 WHERE source = $1
   AND NOT (cve_id = ANY($2::text[]))
   AND updated_at < now() - make_interval(secs => $3::int)
+RETURNING cve_id, date_added
 `
 
 type DeleteKEVSourceEntriesNotSeenParams struct {
 	Source       string   `json:"source"`
 	Keep         []string `json:"keep"`
 	GraceSeconds int32    `json:"grace_seconds"`
+}
+
+type DeleteKEVSourceEntriesNotSeenRow struct {
+	CveID     string       `json:"cve_id"`
+	DateAdded sql.NullTime `json:"date_added"`
 }
 
 // Withdrawal, scoped to one source and grace-aware. grace_seconds = 0 deletes
@@ -66,9 +73,27 @@ type DeleteKEVSourceEntriesNotSeenParams struct {
 // pages mid-walk can be skipped once — un-listing an exploited CVE over a
 // pagination artifact is the worse error; a real withdrawal lands one pass
 // later).
-func (q *Queries) DeleteKEVSourceEntriesNotSeen(ctx context.Context, arg DeleteKEVSourceEntriesNotSeenParams) error {
-	_, err := q.db.ExecContext(ctx, deleteKEVSourceEntriesNotSeen, arg.Source, pq.Array(arg.Keep), arg.GraceSeconds)
-	return err
+func (q *Queries) DeleteKEVSourceEntriesNotSeen(ctx context.Context, arg DeleteKEVSourceEntriesNotSeenParams) ([]DeleteKEVSourceEntriesNotSeenRow, error) {
+	rows, err := q.db.QueryContext(ctx, deleteKEVSourceEntriesNotSeen, arg.Source, pq.Array(arg.Keep), arg.GraceSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeleteKEVSourceEntriesNotSeenRow{}
+	for rows.Next() {
+		var i DeleteKEVSourceEntriesNotSeenRow
+		if err := rows.Scan(&i.CveID, &i.DateAdded); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const filterKEVAdvisoryIDs = `-- name: FilterKEVAdvisoryIDs :many
@@ -180,6 +205,80 @@ func (q *Queries) ListKEVEntriesForIdentifiers(ctx context.Context, dollar_1 []s
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listKEVEntriesForIdentifiersLimited = `-- name: ListKEVEntriesForIdentifiersLimited :many
+SELECT source, cve_id, vendor_project, product, vulnerability_name, date_added, due_date, known_ransomware_campaign_use, updated_at FROM kev_entries
+WHERE cve_id = ANY($1::text[])
+ORDER BY (source <> 'cisa'), source, cve_id
+LIMIT $2
+`
+
+type ListKEVEntriesForIdentifiersLimitedParams struct {
+	Identifiers []string `json:"identifiers"`
+	EntryLimit  int32    `json:"entry_limit"`
+}
+
+func (q *Queries) ListKEVEntriesForIdentifiersLimited(ctx context.Context, arg ListKEVEntriesForIdentifiersLimitedParams) ([]KevEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listKEVEntriesForIdentifiersLimited, pq.Array(arg.Identifiers), arg.EntryLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []KevEntry{}
+	for rows.Next() {
+		var i KevEntry
+		if err := rows.Scan(
+			&i.Source,
+			&i.CveID,
+			&i.VendorProject,
+			&i.Product,
+			&i.VulnerabilityName,
+			&i.DateAdded,
+			&i.DueDate,
+			&i.KnownRansomwareCampaignUse,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listKEVSourceCVEIDs = `-- name: ListKEVSourceCVEIDs :many
+SELECT cve_id FROM kev_entries WHERE source = $1
+`
+
+// The pre-replace listing a sync pass diffs against to emit listed/delisted
+// advisory events (PLAN follow-up / ADR-031 "becoming aware" trigger).
+func (q *Queries) ListKEVSourceCVEIDs(ctx context.Context, source string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listKEVSourceCVEIDs, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var cve_id string
+		if err := rows.Scan(&cve_id); err != nil {
+			return nil, err
+		}
+		items = append(items, cve_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

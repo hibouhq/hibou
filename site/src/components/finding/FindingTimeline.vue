@@ -38,16 +38,20 @@
           <span
             class="absolute -left-[27px] flex h-4 w-4 items-center justify-center rounded-full border"
             :class="markerClass(event)"
-            :title="event.source === 'scan' ? 'Observed by a scan' : 'Recorded decision'"
+            :title="event.source === 'scan' ? 'Observed by a scan' : event.source === 'advisory' ? 'Exploitation catalog update' : 'Recorded decision'"
           >
             <component
-              :is="event.source === 'scan' ? Radar : UserCheck"
+              :is="event.source === 'scan' ? Radar : event.source === 'advisory' ? Flame : UserCheck"
               class="h-2.5 w-2.5"
             />
           </span>
 
           <div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span class="text-sm font-medium text-gray-100">{{ eventLabel(event) }}</span>
+            <span
+              v-if="event.source === 'advisory' && stringOf(event, 'source')"
+              class="text-xs text-gray-400"
+            >{{ kevSourceLabel(stringOf(event, 'source')) }}</span>
             <span
               v-if="event.actor_display"
               class="text-xs text-gray-400"
@@ -89,10 +93,22 @@
             Analysis now finds an execution path to the vulnerable symbol — this counts as real risk again.
           </p>
           <p
+            v-else-if="event.kind === 'kev_listed'"
+            class="mt-0.5 text-xs text-gray-400"
+          >
+            This catalog documented exploitation in the wild, independently of scans on this repository.
+          </p>
+          <p
+            v-else-if="event.kind === 'kev_delisted'"
+            class="mt-0.5 text-xs text-gray-400"
+          >
+            No longer listed by this catalog. Other catalogs may still list it; removal does not prove exploitation stopped.
+          </p>
+          <p
             v-else-if="event.kind === 'first_detected'"
             class="mt-0.5 text-xs text-gray-500"
           >
-            This is where the finding enters the history — everything above happened after it.
+            First observed in this repository. Exploitation catalog entries may predate this scan.
           </p>
 
           <div
@@ -121,11 +137,12 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 
-import { History, Radar, UserCheck } from 'lucide-vue-next'
+import { Flame, History, Radar, UserCheck } from 'lucide-vue-next'
 
 import { api, type FindingHistoryEvent } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
+import { kevSourceLabel } from '@/lib/kev'
 
 // The finding's own timeline: scan observations merged with triage decisions.
 // It reads the fingerprint-scoped history endpoint, not the org audit log —
@@ -179,6 +196,8 @@ const LABELS: Record<string, string> = {
   disputed: 'Suppression disputed',
   dispute_withdrawn: 'Dispute withdrawn',
   triaged: 'Triaged',
+  kev_listed: 'Known exploitation listed',
+  kev_delisted: 'Exploitation listing removed',
 }
 
 function eventLabel(event: FindingHistoryEvent): string {
@@ -192,6 +211,7 @@ function markerClass(event: FindingHistoryEvent): string {
     case 'detected':
     case 'reintroduced':
     case 'became_reachable':
+    case 'kev_listed':
       return 'border-danger/40 bg-danger/15 text-danger'
     case 'resolved':
     case 'revoked':
@@ -203,6 +223,7 @@ function markerClass(event: FindingHistoryEvent): string {
     case 'disputed':
       return 'border-danger/40 bg-danger/15 text-danger'
     case 'false_positive':
+    case 'kev_delisted':
       return 'border-surface-border bg-surface-overlay text-gray-400'
     default:
       return 'border-surface-border bg-surface-overlay text-gray-500'

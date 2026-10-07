@@ -15,6 +15,17 @@ export function kevSourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source.toUpperCase()
 }
 
+export function kevSourceUrl(source: string, identifier: string): string {
+  const value = identifier.trim().toUpperCase()
+  if (source === 'cisa' && /^CVE-\d{4}-\d{4,}$/.test(value)) {
+    return `https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=${encodeURIComponent(value)}`
+  }
+  if (source === 'euvd' && /^EUVD-\d{4}-\d+$/.test(value)) {
+    return `https://euvd.enisa.europa.eu/vulnerability/${value}`
+  }
+  return ''
+}
+
 export type KevSyncTone = 'ok' | 'stale' | 'failing'
 
 /**
