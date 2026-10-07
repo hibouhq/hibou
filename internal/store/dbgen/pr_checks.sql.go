@@ -15,7 +15,7 @@ import (
 )
 
 const getLatestPRCheckByRef = `-- name: GetLatestPRCheckByRef :one
-SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
+SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at, claims_base_sha
 FROM pr_checks
 WHERE ref_id = $1 AND context = $2
 ORDER BY updated_at DESC
@@ -48,12 +48,13 @@ func (q *Queries) GetLatestPRCheckByRef(ctx context.Context, arg GetLatestPRChec
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ClaimsBaseSha,
 	)
 	return i, err
 }
 
 const getPRCheck = `-- name: GetPRCheck :one
-SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
+SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at, claims_base_sha
 FROM pr_checks
 WHERE repo_id = $1 AND head_sha = $2 AND context = $3
 `
@@ -85,12 +86,13 @@ func (q *Queries) GetPRCheck(ctx context.Context, arg GetPRCheckParams) (PrCheck
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ClaimsBaseSha,
 	)
 	return i, err
 }
 
 const listFixingPullRequests = `-- name: ListFixingPullRequests :many
-SELECT f.fingerprint, r.name AS ref_name, r.pr_number, r.pr_title
+SELECT f.fingerprint, r.name AS ref_name, r.pr_number, r.pr_title, c.claims_base_sha
 FROM pr_check_resolved_fingerprints f
 JOIN pr_checks c ON c.id = f.pr_check_id
 JOIN refs r ON r.id = c.ref_id
@@ -107,10 +109,11 @@ type ListFixingPullRequestsParams struct {
 }
 
 type ListFixingPullRequestsRow struct {
-	Fingerprint string         `json:"fingerprint"`
-	RefName     string         `json:"ref_name"`
-	PrNumber    sql.NullString `json:"pr_number"`
-	PrTitle     string         `json:"pr_title"`
+	Fingerprint   string         `json:"fingerprint"`
+	RefName       string         `json:"ref_name"`
+	PrNumber      sql.NullString `json:"pr_number"`
+	PrTitle       string         `json:"pr_title"`
+	ClaimsBaseSha string         `json:"claims_base_sha"`
 }
 
 // Open PRs whose latest published gate resolves the given fingerprints.
@@ -128,6 +131,7 @@ func (q *Queries) ListFixingPullRequests(ctx context.Context, arg ListFixingPull
 			&i.RefName,
 			&i.PrNumber,
 			&i.PrTitle,
+			&i.ClaimsBaseSha,
 		); err != nil {
 			return nil, err
 		}
@@ -143,7 +147,7 @@ func (q *Queries) ListFixingPullRequests(ctx context.Context, arg ListFixingPull
 }
 
 const listUnsyncedPRChecks = `-- name: ListUnsyncedPRChecks :many
-SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
+SELECT id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at, claims_base_sha
 FROM pr_checks
 WHERE forge_synced_at IS NULL
 ORDER BY created_at ASC
@@ -177,6 +181,7 @@ func (q *Queries) ListUnsyncedPRChecks(ctx context.Context, limit int32) ([]PrCh
 			&i.LastError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ClaimsBaseSha,
 		); err != nil {
 			return nil, err
 		}
@@ -244,9 +249,10 @@ INSERT INTO pr_checks (
     external_id,
     target_url,
     forge_synced_at,
-    last_error
+    last_error,
+    claims_base_sha
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
     ref_id = EXCLUDED.ref_id,
     state = EXCLUDED.state,
@@ -260,8 +266,9 @@ ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
     target_url = EXCLUDED.target_url,
     forge_synced_at = EXCLUDED.forge_synced_at,
     last_error = EXCLUDED.last_error,
+    claims_base_sha = EXCLUDED.claims_base_sha,
     updated_at = NOW()
-RETURNING id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at
+RETURNING id, repo_id, ref_id, head_sha, context, state, conclusion, enforcement, passed, reasons, delta_summary, external_id, target_url, forge_synced_at, last_error, created_at, updated_at, claims_base_sha
 `
 
 type UpsertPRCheckParams struct {
@@ -279,6 +286,7 @@ type UpsertPRCheckParams struct {
 	TargetUrl     string          `json:"target_url"`
 	ForgeSyncedAt sql.NullTime    `json:"forge_synced_at"`
 	LastError     string          `json:"last_error"`
+	ClaimsBaseSha string          `json:"claims_base_sha"`
 }
 
 func (q *Queries) UpsertPRCheck(ctx context.Context, arg UpsertPRCheckParams) (PrCheck, error) {
@@ -297,6 +305,7 @@ func (q *Queries) UpsertPRCheck(ctx context.Context, arg UpsertPRCheckParams) (P
 		arg.TargetUrl,
 		arg.ForgeSyncedAt,
 		arg.LastError,
+		arg.ClaimsBaseSha,
 	)
 	var i PrCheck
 	err := row.Scan(
@@ -317,6 +326,7 @@ func (q *Queries) UpsertPRCheck(ctx context.Context, arg UpsertPRCheckParams) (P
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ClaimsBaseSha,
 	)
 	return i, err
 }

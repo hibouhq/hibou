@@ -92,20 +92,22 @@ func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Req
 	}
 
 	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshots(r.Context(), snapshotIDs, store.VulnerabilityListOptions{
-		Types:      csvQueryFilterValues(r.URL.Query().Get("type")),
-		Severities: csvQueryFilterValues(r.URL.Query().Get("severity")),
-		Statuses:   csvQueryFilterValues(r.URL.Query().Get("status")),
-		Scanners:   mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
-		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
-		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
-		Limit:      pagination.PerPage,
-		Offset:     pagination.Offset,
+		Types:         csvQueryFilterValues(r.URL.Query().Get("type")),
+		Severities:    csvQueryFilterValues(r.URL.Query().Get("severity")),
+		Statuses:      csvQueryFilterValues(r.URL.Query().Get("status")),
+		Scanners:      mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
+		Search:        strings.TrimSpace(r.URL.Query().Get("search")),
+		ExploitedOnly: r.URL.Query().Get("exploited") == "true",
+		Sort:          strings.TrimSpace(r.URL.Query().Get("sort")),
+		Limit:         pagination.PerPage,
+		Offset:        pagination.Offset,
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerabilities")
 		return
 	}
 
+	s.attachKEV(r.Context(), vulnerabilities)
 	responses := make([]orgVulnerabilityResponse, len(vulnerabilities))
 	for i := range vulnerabilities {
 		vuln := vulnerabilities[i]

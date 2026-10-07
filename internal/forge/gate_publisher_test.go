@@ -125,6 +125,7 @@ type gatePublisherStore struct {
 	orgSlugs       map[uuid.UUID]string
 	openPRRefs     map[uuid.UUID][]dbgen.Ref
 	repoIDsByOrg   map[uuid.UUID][]uuid.UUID // headSHA -> {state, reason}
+	scanReadiness  map[uuid.UUID]dbgen.GetGateScanReadinessRow
 	prChecks       []storepkg.UpsertPRCheckInput
 }
 
@@ -734,5 +735,172 @@ func TestGateForgeStatusMakesMalwareUnmissable(t *testing.T) {
 
 	if chips := severityChips(deltaResult.New); chips != "🔴 1 critical · 🟠 1 high" {
 		t.Fatalf("severity chips = %q", chips)
+	}
+}
+
+func (m *gatePublisherStore) GetGateScanReadiness(_ context.Context, snapshotID uuid.UUID) (dbgen.GetGateScanReadinessRow, error) {
+	if m.scanReadiness == nil {
+		return dbgen.GetGateScanReadinessRow{}, nil
+	}
+	return m.scanReadiness[snapshotID], nil
+}
+
+// PLAN §1: a verdict computed before the snapshot's advisory scan completes is
+// a lie (PR #11 passed with a known-exploited dependency: the scan had not
+// written the dependency findings yet). With scanning enabled and components
+// present, the gate waits — visibly, and without persisting a verdict.
+func TestGatePublisherWaitsForAdvisoryScan(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID, repoID, prRefID, targetRefID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	prSnapshotID, targetSnapshotID := uuid.New(), uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/11", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+	store.scanReadiness = map[uuid.UUID]dbgen.GetGateScanReadinessRow{
+		// Components ingested, scan not yet complete — the PR #11 window.
+		prSnapshotID:     {HasComponents: true, HasAnyScan: true, LatestStatus: "running"},
+		targetSnapshotID: {HasComponents: true, HasCompleteScan: true, HasAnyScan: true, LatestStatus: "complete"},
+	}
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "", zerolog.Nop())
+	gatePublisher.SetAdvisoryScanEnabled(true)
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(store.prChecks) != 0 {
+		t.Fatalf("a mid-scan evaluation persisted a verdict: %#v", store.prChecks)
+	}
+	if len(forgeProvider.statuses) != 1 {
+		t.Fatalf("expected 1 pending status post, got %d", len(forgeProvider.statuses))
+	}
+	if call := forgeProvider.statuses[0]; call.status.State != "pending" {
+		t.Fatalf("expected pending state while the scan runs, got %#v", call.status)
+	}
+
+	// The scan completes → readiness flips → the same event now evaluates.
+	store.scanReadiness[prSnapshotID] = dbgen.GetGateScanReadinessRow{HasComponents: true, HasCompleteScan: true, HasAnyScan: true, LatestStatus: "complete"}
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+	if len(store.prChecks) != 1 {
+		t.Fatalf("expected the post-scan evaluation to persist a verdict, got %d", len(store.prChecks))
+	}
+}
+
+// Coverage-only and SARIF-only uploads have no components, so there is nothing
+// to scan and nothing to wait for — the recompute published at the end of
+// artifact processing must still produce a verdict (the regression the
+// snapshot_processing comment guards against).
+func TestGatePublisherDoesNotWaitWithoutComponents(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID, repoID, prRefID, targetRefID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	prSnapshotID, targetSnapshotID := uuid.New(), uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/12", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
+	store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "def456", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+	// Zero row: no scans, no components — ready by construction. The target is
+	// ready the same way.
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "", zerolog.Nop())
+	gatePublisher.SetAdvisoryScanEnabled(true)
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(store.prChecks) != 1 {
+		t.Fatalf("component-less snapshot must evaluate immediately, got %d verdicts", len(store.prChecks))
+	}
+}
+
+// A failed scan must read as "failed, retrying", not hold the generic pending
+// wording — and still never produce a verdict from incomplete findings.
+func TestGatePublisherFailedScanStaysPendingWithReason(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID, repoID, prRefID, targetRefID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	prSnapshotID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/13", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
+	store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "abc123", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+	store.scanReadiness = map[uuid.UUID]dbgen.GetGateScanReadinessRow{
+		prSnapshotID: {HasComponents: true, HasAnyScan: true, LatestStatus: "failed"},
+	}
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	gatePublisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "", zerolog.Nop())
+	gatePublisher.SetAdvisoryScanEnabled(true)
+	gatePublisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+
+	if len(store.prChecks) != 0 {
+		t.Fatalf("failed scan produced a verdict: %#v", store.prChecks)
+	}
+	if len(forgeProvider.statuses) != 1 || forgeProvider.statuses[0].status.State != "pending" {
+		t.Fatalf("expected one pending status, got %#v", forgeProvider.statuses)
+	}
+	if desc := forgeProvider.statuses[0].status.Description; !strings.Contains(desc, "failed") {
+		t.Fatalf("description %q should say the scan failed", desc)
+	}
+}
+
+func (m *gatePublisherStore) GetSnapshotByRefCommit(_ context.Context, refID uuid.UUID, commitSHA string) (dbgen.Snapshot, error) {
+	for _, snapshot := range m.snapshots {
+		if snapshot.RefID == refID && snapshot.CommitSha == commitSHA {
+			return snapshot, nil
+		}
+	}
+	return dbgen.Snapshot{}, sql.ErrNoRows
+}
+
+// PLAN §5: "this PR fixes X" may only be recorded when the delta was computed
+// against the CURRENT base head, proven by the CI-recorded base commit. A PR
+// built against an older base (or one recorded before provenance existed)
+// writes an EMPTY claim set — clearing stale claims beats advertising fixes
+// nobody made (observed: July PRs each "fixing" ~94 findings that simply
+// landed on main after their snapshots).
+func TestGatePublisherRecordsClaimsOnlyWhenBaseVerified(t *testing.T) {
+	setup := func(baseSHA string) (*gatePublisherStore, *GatePublisher, uuid.UUID) {
+		store := newGatePublisherStore()
+		orgID, repoID, prRefID, targetRefID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+		prSnapshotID, targetSnapshotID := uuid.New(), uuid.New()
+		store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+		store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/20", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}}
+		store.refs[targetRefID] = dbgen.Ref{ID: targetRefID, RepoID: repoID, Name: "main", RefType: dbgen.RefTypeBranch}
+		store.snapshots[prSnapshotID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "headsha", BaseCommitSha: baseSHA, Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+		store.latestSnapshot[targetRefID] = dbgen.Snapshot{ID: targetSnapshotID, RefID: targetRefID, CommitSha: "basesha-current", Status: dbgen.SnapshotStatusComplete, CreatedAt: time.Now().UTC()}
+		// The base holds one finding the PR resolves.
+		store.vulnsBySnapshot[targetSnapshotID] = []storepkg.Vulnerability{{ID: uuid.New(), Type: "dependency", Severity: storepkg.SeverityLevelHigh, Fingerprint: "fp-resolved-by-pr"}}
+		store.orgSlugs[orgID] = "acme-org"
+		deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+		publisher := NewGatePublisher(map[string]Provider{"github": &mockForgeProvider{}}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "", zerolog.Nop())
+		return store, publisher, prSnapshotID
+	}
+
+	// Verified: CI merged against exactly the current base head.
+	store, publisher, prSnapshotID := setup("basesha-current")
+	publisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+	if len(store.resolvedFingerprints) != 1 || store.resolvedFingerprints[0] != "fp-resolved-by-pr" {
+		t.Fatalf("verified base must record the resolved claim, got %v", store.resolvedFingerprints)
+	}
+	if len(store.prChecks) != 1 || store.prChecks[0].ClaimsBaseSha != "basesha-current" {
+		t.Fatalf("verified claims must record their base, got %#v", store.prChecks)
+	}
+
+	// Unverified: no recorded base (pre-provenance upload).
+	store, publisher, prSnapshotID = setup("")
+	publisher.handleScanCompleted(context.Background(), map[string]any{"snapshot_id": prSnapshotID.String()})
+	if len(store.resolvedFingerprints) != 0 {
+		t.Fatalf("unverified base must clear claims, got %v", store.resolvedFingerprints)
+	}
+	if len(store.prChecks) != 1 || store.prChecks[0].ClaimsBaseSha != "" {
+		t.Fatalf("unverified claims must not carry a base, got %#v", store.prChecks)
 	}
 }

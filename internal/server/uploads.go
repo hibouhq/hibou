@@ -44,6 +44,11 @@ type uploadRequest struct {
 	PRSourceBranch string `json:"pr_source_branch,omitempty"`
 	PRTitle        string `json:"pr_title,omitempty"`
 	Tag            string `json:"tag,omitempty"`
+	// Commit provenance (PLAN §2): on pull_request builds, CommitSHA is the PR
+	// head; these carry the ephemeral merge commit CI checked out and the base
+	// commit that merge used.
+	MergeCommitSHA string `json:"merge_commit_sha,omitempty"`
+	BaseCommitSHA  string `json:"base_commit_sha,omitempty"`
 }
 
 type autoUploadRequest struct {
@@ -863,6 +868,8 @@ func (s *Server) createPendingUploadSnapshot(r *http.Request, userID uuid.UUID, 
 		PRTargetBranch:  optionalTrimmedString(input.PRTargetBranch),
 		Tag:             resolveUploadTag(input.Ref, input.Tag),
 		ExpectedUploads: positiveInt32Ptr(expect),
+		MergeCommitSHA:  strings.TrimSpace(input.MergeCommitSHA),
+		BaseCommitSHA:   strings.TrimSpace(input.BaseCommitSHA),
 	}
 	// Auto-attempt (universal fallback): when no explicit run_attempt was provided, a fresh
 	// upload arriving after the build's latest snapshot is no longer pending indicates a new

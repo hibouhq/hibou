@@ -303,6 +303,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.attachFixingPullRequests(r.Context(), repo.ID, vulnerabilities)
+		s.attachKEV(r.Context(), vulnerabilities)
 		api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 		return
 	}
@@ -1944,5 +1945,53 @@ func severityRank(severity string) int {
 		return 1
 	default:
 		return 0
+	}
+}
+
+// attachKEV marks rows whose advisory is on a known-exploited catalog
+// (PLAN §3) — the same membership the gate blocks on, matched through the
+// advisory id (canonical + aliases) or the bare identifier. One batched
+// lookup per page, never per row; best-effort like the other enrichments.
+func (s *Server) attachKEV(ctx context.Context, vulnerabilities []store.Vulnerability) {
+	advisoryIDs := make([]uuid.UUID, 0, len(vulnerabilities))
+	identifiers := make([]string, 0, len(vulnerabilities))
+	for i := range vulnerabilities {
+		if !isAdvisoryBackedFindingType(vulnerabilities[i].Type) {
+			continue
+		}
+		if vulnerabilities[i].AdvisoryID != nil {
+			advisoryIDs = append(advisoryIDs, *vulnerabilities[i].AdvisoryID)
+		} else if id := strings.ToUpper(strings.TrimSpace(vulnerabilities[i].PrimaryIdentifierValue)); id != "" {
+			identifiers = append(identifiers, id)
+		}
+	}
+	listedAdvisories, err := s.queries.FilterKEVAdvisoryIDs(ctx, advisoryIDs)
+	if err != nil {
+		return
+	}
+	listedIdentifiers, err := s.queries.FilterKEVIdentifiers(ctx, identifiers)
+	if err != nil {
+		return
+	}
+	if len(listedAdvisories) == 0 && len(listedIdentifiers) == 0 {
+		return
+	}
+	advisoryHits := make(map[uuid.UUID]struct{}, len(listedAdvisories))
+	for _, id := range listedAdvisories {
+		advisoryHits[id] = struct{}{}
+	}
+	identifierHits := make(map[string]struct{}, len(listedIdentifiers))
+	for _, id := range listedIdentifiers {
+		identifierHits[id] = struct{}{}
+	}
+	for i := range vulnerabilities {
+		if !isAdvisoryBackedFindingType(vulnerabilities[i].Type) {
+			continue
+		}
+		if vulnerabilities[i].AdvisoryID != nil {
+			_, vulnerabilities[i].KEV = advisoryHits[*vulnerabilities[i].AdvisoryID]
+		} else {
+			_, vulnerabilities[i].KEV = identifierHits[strings.ToUpper(strings.TrimSpace(vulnerabilities[i].PrimaryIdentifierValue))]
+		}
 	}
 }

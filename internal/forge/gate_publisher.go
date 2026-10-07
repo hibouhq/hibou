@@ -40,7 +40,19 @@ type GatePublisher struct {
 	repoConfigLoader RepoConfigLoader
 	live             LiveGateNotifier
 	baseURL          string
-	log              zerolog.Logger
+	// advisoryScanEnabled gates the scan-readiness precondition (PLAN §1): on
+	// an instance that never scans, waiting for a scan would block every gate
+	// forever. Set from the server's advisory-scan configuration.
+	advisoryScanEnabled bool
+	log                 zerolog.Logger
+}
+
+// SetAdvisoryScanEnabled wires the server's advisory-scan configuration in;
+// see the field comment. Called once at construction time, before Subscribe.
+func (a *GatePublisher) SetAdvisoryScanEnabled(enabled bool) {
+	if a != nil {
+		a.advisoryScanEnabled = enabled
+	}
 }
 
 const securityStatusContext = "hibou/security"
@@ -59,6 +71,12 @@ type GatePublisherStore interface {
 	// findings list can show "a PR already fixes this" without recomputing
 	// deltas (TODO-FEAT finding-detail §1).
 	ReplacePRCheckResolvedFingerprints(ctx context.Context, repoID uuid.UUID, headSHA string, fingerprints []string) error
+	// GetGateScanReadiness reports whether a snapshot's advisory scan state
+	// allows an honest gate verdict (PLAN §1).
+	GetGateScanReadiness(ctx context.Context, snapshotID uuid.UUID) (dbgen.GetGateScanReadinessRow, error)
+	// GetSnapshotByRefCommit resolves the base snapshot at the exact commit CI
+	// merged against (PLAN §2/§5); sql.ErrNoRows when it is gone.
+	GetSnapshotByRefCommit(ctx context.Context, refID uuid.UUID, commitSHA string) (dbgen.Snapshot, error)
 }
 
 type RepoConfigLoader interface {
@@ -159,6 +177,14 @@ func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uui
 			a.publishGateWaitingForHead(ctx, snapshot, ref, head)
 			return
 		}
+		if state := a.advisoryScanState(ctx, snapshot.ID); state != scanStateReady {
+			// A verdict computed before the advisory scan finished sees no
+			// dependency findings: everything on the base reads "resolved" and
+			// the malware/KEV blocks cannot fire (observed: PR #11 passed with
+			// a known-exploited dependency). Wait, visibly.
+			a.publishGateScanPending(ctx, snapshot, ref, snapshot.CommitSha, state)
+			return
+		}
 		annotation, ok := a.buildGateContext(ctx, snapshot, ref)
 		if !ok {
 			// The gate is not computable yet (target branch has no snapshot, or
@@ -166,6 +192,12 @@ func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uui
 			// in-progress check so the PR shows "Hibou is working" instead of
 			// nothing at all; a later recompute resolves it.
 			a.publishGatePendingForRef(ctx, snapshot, ref)
+			return
+		}
+		if state := a.advisoryScanState(ctx, annotation.targetSnapshot.ID); state != scanStateReady {
+			// Symmetric: a mid-scan BASE snapshot is missing findings, so the
+			// delta reports them as introduced by the PR — a false failure.
+			a.publishGateScanPending(ctx, snapshot, ref, snapshot.CommitSha, state)
 			return
 		}
 		a.evaluateAndPublish(ctx, annotation)
@@ -345,6 +377,10 @@ func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) 
 		a.publishGateWaitingForHead(ctx, snapshot, ref, head)
 		return
 	}
+	if state := a.advisoryScanState(ctx, snapshot.ID); state != scanStateReady {
+		a.publishGateScanPending(ctx, snapshot, ref, snapshot.CommitSha, state)
+		return
+	}
 	annotation, ok := a.buildGateContext(ctx, snapshot, ref)
 	if !ok {
 		// Head is analyzed but the comparison is not computable yet (target
@@ -352,7 +388,87 @@ func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) 
 		a.publishGatePendingForRef(ctx, snapshot, ref)
 		return
 	}
+	if state := a.advisoryScanState(ctx, annotation.targetSnapshot.ID); state != scanStateReady {
+		a.publishGateScanPending(ctx, snapshot, ref, snapshot.CommitSha, state)
+		return
+	}
 	a.evaluateAndPublish(ctx, annotation)
+}
+
+// Advisory-scan readiness of a snapshot as gate input (PLAN §1).
+type advisoryScanState string
+
+const (
+	scanStateReady   advisoryScanState = "ready"
+	scanStateWaiting advisoryScanState = "waiting"
+	scanStateFailed  advisoryScanState = "failed"
+)
+
+// advisoryScanState reports whether a snapshot's findings are complete enough
+// for an honest verdict. Ready when: advisory scanning is disabled on this
+// instance; the snapshot has no components (nothing to scan — coverage-only
+// and SARIF-only uploads must still get their check, see
+// snapshot_processing's recompute note); or ANY advisory scan has completed —
+// a newer re-scan running on top of a completed one must not flip a published
+// verdict back to pending. Degrades open on a readiness-read error: a broken
+// readiness query must not silence every gate on the instance.
+func (a *GatePublisher) advisoryScanState(ctx context.Context, snapshotID uuid.UUID) advisoryScanState {
+	if !a.advisoryScanEnabled || snapshotID == uuid.Nil {
+		return scanStateReady
+	}
+	readiness, err := a.store.GetGateScanReadiness(ctx, snapshotID)
+	if err != nil {
+		a.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("read gate scan readiness; evaluating without the guard")
+		return scanStateReady
+	}
+	switch {
+	case readiness.HasCompleteScan, !readiness.HasComponents:
+		return scanStateReady
+	case readiness.LatestStatus == "failed":
+		return scanStateFailed
+	default:
+		// Scan pending/running — or not yet created: processing enqueues the
+		// scan asynchronously, so "components but no scan row" is the enqueue
+		// race, not a snapshot that will never be scanned.
+		return scanStateWaiting
+	}
+}
+
+// publishGateScanPending posts the in-progress state while the snapshot's
+// advisory scan is not a done deal. No verdict is persisted.
+func (a *GatePublisher) publishGateScanPending(ctx context.Context, snapshot dbgen.Snapshot, ref dbgen.Ref, headSHA string, state advisoryScanState) {
+	repo, provider, owner, name, ok := a.loadGateRepository(ctx, ref)
+	if !ok {
+		return
+	}
+	orgSlug, err := a.store.GetOrgSlug(ctx, repo.OrgID)
+	if err != nil {
+		a.log.Debug().Err(err).Str("org_id", repo.OrgID.String()).Msg("load org slug for scan-pending gate check")
+	}
+	annotation := &gateContext{
+		snapshot: snapshot,
+		prRef:    ref,
+		repo:     repo,
+		provider: provider,
+		owner:    owner,
+		name:     name,
+		orgSlug:  orgSlug,
+	}
+	status := gatePendingStatus()
+	if state == scanStateFailed {
+		status.description = "Advisory scan failed — retrying"
+		status.title = "Quality gate — advisory scan failed, will retry"
+		status.summary = fmt.Sprintf(
+			"The advisory scan for commit %s failed, so the dependency findings are incomplete and no verdict can be published. Hibou retries scans automatically; this check updates when a scan completes.",
+			shortCommit(headSHA))
+	} else {
+		status.description = "Advisory scan in progress for " + shortCommit(headSHA)
+		status.title = "Quality gate — advisory scan in progress"
+		status.summary = fmt.Sprintf(
+			"The analysis upload for commit %s arrived and its components are being matched against advisory databases. Publishing a verdict before that finishes would miss dependency findings entirely, so this check waits and updates automatically.",
+			shortCommit(headSHA))
+	}
+	a.publishGateStatusOnly(ctx, annotation, status)
 }
 
 // publishGateWaitingForUpload posts the in-progress check for a PR whose
@@ -615,8 +731,35 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 
 	// No timestamp: the forge already shows "edited X ago", and a
 	// deterministic body is what lets UpsertPRComment skip no-op edits.
-	fmt.Fprintf(&b, "\n<sub>evaluated commit %s</sub>\n", shortCommit(annotation.snapshot.CommitSha))
+	fmt.Fprintf(&b, "\n<sub>%s</sub>\n", provenanceLine(annotation))
 	return b.String()
+}
+
+// provenanceLine names what was evaluated — and, when CI recorded it, what was
+// ACTUALLY built (PLAN §2): a pull_request build tests an ephemeral merge of
+// the head onto the base, not the head itself. SHAs are written in full on
+// purpose: every forge auto-links full commit SHAs in PR comments and renders
+// them short, which gives working links on self-hosted instances without this
+// side knowing any web URL.
+func provenanceLine(annotation *gateContext) string {
+	head := strings.TrimSpace(annotation.snapshot.CommitSha)
+	merge := strings.TrimSpace(annotation.snapshot.MergeCommitSha)
+	base := strings.TrimSpace(annotation.snapshot.BaseCommitSha)
+	if merge == "" && base == "" {
+		return "evaluated commit " + head
+	}
+	line := "evaluated commit " + head + " (head)"
+	if merge != "" {
+		line += " — tested as merge " + merge
+	}
+	if base != "" {
+		joiner := " onto "
+		if merge == "" {
+			joiner = " — tested against "
+		}
+		line += joiner + annotation.targetRef.Name + " @ " + base
+	}
+	return line
 }
 
 func (a *GatePublisher) repoOverviewURL(annotation *gateContext) string {
@@ -665,6 +808,10 @@ type gateContext struct {
 	owner          string
 	name           string
 	orgSlug        string
+	// claimsVerified: the delta base is the CURRENT base head, per the CI
+	// upload's recorded base commit — the precondition for recording "this PR
+	// fixes X" claims (PLAN §5).
+	claimsVerified bool
 }
 
 func snapshotIDFromPayload(payload any) uuid.UUID {
@@ -677,6 +824,22 @@ func (a *GatePublisher) buildGateContext(ctx context.Context, snapshot dbgen.Sna
 	if !ok {
 		return nil, false
 	}
+	// Claims honesty (PLAN §5): "this PR fixes X" may only be asserted when
+	// the delta was computed against the base branch AS IT IS NOW. The CI
+	// upload records which base commit the build merged against; when it
+	// matches the latest base snapshot, the claim is verified.
+	latestTargetCommit := targetSnapshot.CommitSha
+	claimsVerified := snapshot.BaseCommitSha != "" && snapshot.BaseCommitSha == latestTargetCommit
+	// Delta honesty (PLAN §2/§5): when CI built against an OLDER base commit
+	// and that base's snapshot still exists, compare against it — against a
+	// newer base, everything the base gained since reads as "resolved by this
+	// PR", which is how July PRs claimed 94 fixes each.
+	if !claimsVerified && snapshot.BaseCommitSha != "" {
+		if exact, err := a.store.GetSnapshotByRefCommit(ctx, targetRef.ID, snapshot.BaseCommitSha); err == nil &&
+			exact.ID != uuid.Nil && (exact.Status == dbgen.SnapshotStatusComplete || exact.Status == dbgen.SnapshotStatusActive) {
+			targetSnapshot = exact
+		}
+	}
 	repo, provider, owner, name, ok := a.loadGateRepository(ctx, ref)
 	if !ok {
 		return nil, false
@@ -685,7 +848,18 @@ func (a *GatePublisher) buildGateContext(ctx context.Context, snapshot dbgen.Sna
 	if err != nil {
 		a.log.Debug().Err(err).Str("org_id", repo.OrgID.String()).Msg("load org slug for gatePublisher deep link")
 	}
-	return &gateContext{snapshot: snapshot, targetSnapshot: targetSnapshot, prRef: ref, targetRef: targetRef, repo: repo, provider: provider, owner: owner, name: name, orgSlug: orgSlug}, true
+	return &gateContext{
+		snapshot:       snapshot,
+		targetSnapshot: targetSnapshot,
+		prRef:          ref,
+		targetRef:      targetRef,
+		repo:           repo,
+		provider:       provider,
+		owner:          owner,
+		name:           name,
+		orgSlug:        orgSlug,
+		claimsVerified: claimsVerified,
+	}, true
 }
 
 func (a *GatePublisher) loadPRTargetContext(ctx context.Context, ref dbgen.Ref) (dbgen.Ref, dbgen.Snapshot, bool) {
@@ -1088,18 +1262,28 @@ func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext
 		now := time.Now().UTC()
 		input.ForgeSyncedAt = &now
 	}
+	if annotation.claimsVerified {
+		input.ClaimsBaseSha = annotation.targetSnapshot.CommitSha
+	}
 	if err := a.store.UpsertPRCheck(ctx, input); err != nil {
 		a.log.Error().Err(err).Str("repo_id", annotation.repo.ID.String()).Str("commit_sha", annotation.snapshot.CommitSha).Msg("persist pr_check")
 		return
 	}
 
 	// Best-effort: the resolved set powers the "fix in #N" chip, never the
-	// gate verdict, so a failure here must not fail the publish.
+	// gate verdict, so a failure here must not fail the publish. Recorded ONLY
+	// when verified against the current base head (PLAN §5): without that, a
+	// stale PR "resolves" everything the base gained since its snapshot, and a
+	// mid-scan verdict once claimed 631 fixes. An unverified evaluation writes
+	// an EMPTY set — clearing claims that stopped being verifiable beats
+	// advertising fixes nobody made.
 	if deltaResult != nil {
 		fingerprints := make([]string, 0, len(deltaResult.Resolved))
-		for _, vulnerability := range deltaResult.Resolved {
-			if vulnerability.Fingerprint != "" {
-				fingerprints = append(fingerprints, vulnerability.Fingerprint)
+		if annotation.claimsVerified {
+			for _, vulnerability := range deltaResult.Resolved {
+				if vulnerability.Fingerprint != "" {
+					fingerprints = append(fingerprints, vulnerability.Fingerprint)
+				}
 			}
 		}
 		if err := a.store.ReplacePRCheckResolvedFingerprints(ctx, annotation.repo.ID, annotation.snapshot.CommitSha, fingerprints); err != nil {
@@ -1170,6 +1354,14 @@ type GatePublisherStoreAdapter struct {
 
 func NewGatePublisherStoreAdapter(queries *store.Queries) *GatePublisherStoreAdapter {
 	return &GatePublisherStoreAdapter{queries: queries}
+}
+
+func (a *GatePublisherStoreAdapter) GetGateScanReadiness(ctx context.Context, snapshotID uuid.UUID) (dbgen.GetGateScanReadinessRow, error) {
+	return a.queries.GetGateScanReadiness(ctx, snapshotID)
+}
+
+func (a *GatePublisherStoreAdapter) GetSnapshotByRefCommit(ctx context.Context, refID uuid.UUID, commitSHA string) (dbgen.Snapshot, error) {
+	return a.queries.GetSnapshotRowByRefCommit(ctx, refID, commitSHA)
 }
 
 func (a *GatePublisherStoreAdapter) GetRepoByID(ctx context.Context, id uuid.UUID) (dbgen.Repository, error) {

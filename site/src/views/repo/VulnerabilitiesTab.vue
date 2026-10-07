@@ -37,7 +37,17 @@
         @click="runSecretScan"
       >
         <KeyRound class="h-3.5 w-3.5" />
-        {{ secretScanRunning ? 'Queueing...' : 'Scan secrets' }}
+        {{ secretScanRunning ? 'Queueing...' : lastSecretScanJob?.status === 'failed' ? 'Retry secret scan' : 'Scan secrets' }}
+      </button>
+      <button
+        type="button"
+        class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium transition"
+        :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-300 hover:border-danger/50 hover:text-danger'"
+        title="Show only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD)"
+        @click="exploitedOnly = !exploitedOnly"
+      >
+        <Flame class="h-3.5 w-3.5" />
+        Exploited only
       </button>
       <span
         v-if="secretScanMessage"
@@ -211,7 +221,7 @@
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
               <tr
-                v-for="vulnerability in vulnerabilities"
+                v-for="vulnerability in displayedVulnerabilities"
                 :key="vulnerability.id"
                 class="cursor-pointer transition hover:bg-white/5"
                 :class="[rowClass(vulnerability.type), selected.has(vulnerability.fingerprint) ? 'bg-accent/10' : '']"
@@ -274,6 +284,14 @@
                     :class="triageFor(vulnerability).badgeClass"
                     :title="triageTitle(vulnerability)"
                   >{{ triageFor(vulnerability).label }}</span>
+                  <span
+                    v-if="vulnerability.kev"
+                    class="ml-1 inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-semibold text-white"
+                    title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD) — exploitation in the wild is documented"
+                  >
+                    <Flame class="h-3 w-3" />
+                    exploited
+                  </span>
                   <RouterLink
                     v-if="vulnerability.fixed_in_prs?.length"
                     :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: vulnerability.fixed_in_prs[0].ref_name } }"
@@ -381,7 +399,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { Biohazard, KeyRound } from 'lucide-vue-next'
+import { Biohazard, KeyRound, Flame } from 'lucide-vue-next'
 
 import { api, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
@@ -401,6 +419,12 @@ const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 
 const vulnerabilities = ref<Vulnerability[]>([])
+
+// Exploited-only is a client-side facet: this view already holds the full
+// filtered list, and "exploited" is enrichment, not a server column.
+const exploitedOnly = ref(false)
+const displayedVulnerabilities = computed(() =>
+  exploitedOnly.value ? vulnerabilities.value.filter((vulnerability) => vulnerability.kev) : vulnerabilities.value)
 
 const secretScanRunning = ref(false)
 const secretScanMessage = ref('')
@@ -1110,7 +1134,14 @@ async function markSecretRevoked(vulnerability: Vulnerability) {
 // news, not an alarm — it changes the decision ("merge #12, don't accept").
 function fixChipTitle(vulnerability: Vulnerability): string {
   const fixes = vulnerability.fixed_in_prs ?? []
-  return 'Already fixed by ' + fixes.map((fix) => `#${fix.number}${fix.title ? ' ' + fix.title : ''}`).join(', ')
+  // "Resolved when merged" is what the delta asserts — "already fixed" is
+  // not: nothing is fixed until a merge happens (PLAN §5). Capped: a tooltip
+  // listing 7 PRs is noise.
+  const shown = fixes.slice(0, 3).map((fix) => `#${fix.number}${fix.title ? ' ' + fix.title : ''}`)
+  const more = fixes.length > shown.length ? ` (+${fixes.length - shown.length} more)` : ''
+  const base = fixes[0]?.verified_base_sha
+  const verified = base ? ` — verified against ${base.slice(0, 8)}` : ''
+  return 'Resolved when merged: ' + shown.join(', ') + more + verified
 }
 
 function triageFor(vulnerability: Vulnerability) {

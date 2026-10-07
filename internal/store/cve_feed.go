@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -103,13 +104,20 @@ func (q *Queries) QueueTriageItem(ctx context.Context, subscriptionID uuid.UUID,
 // the event time would hide the gap between publication and detection, which is
 // the number most worth seeing.
 func (q *Queries) RecordAdvisoryEvent(ctx context.Context, event AdvisoryEvent) error {
+	// detail is NOT NULL, and a nil RawMessage binds as SQL NULL rather than
+	// taking the column default — every detail-less event ("published") was
+	// rejected and the activity stream silently lost it.
+	detail := event.Detail
+	if len(detail) == 0 {
+		detail = json.RawMessage(`{}`)
+	}
 	return q.db.InsertAdvisoryEvent(ctx, dbgen.InsertAdvisoryEventParams{
 		AdvisoryID: toNullUUID(event.AdvisoryID),
 		CveID:      event.CVEID,
 		Kind:       string(event.Kind),
 		OccurredAt: event.OccurredAt,
 		ActorID:    toNullUUID(event.ActorID),
-		Detail:     event.Detail,
+		Detail:     detail,
 	})
 }
 

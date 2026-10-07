@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/sanitize"
 	storepkg "github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -294,12 +295,15 @@ func shouldPromoteCanonicalID(existingCanonicalID, nextCanonicalID string) bool 
 }
 
 func mergedAdvisoryUpsert(existing dbgen.Advisory, found bool, canonicalID string, result IngestResult) dbgen.UpsertAdvisoryParams {
-	title := strings.TrimSpace(result.Title)
+	// Sanitized at the choke point every provider flows through: upstream
+	// databases ship entity-encoded text, sometimes truncated mid-entity
+	// (PLAN §6) — stored dirty, it leaks into every UI and export.
+	title := sanitize.Text(result.Title)
 	if title == "" && found {
 		title = existing.Title
 	}
 
-	description := strings.TrimSpace(result.Description)
+	description := sanitize.Text(result.Description)
 	if description == "" && found {
 		description = existing.Description
 	}

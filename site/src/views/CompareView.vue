@@ -2124,6 +2124,10 @@ function snapshotStatusTextClass(snapshot: Snapshot) {
 
 function snapshotSecondaryLine(snapshot: Snapshot) {
   const details = [`Commit ${snapshot.commit_sha.slice(0, 12)}`, formatDateTime(snapshot.created_at)]
+  // PLAN §2: what CI actually built — a PR build tests an ephemeral merge
+  // commit onto a base, not the head itself.
+  if (snapshot.merge_commit_sha) details.push(`tested as merge ${snapshot.merge_commit_sha.slice(0, 12)}`)
+  if (snapshot.base_commit_sha) details.push(`onto base ${snapshot.base_commit_sha.slice(0, 12)}`)
   if (snapshot.tag) details.push(`Tag ${snapshot.tag}`)
   if (snapshot.run_number) details.push(`Run #${snapshot.run_number}`)
   else if (snapshot.run_id) details.push(`Run ${snapshot.run_id}`)

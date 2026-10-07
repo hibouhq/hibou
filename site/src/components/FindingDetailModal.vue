@@ -172,7 +172,13 @@
                     </li>
                   </ul>
                   <p class="mt-2 text-xs text-gray-500">
-                    Merging it resolves this finding — usually better than accepting the risk.
+                    <template v-if="fixClaimsBase">
+                      Each listed PR's delta resolves this finding when merged — verified against
+                      {{ fixClaimsBase.slice(0, 8) }} — usually better than accepting the risk.
+                    </template>
+                    <template v-else>
+                      Each listed PR's delta resolves this finding when merged — usually better than accepting the risk.
+                    </template>
                   </p>
                 </FindingSection>
 
@@ -504,6 +510,10 @@ const detail = ref<FindingDetail | null>(null)
 
 // Catalog names for the exploited pill's tooltip; the pill itself says only
 // "exploited" — one concept, provenance on demand.
+// The base commit the fix-in-flight claims were verified against (PLAN §5) —
+// shown so the claim is an assertion about merging NOW, not whenever.
+const fixClaimsBase = computed(() => detail.value?.finding.fixed_in_prs?.find((fix) => fix.verified_base_sha)?.verified_base_sha ?? '')
+
 const kevSourceNames = computed(() =>
   (detail.value?.kev?.sources ?? []).map(kevSourceLabel).join(', ') || 'CISA KEV / ENISA EUVD')
 const loading = ref(true)

@@ -27,9 +27,14 @@ type VulnerabilityListOptions struct {
 	// acceptance), "accepted" (any), or a reason kind ("risk_accepted",
 	// "false_positive"). Empty means no acceptance filter.
 	Acceptance string
-	Sort       string
-	Limit      int
-	Offset     int
+	// ExploitedOnly keeps only findings whose advisory is on a known-exploited
+	// catalog (PLAN §3) — matched like the gate: through the advisory's
+	// canonical id and aliases, or the bare identifier, on component-backed
+	// finding types.
+	ExploitedOnly bool
+	Sort          string
+	Limit         int
+	Offset        int
 }
 
 // normalizeAcceptanceFilter whitelists the acceptance filter value; anything
@@ -113,6 +118,10 @@ type Vulnerability struct {
 	// fingerprint — it changes the triage decision ("merge #12 instead of
 	// accepting"). Attached by the list/detail handlers, never stored.
 	FixedInPRs []FixingPullRequest `json:"fixed_in_prs,omitempty"`
+	// KEV marks the finding's advisory as listed on a known-exploited catalog
+	// (PLAN §3). Enriched per page after the query, like FixedInPRs — never a
+	// column.
+	KEV bool `json:"kev,omitempty"`
 }
 
 // VulnerabilityAcceptance is the accepted decision as projected onto a
@@ -298,6 +307,21 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 		// primary_identifier_value is included so searching a CVE/GHSA/rule id
 		// finds the finding — it is the identifier users actually paste.
 		conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\' OR primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
+	}
+
+	if opts.ExploitedOnly {
+		// Same membership the gate blocks on (union across catalogs); scoped to
+		// the finding types an advisory can stand behind. kev_entries carries
+		// an index on cve_id, and advisory ids arrive from the row.
+		conds = append(conds, `type IN ('dependency','container','malware') AND (
+			EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(primary_identifier_value))
+			OR EXISTS (
+				SELECT 1 FROM advisories a
+				LEFT JOIN advisory_aliases al ON al.advisory_id = a.id
+				JOIN kev_entries k2 ON k2.cve_id IN (upper(a.canonical_id), upper(al.alias))
+				WHERE a.id = advisory_id
+			)
+		)`)
 	}
 
 	where := strings.Join(conds, " AND ")

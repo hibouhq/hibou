@@ -7628,6 +7628,9 @@ const docTemplate = `{
                 "artifact": {
                     "$ref": "#/definitions/server.uploadArtifact"
                 },
+                "base_commit_sha": {
+                    "type": "string"
+                },
                 "build_url": {
                     "type": "string"
                 },
@@ -7639,6 +7642,10 @@ const docTemplate = `{
                 },
                 "expect": {
                     "type": "integer"
+                },
+                "merge_commit_sha": {
+                    "description": "Commit provenance (PLAN §2): on pull_request builds, CommitSHA is the PR\nhead; these carry the ephemeral merge commit CI checked out and the base\ncommit that merge used.",
+                    "type": "string"
                 },
                 "org": {
                     "type": "string"
@@ -9936,6 +9943,10 @@ const docTemplate = `{
                 },
                 "title": {
                     "type": "string"
+                },
+                "verified_base_sha": {
+                    "description": "VerifiedBaseSha is the base commit the claim was verified against\n(PLAN §5) — what the UI's \"resolved when merged\" hover cites.",
+                    "type": "string"
                 }
             }
         },
@@ -10687,6 +10698,10 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "kev": {
+                    "description": "KEV marks the finding's advisory as listed on a known-exploited catalog\n(PLAN §3). Enriched per page after the query, like FixedInPRs — never a\ncolumn.",
+                    "type": "boolean"
                 },
                 "language": {
                     "type": "string"

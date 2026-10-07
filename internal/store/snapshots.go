@@ -26,30 +26,35 @@ const (
 )
 
 type Snapshot struct {
-	ID                               uuid.UUID      `json:"id"`
-	RefID                            uuid.UUID      `json:"ref_id"`
-	CommitSHA                        string         `json:"commit_sha"`
-	Status                           SnapshotStatus `json:"status"`
-	Labels                           []string       `json:"labels,omitempty"`
-	Pinned                           bool           `json:"pinned"`
-	RetentionHold                    bool           `json:"retention_hold"`
-	ArtifactBytes                    int64          `json:"artifact_bytes"`
-	BuildURL                         *string        `json:"build_url,omitempty"`
-	RunID                            *string        `json:"run_id,omitempty"`
-	RunAttempt                       *string        `json:"run_attempt,omitempty"`
-	RunNumber                        *string        `json:"run_number,omitempty"`
-	PRNumber                         *string        `json:"pr_number,omitempty"`
-	PRTargetBranch                   *string        `json:"pr_target_branch,omitempty"`
-	Tag                              *string        `json:"tag,omitempty"`
-	ExpectedUploads                  *int           `json:"expected_uploads,omitempty"`
-	ReceivedUploads                  int            `json:"received_uploads"`
-	ArtifactProcessingClaimedBy      *string        `json:"artifact_processing_claimed_by,omitempty"`
-	ArtifactProcessingClaimExpiresAt *time.Time     `json:"artifact_processing_claim_expires_at,omitempty"`
-	ArtifactProcessingStartedAt      *time.Time     `json:"artifact_processing_started_at,omitempty"`
-	ArtifactProcessingFinishedAt     *time.Time     `json:"artifact_processing_finished_at,omitempty"`
-	ArtifactProcessingAttempts       int            `json:"artifact_processing_attempts"`
-	ArtifactProcessingLastError      *string        `json:"artifact_processing_last_error,omitempty"`
-	CreatedAt                        time.Time      `json:"created_at"`
+	ID             uuid.UUID      `json:"id"`
+	RefID          uuid.UUID      `json:"ref_id"`
+	CommitSHA      string         `json:"commit_sha"`
+	Status         SnapshotStatus `json:"status"`
+	Labels         []string       `json:"labels,omitempty"`
+	Pinned         bool           `json:"pinned"`
+	RetentionHold  bool           `json:"retention_hold"`
+	ArtifactBytes  int64          `json:"artifact_bytes"`
+	BuildURL       *string        `json:"build_url,omitempty"`
+	RunID          *string        `json:"run_id,omitempty"`
+	RunAttempt     *string        `json:"run_attempt,omitempty"`
+	RunNumber      *string        `json:"run_number,omitempty"`
+	PRNumber       *string        `json:"pr_number,omitempty"`
+	PRTargetBranch *string        `json:"pr_target_branch,omitempty"`
+	Tag            *string        `json:"tag,omitempty"`
+	// What CI actually built on a pull_request event (PLAN §2): CommitSHA is
+	// the developer's head commit; MergeCommitSHA the ephemeral merge commit
+	// checked out; BaseCommitSHA the base-branch commit that merge used.
+	MergeCommitSHA                   string     `json:"merge_commit_sha,omitempty"`
+	BaseCommitSHA                    string     `json:"base_commit_sha,omitempty"`
+	ExpectedUploads                  *int       `json:"expected_uploads,omitempty"`
+	ReceivedUploads                  int        `json:"received_uploads"`
+	ArtifactProcessingClaimedBy      *string    `json:"artifact_processing_claimed_by,omitempty"`
+	ArtifactProcessingClaimExpiresAt *time.Time `json:"artifact_processing_claim_expires_at,omitempty"`
+	ArtifactProcessingStartedAt      *time.Time `json:"artifact_processing_started_at,omitempty"`
+	ArtifactProcessingFinishedAt     *time.Time `json:"artifact_processing_finished_at,omitempty"`
+	ArtifactProcessingAttempts       int        `json:"artifact_processing_attempts"`
+	ArtifactProcessingLastError      *string    `json:"artifact_processing_last_error,omitempty"`
+	CreatedAt                        time.Time  `json:"created_at"`
 }
 
 type SnapshotBuildMeta struct {
@@ -61,6 +66,10 @@ type SnapshotBuildMeta struct {
 	PRTargetBranch  *string
 	Tag             *string
 	ExpectedUploads *int32
+	// Commit provenance (PLAN §2): the ephemeral merge commit CI actually
+	// built, and the base commit that merge used. Empty for branch/tag builds.
+	MergeCommitSHA string
+	BaseCommitSHA  string
 }
 
 var ErrSnapshotNotCompletable = errors.New("snapshot already finalized or timed out")
@@ -283,6 +292,8 @@ func (q *Queries) UpsertSnapshotForBuild(ctx context.Context, refID uuid.UUID, c
 		PrTargetBranch:  nullStringFromPtr(meta.PRTargetBranch),
 		Tag:             nullStringFromPtr(meta.Tag),
 		ExpectedUploads: nullInt32FromPtr(meta.ExpectedUploads),
+		MergeCommitSha:  strings.TrimSpace(meta.MergeCommitSHA),
+		BaseCommitSha:   strings.TrimSpace(meta.BaseCommitSHA),
 	})
 	if err != nil {
 		return nil, err
@@ -746,6 +757,8 @@ func snapshotFromRow(row dbgen.Snapshot) *Snapshot {
 		PRNumber:                         stringPtrFromNull(row.PrNumber),
 		PRTargetBranch:                   stringPtrFromNull(row.PrTargetBranch),
 		Tag:                              stringPtrFromNull(row.Tag),
+		MergeCommitSHA:                   row.MergeCommitSha,
+		BaseCommitSHA:                    row.BaseCommitSha,
 		ExpectedUploads:                  expectedUploads,
 		ReceivedUploads:                  int(row.ReceivedUploads),
 		ArtifactProcessingClaimedBy:      stringPtrFromNull(row.ArtifactProcessingClaimedBy),
@@ -767,4 +780,11 @@ func parseSnapshotLabels(raw json.RawMessage) []string {
 		return nil
 	}
 	return labels
+}
+
+// GetSnapshotRowByRefCommit returns the raw snapshot row at an exact
+// (ref, commit) — the gate publisher's base-provenance lookup (PLAN §2/§5).
+// sql.ErrNoRows when that base snapshot no longer exists.
+func (q *Queries) GetSnapshotRowByRefCommit(ctx context.Context, refID uuid.UUID, commitSHA string) (dbgen.Snapshot, error) {
+	return q.db.GetSnapshotByRefCommit(ctx, dbgen.GetSnapshotByRefCommitParams{RefID: refID, CommitSha: commitSHA})
 }

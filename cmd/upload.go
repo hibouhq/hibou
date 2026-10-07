@@ -50,6 +50,9 @@ type uploadCIContext struct {
 	prNumber       string
 	prTargetBranch string
 	prSourceBranch string
+	// Provenance (PLAN §2): what CI really built on a PR event.
+	mergeCommitSHA string
+	baseCommitSHA  string
 	prTitle        string
 	tag            string
 }
@@ -258,35 +261,44 @@ func detectGitHubFamilyCIContext() (uploadCIContext, bool) {
 	// it never show on the PR, and the server sees a head it can't match. The
 	// event payload carries the real head.
 	if ctx.prNumber != "" {
-		if head := gitHubEventPRHeadSHA(os.Getenv("GITHUB_EVENT_PATH")); head != "" {
+		// GITHUB_SHA on pull_request events IS the ephemeral merge commit —
+		// keep it as provenance before swapping commitSHA to the real head.
+		ctx.mergeCommitSHA = ctx.commitSHA
+		head, base := gitHubEventPRSHAs(os.Getenv("GITHUB_EVENT_PATH"))
+		if head != "" {
 			ctx.commitSHA = head
 		}
+		ctx.baseCommitSHA = base
 	}
 	return ctx, true
 }
 
-// gitHubEventPRHeadSHA reads .pull_request.head.sha from the Actions event
-// payload file. Empty on any error — the caller keeps GITHUB_SHA then.
-func gitHubEventPRHeadSHA(eventPath string) string {
+// gitHubEventPRSHAs reads .pull_request.head.sha and .pull_request.base.sha
+// from the Actions event payload file. Empty on any error — the caller keeps
+// GITHUB_SHA then.
+func gitHubEventPRSHAs(eventPath string) (head, base string) {
 	eventPath = strings.TrimSpace(eventPath)
 	if eventPath == "" {
-		return ""
+		return "", ""
 	}
 	payload, err := os.ReadFile(eventPath) // #nosec G304 G703 -- the CLI reads GITHUB_EVENT_PATH, the Actions-runner-provided payload file, with the invoking user's own privileges — no trust boundary to traverse.
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var event struct {
 		PullRequest struct {
 			Head struct {
 				SHA string `json:"sha"`
 			} `json:"head"`
+			Base struct {
+				SHA string `json:"sha"`
+			} `json:"base"`
 		} `json:"pull_request"`
 	}
 	if err := json.Unmarshal(payload, &event); err != nil {
-		return ""
+		return "", ""
 	}
-	return strings.TrimSpace(event.PullRequest.Head.SHA)
+	return strings.TrimSpace(event.PullRequest.Head.SHA), strings.TrimSpace(event.PullRequest.Base.SHA)
 }
 
 func detectGitLabCIContext() (uploadCIContext, bool) {
@@ -304,8 +316,12 @@ func detectGitLabCIContext() (uploadCIContext, bool) {
 	}
 	commitSHA := strings.TrimSpace(os.Getenv("CI_COMMIT_SHA"))
 	// Merged-results pipelines run on an internal merge commit; the MR head is
-	// what the forge shows and what checks must attach to.
+	// what the forge shows and what checks must attach to. The merge commit and
+	// the base it merged onto are kept as provenance (PLAN §2).
+	mergeCommitSHA := ""
+	baseCommitSHA := strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_DIFF_BASE_SHA"))
 	if headSHA := strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA")); headSHA != "" {
+		mergeCommitSHA = commitSHA
 		commitSHA = headSHA
 	}
 	return uploadCIContext{
@@ -316,6 +332,8 @@ func detectGitLabCIContext() (uploadCIContext, bool) {
 		prTargetBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")),
 		prSourceBranch: strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")),
 		prNumber:       strings.TrimSpace(os.Getenv("CI_MERGE_REQUEST_IID")),
+		mergeCommitSHA: mergeCommitSHA,
+		baseCommitSHA:  baseCommitSHA,
 		runID:          strings.TrimSpace(os.Getenv("CI_PIPELINE_ID")),
 		runNumber:      strings.TrimSpace(os.Getenv("CI_PIPELINE_IID")),
 		buildURL:       buildURL,
@@ -472,6 +490,12 @@ func setOptionalUploadContextFields(payload map[string]any, ctx uploadCIContext)
 	}
 	if ctx.tag != "" {
 		payload["tag"] = ctx.tag
+	}
+	if ctx.mergeCommitSHA != "" {
+		payload["merge_commit_sha"] = ctx.mergeCommitSHA
+	}
+	if ctx.baseCommitSHA != "" {
+		payload["base_commit_sha"] = ctx.baseCommitSHA
 	}
 }
 

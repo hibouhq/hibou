@@ -13,9 +13,10 @@ INSERT INTO pr_checks (
     external_id,
     target_url,
     forge_synced_at,
-    last_error
+    last_error,
+    claims_base_sha
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
     ref_id = EXCLUDED.ref_id,
     state = EXCLUDED.state,
@@ -29,6 +30,7 @@ ON CONFLICT (repo_id, head_sha, context) DO UPDATE SET
     target_url = EXCLUDED.target_url,
     forge_synced_at = EXCLUDED.forge_synced_at,
     last_error = EXCLUDED.last_error,
+    claims_base_sha = EXCLUDED.claims_base_sha,
     updated_at = NOW()
 RETURNING *;
 
@@ -69,7 +71,7 @@ ON CONFLICT DO NOTHING;
 
 -- name: ListFixingPullRequests :many
 -- Open PRs whose latest published gate resolves the given fingerprints.
-SELECT f.fingerprint, r.name AS ref_name, r.pr_number, r.pr_title
+SELECT f.fingerprint, r.name AS ref_name, r.pr_number, r.pr_title, c.claims_base_sha
 FROM pr_check_resolved_fingerprints f
 JOIN pr_checks c ON c.id = f.pr_check_id
 JOIN refs r ON r.id = c.ref_id

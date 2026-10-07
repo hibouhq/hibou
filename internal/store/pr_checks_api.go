@@ -35,6 +35,9 @@ type UpsertPRCheckInput struct {
 	TargetURL     string
 	ForgeSyncedAt *time.Time
 	LastError     string
+	// ClaimsBaseSha is the base commit the resolved-fingerprint claims were
+	// verified against; empty when no claims were recorded (PLAN §5).
+	ClaimsBaseSha string
 }
 
 // UpsertPRCheck inserts or updates the gate outcome for (repo, head SHA, context).
@@ -72,6 +75,7 @@ func (q *Queries) UpsertPRCheck(ctx context.Context, in UpsertPRCheckInput) (*Pr
 		TargetUrl:     in.TargetURL,
 		ForgeSyncedAt: nullTimeFromPtr(in.ForgeSyncedAt),
 		LastError:     in.LastError,
+		ClaimsBaseSha: in.ClaimsBaseSha,
 	})
 	if err != nil {
 		return nil, err
@@ -111,6 +115,9 @@ type FixingPullRequest struct {
 	RefName     string `json:"ref_name"`
 	Number      string `json:"number,omitempty"`
 	Title       string `json:"title,omitempty"`
+	// VerifiedBaseSha is the base commit the claim was verified against
+	// (PLAN §5) — what the UI's "resolved when merged" hover cites.
+	VerifiedBaseSha string `json:"verified_base_sha,omitempty"`
 }
 
 func (q *Queries) ListFixingPullRequests(ctx context.Context, repoID uuid.UUID, fingerprints []string) ([]FixingPullRequest, error) {
@@ -127,10 +134,11 @@ func (q *Queries) ListFixingPullRequests(ctx context.Context, repoID uuid.UUID, 
 	out := make([]FixingPullRequest, len(rows))
 	for i, row := range rows {
 		out[i] = FixingPullRequest{
-			Fingerprint: row.Fingerprint,
-			RefName:     row.RefName,
-			Number:      row.PrNumber.String,
-			Title:       row.PrTitle,
+			Fingerprint:     row.Fingerprint,
+			RefName:         row.RefName,
+			Number:          row.PrNumber.String,
+			Title:           row.PrTitle,
+			VerifiedBaseSha: row.ClaimsBaseSha,
 		}
 	}
 	return out, nil

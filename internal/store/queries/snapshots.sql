@@ -322,9 +322,11 @@ INSERT INTO snapshots (
 	pr_number,
 	pr_target_branch,
 	tag,
-	expected_uploads
+	expected_uploads,
+	merge_commit_sha,
+	base_commit_sha
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (ref_id, commit_sha, COALESCE(run_id, ''), COALESCE(run_attempt, '')) DO UPDATE SET
 	build_url = COALESCE(snapshots.build_url, EXCLUDED.build_url),
 	run_id = COALESCE(snapshots.run_id, EXCLUDED.run_id),
@@ -333,7 +335,11 @@ ON CONFLICT (ref_id, commit_sha, COALESCE(run_id, ''), COALESCE(run_attempt, '')
 	pr_number = COALESCE(snapshots.pr_number, EXCLUDED.pr_number),
 	pr_target_branch = COALESCE(snapshots.pr_target_branch, EXCLUDED.pr_target_branch),
 	tag = COALESCE(snapshots.tag, EXCLUDED.tag),
-	expected_uploads = COALESCE(snapshots.expected_uploads, EXCLUDED.expected_uploads)
+	expected_uploads = COALESCE(snapshots.expected_uploads, EXCLUDED.expected_uploads),
+	-- First writer wins, like the rest of the build metadata: later uploads of
+	-- the same build must not blank what the first one knew.
+	merge_commit_sha = CASE WHEN snapshots.merge_commit_sha = '' THEN EXCLUDED.merge_commit_sha ELSE snapshots.merge_commit_sha END,
+	base_commit_sha = CASE WHEN snapshots.base_commit_sha = '' THEN EXCLUDED.base_commit_sha ELSE snapshots.base_commit_sha END
 RETURNING *;
 
 -- name: ListSnapshotsByRefWithLabels :many

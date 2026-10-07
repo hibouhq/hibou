@@ -305,6 +305,10 @@ export interface Snapshot {
   run_number?: string
   pr_number?: string
   pr_target_branch?: string
+  /** PLAN §2: on PR builds, what CI actually built — the ephemeral merge
+   * commit it checked out, and the base commit that merge used. */
+  merge_commit_sha?: string
+  base_commit_sha?: string
   created_at: string
 }
 
@@ -546,6 +550,8 @@ export interface Ref {
 }
 
 export interface Vulnerability {
+  /** Advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD). */
+  kev?: boolean
   id: string
   type: string
   snapshot_id: string
@@ -585,7 +591,7 @@ export interface Vulnerability {
   // CI call-graph verdict (govulncheck): reachable | not_reachable | unknown.
   reachability?: string
   // Open PRs whose latest gate run resolves this fingerprint.
-  fixed_in_prs?: Array<{ fingerprint: string; ref_name: string; number?: string; title?: string }>
+  fixed_in_prs?: Array<{ fingerprint: string; ref_name: string; number?: string; title?: string; verified_base_sha?: string }>
   solution?: string
   // Provenance (ADR-020): who produced this finding. 'scanner' is an ingested
   // tool report, 'human' a person, 'agent' an API token acting for an agent.
@@ -2675,11 +2681,15 @@ class ApiClient {
       tool?: string
       search?: string
       sort?: string
+      exploited?: boolean
       page?: number
       per_page?: number
     },
   ) {
     const query = new URLSearchParams()
+    if (params?.exploited) {
+      query.set('exploited', 'true')
+    }
     for (const key of ['type', 'severity', 'status', 'tool', 'search', 'sort'] as const) {
       const value = params?.[key]
       if (value) {

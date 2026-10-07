@@ -208,9 +208,10 @@ Items:
   KEV-listed (distinct wording for risk-accept vs false-positive), plus a
   clearable 30-day default expiry on exploited risk acceptance. Wired from the
   drawer through both VulnerabilitiesTab views.
-- [ ] **Exploited badge + filter on findings lists** ❌ — needs backend: list
-  rows don't carry `kev`; add batched enrichment like `FixedInPRs`
-  ([internal/server/analysis.go](internal/server/analysis.go)).
+- [x] **Exploited badge + filter on findings lists** ✅ — batched `attachKEV`
+  enrichment on repo and org lists; flame badge + "Exploited only" toggle in
+  both VulnerabilitiesTabs (org side filters in SQL via `exploited=true`).
+  Still open: the same badge on the Dependencies tab / component modal.
 - [ ] **Org-level exploited count** ❌ — needs backend: surface "N exploited
   findings" on the org vulnerability aggregation for the security team's
   portfolio view.

@@ -80,6 +80,40 @@ func (q *Queries) CreateScanProvider(ctx context.Context, arg CreateScanProvider
 	return i, err
 }
 
+const getGateScanReadiness = `-- name: GetGateScanReadiness :one
+SELECT
+    EXISTS(SELECT 1 FROM scans sc WHERE sc.snapshot_id = $1 AND sc.status = 'complete') AS has_complete_scan,
+    EXISTS(SELECT 1 FROM scans sc WHERE sc.snapshot_id = $1) AS has_any_scan,
+    EXISTS(SELECT 1 FROM snapshot_components sn WHERE sn.snapshot_id = $1) AS has_components,
+    COALESCE((SELECT sc.status FROM scans sc WHERE sc.snapshot_id = $1 ORDER BY sc.created_at DESC LIMIT 1), '') AS latest_status
+`
+
+type GetGateScanReadinessRow struct {
+	HasCompleteScan bool        `json:"has_complete_scan"`
+	HasAnyScan      bool        `json:"has_any_scan"`
+	HasComponents   bool        `json:"has_components"`
+	LatestStatus    interface{} `json:"latest_status"`
+}
+
+// The gate's precondition (PLAN §1): a snapshot with components is gate-ready
+// only once an advisory scan has COMPLETED for it — a verdict computed between
+// artifact processing and the scan sees no dependency findings, reports them
+// all "resolved", and cannot fire the malware/KEV blocks. A snapshot with no
+// components has nothing to scan and is ready immediately (coverage-only or
+// SARIF-only uploads). latest_status lets the caller word "failed" apart from
+// "in progress".
+func (q *Queries) GetGateScanReadiness(ctx context.Context, snapshotID uuid.UUID) (GetGateScanReadinessRow, error) {
+	row := q.db.QueryRowContext(ctx, getGateScanReadiness, snapshotID)
+	var i GetGateScanReadinessRow
+	err := row.Scan(
+		&i.HasCompleteScan,
+		&i.HasAnyScan,
+		&i.HasComponents,
+		&i.LatestStatus,
+	)
+	return i, err
+}
+
 const getScanByID = `-- name: GetScanByID :one
 SELECT id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at FROM scans WHERE id = $1
 `

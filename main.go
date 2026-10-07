@@ -1,6 +1,9 @@
 package main
 
-import "github.com/hibouhq/hibou/cmd"
+import (
+	"github.com/hibouhq/hibou/cmd"
+	"github.com/hibouhq/hibou/internal/initproc"
+)
 
 // @title           hibou API
 // @version         1.0
@@ -12,5 +15,8 @@ import "github.com/hibouhq/hibou/cmd"
 // @name Authorization
 // @description Enter your API key with the "Bearer " prefix
 func main() {
+	// Before anything else: as PID 1 this becomes the reaping supervisor and
+	// never returns, so it must not share a process with code that execs.
+	initproc.SuperviseIfPID1()
 	cmd.Execute()
 }

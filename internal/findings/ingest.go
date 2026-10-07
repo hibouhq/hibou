@@ -15,6 +15,7 @@ import (
 	"github.com/lib/pq"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/sanitize"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -110,8 +111,8 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		_, err = i.store.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
 			Type:                   "sast",
 			SnapshotID:             snapshotID,
-			Title:                  truncateMessage(strings.TrimSpace(finding.Message), 200),
-			Description:            strings.TrimSpace(finding.Message),
+			Title:                  truncateMessage(sanitize.Text(finding.Message), 200),
+			Description:            sanitize.Text(finding.Message),
 			PrimaryIdentifierKind:  "rule",
 			PrimaryIdentifierValue: strings.TrimSpace(finding.RuleID),
 			OriginalSeverity:       severity,

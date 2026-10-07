@@ -271,6 +271,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.staleScanChecker = notify.NewStaleScanChecker(s.queries, s.bus, log)
 	s.tokenExpiryChecker = notify.NewTokenExpiryChecker(s.queries, s.bus, log)
 	s.gatePublisher = forge.NewGatePublisher(forges, s.deltaSvc, s.bus, forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, wsGateNotifier{live: s.wsFanout}, cfg.BaseURL, log)
+	s.gatePublisher.SetAdvisoryScanEnabled(s.advisoryScanner != nil && len(s.advisoryProviders) > 0)
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
 	s.gatePublisher.Subscribe()

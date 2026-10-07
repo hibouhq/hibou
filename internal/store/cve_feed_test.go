@@ -163,3 +163,32 @@ func containsSubscription(subscriptions []dbgen.CveSubscription, id string) bool
 	}
 	return false
 }
+
+// A "published" event carries no detail. A nil RawMessage binds as SQL NULL,
+// not the column default, so detail-less events were rejected by the NOT NULL
+// constraint and silently dropped from the activity stream.
+func TestRecordAdvisoryEventWithoutDetail(t *testing.T) {
+	db := openStoreTestDB(t, "advisory event without detail")
+	queries := NewQueries(db)
+	ctx := context.Background()
+
+	const cveID = "CVE-2099-20001"
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM advisory_events WHERE cve_id = $1`, cveID)
+	})
+
+	if err := queries.RecordAdvisoryEvent(ctx, AdvisoryEvent{
+		CVEID:      cveID,
+		Kind:       EventPublished,
+		OccurredAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordAdvisoryEvent with nil detail: %v", err)
+	}
+	var detail string
+	if err := db.QueryRowContext(ctx, `SELECT detail::text FROM advisory_events WHERE cve_id = $1`, cveID).Scan(&detail); err != nil {
+		t.Fatalf("read back event: %v", err)
+	}
+	if detail != "{}" {
+		t.Fatalf("detail = %q, want {}", detail)
+	}
+}

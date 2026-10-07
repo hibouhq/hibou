@@ -26,6 +26,17 @@
       placeholder="Filter vulnerabilities across all repositories..."
     />
 
+    <button
+      type="button"
+      class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium transition"
+      :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-300 hover:border-danger/50 hover:text-danger'"
+      title="Show only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD)"
+      @click="exploitedOnly = !exploitedOnly"
+    >
+      <Flame class="h-3.5 w-3.5" />
+      Exploited only
+    </button>
+
     <!-- Same detail drawer as the repository view; org-wide rows carry their own
          repository, so it is passed per row rather than read from the route. -->
     <FindingDetailModal
@@ -104,6 +115,14 @@
               >
                 <td class="px-3 py-2.5">
                   <span :class="severityClass(vulnerability.severity)">{{ vulnerability.severity }}</span>
+                  <span
+                    v-if="vulnerability.kev"
+                    class="ml-1 inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-semibold text-white"
+                    title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD) — exploitation in the wild is documented"
+                  >
+                    <Flame class="h-3 w-3" />
+                    exploited
+                  </span>
                 </td>
                 <td class="px-3 py-2.5">
                   <RouterLink
@@ -173,7 +192,7 @@
 </template>
 
 <script setup lang="ts">
-import { Biohazard } from 'lucide-vue-next'
+import { Flame, Biohazard } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
@@ -194,6 +213,9 @@ const { pushToast } = useToast()
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 
+// Server-side facet (SQL EXISTS against the exploited catalogs): this view is
+// paginated in SQL, so the filter cannot be client-side.
+const exploitedOnly = ref(false)
 const vulnerabilities = ref<OrgVulnerability[]>([])
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected' })
@@ -243,7 +265,7 @@ watch(
 )
 
 watch(
-  [provider, slug, activeFilters, searchQuery, currentSort, currentSortDirection, () => pagination.value.page],
+  [provider, slug, activeFilters, searchQuery, currentSort, currentSortDirection, exploitedOnly, () => pagination.value.page],
   async () => {
     if (!provider.value || !slug.value) {
       vulnerabilities.value = []
@@ -258,6 +280,7 @@ watch(
         status: activeFilters.value.status || undefined,
         tool: activeFilters.value.tool || undefined,
         search: searchQuery.value || undefined,
+        exploited: exploitedOnly.value || undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,
         per_page: pagination.value.per_page,

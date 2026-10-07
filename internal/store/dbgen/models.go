@@ -1375,6 +1375,7 @@ type PrCheck struct {
 	LastError     string          `json:"last_error"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	ClaimsBaseSha string          `json:"claims_base_sha"`
 }
 
 type PrCheckResolvedFingerprint struct {
@@ -1554,6 +1555,8 @@ type Snapshot struct {
 	ArtifactProcessingLastError      sql.NullString  `json:"artifact_processing_last_error"`
 	OrgID                            uuid.UUID       `json:"org_id"`
 	RepoID                           uuid.UUID       `json:"repo_id"`
+	MergeCommitSha                   string          `json:"merge_commit_sha"`
+	BaseCommitSha                    string          `json:"base_commit_sha"`
 }
 
 type SnapshotArtifact struct {
