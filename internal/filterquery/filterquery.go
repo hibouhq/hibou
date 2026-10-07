@@ -76,6 +76,9 @@ var AllowedColumns = map[string]string{
 	// (alias fa) that the dynamic list query always carries.
 	"acceptance": "fa.reason_kind",
 	"label":      "fa.labels",
+	// Known-exploited membership (ADR-032): resolved against the kev_entries
+	// mirror, not a column — see exploitedQualifierToSQL.
+	"exploited": "",
 }
 
 const maxDepth = 16
@@ -332,6 +335,8 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 	}
 
 	switch node.Key {
+	case "exploited":
+		return exploitedQualifierToSQL(values, param)
 	case "acceptance":
 		return acceptanceQualifierToSQL(values, param)
 	case "label":
@@ -348,6 +353,31 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 		return singleOrArraySQL(column, values, param, "%s::text = $%d", "%s::text = ANY($%d::text[])")
 	default:
 		return singleOrArraySQL(column, values, param, "%s = $%d", "%s = ANY($%d::text[])")
+	}
+}
+
+// exploitedSQL is the known-exploited membership test the gate blocks on
+// (ADR-032): the finding's advisory — by id+aliases, or bare identifier — is
+// on a mirrored exploited catalog. Scoped to advisory-backed finding types;
+// parameterless (closed true/false vocabulary). The alias v matches the
+// dynamic list query this filter is compiled for.
+const exploitedSQL = `(v.type IN ('dependency','container','malware') AND (` +
+	`EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))` +
+	` OR EXISTS (SELECT 1 FROM advisories adv LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id` +
+	` JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))` +
+	` WHERE adv.id = v.advisory_id)))`
+
+func exploitedQualifierToSQL(values []string, param int) (string, []interface{}, int, error) {
+	if len(values) != 1 {
+		return "", nil, param, errors.New("exploited takes a single true/false value")
+	}
+	switch values[0] {
+	case "true", "yes":
+		return exploitedSQL, nil, param, nil
+	case "false", "no":
+		return "NOT " + exploitedSQL, nil, param, nil
+	default:
+		return "", nil, param, fmt.Errorf("exploited must be true or false (got %q)", values[0])
 	}
 }
 

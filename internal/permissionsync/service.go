@@ -152,25 +152,25 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 		}
 	}
 
-	if err := s.store.PruneForgeOrgMembersForUser(ctx, user.ID, keptOrgIDs); err != nil {
-		return err
-	}
-	for _, membership := range existingMemberships {
-		if _, keep := desiredOrgRoles[membership.OrgID]; keep {
-			continue
-		}
-		s.removeOrgRole(user.ID, membership.Role, membership.OrgID)
-		// Losing membership is not ambiguous the way a downgrade is: the person
-		// may have left the company entirely, so their grants go with it rather
-		// than waiting for somebody to re-confirm.
-		s.revokeLocalGrants(ctx, user.ID, membership.OrgID)
-	}
-
 	desiredRepoRoles := make(map[uuid.UUID]string, len(access.Repos))
 	desiredRepoOrder := make([]uuid.UUID, 0, len(access.Repos))
+	// Orgs reachable only through repo-level access (outside collaborators,
+	// per-repo readers): they carry no org membership on the forge, so the
+	// org prune below must not evict them — that was the bug where invited
+	// readers lost the org from /orgs the moment THEY logged in, until the
+	// org-side sync re-added it.
+	repoOnlyOrgIDs := make([]uuid.UUID, 0, 4)
+	repoOrgSeen := make(map[uuid.UUID]struct{}, 4)
 	for _, repoAccess := range access.Repos {
-		org := orgsByAccount[normalizeAccessKey(repoAccess.AccountLogin)]
-		if org == nil {
+		// Resolved, not read from the org-loop's cache: a repo-only user
+		// (outside collaborator) has no entry in access.Orgs, so the cache is
+		// cold and the bare map read dropped their entire repo access at login
+		// — which the prune below then deleted.
+		org, ok, err := s.resolveOrganization(ctx, providerID, repoAccess.AccountLogin, orgsByAccount)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			continue
 		}
 		repoName := strings.TrimSpace(repoAccess.Name)
@@ -193,6 +193,12 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 			desiredRepoOrder = append(desiredRepoOrder, repo.ID)
 		}
 		desiredRepoRoles[repo.ID] = strongerRole(desiredRepoRoles[repo.ID], enumRole)
+		if _, dup := repoOrgSeen[org.ID]; !dup {
+			repoOrgSeen[org.ID] = struct{}{}
+			if _, hasOrgRole := desiredOrgRoles[org.ID]; !hasOrgRole {
+				repoOnlyOrgIDs = append(repoOnlyOrgIDs, org.ID)
+			}
+		}
 	}
 
 	keptRepoIDs := make([]uuid.UUID, 0, len(desiredRepoOrder))
@@ -205,6 +211,36 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 			return err
 		}
 		keptRepoIDs = append(keptRepoIDs, repoID)
+	}
+
+	// Repo-level access keeps the owning org visible as a viewer membership:
+	// without it the person can open their repos but the org never appears on
+	// /orgs, and the login prune would evict what the org-side sync granted.
+	for _, orgID := range repoOnlyOrgIDs {
+		if err := s.store.UpsertForgeOrgMember(ctx, orgID, user.ID, "viewer"); err != nil {
+			return err
+		}
+		keptOrgIDs = append(keptOrgIDs, orgID)
+		desiredOrgRoles[orgID] = "viewer"
+		if existingRoles[orgID] == "" {
+			s.addOrgRole(user.ID, "viewer", orgID)
+		}
+	}
+
+	// Prune AFTER both halves are known: the org list alone is a narrower view
+	// than what this same pass writes.
+	if err := s.store.PruneForgeOrgMembersForUser(ctx, user.ID, keptOrgIDs); err != nil {
+		return err
+	}
+	for _, membership := range existingMemberships {
+		if _, keep := desiredOrgRoles[membership.OrgID]; keep {
+			continue
+		}
+		s.removeOrgRole(user.ID, membership.Role, membership.OrgID)
+		// Losing membership is not ambiguous the way a downgrade is: the person
+		// may have left the company entirely, so their grants go with it rather
+		// than waiting for somebody to re-confirm.
+		s.revokeLocalGrants(ctx, user.ID, membership.OrgID)
 	}
 
 	return s.store.PruneForgeUserRepoAccess(ctx, user.ID, keptRepoIDs)

@@ -24,18 +24,20 @@
       :total-count="pagination.total"
       :filtered-count="hasActiveFilters ? pagination.total : undefined"
       placeholder="Filter vulnerabilities across all repositories..."
-    />
-
-    <button
-      type="button"
-      class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium transition"
-      :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-300 hover:border-danger/50 hover:text-danger'"
-      title="Show only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD)"
-      @click="exploitedOnly = !exploitedOnly"
     >
-      <Flame class="h-3.5 w-3.5" />
-      Exploited only
-    </button>
+      <template #trailing>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition"
+          :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-400 hover:border-danger/50 hover:text-danger'"
+          title="Only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD)"
+          @click="toggleExploitedOnly"
+        >
+          <Flame class="h-3.5 w-3.5" />
+          Exploited
+        </button>
+      </template>
+    </FilterBar>
 
     <!-- Same detail drawer as the repository view; org-wide rows carry their own
          repository, so it is passed per row rather than read from the route. -->
@@ -214,8 +216,14 @@ const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 
 // Server-side facet (SQL EXISTS against the exploited catalogs): this view is
-// paginated in SQL, so the filter cannot be client-side.
-const exploitedOnly = ref(false)
+// paginated in SQL, so the filter cannot be client-side. URL-synced so a
+// filtered view can be bookmarked.
+const exploitedOnly = ref(route.query.exploited === 'true')
+function toggleExploitedOnly() {
+  exploitedOnly.value = !exploitedOnly.value
+  pagination.value.page = 1
+  void router.replace({ query: { ...route.query, exploited: exploitedOnly.value ? 'true' : undefined } })
+}
 const vulnerabilities = ref<OrgVulnerability[]>([])
 const loading = ref(true)
 const activeFilters = ref<Record<string, string>>({ status: 'detected' })

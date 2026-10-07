@@ -2152,7 +2152,13 @@ function severityBadgeClass(severity: string) {
 }
 
 function changeBadgeClass(change: string) {
-  if (change === 'new' || change === 'added') {
+  // Valence follows the SECURITY meaning, not the diff meaning: a NEW finding
+  // is a regression (red) and a RESOLVED one is the good news (green). Only
+  // component additions keep the diff-style green.
+  if (change === 'new') {
+    return 'rounded-full bg-danger/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-danger'
+  }
+  if (change === 'resolved' || change === 'added') {
     return 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-300'
   }
   if (change === 'updated') {

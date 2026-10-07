@@ -26,7 +26,20 @@
       :filtered-count="hasActiveFilters ? pagination.total : undefined"
       :counts="facetCounts"
       placeholder="Filter vulnerabilities..."
-    />
+    >
+      <template #trailing>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition"
+          :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-400 hover:border-danger/50 hover:text-danger'"
+          title="Only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD). Server-side: pagination stays correct."
+          @click="toggleExploitedOnly"
+        >
+          <Flame class="h-3.5 w-3.5" />
+          Exploited
+        </button>
+      </template>
+    </FilterBar>
 
     <div class="flex items-center gap-3">
       <button
@@ -38,16 +51,6 @@
       >
         <KeyRound class="h-3.5 w-3.5" />
         {{ secretScanRunning ? 'Queueing...' : lastSecretScanJob?.status === 'failed' ? 'Retry secret scan' : 'Scan secrets' }}
-      </button>
-      <button
-        type="button"
-        class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium transition"
-        :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-300 hover:border-danger/50 hover:text-danger'"
-        title="Show only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD)"
-        @click="exploitedOnly = !exploitedOnly"
-      >
-        <Flame class="h-3.5 w-3.5" />
-        Exploited only
       </button>
       <span
         v-if="secretScanMessage"
@@ -221,7 +224,7 @@
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
               <tr
-                v-for="vulnerability in displayedVulnerabilities"
+                v-for="vulnerability in vulnerabilities"
                 :key="vulnerability.id"
                 class="cursor-pointer transition hover:bg-white/5"
                 :class="[rowClass(vulnerability.type), selected.has(vulnerability.fingerprint) ? 'bg-accent/10' : '']"
@@ -420,11 +423,15 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 
 const vulnerabilities = ref<Vulnerability[]>([])
 
-// Exploited-only is a client-side facet: this view already holds the full
-// filtered list, and "exploited" is enrichment, not a server column.
-const exploitedOnly = ref(false)
-const displayedVulnerabilities = computed(() =>
-  exploitedOnly.value ? vulnerabilities.value.filter((vulnerability) => vulnerability.kev) : vulnerabilities.value)
+// Exploited-only is a SERVER-side facet (the list is paginated; a client-side
+// filter rendered empty pages) and lives in the URL so a filtered view can be
+// bookmarked/shared, like ref and snapshot.
+const exploitedOnly = ref(route.query.exploited === 'true')
+function toggleExploitedOnly() {
+  exploitedOnly.value = !exploitedOnly.value
+  pagination.value.page = 1
+  void router.replace({ query: { ...route.query, exploited: exploitedOnly.value ? 'true' : undefined } })
+}
 
 const secretScanRunning = ref(false)
 const secretScanMessage = ref('')
@@ -622,6 +629,7 @@ async function loadVulnerabilities() {
         file: activeFilters.value.file || undefined,
         search: searchQuery.value || undefined,
         acceptance: activeFilters.value.acceptance || undefined,
+        exploited: exploitedOnly.value || undefined,
         // An OR/parenthesised bar query runs as the server-side filterquery;
         // the server uses it exclusively when present.
         q: advancedQuery.value || undefined,
@@ -673,7 +681,7 @@ async function loadVulnerabilities() {
 }
 
 watch(
-  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, advancedQuery, currentSort, currentSortDirection, () => pagination.value.page],
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery, advancedQuery, exploitedOnly, currentSort, currentSortDirection, () => pagination.value.page],
   () => { void loadVulnerabilities() },
   { immediate: true },
 )

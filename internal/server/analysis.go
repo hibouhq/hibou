@@ -137,9 +137,12 @@ func vulnerabilityListOptionsFromRequest(r *http.Request, limit, offset int) sto
 		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
 		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
 		Acceptance: strings.TrimSpace(r.URL.Query().Get("acceptance")),
-		Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
-		Limit:      limit,
-		Offset:     offset,
+		// PLAN §3 follow-up: the exploited facet must be server-side — this
+		// list is paginated, so a client-side filter renders empty pages.
+		ExploitedOnly: r.URL.Query().Get("exploited") == "true",
+		Sort:          strings.TrimSpace(r.URL.Query().Get("sort")),
+		Limit:         limit,
+		Offset:        offset,
 	}
 }
 
@@ -315,6 +318,9 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.attachFixingPullRequests(r.Context(), repo.ID, vulnerabilities)
+	// Both branches enrich identically — the PR view goes through this default
+	// branch and was missing the exploited badges.
+	s.attachKEV(r.Context(), vulnerabilities)
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 

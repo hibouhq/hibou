@@ -495,3 +495,46 @@ func TestMembershipRemovalRevokesLocalGrants(t *testing.T) {
 		t.Errorf("the revoked grant's policy was not dropped: %v", rbacFake.removedLocal)
 	}
 }
+
+// A person whose only forge standing is REPO-level access (outside
+// collaborator, per-repo reader) has no org in access.Orgs — the login prune
+// used to evict their org membership, so /orgs went blank for them until the
+// org-side sync re-added it. Repo access now keeps (or grants) a viewer org
+// membership, and the prune keeps it.
+func TestSyncUserRepoOnlyAccessKeepsOrgVisible(t *testing.T) {
+	t.Parallel()
+
+	user := testUser()
+	org := testOrg("github", "acme")
+	repo := testRepo(org.ID, "alpha")
+	storeFake := &fakeStore{
+		orgsBySlug:        map[string]*store.Organization{"github/acme": org},
+		reposByOrgAndSlug: map[string]*store.Repository{repoKey(org.ID, "alpha"): repo},
+		// The org-side sync granted viewer before this login.
+		existingMemberships: []store.ForgeOrgMembership{{OrgID: org.ID, UserID: user.ID, Role: "viewer"}},
+	}
+	rbacFake := &fakeRBAC{}
+	svc := NewService(storeFake, rbacFake, map[string]forge.Provider{
+		"github": fakeProvider{access: forge.UserAccess{
+			// No org access at all — only the repo.
+			Repos: []forge.UserRepoAccess{{AccountLogin: "Acme", Name: "alpha", Level: "pull"}},
+		}},
+	}, zerolog.Nop())
+
+	if err := svc.SyncUser(context.Background(), user, "github", &oauth2.Token{AccessToken: "token"}); err != nil {
+		t.Fatalf("SyncUser() error = %v", err)
+	}
+
+	if len(storeFake.upsertOrgMembers) != 1 || storeFake.upsertOrgMembers[0].role != "viewer" || storeFake.upsertOrgMembers[0].orgID != org.ID {
+		t.Fatalf("expected a viewer org membership derived from repo access, got %#v", storeFake.upsertOrgMembers)
+	}
+	if len(storeFake.prunedOrgIDs) != 1 || storeFake.prunedOrgIDs[0] != org.ID {
+		t.Fatalf("the prune keep-list must retain the repo-derived org, got %#v", storeFake.prunedOrgIDs)
+	}
+	if len(storeFake.revokedForOrgs) != 0 {
+		t.Fatalf("no grants may be revoked for a kept org, got %#v", storeFake.revokedForOrgs)
+	}
+	if len(storeFake.upsertRepoAccess) != 1 || storeFake.upsertRepoAccess[0].role != "viewer" {
+		t.Fatalf("repo access upserts = %#v", storeFake.upsertRepoAccess)
+	}
+}

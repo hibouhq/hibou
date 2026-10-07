@@ -237,6 +237,10 @@
         </div>
       </div>
 
+      <!-- Trailing controls supplied by the host view (e.g. the exploited
+           toggle): visually part of the filter row, right of the facet pills. -->
+      <slot name="trailing" />
+
       <div
         v-if="hasSortOptions"
         class="relative ml-auto"

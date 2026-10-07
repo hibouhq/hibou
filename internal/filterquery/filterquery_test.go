@@ -462,3 +462,38 @@ func assertArrayValue(t *testing.T, value interface{}, expected string) {
 		t.Fatalf("unexpected array value: got %v want %s", raw, expected)
 	}
 }
+
+func TestExploitedQualifier(t *testing.T) {
+	for _, tc := range []struct {
+		query   string
+		wantNot bool
+	}{
+		{"exploited:true", false},
+		{"exploited:false", true},
+	} {
+		node, err := Parse(tc.query)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tc.query, err)
+		}
+		result, err := ToSQL(node, 2)
+		if err != nil {
+			t.Fatalf("ToSQL(%q): %v", tc.query, err)
+		}
+		if !strings.Contains(result.Where, "kev_entries") {
+			t.Fatalf("where %q should test kev_entries membership", result.Where)
+		}
+		if gotNot := strings.HasPrefix(strings.TrimSpace(result.Where), "NOT "); gotNot != tc.wantNot {
+			t.Fatalf("where %q negation = %v, want %v", result.Where, gotNot, tc.wantNot)
+		}
+		if len(result.Params) != 0 {
+			t.Fatalf("exploited is a closed vocabulary; params = %v", result.Params)
+		}
+	}
+	if _, err := Parse("exploited:maybe"); err == nil {
+		if node, _ := Parse("exploited:maybe"); node != nil {
+			if _, err := ToSQL(node, 2); err == nil {
+				t.Fatal("exploited:maybe must be rejected")
+			}
+		}
+	}
+}

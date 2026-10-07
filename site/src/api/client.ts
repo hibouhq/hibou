@@ -2359,6 +2359,8 @@ class ApiClient {
       file?: string
       search?: string
       acceptance?: string
+      /** Server-side known-exploited facet (also available as `exploited:true` in q). */
+      exploited?: boolean
       // Full boolean filterquery (AND/OR/parentheses); when set the server
       // uses it exclusively and the discrete params above are ignored.
       q?: string
@@ -2390,6 +2392,9 @@ class ApiClient {
     }
     if (params?.tool) {
       query.set('tool', params.tool)
+    }
+    if (params?.exploited) {
+      query.set('exploited', 'true')
     }
     if (params?.status) {
       query.set('status', params.status)
