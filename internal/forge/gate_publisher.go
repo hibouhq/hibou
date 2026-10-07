@@ -117,16 +117,21 @@ func (a *GatePublisher) Subscribe() {
 	if a == nil || a.bus == nil {
 		return
 	}
+	// context.WithoutCancel on every handler: the publisher (an advisory-scan
+	// goroutine with a deferred cancel, a request that just returned) tears its
+	// context down the moment it finishes, and that cancellation killed the
+	// authoritative post-scan publish mid-flight on dogfood — leaving a
+	// mid-scan "passed" as the PR's final word.
 	a.bus.Subscribe(events.ScanCompleted, func(ctx context.Context, event events.Event) {
-		a.handleScanCompleted(ctx, event.Payload)
+		a.handleScanCompleted(context.WithoutCancel(ctx), event.Payload)
 	})
 	// A secret scan lands findings after upload analysis, so an already-posted
 	// gate check would otherwise go stale the moment a leak is found.
 	a.bus.Subscribe(events.SecretScanCompleted, func(ctx context.Context, event events.Event) {
-		a.handleScanCompleted(ctx, event.Payload)
+		a.handleScanCompleted(context.WithoutCancel(ctx), event.Payload)
 	})
 	a.bus.Subscribe(events.GateRecomputeRequested, func(ctx context.Context, event events.Event) {
-		a.handleRecomputeRequested(ctx, event.Payload)
+		a.handleRecomputeRequested(context.WithoutCancel(ctx), event.Payload)
 	})
 }
 
@@ -370,6 +375,14 @@ func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) 
 		// No analyzed head snapshot yet (PR opened / pushed, CI not uploaded):
 		// post the pending check on the webhook-tracked head so the PR is
 		// blocked-and-informative instead of blank.
+		a.publishGateWaitingForUpload(ctx, ref)
+		return
+	}
+	if snapshot.Status != dbgen.SnapshotStatusComplete && snapshot.Status != dbgen.SnapshotStatusActive {
+		// Same guard publishForSnapshotID has had all along; without it this
+		// path evaluated a webhook-created pending placeholder — zero findings
+		// against the full base — and published "passed" on a PR that
+		// introduced a known-exploited dependency (dogfood, PR #11 retest).
 		a.publishGateWaitingForUpload(ctx, ref)
 		return
 	}

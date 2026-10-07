@@ -904,3 +904,29 @@ func TestGatePublisherRecordsClaimsOnlyWhenBaseVerified(t *testing.T) {
 		t.Fatalf("unverified claims must not carry a base, got %#v", store.prChecks)
 	}
 }
+
+// alpha.82 incident, second hole: the by-ref path (PR-sync webhook, reconcile
+// loop) evaluated whatever GetLatestSnapshotByRef returned — including a
+// pending snapshot with zero findings, which reads as "0 new, passed".
+func TestPublishGateForRefSkipsPendingSnapshot(t *testing.T) {
+	store := newGatePublisherStore()
+	forgeProvider := &mockForgeProvider{}
+	orgID, repoID, prRefID, targetRefID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	prSnapshotID := uuid.New()
+
+	store.repos[repoID] = dbgen.Repository{ID: repoID, OrgID: orgID, Name: "acme/api", Slug: "api", Provider: "github", ProviderID: "acme/api"}
+	store.refs[prRefID] = dbgen.Ref{ID: prRefID, RepoID: repoID, Name: "refs/pull/21", RefType: dbgen.RefTypePullRequest, MergeTargetRefID: uuid.NullUUID{UUID: targetRefID, Valid: true}, LatestCommitSha: sql.NullString{String: "headsha", Valid: true}}
+	store.latestSnapshot[prRefID] = dbgen.Snapshot{ID: prSnapshotID, RefID: prRefID, CommitSha: "headsha", Status: dbgen.SnapshotStatusPending, CreatedAt: time.Now().UTC()}
+	store.orgSlugs[orgID] = "acme-org"
+
+	deltaSvc := delta.NewService(store.deltaTestStore, zerolog.Nop())
+	publisher := NewGatePublisher(map[string]Provider{"github": forgeProvider}, deltaSvc, events.New(zerolog.Nop()), store, nil, nil, "", zerolog.Nop())
+	publisher.PublishGateForRef(context.Background(), prRefID)
+
+	if len(store.prChecks) != 0 {
+		t.Fatalf("pending snapshot produced a verdict: %#v", store.prChecks)
+	}
+	if len(forgeProvider.statuses) != 1 || forgeProvider.statuses[0].status.State != "pending" {
+		t.Fatalf("expected one pending status, got %#v", forgeProvider.statuses)
+	}
+}

@@ -173,3 +173,21 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 		t.Fatal("ReplaceKEVSource with zero entries must refuse")
 	}
 }
+
+// PLAN addendum (alpha.82 incident): on a snapshot with ZERO scans the enum
+// column made COALESCE(status, ”) unparseable, the readiness read errored,
+// and the gate guard silently degraded open — a mid-scan "passed" shipped.
+// The ::text cast is load-bearing.
+func TestGateScanReadinessOnScanlessSnapshot(t *testing.T) {
+	db := openStoreTestDB(t, "gate scan readiness scanless")
+	queries := NewQueries(db)
+	ctx := context.Background()
+
+	row, err := queries.GetGateScanReadiness(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("readiness on a scan-less snapshot errored: %v", err)
+	}
+	if row.HasCompleteScan || row.HasAnyScan || row.HasComponents || row.LatestStatus != "" {
+		t.Fatalf("zero row expected, got %+v", row)
+	}
+}

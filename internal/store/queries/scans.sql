@@ -39,4 +39,7 @@ SELECT
     EXISTS(SELECT 1 FROM scans sc WHERE sc.snapshot_id = $1 AND sc.status = 'complete') AS has_complete_scan,
     EXISTS(SELECT 1 FROM scans sc WHERE sc.snapshot_id = $1) AS has_any_scan,
     EXISTS(SELECT 1 FROM snapshot_components sn WHERE sn.snapshot_id = $1) AS has_components,
-    COALESCE((SELECT sc.status FROM scans sc WHERE sc.snapshot_id = $1 ORDER BY sc.created_at DESC LIMIT 1), '') AS latest_status;
+    -- status is an enum: cast before COALESCE or the '' fallback fails to
+    -- parse as scan_status on snapshots with no scans (observed on dogfood,
+    -- which silently degraded the whole guard open).
+    COALESCE((SELECT sc.status::text FROM scans sc WHERE sc.snapshot_id = $1 ORDER BY sc.created_at DESC LIMIT 1), '') AS latest_status;
