@@ -62,6 +62,8 @@ RUN set -eux; \
 
 FROM runtime
 
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+
 COPY --from=prep /out/ /usr/local/bin/
 COPY --from=betterleaks /usr/local/bin/betterleaks /usr/local/bin/betterleaks
 

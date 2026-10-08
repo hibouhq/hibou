@@ -73,12 +73,14 @@ target "default" {
         SHA_TAG != "" ? "${REPO}:${SHA_TAG}" : "",
     ])
     labels = {
+        "org.opencontainers.image.licenses" = "AGPL-3.0-only"
         "org.opencontainers.image.source"   = "https://github.com/hibouhq/hibou"
         "org.opencontainers.image.version"  = coalesce(RELEASE_VERSION, SHA_TAG, "dev")
         "org.opencontainers.image.revision" = GITHUB_SHA
         "org.opencontainers.image.created"  = timestamp()
     }
     annotations = [
+        "index,manifest:org.opencontainers.image.licenses=AGPL-3.0-only",
         "index,manifest:org.opencontainers.image.source=https://github.com/hibouhq/hibou",
         "index,manifest:org.opencontainers.image.version=${coalesce(RELEASE_VERSION, SHA_TAG, "dev")}",
         "index,manifest:org.opencontainers.image.revision=${GITHUB_SHA}",

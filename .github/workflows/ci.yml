@@ -98,10 +98,14 @@ jobs:
             uses: ./.github/actions/devcontainer-ci
             with:
               run-cmd: |
+                set -euo pipefail
+                node --test scripts/sbom-license.test.mjs
                 gosec -track-suppressions -fmt sarif -out gosec.sarif ./... || true
                 trivy fs --format sarif --output trivy-fs.sarif .
                 trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
+                node scripts/sbom-license.mjs go-sbom.cdx.json go "${{ github.sha }}"
                 trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
+                node scripts/sbom-license.mjs frontend-sbom.cdx.json frontend "${{ github.sha }}"
 
       # - name: Check reproducibility
       #   uses: ./.github/actions/devcontainer-ci
@@ -280,7 +284,9 @@ jobs:
         uses: ./.github/actions/devcontainer-ci
         with:
           run-cmd: |
+            set -euo pipefail
             trivy image --format cyclonedx --output image-sbom.cdx.json ghcr.io/${{ github.repository }}:${{ steps.release.outputs.version }}
+            node scripts/sbom-license.mjs image-sbom.cdx.json image "${{ steps.release.outputs.version }}"
 
       - name: Upload image SBOM to Hibou
         if: github.event_name == 'release' && steps.hibou-ci.outputs.enabled == 'true'
