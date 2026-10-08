@@ -25,6 +25,27 @@ The recommended way to develop is using the VS Code devcontainer. It includes al
 4. Open http://localhost:3000 and sign in via Forgejo (or use "Dev Login" if no
    forge is configured).
 
+### Local Dev Login
+
+For local development without OAuth, start PostgreSQL, Trivy, and both dev servers:
+
+```bash
+make dev-local
+```
+
+Open http://localhost:3000/login and select **Dev Login**. Install frontend
+dependencies with `npm --prefix site install` if needed. The target builds
+the backend, loads local environment settings, starts PostgreSQL and Trivy,
+waits for their health checks, and disables forge providers
+only for this run; saved Forgejo settings are unchanged. Stop both servers with
+Ctrl+C. Use `make dev` to keep configured OAuth providers instead.
+
+Dev Login grants a local admin session without OAuth. Never expose this mode
+publicly. These targets do not seed or reset the database.
+
+Trivy's first startup downloads its vulnerability database and can take several
+minutes. Local startup waits up to ten minutes before launching Hibou.
+
 ### Forgejo local instance
 
 The Docker Compose stack includes a Forgejo instance at http://localhost:3030.

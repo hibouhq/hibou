@@ -2,12 +2,13 @@
   <div class="min-h-screen bg-surface text-[#e6edf3]">
     <header class="fixed inset-x-0 top-[var(--app-banner-height,0px)] z-50 h-14 border-b border-surface-border bg-surface-raised/95 backdrop-blur">
       <div class="flex h-full items-center gap-3 px-4">
-        <div class="flex items-center gap-3">
+        <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           <button
-            class="flex h-9 w-9 items-center justify-center rounded-lg border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/50 hover:text-white"
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-surface-border bg-surface-overlay text-gray-300 transition hover:border-accent/50 hover:text-white"
             type="button"
             aria-label="Open navigation menu"
             :aria-expanded="isDrawerOpen"
+            aria-controls="navigation-drawer"
             @click.stop="isDrawerOpen = !isDrawerOpen"
           >
             <Menu class="h-5 w-5" />
@@ -15,6 +16,7 @@
 
           <RouterLink
             to="/orgs"
+            aria-label="Hibou home"
             class="flex items-center gap-3 text-sm font-semibold text-white"
           >
             <span class="flex h-8 w-8 items-center justify-center rounded-xl border border-surface-border bg-surface-overlay shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
@@ -48,18 +50,18 @@
                 />
               </svg>
             </span>
-            <span class="hidden sm:inline">Hibou</span>
+            <span :class="currentRepoSlug ? 'hidden' : 'hidden sm:inline'">Hibou</span>
           </RouterLink>
 
-          <div class="flex items-center gap-1.5 text-sm">
+          <div class="flex min-w-0 items-center gap-1.5 text-sm">
             <template v-if="currentOrgSlug && currentOrgProvider">
               <div
                 ref="orgMenuRef"
-                class="relative flex items-center gap-1"
+                class="relative flex min-w-0 items-center gap-1"
               >
                 <RouterLink
                   :to="`/orgs/${currentOrgProvider}/${currentOrgSlug}`"
-                  class="max-w-[10rem] truncate text-gray-300 transition hover:text-white"
+                  class="max-w-[5rem] truncate font-medium text-accent transition hover:text-accent-hover sm:max-w-[10rem]"
                 >
                   {{ currentOrgName }}
                 </RouterLink>
@@ -67,6 +69,8 @@
                   v-if="orgStore.orgs.length > 1"
                   class="rounded p-0.5 text-gray-400 transition hover:bg-surface-overlay hover:text-white"
                   type="button"
+                  aria-label="Switch organization"
+                  :aria-expanded="isOrgMenuOpen"
                   @click.stop="toggleOrgMenu"
                 >
                   <ChevronDown class="h-3.5 w-3.5" />
@@ -108,7 +112,7 @@
               <span class="text-gray-500">/</span>
               <div
                 ref="repoMenuRef"
-                class="relative flex items-center gap-1"
+                class="relative flex min-w-0 items-center gap-1"
               >
                 <Lock
                   v-if="currentRepoIsPrivate"
@@ -117,7 +121,7 @@
                 />
                 <RouterLink
                   :to="`/orgs/${currentOrgProvider}/${currentOrgSlug}/repos/${currentRepoSlug}`"
-                  class="max-w-[14rem] truncate font-semibold text-white transition hover:text-accent"
+                  class="max-w-[5rem] truncate font-semibold text-white transition hover:text-accent sm:max-w-[14rem]"
                   :title="currentRepoIsPrivate ? `${currentRepoVisibilityLabel} repository` : undefined"
                 >
                   {{ currentRepoSlug }}
@@ -125,6 +129,8 @@
                 <button
                   class="rounded p-0.5 text-gray-400 transition hover:bg-surface-overlay hover:text-white"
                   type="button"
+                  aria-label="Switch repository"
+                  :aria-expanded="isRepoMenuOpen"
                   @click.stop="toggleRepoMenu"
                 >
                   <ChevronDown class="h-3.5 w-3.5" />
@@ -181,7 +187,7 @@
           </button>
         </div>
 
-        <div class="ml-auto flex items-center gap-3">
+        <div class="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <div
             ref="notifMenuRef"
             class="relative"
@@ -215,8 +221,9 @@
             class="relative"
           >
             <button
-              class="flex items-center gap-3 rounded-xl border border-surface-border bg-surface-overlay px-2.5 py-1.5 transition hover:border-accent/50"
+              class="flex items-center gap-3 rounded-xl border border-surface-border bg-surface-overlay p-0.5 transition hover:border-accent/50 sm:px-2.5 sm:py-1.5"
               type="button"
+              aria-label="User menu"
               @click.stop="toggleUserMenu"
             >
               <span class="hidden text-sm text-gray-300 sm:block">{{ authStore.user?.display_name || 'User' }}</span>
@@ -319,121 +326,19 @@
       @close="searchPaletteOpen = false"
     />
 
-    <!-- Hidden, context-scoped navigation drawer -->
-    <Transition
-      enter-active-class="transition-opacity duration-150"
-      enter-from-class="opacity-0"
-      leave-active-class="transition-opacity duration-150"
-      leave-to-class="opacity-0"
-    >
-      <div
-        v-if="isDrawerOpen"
-        class="fixed inset-0 z-[60] bg-black/50"
-        @click="isDrawerOpen = false"
-      />
-    </Transition>
-    <Transition
-      enter-active-class="transition-transform duration-200 ease-out"
-      enter-from-class="-translate-x-full"
-      leave-active-class="transition-transform duration-150 ease-in"
-      leave-to-class="-translate-x-full"
-    >
-      <aside
-        v-if="isDrawerOpen"
-        ref="drawerRef"
-        class="fixed bottom-0 left-0 top-0 z-[61] flex w-[19rem] max-w-[85vw] flex-col rounded-r-xl border-r border-surface-border bg-surface-raised"
-      >
-        <!-- GitHub-style drawer header: brand left, close right -->
-        <div class="flex items-center justify-between px-4 pb-2 pt-4">
-          <RouterLink
-            to="/orgs"
-            class="flex items-center gap-2 text-sm font-semibold text-white"
-            @click="isDrawerOpen = false"
-          >
-            <svg
-              viewBox="0 0 32 32"
-              class="h-6 w-6 text-gray-200"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M8 24V12L12 8L16 12L20 8L24 12V24L16 28L8 24Z"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linejoin="round"
-              />
-              <circle
-                cx="13"
-                cy="16"
-                r="2"
-                fill="currentColor"
-              />
-              <circle
-                cx="19"
-                cy="16"
-                r="2"
-                fill="currentColor"
-              />
-              <path
-                d="M16 18L14.5 20H17.5L16 18Z"
-                fill="currentColor"
-              />
-            </svg>
-            Hibou
-          </RouterLink>
-          <button
-            class="rounded-md p-1.5 text-gray-400 transition hover:bg-surface-overlay hover:text-white"
-            type="button"
-            aria-label="Close navigation menu"
-            @click="isDrawerOpen = false"
-          >
-            <X class="h-4 w-4" />
-          </button>
-        </div>
+    <NavigationDrawer
+      :open="isDrawerOpen"
+      :sections="navSections"
+      @close="isDrawerOpen = false"
+    />
 
-        <nav class="flex-1 overflow-y-auto px-2 pb-4">
-          <template
-            v-for="(section, sectionIndex) in navSections"
-            :key="sectionIndex"
-          >
-            <div
-              v-if="sectionIndex > 0"
-              class="mx-2 my-2 border-t border-surface-border-subtle"
-            />
-            <div
-              v-if="section.title"
-              class="flex items-center gap-2 px-2 pb-1 pt-1.5"
-            >
-              <component
-                :is="section.titleIcon"
-                v-if="section.titleIcon"
-                class="h-3.5 w-3.5 shrink-0 text-gray-500"
-              />
-              <span class="truncate text-xs font-semibold text-gray-500">{{ section.title }}</span>
-            </div>
-            <RouterLink
-              v-for="item in section.items"
-              :key="item.label"
-              :to="item.to"
-              class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition"
-              :class="isActive(item)
-                ? 'bg-surface-overlay font-medium text-white'
-                : 'font-normal text-gray-300 hover:bg-surface-overlay/60 hover:text-white'"
-            >
-              <component
-                :is="item.icon"
-                class="h-4 w-4 shrink-0"
-                :class="isActive(item) ? 'text-gray-300' : 'text-gray-500'"
-              />
-              <span class="truncate">{{ item.label }}</span>
-            </RouterLink>
-          </template>
-        </nav>
-      </aside>
-    </Transition>
-
-    <main class="min-h-screen px-4 pb-6 pt-[calc(4.75rem+var(--app-banner-height,0px))] sm:px-6">
-      <div class="mx-auto max-w-7xl">
+    <main
+      class="min-h-screen pb-6"
+      :class="hasAttachedEntityTabs
+        ? 'px-0 pt-[calc(3.5rem+var(--app-banner-height,0px))]'
+        : 'px-4 pt-[calc(4.75rem+var(--app-banner-height,0px))] sm:px-6'"
+    >
+      <div :class="hasAttachedEntityTabs ? '' : 'mx-auto max-w-7xl'">
         <RouterView />
       </div>
     </main>
@@ -464,13 +369,13 @@ import {
   Settings,
   ShieldAlert,
   Users,
-  X,
 } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { api, type Repository, type ServerVersion } from '@/api/client'
 import InstallCliModal from '@/components/InstallCliModal.vue'
+import NavigationDrawer, { type NavigationDrawerSection } from '@/components/NavigationDrawer.vue'
 import NotificationPanel from '@/components/NotificationPanel.vue'
 import SearchPalette from '@/components/SearchPalette.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -484,7 +389,6 @@ const route = useRoute()
 const router = useRouter()
 
 const isDrawerOpen = ref(false)
-const drawerRef = ref<HTMLElement | null>(null)
 const isUserMenuOpen = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
 const isInstallCliOpen = ref(false)
@@ -548,6 +452,10 @@ const currentRepoSlug = computed(() => {
   return ''
 })
 
+const hasAttachedEntityTabs = computed(() => {
+  return typeof route.name === 'string' && (route.name.startsWith('repo-') || route.name.startsWith('org-'))
+})
+
 const currentOrg = computed(() => {
   if (!currentOrgSlug.value || !currentOrgProvider.value) {
     return orgStore.currentOrg
@@ -603,22 +511,20 @@ const userInitials = computed(() => {
     .join('')
 })
 
-interface NavItem { label: string; icon: unknown; to: string }
-interface NavSection { title?: string; titleIcon?: unknown; items: NavItem[] }
-
-const navSections = computed<NavSection[]>(() => {
-  const sections: NavSection[] = []
+const navSections = computed<NavigationDrawerSection[]>(() => {
+  const sections: NavigationDrawerSection[] = []
   const hasOrg = Boolean(currentOrgSlug.value && currentOrgProvider.value)
 
   // Global destinations first, GitHub-drawer style.
   sections.push({
+    title: 'Global',
     items: [{ label: 'Organizations', icon: Building2, to: '/orgs' }],
   })
 
   if (hasOrg) {
     const orgBase = `/orgs/${currentOrgProvider.value}/${currentOrgSlug.value}`
     sections.push({
-      title: currentOrgName.value,
+      title: `Organization: ${currentOrgName.value}`,
       titleIcon: Building2,
       items: [
         { label: 'Overview', icon: LayoutDashboard, to: `${orgBase}/overview` },
@@ -635,7 +541,7 @@ const navSections = computed<NavSection[]>(() => {
     if (currentRepoSlug.value) {
       const repoBase = `${orgBase}/repos/${currentRepoSlug.value}`
       sections.push({
-        title: currentRepoSlug.value,
+        title: `Repository: ${currentRepoSlug.value}`,
         titleIcon: BookOpen,
         items: [
           { label: 'Overview', icon: LayoutDashboard, to: `${repoBase}/overview` },
@@ -655,7 +561,7 @@ const navSections = computed<NavSection[]>(() => {
   // The personal/instance settings area (/settings): API keys, and for
   // instance admins also banners, administrators, audit, jobs. Labeled by the
   // area, not by its first tab.
-  sections.push({ items: [{ label: 'Settings', icon: Settings, to: '/settings' }] })
+  sections.push({ title: 'Account', items: [{ label: 'Settings', icon: Settings, to: '/settings' }] })
   return sections
 })
 
@@ -777,18 +683,6 @@ function handleDocumentClick(event: MouseEvent) {
   }
 }
 
-function isActive(item: { to: string }) {
-  if (item.to === '/settings') {
-    return route.path.startsWith('/settings')
-  }
-
-  if (item.to === '/orgs') {
-    return route.path === '/orgs'
-  }
-
-  return route.path === item.to || route.path.startsWith(`${item.to}/`)
-}
-
 async function handleLogout() {
   isUserMenuOpen.value = false
   await authStore.logout()
@@ -799,9 +693,6 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault()
     searchPaletteOpen.value = true
-  }
-  if (event.key === 'Escape' && isDrawerOpen.value) {
-    isDrawerOpen.value = false
   }
 }
 </script>

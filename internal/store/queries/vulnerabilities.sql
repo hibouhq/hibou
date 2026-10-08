@@ -104,6 +104,16 @@ WHERE v.snapshot_id = $1
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id))))
+  AND (NOT @risk_only::bool OR (
+       v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)
+       ) AND v.status != 'resolved'
+         AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+         AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 ORDER BY
   CASE WHEN @sort::text IN ('', 'detected_desc', 'severity_desc')
        AND v.type::text IN ('dependency', 'container', 'malware') AND (
@@ -148,7 +158,17 @@ WHERE v.snapshot_id = $1
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id))));
+                    WHERE adv.id = v.advisory_id))))
+  AND (NOT @risk_only::bool OR (
+       v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)
+       ) AND v.status != 'resolved'
+         AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+         AND COALESCE(fa.reason_kind::text, '') != 'false_positive'));
 
 -- name: ListAllVulnerabilitiesBySnapshot :many
 SELECT * FROM vulnerabilities

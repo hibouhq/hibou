@@ -495,7 +495,8 @@ async function runSecretScan() {
 }
 
 const loading = ref(true)
-const activeFilters = ref<Record<string, string>>({ status: 'detected' })
+const riskOnly = computed(() => route.query.risk_only === 'true')
+const activeFilters = ref<Record<string, string>>(riskOnly.value ? {} : { status: 'detected' })
 watch(() => activeFilters.value.exploited, (token) => {
   if (token === 'true') setExploitedOnly(true)
   else if (token === 'false' || token === '') setExploitedOnly(false)
@@ -649,6 +650,7 @@ async function loadVulnerabilities() {
         search: searchQuery.value || undefined,
         acceptance: activeFilters.value.acceptance || undefined,
         exploited: exploitedOnly.value || undefined,
+        risk_only: riskOnly.value || undefined,
         // An OR/parenthesised bar query runs as the server-side filterquery;
         // the server uses it exclusively when present.
         q: advancedQuery.value || undefined,
@@ -749,7 +751,7 @@ function changePage(page: number) {
 }
 
 function readQueryState() {
-  const filters: Record<string, string> = { status: 'detected' }
+  const filters: Record<string, string> = riskOnly.value ? {} : { status: 'detected' }
 
   for (const key of filterKeys) {
     const value = route.query[key]

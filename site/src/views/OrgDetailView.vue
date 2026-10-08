@@ -8,77 +8,77 @@
     </div>
 
     <template v-else-if="org">
-      <!-- Org header (GitHub-style) -->
-      <div class="px-4 pt-5">
-        <h1 class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xl">
-          <ForgeIcon
-            :provider="org.provider"
-            size="md"
-            class="text-gray-400"
-          />
-          <span class="font-semibold text-white">{{ org.display_name || org.name }}</span>
-          <span class="ml-1 rounded-full border border-surface-border px-2 py-0.5 text-[11px] font-medium text-gray-400">
-            Organization
-          </span>
-        </h1>
-        <p class="mt-1 text-sm text-gray-500">
-          {{ org.provider }} / {{ org.slug }}
-        </p>
-      </div>
-
-      <!-- Tabs; Clients is the rollout side, not an analysis lens — fenced
-           pill, matching the repo-level Releases tab (ADR-024 §1/§7). -->
-      <div class="mt-4 border-b border-surface-border px-2">
-        <nav class="flex items-center gap-0.5 overflow-x-auto">
-          <template
-            v-for="tab in tabs"
+      <div class="border-b border-surface-border px-2">
+        <nav
+          class="flex w-full items-center gap-0.5"
+          aria-label="Organization navigation"
+        >
+          <RouterLink
+            v-for="tab in visibleTabs"
             :key="tab.name"
+            :to="{ name: tab.name, params: route.params }"
+            class="group flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-sm transition lg:px-3"
+            :class="isActiveTab(tab.name)
+              ? 'border-accent font-semibold text-white'
+              : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
           >
-            <template v-if="tab.fenced">
-              <span
-                aria-hidden="true"
-                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
-              />
+            <component
+              :is="tab.icon"
+              class="h-4 w-4 shrink-0"
+              :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
+            />
+            {{ tab.label }}
+            <span
+              v-if="tab.count !== null"
+              class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
+              :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
+            >{{ tab.count }}</span>
+          </RouterLink>
+          <div
+            v-if="overflowTabs.length"
+            ref="moreMenuRef"
+            class="relative ml-auto"
+          >
+            <button
+              ref="moreMenuTriggerRef"
+              class="flex items-center gap-1.5 border-b-2 px-2 py-2 text-sm transition lg:px-3"
+              :class="hasActiveOverflowTab
+                ? 'border-accent font-semibold text-white'
+                : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
+              type="button"
+              aria-controls="organization-more-links"
+              :aria-expanded="moreMenuOpen"
+              @click.stop="moreMenuOpen = !moreMenuOpen"
+            >
+              {{ activeOverflowTab?.label || 'More' }}
+              <ChevronDown class="h-4 w-4" />
+            </button>
+            <div
+              v-if="moreMenuOpen"
+              id="organization-more-links"
+              class="absolute right-0 top-[calc(100%+0.25rem)] z-30 min-w-48 rounded-md border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+              @keydown.esc.prevent.stop="closeMoreMenu(true)"
+            >
               <RouterLink
+                v-for="tab in overflowTabs"
+                :key="tab.name"
                 :to="{ name: tab.name, params: route.params }"
-                class="group mb-2 flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition"
-                :class="isActiveTab(tab.name)
-                  ? 'border-accent/60 bg-accent/15 font-semibold text-accent'
-                  : 'border-surface-border bg-surface-overlay text-gray-400 hover:border-accent/40 hover:text-gray-200'"
+                class="flex items-center gap-2 px-3 py-2 text-sm transition hover:bg-surface-muted"
+                :class="isActiveTab(tab.name) ? 'font-semibold text-white' : 'text-gray-300'"
+                @click="closeMoreMenu()"
               >
                 <component
                   :is="tab.icon"
-                  class="h-4 w-4 shrink-0"
-                  :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+                  class="h-4 w-4 text-gray-500"
                 />
                 {{ tab.label }}
+                <span
+                  v-if="tab.count !== null"
+                  class="ml-auto text-[10px] text-gray-500"
+                >{{ tab.count }}</span>
               </RouterLink>
-              <span
-                aria-hidden="true"
-                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
-              />
-            </template>
-            <RouterLink
-              v-else
-              :to="{ name: tab.name, params: route.params }"
-              class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
-              :class="isActiveTab(tab.name)
-                ? 'border-accent font-semibold text-white'
-                : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
-            >
-              <component
-                :is="tab.icon"
-                class="h-4 w-4 shrink-0"
-                :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
-              />
-              {{ tab.label }}
-              <span
-                v-if="tab.count !== null"
-                class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
-                :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
-              >{{ tab.count }}</span>
-            </RouterLink>
-          </template>
+            </div>
+          </div>
         </nav>
       </div>
 
@@ -97,12 +97,12 @@
 </template>
 
 <script setup lang="ts">
-import { LayoutDashboard, LineChart, ListChecks, Package, Scale, Settings, ShieldAlert, Users } from 'lucide-vue-next'
-import { computed, provide, ref, watch } from 'vue'
+import { ChevronDown, LayoutDashboard, LineChart, ListChecks, Package, Scale, Settings, ShieldAlert, Users } from 'lucide-vue-next'
+import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 import { api, type OrgDashboard, type Organization, type SeverityCounts } from '@/api/client'
-import ForgeIcon from '@/components/ForgeIcon.vue'
+import { visibleRepoTabCount } from '@/lib/repoTabs'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
@@ -111,6 +111,10 @@ const slug = computed(() => route.params.slug as string)
 const org = ref<Organization | null>(null)
 const dashboard = ref<OrgDashboard | null>(null)
 const loading = ref(true)
+const viewportWidth = ref(typeof window === 'undefined' ? 1360 : window.innerWidth)
+const moreMenuRef = ref<HTMLElement | null>(null)
+const moreMenuTriggerRef = ref<HTMLButtonElement | null>(null)
+const moreMenuOpen = ref(false)
 
 provide('org', org)
 provide('orgDashboard', dashboard)
@@ -128,10 +132,15 @@ const tabs = computed(() => [
   { label: 'Dependencies', name: 'org-dependencies', icon: Package, count: componentsTotal.value },
   { label: 'Licenses', name: 'org-licenses', icon: Scale, count: null },
   { label: 'Triage', name: 'org-triage', icon: ListChecks, count: null },
-  { label: 'Clients', name: 'org-clients', icon: Users, count: null, fenced: true },
+  { label: 'Clients', name: 'org-clients', icon: Users, count: null },
   { label: 'Insights', name: 'org-insights', icon: LineChart, count: null },
   { label: 'Settings', name: 'org-settings', icon: Settings, count: null },
 ])
+
+const visibleTabs = computed(() => tabs.value.slice(0, visibleRepoTabCount(viewportWidth.value)))
+const overflowTabs = computed(() => tabs.value.slice(visibleTabs.value.length))
+const hasActiveOverflowTab = computed(() => overflowTabs.value.some((tab) => isActiveTab(tab.name)))
+const activeOverflowTab = computed(() => overflowTabs.value.find((tab) => isActiveTab(tab.name)))
 
 function isActiveTab(name: string) {
   if (name === 'org-settings') {
@@ -139,6 +148,34 @@ function isActiveTab(name: string) {
   }
   return route.name === name
 }
+
+function updateViewportWidth() {
+  viewportWidth.value = window.innerWidth
+}
+
+function closeMoreMenu(restoreFocus = false) {
+  moreMenuOpen.value = false
+  if (restoreFocus) {
+    moreMenuTriggerRef.value?.focus()
+  }
+}
+
+function handleDocumentClick(event: MouseEvent) {
+  const target = event.target as Node | null
+  if (target && moreMenuRef.value && !moreMenuRef.value.contains(target)) {
+    closeMoreMenu(true)
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocumentClick)
+  window.addEventListener('resize', updateViewportWidth)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleDocumentClick)
+  window.removeEventListener('resize', updateViewportWidth)
+})
 
 watch(
   [provider, slug],

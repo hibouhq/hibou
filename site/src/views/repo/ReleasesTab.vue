@@ -85,9 +85,8 @@
         :class="index > 0 ? 'border-t border-surface-border' : ''"
       >
         <!-- Row -->
-        <button
+        <div
           class="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1.6fr)_auto] items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-overlay/50"
-          type="button"
           @click="toggleExpanded(release.id)"
         >
           <!-- Version + provenance -->
@@ -137,7 +136,15 @@
                 v-for="chip in riskChips(release)"
                 :key="chip.label"
                 :class="chip.class"
-              >{{ chip.count }} {{ chip.label }}</span>
+                :title="chip.title"
+              >
+                <component
+                  :is="chip.icon"
+                  v-if="chip.icon"
+                  class="h-3 w-3"
+                />
+                {{ chip.count }} {{ chip.text }}
+              </span>
             </template>
           </div>
 
@@ -171,12 +178,20 @@
             >
               {{ release.last_scanned_at ? `scanned ${relativeTime(release.last_scanned_at)}` : 'never scanned' }}
             </span>
-            <ChevronDown
-              class="h-4 w-4 text-gray-500 transition-transform"
-              :class="expandedId === release.id ? 'rotate-180' : ''"
-            />
+            <button
+              class="rounded p-1 text-gray-500 transition hover:bg-surface-overlay hover:text-gray-300"
+              type="button"
+              :aria-label="expandedId === release.id ? `Collapse release ${release.version}` : `Expand release ${release.version}`"
+              :aria-expanded="expandedId === release.id"
+              @click.stop="toggleExpanded(release.id)"
+            >
+              <ChevronDown
+                class="h-4 w-4 transition-transform"
+                :class="expandedId === release.id ? 'rotate-180' : ''"
+              />
+            </button>
           </div>
-        </button>
+        </div>
 
         <!-- Expanded detail -->
         <div
@@ -421,6 +436,7 @@
 import {
   ChevronDown,
   ExternalLink,
+  Flame,
   RefreshCw,
   Rocket,
   Search,
@@ -438,6 +454,7 @@ import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
+import { severityBadgeClass } from '@/lib/findingDisplay'
 
 const { confirmDialog } = useDialog()
 const route = useRoute()
@@ -484,12 +501,13 @@ function isStale(release: ReleaseWithRisk) {
 
 function riskChips(release: ReleaseWithRisk) {
   const chips = [
-    { label: 'critical', count: release.critical_count, class: 'rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-400' },
-    { label: 'high', count: release.high_count, class: 'rounded-full bg-orange-500/15 px-2 py-0.5 text-[11px] font-medium text-orange-400' },
-    { label: 'medium', count: release.medium_count, class: 'rounded-full bg-yellow-500/15 px-2 py-0.5 text-[11px] font-medium text-yellow-400' },
-    { label: 'low', count: release.low_count, class: 'rounded-full bg-gray-500/15 px-2 py-0.5 text-[11px] font-medium text-gray-400' },
+    { label: 'Known exploited', text: 'exploited', title: 'Known exploited', count: release.kev_open, class: 'inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-medium text-white', icon: Flame },
+    { label: 'critical', text: 'critical', count: release.critical_count, class: severityBadgeClass('critical') },
+    { label: 'high', text: 'high', count: release.high_count, class: severityBadgeClass('high') },
+    { label: 'medium', text: 'medium', count: release.medium_count, class: severityBadgeClass('medium') },
+    { label: 'low', text: 'low', count: release.low_count, class: severityBadgeClass('low') },
   ]
-  return chips.filter((chip) => chip.count > 0)
+  return chips.filter((chip) => (chip.count ?? 0) > 0)
 }
 
 function assignableClients(release: ReleaseWithRisk) {

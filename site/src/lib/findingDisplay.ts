@@ -15,15 +15,15 @@ export function severityKey(severity: unknown): string {
 }
 
 const SEVERITY_CLASSES: Record<string, string> = {
-  critical: 'bg-danger/15 text-danger',
-  high: 'bg-orange-500/15 text-orange-300',
-  medium: 'bg-amber-500/15 text-amber-300',
-  low: 'bg-sky-500/15 text-sky-300',
-  info: 'bg-surface-overlay text-gray-400',
+  critical: 'bg-sev-critical/15 text-sev-critical',
+  high: 'bg-sev-high/15 text-sev-high',
+  medium: 'bg-sev-medium/15 text-sev-medium',
+  low: 'bg-sev-low/15 text-sev-low',
+  info: 'bg-sev-info/15 text-sev-info',
 }
 
 export function severityBadgeClass(severity: unknown): string {
-  return `rounded-full px-2 py-0.5 text-[11px] font-medium ${SEVERITY_CLASSES[severityKey(severity)]}`
+  return `inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${SEVERITY_CLASSES[severityKey(severity)]}`
 }
 
 const TYPE_CLASSES: Record<string, string> = {

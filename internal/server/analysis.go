@@ -88,6 +88,7 @@ type componentGraphResponse struct {
 type refSummaryResponse struct {
 	Vulnerabilities  severityCounts `json:"vulnerabilities"`
 	MalwareOpen      int            `json:"malware_open"`
+	KEVOpen          *int           `json:"kev_open"`
 	ComponentsTotal  int            `json:"components_total"`
 	CoverageLineRate *float64       `json:"coverage_line_rate,omitempty"`
 	TestsTotal       *int           `json:"tests_total,omitempty"`
@@ -106,6 +107,7 @@ type repoDashboardEntryResponse struct {
 	Status          string         `json:"status"`
 	Vulnerabilities severityCounts `json:"vulnerabilities"`
 	MalwareOpen     int            `json:"malware_open"`
+	KEVOpen         *int           `json:"kev_open"`
 	ComponentsTotal int            `json:"components_total"`
 	LastScanned     *time.Time     `json:"last_scanned,omitempty"`
 	Outdated        bool           `json:"outdated"`
@@ -114,6 +116,7 @@ type repoDashboardEntryResponse struct {
 type orgDashboardTotalsResponse struct {
 	Vulnerabilities severityCounts `json:"vulnerabilities"`
 	MalwareOpen     int            `json:"malware_open"`
+	KEVOpen         *int           `json:"kev_open"`
 	ComponentsTotal int            `json:"components_total"`
 }
 
@@ -141,6 +144,7 @@ func vulnerabilityListOptionsFromRequest(r *http.Request, limit, offset int) sto
 		// PLAN §3 follow-up: the exploited facet must be server-side — this
 		// list is paginated, so a client-side filter renders empty pages.
 		ExploitedOnly: r.URL.Query().Get("exploited") == "true",
+		RiskOnly:      r.URL.Query().Get("risk_only") == "true",
 		Sort:          strings.TrimSpace(r.URL.Query().Get("sort")),
 		Limit:         limit,
 		Offset:        offset,
@@ -201,7 +205,7 @@ func (s *Server) handleGetRefFindingFingerprints(w http.ResponseWriter, r *http.
 			return
 		}
 		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshotDynamic(
-			r.Context(), snapshot.ID, sqlResult.Where, sqlResult.Params, "", maxFingerprintExport, 0,
+			r.Context(), snapshot.ID, sqlResult.Where, sqlResult.Params, r.URL.Query().Get("risk_only") == "true", "", maxFingerprintExport, 0,
 		)
 	} else {
 		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, vulnerabilityListOptionsFromRequest(r, maxFingerprintExport, 0))
@@ -297,6 +301,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 			snapshot.ID,
 			sqlResult.Where,
 			sqlResult.Params,
+			r.URL.Query().Get("risk_only") == "true",
 			strings.TrimSpace(r.URL.Query().Get("sort")),
 			pagination.PerPage,
 			pagination.Offset,
@@ -671,6 +676,7 @@ func (s *Server) buildRefSummary(r *http.Request, repo *store.Repository, snapsh
 	summary := refSummaryResponse{
 		Vulnerabilities: riskSeverityCounts(vulnerabilities, acceptances, disputed),
 		MalwareOpen:     openMalwareCount(vulnerabilities, acceptances, disputed),
+		KEVOpen:         s.openKEVCount(r.Context(), vulnerabilities, acceptances, disputed),
 		ComponentsTotal: len(components),
 		SnapshotDate:    &createdAt,
 		SnapshotStatus:  &status,
@@ -735,6 +741,10 @@ func (s *Server) buildOrgDashboardResponse(r *http.Request, repos []repositoryIn
 		Repos:    make([]repoDashboardEntryResponse, 0, len(repos)),
 		Coverage: coverage,
 	}
+	if s.kevCatalogEnabled() {
+		kevOpen := 0
+		response.Totals.KEVOpen = &kevOpen
+	}
 
 	for _, repo := range repos {
 		entry, err := s.buildRepoDashboardEntry(r, repo)
@@ -743,6 +753,7 @@ func (s *Server) buildOrgDashboardResponse(r *http.Request, repos []repositoryIn
 		}
 		addSeverityCounts(&response.Totals.Vulnerabilities, entry.Vulnerabilities)
 		response.Totals.MalwareOpen += entry.MalwareOpen
+		response.Totals.KEVOpen = addKEVOpenCount(response.Totals.KEVOpen, entry.KEVOpen, entry.Enrolled)
 		response.Totals.ComponentsTotal += entry.ComponentsTotal
 		response.Repos = append(response.Repos, entry)
 	}
@@ -797,6 +808,7 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 	}
 	entry.Vulnerabilities = riskSeverityCounts(vulnerabilities, acceptances, disputed)
 	entry.MalwareOpen = openMalwareCount(vulnerabilities, acceptances, disputed)
+	entry.KEVOpen = s.openKEVCount(r.Context(), vulnerabilities, acceptances, disputed)
 	entry.ComponentsTotal = len(components)
 	return entry, nil
 }
@@ -1944,6 +1956,43 @@ func openMalwareCount(vulnerabilities []store.Vulnerability, acceptances []store
 	return count
 }
 
+// openKEVCount returns nil when the KEV catalog is disabled or cannot be
+// queried. A zero means an enabled catalog was queried successfully.
+func (s *Server) openKEVCount(ctx context.Context, vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance, disputed map[string]struct{}) *int {
+	if !s.kevCatalogEnabled() || !s.attachKEV(ctx, vulnerabilities) {
+		return nil
+	}
+	count := openMarkedKEVCount(vulnerabilities, acceptances, disputed)
+	return &count
+}
+
+func openMarkedKEVCount(vulnerabilities []store.Vulnerability, acceptances []store.FindingAcceptance, disputed map[string]struct{}) int {
+	kinds := acceptanceKindsByFingerprint(acceptances)
+	count := 0
+	for _, vulnerability := range vulnerabilities {
+		if !vulnerability.KEV || isNonRiskStatus(vulnerability, disputed) || kinds[vulnerability.Fingerprint] == "false_positive" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func (s *Server) kevCatalogEnabled() bool {
+	return s.cfg.KEV.Enabled && (s.cfg.KEV.CISA.Enabled || s.cfg.KEV.EUVD.Enabled)
+}
+
+func addKEVOpenCount(total, entry *int, enrolled bool) *int {
+	if !enrolled || total == nil {
+		return total
+	}
+	if entry == nil {
+		return nil
+	}
+	*total += *entry
+	return total
+}
+
 func acceptanceKindsByFingerprint(acceptances []store.FindingAcceptance) map[string]string {
 	kinds := make(map[string]string, len(acceptances))
 	for _, acceptance := range acceptances {
@@ -2008,7 +2057,7 @@ func severityRank(severity string) int {
 // (PLAN §3) — the same membership the gate blocks on, matched through the
 // advisory id (canonical + aliases) or the bare identifier. One batched
 // lookup per page, never per row; best-effort like the other enrichments.
-func (s *Server) attachKEV(ctx context.Context, vulnerabilities []store.Vulnerability) {
+func (s *Server) attachKEV(ctx context.Context, vulnerabilities []store.Vulnerability) bool {
 	advisoryIDs := make([]uuid.UUID, 0, len(vulnerabilities))
 	identifiers := make([]string, 0, len(vulnerabilities))
 	for i := range vulnerabilities {
@@ -2023,14 +2072,14 @@ func (s *Server) attachKEV(ctx context.Context, vulnerabilities []store.Vulnerab
 	}
 	listedAdvisories, err := s.queries.FilterKEVAdvisoryIDs(ctx, advisoryIDs)
 	if err != nil {
-		return
+		return false
 	}
 	listedIdentifiers, err := s.queries.FilterKEVIdentifiers(ctx, identifiers)
 	if err != nil {
-		return
+		return false
 	}
 	if len(listedAdvisories) == 0 && len(listedIdentifiers) == 0 {
-		return
+		return true
 	}
 	advisoryHits := make(map[uuid.UUID]struct{}, len(listedAdvisories))
 	for _, id := range listedAdvisories {
@@ -2050,4 +2099,5 @@ func (s *Server) attachKEV(ctx context.Context, vulnerabilities []store.Vulnerab
 			_, vulnerabilities[i].KEV = identifierHits[strings.ToUpper(strings.TrimSpace(vulnerabilities[i].PrimaryIdentifierValue))]
 		}
 	}
+	return true
 }

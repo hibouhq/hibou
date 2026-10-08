@@ -238,7 +238,8 @@ function setExploitedOnly(on: boolean) {
 }
 const vulnerabilities = ref<OrgVulnerability[]>([])
 const loading = ref(true)
-const activeFilters = ref<Record<string, string>>({ status: 'detected' })
+const riskOnly = computed(() => route.query.risk_only === 'true')
+const activeFilters = ref<Record<string, string>>(riskOnly.value ? {} : { status: 'detected' })
 watch(() => activeFilters.value.exploited, (token) => {
   if (token === 'true') setExploitedOnly(true)
   else if (token === 'false' || token === '') setExploitedOnly(false)
@@ -290,7 +291,7 @@ watch(
 )
 
 watch(
-  [provider, slug, activeFilters, searchQuery, currentSort, currentSortDirection, exploitedOnly, () => pagination.value.page],
+  [provider, slug, activeFilters, searchQuery, currentSort, currentSortDirection, exploitedOnly, riskOnly, () => pagination.value.page],
   async () => {
     if (!provider.value || !slug.value) {
       vulnerabilities.value = []
@@ -306,6 +307,7 @@ watch(
         tool: activeFilters.value.tool || undefined,
         search: searchQuery.value || undefined,
         exploited: exploitedOnly.value || undefined,
+        risk_only: riskOnly.value || undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,
         per_page: pagination.value.per_page,

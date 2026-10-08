@@ -2,6 +2,7 @@ import type { Config } from 'tailwindcss'
 
 export default {
   content: ['./index.html', './src/**/*.{vue,ts,tsx}'],
+  safelist: ['sev-critical', 'sev-high', 'sev-medium', 'sev-low', 'sev-info'],
   darkMode: 'class',
   theme: {
     extend: {

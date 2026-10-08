@@ -89,6 +89,11 @@ func (s *Server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list releases")
 		return
 	}
+	if !s.kevCatalogEnabled() {
+		for i := range releases {
+			releases[i].KEVOpen = nil
+		}
+	}
 
 	api.JSONList(w, releases, pagination.Page, pagination.PerPage, total)
 }

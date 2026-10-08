@@ -20,6 +20,37 @@
         <span class="ml-auto text-xs text-red-300/80">Review immediately →</span>
       </RouterLink>
 
+      <RouterLink
+        v-if="kevOpen !== null"
+        :to="kevLink()"
+        class="flex flex-wrap items-center gap-2.5 border-l-2 px-4 py-3 transition hover:bg-surface-overlay"
+        :class="kevOpen > 0 ? 'border-danger/60 bg-danger/5' : 'border-surface-border bg-surface-overlay/30'"
+        title="Known exploited vulnerabilities"
+      >
+        <Flame
+          class="h-5 w-5 shrink-0"
+          :class="kevOpen > 0 ? 'text-danger' : 'text-gray-500'"
+        />
+        <span class="text-sm font-semibold text-gray-200">
+          {{ kevOpen }} known exploited {{ kevOpen === 1 ? 'vulnerability' : 'vulnerabilities' }} across {{ kevRepoCount }} {{ kevRepoCount === 1 ? 'repository' : 'repositories' }}
+        </span>
+        <span class="ml-auto text-xs text-accent">View findings</span>
+      </RouterLink>
+      <p
+        v-else-if="kevOpen === null"
+        class="text-xs text-gray-500"
+      >
+        <RouterLink
+          v-if="knownKEVOpen > 0"
+          :to="kevLink()"
+          class="font-medium text-danger hover:underline"
+        >
+          At least {{ knownKEVOpen }} known exploited
+        </RouterLink>
+        <span v-else>Known exploited status unavailable</span>
+        <span v-if="kevUnavailableRepos > 0"> · {{ kevUnavailableRepos }} {{ kevUnavailableRepos === 1 ? 'repository' : 'repositories' }} without KEV evidence</span>
+      </p>
+
       <!-- Severity rollup + coverage tiles -->
       <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-xl border border-surface-border bg-surface-raised/40 p-4 sm:col-span-2">
@@ -43,8 +74,7 @@
             <span
               v-for="item in severityItems"
               :key="item.key"
-              class="rounded-full px-2.5 py-1 text-xs font-medium"
-              :class="`sev-${item.key}`"
+              :class="severityBadgeClass(item.key)"
             >{{ item.value }} {{ item.key }}</span>
             <span
               v-if="severityItems.length === 0"
@@ -142,6 +172,15 @@
                 </td>
                 <td class="px-4 py-3">
                   <div class="flex flex-wrap items-center gap-1.5">
+                    <RouterLink
+                      v-if="entry.enrolled && entry.repo_slug && entry.kev_open != null"
+                      :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { exploited: 'true', risk_only: 'true' } }"
+                      class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:underline"
+                      :class="entry.kev_open > 0 ? 'bg-danger/10 font-semibold text-danger' : 'text-gray-500'"
+                    >
+                      <Flame class="h-3 w-3" />
+                      {{ entry.kev_open }} exploited
+                    </RouterLink>
                     <span
                       v-if="entry.malware_open > 0"
                       class="inline-flex items-center gap-1 rounded-full border border-danger/50 bg-danger/15 px-2 py-0.5 text-xs font-semibold text-red-200"
@@ -152,9 +191,8 @@
                     <span
                       v-for="item in toSeverityItems(entry.vulnerabilities)"
                       :key="`${repoEntryKey(entry)}-${item.key}`"
-                      class="rounded-full px-2 py-0.5 text-xs font-medium"
-                      :class="`sev-${item.key}`"
-                    >{{ item.key }} {{ item.value }}</span>
+                      :class="severityBadgeClass(item.key)"
+                    >{{ item.value }} {{ item.key }}</span>
                     <span
                       v-if="toSeverityItems(entry.vulnerabilities).length === 0"
                       class="text-gray-500"
@@ -183,12 +221,13 @@
 </template>
 
 <script setup lang="ts">
-import { Biohazard, ShieldAlert } from 'lucide-vue-next'
+import { Biohazard, Flame, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import type { OrgDashboard, RepoDashboardEntry, RepoLifecycleStatus, SeverityCounts } from '@/api/client'
 import ForgeIcon from '@/components/ForgeIcon.vue'
+import { severityBadgeClass } from '@/lib/findingDisplay'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
@@ -203,6 +242,10 @@ const severityItems = computed(() => toSeverityItems(dashboard.value?.totals.vul
 const totalVulnerabilities = computed(() => sumCounts(dashboard.value?.totals.vulnerabilities))
 const malwareOpen = computed(() => dashboard.value?.totals.malware_open ?? 0)
 const malwareRepoCount = computed(() => (dashboard.value?.repos ?? []).filter((entry) => entry.malware_open > 0).length)
+const kevOpen = computed(() => dashboard.value?.totals.kev_open ?? null)
+const knownKEVOpen = computed(() => (dashboard.value?.repos ?? []).reduce((total, entry) => total + (entry.kev_open ?? 0), 0))
+const kevUnavailableRepos = computed(() => (dashboard.value?.repos ?? []).filter(entry => entry.enrolled && entry.kev_open == null).length)
+const kevRepoCount = computed(() => (dashboard.value?.repos ?? []).filter((entry) => (entry.kev_open ?? 0) > 0).length)
 
 const coverageCards = computed(() => {
   const coverage = dashboard.value?.coverage
@@ -218,6 +261,9 @@ const sortedRepos = computed(() => {
   return repos.sort((a, b) => {
     if (a.malware_open !== b.malware_open) {
       return b.malware_open - a.malware_open
+    }
+    if ((a.kev_open ?? 0) !== (b.kev_open ?? 0)) {
+      return (b.kev_open ?? 0) - (a.kev_open ?? 0)
     }
     return riskScore(b.vulnerabilities) - riskScore(a.vulnerabilities)
   })
@@ -238,6 +284,10 @@ function toSeverityItems(counts?: SeverityCounts | null) {
 
 function sumCounts(counts?: SeverityCounts | null) {
   return severityOrder.reduce((total, key) => total + (counts?.[key] ?? 0), 0)
+}
+
+function kevLink() {
+  return { name: 'org-vulnerabilities', params: route.params, query: { exploited: 'true', risk_only: 'true' } }
 }
 
 function statusClass(status: RepoLifecycleStatus) {

@@ -116,6 +116,16 @@ WHERE v.snapshot_id = $1
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id))))
+  AND (NOT $11::bool OR (
+       v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)
+       ) AND v.status != 'resolved'
+         AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+         AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 `
 
 type CountVulnerabilitiesBySnapshotParams struct {
@@ -129,6 +139,7 @@ type CountVulnerabilitiesBySnapshotParams struct {
 	Search        string    `json:"search"`
 	Acceptance    string    `json:"acceptance"`
 	ExploitedOnly bool      `json:"exploited_only"`
+	RiskOnly      bool      `json:"risk_only"`
 }
 
 func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountVulnerabilitiesBySnapshotParams) (int64, error) {
@@ -143,6 +154,7 @@ func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountV
 		arg.Search,
 		arg.Acceptance,
 		arg.ExploitedOnly,
+		arg.RiskOnly,
 	)
 	var column_1 int64
 	err := row.Scan(&column_1)
@@ -1337,8 +1349,18 @@ WHERE v.snapshot_id = $1
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id))))
+  AND (NOT $13::bool OR (
+       v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)
+       ) AND v.status != 'resolved'
+         AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+         AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 ORDER BY
-  CASE WHEN $13::text IN ('', 'detected_desc', 'severity_desc')
+  CASE WHEN $14::text IN ('', 'detected_desc', 'severity_desc')
        AND v.type::text IN ('dependency', 'container', 'malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
@@ -1346,12 +1368,12 @@ ORDER BY
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id))
     THEN 0 ELSE 1 END ASC,
-  CASE WHEN $13::text = 'severity_asc' THEN v.severity_rank END ASC,
-  CASE WHEN $13::text = 'severity_desc' THEN v.severity_rank END DESC,
-  CASE WHEN $13::text = 'status_asc' THEN v.status END ASC,
-  CASE WHEN $13::text = 'status_desc' THEN v.status END DESC,
-  CASE WHEN $13::text = 'detected_asc' THEN v.detected_at END ASC,
-  CASE WHEN $13::text = 'detected_desc' OR $13::text = '' THEN v.detected_at END DESC,
+  CASE WHEN $14::text = 'severity_asc' THEN v.severity_rank END ASC,
+  CASE WHEN $14::text = 'severity_desc' THEN v.severity_rank END DESC,
+  CASE WHEN $14::text = 'status_asc' THEN v.status END ASC,
+  CASE WHEN $14::text = 'status_desc' THEN v.status END DESC,
+  CASE WHEN $14::text = 'detected_asc' THEN v.detected_at END ASC,
+  CASE WHEN $14::text = 'detected_desc' OR $14::text = '' THEN v.detected_at END DESC,
   v.id DESC
 LIMIT $2 OFFSET $3
 `
@@ -1369,6 +1391,7 @@ type ListVulnerabilitiesBySnapshotParams struct {
 	Search        string    `json:"search"`
 	Acceptance    string    `json:"acceptance"`
 	ExploitedOnly bool      `json:"exploited_only"`
+	RiskOnly      bool      `json:"risk_only"`
 	Sort          string    `json:"sort"`
 }
 
@@ -1402,6 +1425,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 		arg.Search,
 		arg.Acceptance,
 		arg.ExploitedOnly,
+		arg.RiskOnly,
 		arg.Sort,
 	)
 	if err != nil {

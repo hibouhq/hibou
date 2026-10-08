@@ -83,14 +83,15 @@ FROM releases rel
 LEFT JOIN LATERAL (
     SELECT COUNT(*) AS total_count
     FROM vulnerabilities v
+    LEFT JOIN finding_acceptances fa
+      ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+      AND (fa.expires_at IS NULL OR fa.expires_at > now())
+    LEFT JOIN finding_disputes fd
+      ON fd.repo_id = v.repo_id AND fd.fingerprint = v.fingerprint
     WHERE v.snapshot_id = rel.snapshot_id
-      AND v.status NOT IN ('resolved', 'suppressed')
-      AND NOT EXISTS (
-        SELECT 1 FROM finding_acceptances fa
-        WHERE fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
-          AND fa.reason_kind = 'false_positive'
-          AND (fa.expires_at IS NULL OR fa.expires_at > now())
-      )
+      AND v.status != 'resolved'
+      AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+      AND COALESCE(fa.reason_kind::text, '') != 'false_positive'
 ) risk ON true
 WHERE rel.repo_id = $1
   AND ($2::text = '' OR position(lower($2) IN lower(rel.version)) > 0)
@@ -414,6 +415,7 @@ SELECT
     COALESCE(risk.high_count, 0)::bigint AS high_count,
     COALESCE(risk.medium_count, 0)::bigint AS medium_count,
     COALESCE(risk.low_count, 0)::bigint AS low_count,
+    COALESCE(risk.kev_open, 0)::bigint AS kev_open,
     COALESCE(risk.total_count, 0)::bigint AS open_finding_count,
     COALESCE(scan.last_scanned_at, '1970-01-01T00:00:00Z'::timestamptz)::timestamptz AS last_scanned_at,
     COALESCE(dep.clients, '[]'::jsonb) AS clients,
@@ -429,16 +431,26 @@ LEFT JOIN LATERAL (
         COUNT(*) FILTER (WHERE v.severity = 'high') AS high_count,
         COUNT(*) FILTER (WHERE v.severity = 'medium') AS medium_count,
         COUNT(*) FILTER (WHERE v.severity = 'low') AS low_count,
+        COUNT(*) FILTER (WHERE v.type IN ('dependency', 'container', 'malware') AND (
+            EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+            OR EXISTS (
+                SELECT 1 FROM advisories adv
+                LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                WHERE adv.id = v.advisory_id
+            )
+        )) AS kev_open,
         COUNT(*) AS total_count
     FROM vulnerabilities v
+    LEFT JOIN finding_acceptances fa
+      ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
+      AND (fa.expires_at IS NULL OR fa.expires_at > now())
+    LEFT JOIN finding_disputes fd
+      ON fd.repo_id = v.repo_id AND fd.fingerprint = v.fingerprint
     WHERE v.snapshot_id = rel.snapshot_id
-      AND v.status NOT IN ('resolved', 'suppressed')
-      AND NOT EXISTS (
-        SELECT 1 FROM finding_acceptances fa
-        WHERE fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint
-          AND fa.reason_kind = 'false_positive'
-          AND (fa.expires_at IS NULL OR fa.expires_at > now())
-      )
+      AND v.status != 'resolved'
+      AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+      AND COALESCE(fa.reason_kind::text, '') != 'false_positive'
 ) risk ON true
 LEFT JOIN LATERAL (
     SELECT MAX(sc.completed_at) AS last_scanned_at
@@ -502,6 +514,7 @@ type ListReleasesWithRiskByRepoRow struct {
 	HighCount          int64           `json:"high_count"`
 	MediumCount        int64           `json:"medium_count"`
 	LowCount           int64           `json:"low_count"`
+	KevOpen            int64           `json:"kev_open"`
 	OpenFindingCount   int64           `json:"open_finding_count"`
 	LastScannedAt      time.Time       `json:"last_scanned_at"`
 	Clients            json.RawMessage `json:"clients"`
@@ -510,8 +523,8 @@ type ListReleasesWithRiskByRepoRow struct {
 }
 
 // Enriched listing for the Releases tab: per release, the open-risk severity
-// counts of its pinned snapshot (platform-wide semantics: resolved/suppressed
-// out, active false-positive acceptances out — ADR-023), the clients currently
+// counts of its pinned snapshot (platform-wide semantics: resolved and ordinary
+// suppressions out, active false-positive acceptances out — ADR-023), the clients currently
 // on it via active deployments, and the snapshot's last completed scan.
 func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, arg ListReleasesWithRiskByRepoParams) ([]ListReleasesWithRiskByRepoRow, error) {
 	rows, err := q.db.QueryContext(ctx, listReleasesWithRiskByRepo,
@@ -552,6 +565,7 @@ func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, arg ListReleas
 			&i.HighCount,
 			&i.MediumCount,
 			&i.LowCount,
+			&i.KevOpen,
 			&i.OpenFindingCount,
 			&i.LastScannedAt,
 			&i.Clients,

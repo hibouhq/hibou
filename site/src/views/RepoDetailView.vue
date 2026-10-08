@@ -8,195 +8,84 @@
     </div>
 
     <template v-else-if="repo">
-      <!-- Repo header (GitHub-style) -->
-      <div class="px-4 pt-5">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0">
-            <h1 class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xl">
-              <BookMarked class="h-5 w-5 shrink-0 text-gray-500" />
-              <RouterLink
-                :to="`/orgs/${provider}/${orgSlug}`"
-                class="text-accent transition hover:underline"
-              >
-                {{ orgSlug }}
-              </RouterLink>
-              <span class="text-gray-600">/</span>
-              <span class="font-semibold text-white">{{ repo.name }}</span>
-              <span
-                class="ml-1 rounded-full border px-2 py-0.5 text-[11px] font-medium"
-                :class="repo.private
-                  ? 'border-surface-border text-gray-400'
-                  : 'border-ok/40 text-ok'"
-              >
-                {{ repo.private ? 'Private' : 'Public' }}
-              </span>
-            </h1>
-            <p
-              v-if="repoDescription"
-              class="mt-1.5 max-w-2xl text-sm text-gray-400"
-            >
-              {{ repoDescription }}
-            </p>
-          </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <div
-              v-if="compareRefOptions.length > 0"
-              ref="compareMenuRef"
-              class="relative"
-            >
-              <button
-                class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
-                type="button"
-                @click.stop="toggleCompareMenu"
-              >
-                <GitCompareArrows class="h-3.5 w-3.5" />
-                Compare with
-              </button>
-
-              <div
-                v-if="compareMenuOpen"
-                class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface-overlay p-3 shadow-2xl"
-              >
-                <div class="space-y-3">
-                  <div>
-                    <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                      Base
-                    </p>
-                    <BranchPRSelector
-                      :refs="refs"
-                      :selected-ref-name="compareBaseRefName"
-                      :default-branch="repo.default_branch"
-                      :repo-html-url="repo.html_url"
-                      :provider="repo.provider"
-                      compact
-                      block
-                      @select="selectCompareBase"
-                    />
-                    <p
-                      v-if="selectedSnapshotId && sameComparableRef(compareBaseRefName, selectedRefName)"
-                      class="mt-1 text-[11px] text-gray-500"
-                    >
-                      Uses the snapshot currently selected on this page.
-                    </p>
-                  </div>
-
-                  <div>
-                    <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                      Target
-                    </p>
-                    <BranchPRSelector
-                      :refs="compareTargetOptions"
-                      :selected-ref-name="compareTargetRefName"
-                      :default-branch="repo.default_branch"
-                      :repo-html-url="repo.html_url"
-                      :provider="repo.provider"
-                      compact
-                      block
-                      @select="selectCompareTarget"
-                    />
-                  </div>
-
-                  <div class="flex items-center justify-end gap-2 pt-1">
-                    <button
-                      class="rounded-md border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-400 transition hover:text-white"
-                      type="button"
-                      @click="compareMenuOpen = false"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-                      type="button"
-                      :disabled="!canRunCompare"
-                      @click="runCompare"
-                    >
-                      Open compare
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <RouterLink
-              v-if="selectedPRNumber"
-              class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
-              :to="{ name: 'repo-compare', params: route.params, query: { base: selectedRef?.merge_target_ref_name || repo?.default_branch || 'main', head: selectedRefName } }"
-            >
-              <GitPullRequest class="h-3.5 w-3.5" />
-              PR Review
-            </RouterLink>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tabs (GitHub-style); the Releases tab is a different species —
-           shipped artifacts, not ref-scoped analysis — fenced by dividers and
-           rendered as a pill (ADR-024 §1). -->
-      <div class="mt-4 border-b border-surface-border px-2">
-        <nav class="flex items-center gap-0.5 overflow-x-auto">
-          <template
-            v-for="(tab, tabIndex) in tabs"
+      <div class="border-b border-surface-border px-2">
+        <nav
+          class="flex w-full items-center gap-0.5"
+          aria-label="Repository navigation"
+        >
+          <RouterLink
+            v-for="tab in visibleTabs"
             :key="tab.name"
+            :to="tab.to"
+            class="group flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-2 py-2 text-sm transition lg:px-3"
+            :class="isActiveTab(tab.name)
+              ? 'border-accent font-semibold text-white'
+              : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
           >
-            <template v-if="tab.fenced">
-              <span
-                v-if="!tabs[tabIndex - 1]?.fenced"
-                aria-hidden="true"
-                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
-              />
+            <component
+              :is="tab.icon"
+              class="h-4 w-4 shrink-0"
+              :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
+            />
+            {{ tab.label }}
+            <span
+              v-if="tabCount(tab.name) !== null"
+              class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
+              :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
+            >
+              {{ tabCount(tab.name) }}
+            </span>
+          </RouterLink>
+          <div
+            v-if="overflowTabs.length"
+            ref="moreMenuRef"
+            class="relative ml-auto"
+          >
+            <button
+              class="flex items-center gap-1.5 border-b-2 px-2 py-2 text-sm transition lg:px-3"
+              :class="hasActiveOverflowTab
+                ? 'border-accent font-semibold text-white'
+                : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
+              type="button"
+              aria-controls="repository-more-links"
+              :aria-expanded="moreMenuOpen"
+              @click.stop="moreMenuOpen = !moreMenuOpen"
+            >
+              {{ activeOverflowTab?.label || 'More' }}
+              <ChevronDown class="h-4 w-4" />
+            </button>
+            <div
+              v-if="moreMenuOpen"
+              id="repository-more-links"
+              class="absolute right-0 top-[calc(100%+0.25rem)] z-30 min-w-48 rounded-md border border-surface-border bg-surface-overlay py-1 shadow-2xl"
+              @keydown.esc.stop="moreMenuOpen = false"
+            >
               <RouterLink
+                v-for="tab in overflowTabs"
+                :key="tab.name"
                 :to="tab.to"
-                class="group mb-2 flex items-center gap-2 rounded-full border px-3 py-1 text-sm transition"
-                :class="isActiveTab(tab.name)
-                  ? 'border-accent/60 bg-accent/15 font-semibold text-accent'
-                  : 'border-surface-border bg-surface-overlay text-gray-400 hover:border-accent/40 hover:text-gray-200'"
+                class="flex items-center gap-2 px-3 py-2 text-sm transition hover:bg-surface-muted"
+                :class="isActiveTab(tab.name) ? 'font-semibold text-white' : 'text-gray-300'"
+                @click="moreMenuOpen = false"
               >
                 <component
                   :is="tab.icon"
-                  class="h-4 w-4 shrink-0"
-                  :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+                  class="h-4 w-4 text-gray-500"
                 />
                 {{ tab.label }}
                 <span
                   v-if="tab.badge"
-                  class="rounded-full border border-accent/40 px-1.5 py-0.5 text-[10px] font-medium leading-none"
-                  :class="isActiveTab(tab.name) ? 'text-accent' : 'text-gray-500'"
+                  class="ml-auto text-[10px] text-gray-500"
                 >{{ tab.badge }}</span>
               </RouterLink>
-              <span
-                v-if="!tabs[tabIndex + 1]?.fenced"
-                aria-hidden="true"
-                class="mx-1.5 mb-1.5 h-5 w-px shrink-0 bg-surface-border"
-              />
-            </template>
-            <RouterLink
-              v-else
-              :to="tab.to"
-              class="group flex items-center gap-2 border-b-2 px-3 pb-2.5 pt-1.5 text-sm transition"
-              :class="isActiveTab(tab.name)
-                ? 'border-accent font-semibold text-white'
-                : 'border-transparent text-gray-400 hover:border-surface-border hover:text-gray-200'"
-            >
-              <component
-                :is="tab.icon"
-                class="h-4 w-4 shrink-0"
-                :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
-              />
-              {{ tab.label }}
-              <span
-                v-if="tabCount(tab.name) !== null"
-                class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
-                :class="isActiveTab(tab.name) ? 'bg-accent/15 text-accent' : 'bg-surface-overlay text-gray-500'"
-              >
-                {{ tabCount(tab.name) }}
-              </span>
-            </RouterLink>
-          </template>
+            </div>
+          </div>
         </nav>
       </div>
 
       <div
         v-if="!isFencedTabActive"
-        class="px-4 pt-3"
+        class="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 pt-3"
       >
         <BranchPRSelector
           :refs="refs"
@@ -207,11 +96,102 @@
           :provider="repo.provider"
           @select="selectRef"
         />
+        <div class="ml-auto flex flex-wrap items-center gap-2">
+          <div
+            v-if="compareRefOptions.length > 0"
+            ref="compareMenuRef"
+            class="relative"
+          >
+            <button
+              class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
+              type="button"
+              @click.stop="toggleCompareMenu"
+            >
+              <GitCompareArrows class="h-3.5 w-3.5" />
+              Compare with
+            </button>
+            <div
+              v-if="compareMenuOpen"
+              class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface-overlay p-3 shadow-2xl"
+            >
+              <div class="space-y-3">
+                <div>
+                  <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                    Base
+                  </p>
+                  <BranchPRSelector
+                    :refs="refs"
+                    :selected-ref-name="compareBaseRefName"
+                    :default-branch="repo.default_branch"
+                    :repo-html-url="repo.html_url"
+                    :provider="repo.provider"
+                    compact
+                    block
+                    @select="selectCompareBase"
+                  />
+                  <p
+                    v-if="selectedSnapshotId && sameComparableRef(compareBaseRefName, selectedRefName)"
+                    class="mt-1 text-[11px] text-gray-500"
+                  >
+                    Uses the snapshot currently selected on this page.
+                  </p>
+                </div>
+                <div>
+                  <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                    Target
+                  </p>
+                  <BranchPRSelector
+                    :refs="compareTargetOptions"
+                    :selected-ref-name="compareTargetRefName"
+                    :default-branch="repo.default_branch"
+                    :repo-html-url="repo.html_url"
+                    :provider="repo.provider"
+                    compact
+                    block
+                    @select="selectCompareTarget"
+                  />
+                </div>
+                <div class="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    class="rounded-md border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-400 transition hover:text-white"
+                    type="button"
+                    @click="compareMenuOpen = false"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    type="button"
+                    :disabled="!canRunCompare"
+                    @click="runCompare"
+                  >
+                    Open compare
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <RouterLink
+            v-if="selectedPRNumber"
+            class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
+            :to="{ name: 'repo-compare', params: route.params, query: { base: selectedRef?.merge_target_ref_name || repo?.default_branch || 'main', head: selectedRefName } }"
+          >
+            <GitPullRequest class="h-3.5 w-3.5" />
+            PR Review
+          </RouterLink>
+        </div>
       </div>
+
+      <p
+        v-if="isActiveTab('repo-overview') && repoDescription"
+        class="mx-auto max-w-7xl truncate px-4 pt-3 text-sm text-gray-400"
+      >
+        {{ repoDescription }}
+      </p>
 
       <div
         v-if="!isFencedTabActive && (snapshots.length > 0 || snapshotsLoading)"
-        class="flex items-center gap-2 overflow-x-auto border-b border-surface-border-subtle px-4 py-2"
+        class="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto border-b border-surface-border-subtle px-4 py-2"
       >
         <span class="shrink-0 text-[11px] uppercase tracking-[0.14em] text-gray-500">Snapshot</span>
         <button
@@ -238,7 +218,7 @@
         </span>
       </div>
 
-      <div class="pt-4">
+      <div class="mx-auto max-w-7xl px-4 pt-4">
         <RouterView />
       </div>
     </template>
@@ -255,7 +235,7 @@
 <script setup lang="ts">
 import {
   Activity,
-  BookMarked,
+  ChevronDown,
   Container,
   FlaskConical,
   GitCompareArrows,
@@ -273,6 +253,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { api, type EnhancedRef, type RefSummary, type Repository, type Snapshot } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
 import { relativeTime } from '@/lib/datetime'
+import { visibleRepoTabCount } from '@/lib/repoTabs'
 import { useOrgStore } from '@/stores/org'
 
 const route = useRoute()
@@ -361,6 +342,9 @@ const selectedPRNumber = computed(() => {
 })
 const compareMenuRef = ref<HTMLElement | null>(null)
 const compareMenuOpen = ref(false)
+const moreMenuRef = ref<HTMLElement | null>(null)
+const moreMenuOpen = ref(false)
+const viewportWidth = ref(typeof window === 'undefined' ? 1100 : window.innerWidth)
 const compareBaseRefName = ref('')
 const compareTargetRefName = ref('')
 
@@ -473,6 +457,9 @@ function handleCompareMenuDocumentClick(event: MouseEvent) {
   if (target && compareMenuRef.value && !compareMenuRef.value.contains(target)) {
     compareMenuOpen.value = false
   }
+  if (target && moreMenuRef.value && !moreMenuRef.value.contains(target)) {
+    moreMenuOpen.value = false
+  }
 }
 
 const tabs = computed(() => {
@@ -502,10 +489,19 @@ const tabs = computed(() => {
 })
 
 const repoDescription = computed(() => repo.value?.description || '')
+const visibleTabs = computed(() => tabs.value.slice(0, visibleRepoTabCount(viewportWidth.value)))
+const overflowTabs = computed(() => tabs.value.slice(visibleTabs.value.length))
+const hasActiveOverflowTab = computed(() => overflowTabs.value.some((tab) => isActiveTab(tab.name)))
+const activeOverflowTab = computed(() => overflowTabs.value.find((tab) => isActiveTab(tab.name)))
+
+function updateViewportWidth() {
+  viewportWidth.value = window.innerWidth
+}
 
 const prevParams = ref({ provider: '', slug: '', repoSlug: '' })
 onMounted(() => {
   document.addEventListener('click', handleCompareMenuDocumentClick)
+  window.addEventListener('resize', updateViewportWidth)
   prevParams.value = { provider: provider.value, slug: orgSlug.value, repoSlug: repoSlug.value }
   if (orgStore.orgs.length === 0) {
     void orgStore.fetchOrgs()
@@ -515,6 +511,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleCompareMenuDocumentClick)
+  window.removeEventListener('resize', updateViewportWidth)
   stopSnapshotPolling()
 })
 

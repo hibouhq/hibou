@@ -274,11 +274,11 @@ dev-bin: ## Build dev binary + hibou-server symlink (tmp/dev)
 
 .PHONY: dev
 dev: dev-bin ## Run backend + Vite dev server concurrently
-	@trap 'kill 0' EXIT; \
-		set -a; [ -f .env ] && . ./.env; set +a; \
-		HIBOU_DEVELOPMENT=true HIBOU_ARTIFACT_PATH=tmp/artifacts tmp/dev/hibou-server serve & \
-		cd $(FRONTEND) && npx vite --host 0.0.0.0 & \
-		wait
+	@bash scripts/dev.sh
+
+.PHONY: dev-local
+dev-local: dev-bin ## Run backend + frontend with local Dev Login (no OAuth)
+	@bash scripts/dev.sh --local
 
 .PHONY: db-migrate
 db-migrate: ## Database migrations run automatically on hibou-server serve startup

@@ -231,6 +231,7 @@ export interface ReleaseWithRisk extends Release {
   high_count: number
   medium_count: number
   low_count: number
+  kev_open: number | null
   open_finding_count: number
   last_scanned_at?: string
   clients: ReleaseClient[]
@@ -1057,6 +1058,7 @@ export interface OrgLicensePolicyInput {
 export interface RefSummary {
   vulnerabilities: SeverityCounts
   malware_open: number
+  kev_open: number | null
   components_total: number
   coverage_line_rate?: number | null
   tests_total?: number | null
@@ -1237,11 +1239,16 @@ export interface TrendPoint {
   snapshot_id: string
   date: string
   commit_sha: string
-  vuln_critical: number
-  vuln_high: number
-  vuln_medium: number
-  vuln_low: number
-  vuln_info: number
+  findings_critical: number
+  findings_high: number
+  findings_medium: number
+  findings_low: number
+  findings_info: number
+  vulns_critical: number
+  vulns_high: number
+  vulns_medium: number
+  vulns_low: number
+  vulns_info: number
   components_total: number
 }
 
@@ -1349,6 +1356,7 @@ export interface RepoDashboardEntry {
   status: RepoLifecycleStatus
   vulnerabilities: SeverityCounts
   malware_open: number
+  kev_open: number | null
   components_total: number
   last_scanned?: string
   outdated: boolean
@@ -1359,6 +1367,7 @@ export interface OrgDashboard {
   totals: {
     vulnerabilities: SeverityCounts
     malware_open: number
+    kev_open: number | null
     components_total: number
   }
   coverage: {
@@ -2363,6 +2372,7 @@ class ApiClient {
       acceptance?: string
       /** Server-side known-exploited facet (also available as `exploited:true` in q). */
       exploited?: boolean
+      risk_only?: boolean
       // Full boolean filterquery (AND/OR/parentheses); when set the server
       // uses it exclusively and the discrete params above are ignored.
       q?: string
@@ -2398,6 +2408,9 @@ class ApiClient {
     if (params?.exploited) {
       query.set('exploited', 'true')
     }
+		if (params?.risk_only) {
+			query.set('risk_only', 'true')
+		}
     if (params?.status) {
       query.set('status', params.status)
     }
@@ -2689,6 +2702,7 @@ class ApiClient {
       search?: string
       sort?: string
       exploited?: boolean
+      risk_only?: boolean
       page?: number
       per_page?: number
     },
@@ -2697,6 +2711,9 @@ class ApiClient {
     if (params?.exploited) {
       query.set('exploited', 'true')
     }
+		if (params?.risk_only) {
+			query.set('risk_only', 'true')
+		}
     for (const key of ['type', 'severity', 'status', 'tool', 'search', 'sort'] as const) {
       const value = params?.[key]
       if (value) {

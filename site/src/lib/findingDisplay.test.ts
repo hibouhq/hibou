@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
-import { advisoryUrl, cweUrl, findingShape, isComponentBacked, severityKey } from './findingDisplay'
+import { advisoryUrl, cweUrl, findingShape, isComponentBacked, severityBadgeClass, severityKey } from './findingDisplay'
+
+describe('severityBadgeClass', () => {
+  it.each(['critical', 'high', 'medium', 'low', 'info'])('uses canonical colors for %s', (severity) => {
+    const classes = severityBadgeClass(severity)
+    expect(classes).toContain(`bg-sev-${severity}/15`)
+    expect(classes).toContain(`text-sev-${severity}`)
+    expect(classes).toContain('rounded-full px-2 py-0.5 text-[11px] font-medium')
+    expect(classes).toContain('whitespace-nowrap')
+  })
+
+  it('normalizes scanner aliases and unknown severities', () => {
+    expect(severityBadgeClass('Moderate')).toBe(severityBadgeClass('medium'))
+    expect(severityBadgeClass(undefined)).toBe(severityBadgeClass('info'))
+  })
+})
 
 describe('severityKey', () => {
   it('normalizes the spellings scanners emit', () => {

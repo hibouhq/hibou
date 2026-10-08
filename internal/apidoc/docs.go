@@ -10436,6 +10436,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "kev_open": {
+                    "type": "integer"
+                },
                 "last_scanned_at": {
                     "type": "string"
                 },

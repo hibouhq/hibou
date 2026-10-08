@@ -98,6 +98,7 @@ func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Req
 		Scanners:      mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
 		Search:        strings.TrimSpace(r.URL.Query().Get("search")),
 		ExploitedOnly: r.URL.Query().Get("exploited") == "true",
+		RiskOnly:      r.URL.Query().Get("risk_only") == "true",
 		Sort:          strings.TrimSpace(r.URL.Query().Get("sort")),
 		Limit:         pagination.PerPage,
 		Offset:        pagination.Offset,

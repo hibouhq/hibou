@@ -10,12 +10,32 @@
     <template v-else>
       <!-- Risk distribution -->
       <section class="rounded-xl border border-surface-border bg-surface-raised/40 p-4">
-        <div class="flex items-center justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="flex items-center gap-2 text-sm font-semibold text-white">
             <ShieldAlert class="h-4 w-4 text-gray-500" />
             Risk distribution
           </h2>
-          <span class="text-xs text-gray-500">{{ totalVulnerabilities }} open across {{ dashboard.totals.components_total }} components</span>
+          <div class="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+            <RouterLink
+              v-if="kevOpen !== null"
+              :to="kevLink()"
+              class="inline-flex items-center gap-1 transition hover:text-accent"
+              :class="kevOpen > 0 ? 'text-danger' : 'text-gray-400'"
+              title="Known exploited vulnerabilities"
+            >
+              <Flame class="h-3.5 w-3.5" />
+              {{ kevOpen }} known exploited
+            </RouterLink>
+            <RouterLink
+              v-else-if="knownKEVOpen > 0"
+              :to="kevLink()"
+              class="text-danger hover:underline"
+            >
+              At least {{ knownKEVOpen }} known exploited · {{ kevUnavailableRepos }} {{ kevUnavailableRepos === 1 ? 'repository' : 'repositories' }} unavailable
+            </RouterLink>
+            <span v-else-if="kevOpen === null">Known exploited unavailable</span>
+            <span>{{ totalVulnerabilities }} open across {{ dashboard.totals.components_total }} components</span>
+          </div>
         </div>
 
         <div
@@ -138,7 +158,7 @@
       </div>
 
       <!-- Riskiest repositories -->
-      <section class="overflow-hidden rounded-xl border border-surface-border">
+      <section class="overflow-x-auto rounded-xl border border-surface-border">
         <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-3">
           <h2 class="flex items-center gap-2 text-sm font-semibold text-white">
             <Flame class="h-4 w-4 text-gray-500" />
@@ -177,7 +197,16 @@
                 </RouterLink>
               </td>
               <td class="px-4 py-2.5">
-                <div class="flex justify-end gap-1.5">
+                <div class="flex flex-wrap justify-end gap-1.5">
+                  <RouterLink
+                    v-if="entry.kev_open != null"
+                    :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { exploited: 'true', risk_only: 'true' } }"
+                    class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:underline"
+                    :class="entry.kev_open > 0 ? 'bg-danger/10 font-semibold text-danger' : 'text-gray-500'"
+                  >
+                    <Flame class="h-3 w-3" />
+                    {{ entry.kev_open }} exploited
+                  </RouterLink>
                   <span
                     v-for="sev in severityOrder"
                     v-show="entry.vulnerabilities[sev] > 0"
@@ -209,6 +238,9 @@ const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 
 const dashboard = inject<Ref<OrgDashboard | null>>('orgDashboard', ref(null))
+const kevOpen = computed(() => dashboard.value?.totals.kev_open ?? null)
+const knownKEVOpen = computed(() => (dashboard.value?.repos ?? []).reduce((total, entry) => total + (entry.kev_open ?? 0), 0))
+const kevUnavailableRepos = computed(() => (dashboard.value?.repos ?? []).filter(entry => entry.enrolled && entry.kev_open == null).length)
 
 const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'low', 'info']
 const severityColors: Record<keyof SeverityCounts, string> = {
@@ -251,6 +283,10 @@ function percent(value: number) {
   return total > 0 ? Math.round((value / total) * 100) : 0
 }
 
+function kevLink() {
+  return { name: 'org-vulnerabilities', params: route.params, query: { exploited: 'true', risk_only: 'true' } }
+}
+
 const outdatedRepos = computed(() => (dashboard.value?.repos ?? [])
   .filter((entry) => entry.enrolled && (entry.outdated || !entry.last_scanned))
   .sort((a, b) => (a.last_scanned ?? '').localeCompare(b.last_scanned ?? ''))
@@ -261,7 +297,7 @@ function riskScore(counts: SeverityCounts) {
 }
 
 const riskiestRepos = computed(() => (dashboard.value?.repos ?? [])
-  .filter((entry) => entry.enrolled && riskScore(entry.vulnerabilities) > 0)
-  .sort((a, b) => riskScore(b.vulnerabilities) - riskScore(a.vulnerabilities))
+  .filter((entry) => entry.enrolled && (riskScore(entry.vulnerabilities) > 0 || (entry.kev_open ?? 0) > 0 || entry.malware_open > 0))
+  .sort((a, b) => b.malware_open - a.malware_open || (b.kev_open ?? 0) - (a.kev_open ?? 0) || riskScore(b.vulnerabilities) - riskScore(a.vulnerabilities))
   .slice(0, 5))
 </script>

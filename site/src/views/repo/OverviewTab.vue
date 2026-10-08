@@ -64,6 +64,29 @@
                 <span class="ml-auto text-xs text-red-300/80">Review immediately →</span>
               </RouterLink>
 
+              <RouterLink
+                v-if="kevOpen !== null"
+                :to="kevLink()"
+                class="flex flex-wrap items-center gap-2.5 border-l-2 px-3 py-2.5 transition hover:bg-surface-overlay"
+                :class="kevOpen > 0 ? 'border-danger/60 bg-danger/5' : 'border-surface-border bg-surface-overlay/30'"
+                title="Known exploited vulnerabilities"
+              >
+                <Flame
+                  class="h-5 w-5 shrink-0"
+                  :class="kevOpen > 0 ? 'text-danger' : 'text-gray-500'"
+                />
+                <span class="text-sm font-semibold text-gray-200">
+                  {{ kevOpen }} known exploited {{ kevOpen === 1 ? 'vulnerability' : 'vulnerabilities' }}
+                </span>
+                <span class="ml-auto text-xs text-accent">View findings</span>
+              </RouterLink>
+              <p
+                v-else-if="kevOpen === null"
+                class="text-xs text-gray-500"
+              >
+                Known exploited status unavailable
+              </p>
+
               <div class="flex items-end gap-2">
                 <span class="text-3xl font-semibold text-white">{{ vulnerabilitiesTotal }}</span>
                 <span class="pb-1 text-sm text-gray-400">open vulnerabilities</span>
@@ -285,7 +308,7 @@
 </template>
 
 <script setup lang="ts">
-import { Activity, ArrowLeftRight, ArrowRight, Biohazard, Clock, Download, ExternalLink, FileArchive, FileText, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
+import { Activity, ArrowLeftRight, ArrowRight, Biohazard, Clock, Download, ExternalLink, FileArchive, FileText, Flame, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -313,6 +336,7 @@ const loading = ref(true)
 const error = ref('')
 const summary = ref<RefSummary | null>(null)
 const malwareOpen = computed(() => summary.value?.malware_open ?? 0)
+const kevOpen = computed(() => summary.value?.kev_open ?? null)
 const coverageRate = ref<number | null>(null)
 const files = ref<SnapshotFile[]>([])
 const filesLoading = ref(false)
@@ -336,7 +360,7 @@ const severityMeta: Array<{ key: SeverityKey; label: string; valueClass: string;
   { key: 'critical', label: 'crit', valueClass: 'text-sev-critical', barClass: 'bg-sev-critical' },
   { key: 'high', label: 'high', valueClass: 'text-sev-high', barClass: 'bg-sev-high' },
   { key: 'medium', label: 'med', valueClass: 'text-sev-medium', barClass: 'bg-sev-medium' },
-  { key: 'low', label: 'low', valueClass: 'text-gray-300', barClass: 'bg-gray-500/80' },
+  { key: 'low', label: 'low', valueClass: 'text-sev-low', barClass: 'bg-sev-low' },
   { key: 'info', label: 'info', valueClass: 'text-sev-info', barClass: 'bg-sev-info' },
 ]
 
@@ -481,6 +505,14 @@ function malwareLink() {
     name: 'repo-vulnerabilities',
     params: route.params,
     query: { ...route.query, type: 'malware' },
+  }
+}
+
+function kevLink() {
+  return {
+    name: 'repo-vulnerabilities',
+    params: route.params,
+    query: { ref: route.query.ref, snapshot: route.query.snapshot, exploited: 'true', risk_only: 'true' },
   }
 }
 

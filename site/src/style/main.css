@@ -42,28 +42,23 @@
 
 @layer components {
   .sev-critical {
-    background: rgb(248 81 73 / 0.22);
-    color: #f85149;
+    @apply bg-sev-critical/15 text-sev-critical;
   }
 
   .sev-high {
-    background: rgb(230 85 13 / 0.22);
-    color: #e6550d;
+    @apply bg-sev-high/15 text-sev-high;
   }
 
   .sev-medium {
-    background: rgb(210 153 34 / 0.20);
-    color: #d29922;
+    @apply bg-sev-medium/15 text-sev-medium;
   }
 
   .sev-low {
-    background: rgb(139 148 158 / 0.16);
-    color: #8b949e;
+    @apply bg-sev-low/15 text-sev-low;
   }
 
   .sev-info {
-    background: rgb(88 166 255 / 0.16);
-    color: #58a6ff;
+    @apply bg-sev-info/15 text-sev-info;
   }
 
   .vuln-count {

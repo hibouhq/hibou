@@ -32,9 +32,12 @@ type VulnerabilityListOptions struct {
 	// canonical id and aliases, or the bare identifier, on component-backed
 	// finding types.
 	ExploitedOnly bool
-	Sort          string
-	Limit         int
-	Offset        int
+	// RiskOnly keeps only known-exploited findings which count as actual risk:
+	// active or disputed-suppressed, and not accepted as false positive.
+	RiskOnly bool
+	Sort     string
+	Limit    int
+	Offset   int
 }
 
 // normalizeAcceptanceFilter whitelists the acceptance filter value; anything
@@ -239,6 +242,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 		// Known-exploited membership (ADR-032); implies the dependency-shaped
 		// finding types, so sast/secret rows drop out while it is on.
 		ExploitedOnly: opts.ExploitedOnly,
+		RiskOnly:      opts.RiskOnly,
 		Sort:          normalizeVulnerabilitySort(opts.Sort),
 	}
 
@@ -266,6 +270,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 		Search:        params.Search,
 		Acceptance:    params.Acceptance,
 		ExploitedOnly: params.ExploitedOnly,
+		RiskOnly:      params.RiskOnly,
 	})
 	if err != nil {
 		return nil, 0, err
@@ -289,43 +294,46 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 		return len(args)
 	}
 
-	conds = append(conds, fmt.Sprintf("snapshot_id = ANY($%d)", addArg(pq.Array(snapshotIDs))))
+	conds = append(conds, fmt.Sprintf("v.snapshot_id = ANY($%d)", addArg(pq.Array(snapshotIDs))))
 
 	statuses := normalizeStringFilters(opts.Statuses)
 	if len(statuses) == 0 {
 		statuses = []string{"detected", "resolved", "suppressed"}
 	}
-	conds = append(conds, fmt.Sprintf("status = ANY($%d)", addArg(pq.Array(statuses))))
+	conds = append(conds, fmt.Sprintf("v.status = ANY($%d)", addArg(pq.Array(statuses))))
 
 	if types := normalizeStringFilters(opts.Types); len(types) > 0 {
-		conds = append(conds, fmt.Sprintf("type = ANY($%d)", addArg(pq.Array(types))))
+		conds = append(conds, fmt.Sprintf("v.type = ANY($%d)", addArg(pq.Array(types))))
 	}
 	if severities := normalizeStringFilters(opts.Severities); len(severities) > 0 {
-		conds = append(conds, fmt.Sprintf("severity = ANY($%d)", addArg(pq.Array(severities))))
+		conds = append(conds, fmt.Sprintf("v.severity = ANY($%d)", addArg(pq.Array(severities))))
 	}
 	if scanners := normalizeStringFilters(opts.Scanners); len(scanners) > 0 {
-		conds = append(conds, fmt.Sprintf("lower(scanner_name) = ANY($%d)", addArg(pq.Array(scanners))))
+		conds = append(conds, fmt.Sprintf("lower(v.scanner_name) = ANY($%d)", addArg(pq.Array(scanners))))
 	}
 	if search := escapeLikeFragment(opts.Search); search != "" {
 		idx := addArg("%" + search + "%")
 		// primary_identifier_value is included so searching a CVE/GHSA/rule id
 		// finds the finding — it is the identifier users actually paste.
-		conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\' OR primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
+		conds = append(conds, fmt.Sprintf(`(v.title ILIKE $%d ESCAPE '\' OR v.component_name ILIKE $%d ESCAPE '\' OR v.component_purl ILIKE $%d ESCAPE '\' OR v.primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
 	}
 
-	if opts.ExploitedOnly {
+	if opts.ExploitedOnly || opts.RiskOnly {
 		// Same membership the gate blocks on (union across catalogs); scoped to
 		// the finding types an advisory can stand behind. kev_entries carries
 		// an index on cve_id, and advisory ids arrive from the row.
-		conds = append(conds, `type IN ('dependency','container','malware') AND (
-			EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(primary_identifier_value))
+		conds = append(conds, `v.type IN ('dependency','container','malware') AND (
+			EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
 			OR EXISTS (
 				SELECT 1 FROM advisories a
 				LEFT JOIN advisory_aliases al ON al.advisory_id = a.id
 				JOIN kev_entries k2 ON k2.cve_id IN (upper(a.canonical_id), upper(al.alias))
-				WHERE a.id = advisory_id
+				WHERE a.id = v.advisory_id
 			)
 		)`)
+	}
+	if opts.RiskOnly {
+		conds = append(conds, `v.status != 'resolved' AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL) AND COALESCE(fa.reason_kind::text, '') != 'false_positive'`)
 	}
 
 	where := strings.Join(conds, " AND ")
@@ -336,8 +344,8 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 	offsetParam := addArg(int32(opts.Offset)) // #nosec G115 -- pagination values bounded by API parsing.
 
 	// #nosec G201 -- validated sort + positional parameters only.
-	listSQL := fmt.Sprintf("SELECT %s FROM vulnerabilities\nWHERE %s\n%s\nLIMIT $%d OFFSET $%d",
-		vulnerabilitySelectColumns, where, vulnerabilityOrderByClause(sortParam), limitParam, offsetParam)
+	listSQL := fmt.Sprintf("SELECT %s FROM vulnerabilities v\n%s\nWHERE %s\n%s\nLIMIT $%d OFFSET $%d",
+		dynamicVulnerabilitySelectColumns(), acceptanceJoinClause, where, vulnerabilityOrderByClause(sortParam), limitParam, offsetParam)
 
 	rows, err := q.sqlDB.QueryContext(ctx, listSQL, args...)
 	if err != nil {
@@ -359,7 +367,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 
 	// total ignores limit/offset/sort args (the last three).
 	countArgs := args[:len(args)-3]
-	countSQL := "SELECT COUNT(*)::bigint FROM vulnerabilities\nWHERE " + where
+	countSQL := "SELECT COUNT(*)::bigint FROM vulnerabilities v\n" + acceptanceJoinClause + "\nWHERE " + where
 	var total int64
 	if err := q.sqlDB.QueryRowContext(ctx, countSQL, countArgs...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -368,7 +376,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshots(ctx context.Context, snapshotID
 	return vulnerabilities, int(total), nil
 }
 
-func (q *Queries) ListVulnerabilitiesBySnapshotDynamic(ctx context.Context, snapshotID uuid.UUID, where string, params []interface{}, sort string, limit, offset int) ([]Vulnerability, int, error) {
+func (q *Queries) ListVulnerabilitiesBySnapshotDynamic(ctx context.Context, snapshotID uuid.UUID, where string, params []interface{}, riskOnly bool, sort string, limit, offset int) ([]Vulnerability, int, error) {
 	baseWhere := "v.snapshot_id = $1"
 	baseArgs := make([]interface{}, 0, len(params)+1)
 	baseArgs = append(baseArgs, snapshotID)
@@ -377,6 +385,9 @@ func (q *Queries) ListVulnerabilitiesBySnapshotDynamic(ctx context.Context, snap
 	if strings.TrimSpace(where) != "" {
 		baseWhere += " AND " + where
 	}
+	if riskOnly {
+		baseWhere += " AND " + riskOnlyVulnerabilityPredicate("v")
+	}
 
 	sort = normalizeVulnerabilitySort(sort)
 	sortParam := len(baseArgs) + 1
@@ -384,11 +395,11 @@ func (q *Queries) ListVulnerabilitiesBySnapshotDynamic(ctx context.Context, snap
 	// unique index; filterquery conditions may reference the fa alias
 	// (acceptance:/label: qualifiers), so the count shares the join.
 	// #nosec G201 -- query uses validated sort input and positional parameters.
-	listSQL := fmt.Sprintf(`SELECT v.*, %s FROM vulnerabilities v
+	listSQL := fmt.Sprintf(`SELECT %s, %s FROM vulnerabilities v
 %s
 WHERE %s
 %s
-LIMIT $%d OFFSET $%d`, acceptanceProjectionColumns, acceptanceJoinClause, baseWhere, vulnerabilityOrderByClause(sortParam), sortParam+1, sortParam+2)
+LIMIT $%d OFFSET $%d`, dynamicVulnerabilitySelectColumns(), acceptanceProjectionColumns, acceptanceJoinClause, baseWhere, vulnerabilityOrderByClause(sortParam), sortParam+1, sortParam+2)
 
 	listArgs := append(append([]interface{}{}, baseArgs...), sort, limit, offset)
 	rows, err := q.sqlDB.QueryContext(ctx, listSQL, listArgs...)
@@ -419,6 +430,19 @@ LIMIT $%d OFFSET $%d`, acceptanceProjectionColumns, acceptanceJoinClause, baseWh
 	}
 
 	return vulnerabilities, int(total), nil
+}
+
+func riskOnlyVulnerabilityPredicate(alias string) string {
+	return fmt.Sprintf(`%s.type IN ('dependency','container','malware') AND (
+		EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(%s.primary_identifier_value))
+		OR EXISTS (
+			SELECT 1 FROM advisories a
+			LEFT JOIN advisory_aliases al ON al.advisory_id = a.id
+			JOIN kev_entries k2 ON k2.cve_id IN (upper(a.canonical_id), upper(al.alias))
+			WHERE a.id = %s.advisory_id
+		)
+	) AND %s.status != 'resolved' AND (%s.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
+	AND COALESCE(fa.reason_kind::text, '') != 'false_positive'`, alias, alias, alias, alias, alias)
 }
 
 // VulnerabilityFacets holds per-option result counts for each filterable
@@ -760,6 +784,10 @@ func scanVulnerabilityWithAcceptance(scanner interface {
 }
 
 const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
+
+func dynamicVulnerabilitySelectColumns() string {
+	return "v." + strings.ReplaceAll(vulnerabilitySelectColumns, ", ", ", v.")
+}
 
 //nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
