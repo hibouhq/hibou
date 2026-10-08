@@ -143,12 +143,19 @@ func vulnerabilityListOptionsFromRequest(r *http.Request, limit, offset int) sto
 		Acceptance: strings.TrimSpace(r.URL.Query().Get("acceptance")),
 		// PLAN §3 follow-up: the exploited facet must be server-side — this
 		// list is paginated, so a client-side filter renders empty pages.
-		ExploitedOnly: r.URL.Query().Get("exploited") == "true",
-		RiskOnly:      r.URL.Query().Get("risk_only") == "true",
-		Sort:          strings.TrimSpace(r.URL.Query().Get("sort")),
-		Limit:         limit,
-		Offset:        offset,
+		Exploited: normalizeExploitedFilter(r.URL.Query().Get("exploited")),
+		RiskOnly:  r.URL.Query().Get("risk_only") == "true",
+		Sort:      strings.TrimSpace(r.URL.Query().Get("sort")),
+		Limit:     limit,
+		Offset:    offset,
 	}
+}
+
+func normalizeExploitedFilter(value string) string {
+	if value == "true" || value == "false" {
+		return value
+	}
+	return ""
 }
 
 // maxFingerprintExport bounds "select all matching this filter". It matches the
@@ -204,8 +211,8 @@ func (s *Server) handleGetRefFindingFingerprints(w http.ResponseWriter, r *http.
 			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
 			return
 		}
-		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshotDynamic(
-			r.Context(), snapshot.ID, sqlResult.Where, sqlResult.Params, r.URL.Query().Get("risk_only") == "true", "", maxFingerprintExport, 0,
+		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshotDynamicWithFilters(
+			r.Context(), snapshot.ID, sqlResult.Where, sqlResult.Params, normalizeExploitedFilter(r.URL.Query().Get("exploited")), r.URL.Query().Get("risk_only") == "true", "", maxFingerprintExport, 0,
 		)
 	} else {
 		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, vulnerabilityListOptionsFromRequest(r, maxFingerprintExport, 0))
@@ -296,11 +303,12 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshotDynamic(
+		vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshotDynamicWithFilters(
 			r.Context(),
 			snapshot.ID,
 			sqlResult.Where,
 			sqlResult.Params,
+			normalizeExploitedFilter(r.URL.Query().Get("exploited")),
 			r.URL.Query().Get("risk_only") == "true",
 			strings.TrimSpace(r.URL.Query().Get("sort")),
 			pagination.PerPage,

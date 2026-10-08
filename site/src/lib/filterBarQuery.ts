@@ -36,6 +36,9 @@ export interface ParsedQuery {
   // Non-empty when the query uses OR or parentheses; the consumer sends it
   // verbatim as the server-side filterquery instead of discrete params.
   advancedQuery: string
+  // True as soon as the text uses OR or parentheses, valid or not: the
+  // discrete controls cannot represent it even while it has issues.
+  booleanSyntax: boolean
 }
 
 export interface BarQueryChunk {
@@ -145,7 +148,7 @@ export function validateFilterValues(filter: FilterBarFilter, rawValue: string) 
   if (!filter.multi) {
     const trimmed = rawValue.trim()
     if (trimmed.length === 0) {
-      issues.push(createEmptyValueIssue(filter.key))
+      issues.push(createEmptyValueIssue(filter))
       return { values, issues }
     }
 
@@ -154,10 +157,15 @@ export function validateFilterValues(filter: FilterBarFilter, rawValue: string) 
       return { values, issues }
     }
 
+    if (trimmed.includes(',')) {
+      issues.push(createSingleValueIssue(filter))
+      return { values, issues }
+    }
+
     if (filter.options.length > 0) {
       const canonical = getCanonicalFilterOption(filter, rawValue)
       if (!canonical) {
-        issues.push(createInvalidValueIssue(filter.key, trimmed))
+        issues.push(createInvalidValueIssue(filter, trimmed))
         return { values, issues }
       }
       values.push(canonical)
@@ -172,7 +180,7 @@ export function validateFilterValues(filter: FilterBarFilter, rawValue: string) 
   for (const fragment of fragments) {
     const trimmed = fragment.trim()
     if (trimmed.length === 0) {
-      issues.push(createEmptyValueIssue(filter.key))
+      issues.push(createEmptyValueIssue(filter))
       continue
     }
 
@@ -184,7 +192,7 @@ export function validateFilterValues(filter: FilterBarFilter, rawValue: string) 
     if (filter.options.length > 0) {
       const canonical = getCanonicalFilterOption(filter, fragment)
       if (!canonical) {
-        issues.push(createInvalidValueIssue(filter.key, trimmed))
+        issues.push(createInvalidValueIssue(filter, trimmed))
         continue
       }
       values.push(canonical)
@@ -211,34 +219,55 @@ function addValidationIssue(target: Map<string, ValidationIssue>, issue: Validat
   }
 }
 
-export function createUnknownFilterIssue(rawKey: string): ValidationIssue {
+const HIGHLIGHT = 'font-medium text-amber-100'
+
+// suggestionPart: a short "try …" tail so a message says how to fix itself.
+function suggestionPart(values: string[]): DisplaySegment[] {
+  if (values.length === 0) return []
+  const shown = values.slice(0, 4).join(', ')
+  return [{ text: ` — try ${shown}${values.length > 4 ? ', …' : ''}`, className: 'text-amber-200/70' }]
+}
+
+export function createUnknownFilterIssue(rawKey: string, knownKeys: string[] = []): ValidationIssue {
   return {
     id: `unknown-filter:${rawKey.toLowerCase()}`,
     parts: [
-      { text: 'Unknown filter ', className: 'text-[#f0c674]' },
-      { text: rawKey, className: 'font-medium text-[#ffcc66]' },
+      { text: rawKey, className: HIGHLIGHT },
+      { text: ' is not a filter', className: '' },
+      ...suggestionPart(knownKeys.map(key => `${key}:`)),
     ],
   }
 }
 
-export function createEmptyValueIssue(key: string): ValidationIssue {
+export function createEmptyValueIssue(filter: FilterBarFilter): ValidationIssue {
   return {
-    id: `empty-value:${key}`,
+    id: `empty-value:${filter.key}`,
     parts: [
-      { text: 'Empty value for ', className: 'text-[#f0c674]' },
-      { text: key, className: 'font-medium text-[#ffd38a]' },
+      { text: `${filter.key}:`, className: HIGHLIGHT },
+      { text: ' needs a value', className: '' },
+      ...suggestionPart(filter.freeform ? [] : filter.options),
     ],
   }
 }
 
-export function createInvalidValueIssue(key: string, value: string): ValidationIssue {
+export function createInvalidValueIssue(filter: FilterBarFilter, value: string): ValidationIssue {
   return {
-    id: `invalid-value:${key}:${value.toLowerCase()}`,
+    id: `invalid-value:${filter.key}:${value.toLowerCase()}`,
     parts: [
-      { text: 'Invalid value ', className: 'text-[#f0c674]' },
-      { text: value, className: 'font-medium text-[#ffd38a]' },
-      { text: ' for ', className: 'text-[#f0c674]' },
-      { text: key, className: 'font-medium text-[#ffcc66]' },
+      { text: value, className: HIGHLIGHT },
+      { text: ' is not a valid ', className: '' },
+      { text: filter.key, className: HIGHLIGHT },
+      ...suggestionPart(filter.options),
+    ],
+  }
+}
+
+export function createSingleValueIssue(filter: FilterBarFilter): ValidationIssue {
+  return {
+    id: `single-value:${filter.key}`,
+    parts: [
+      { text: `${filter.key}:`, className: HIGHLIGHT },
+      { text: ' takes one value — use OR to match several', className: '' },
     ],
   }
 }
@@ -247,7 +276,7 @@ export function createUnbalancedParensIssue(): ValidationIssue {
   return {
     id: 'parens:unbalanced',
     parts: [
-      { text: 'Unbalanced parentheses', className: 'font-semibold' },
+      { text: 'Unbalanced parentheses', className: HIGHLIGHT },
       { text: ' — every ( needs a matching )', className: '' },
     ],
   }
@@ -257,7 +286,7 @@ export function createDanglingConnectiveIssue(word: string): ValidationIssue {
   return {
     id: `connective:${word.toLowerCase()}`,
     parts: [
-      { text: word, className: 'font-semibold' },
+      { text: word.toUpperCase(), className: HIGHLIGHT },
       { text: ' must sit between two conditions', className: '' },
     ],
   }
@@ -321,7 +350,7 @@ export function parseBarQuery(query: string, filterDefs: FilterBarFilter[], sear
     const filter = filterMap.get(rawKey.toLowerCase())
 
     if (!filter) {
-      addValidationIssue(issues, createUnknownFilterIssue(rawKey))
+      addValidationIssue(issues, createUnknownFilterIssue(rawKey, filterDefs.map(filter => filter.key)))
       continue
     }
 
@@ -354,6 +383,7 @@ export function parseBarQuery(query: string, filterDefs: FilterBarFilter[], sear
     searchText: searchable ? searchTerms.join(' ') : '',
     issues: [...issues.values()],
     advancedQuery: advanced && issues.size === 0 ? query.trim() : '',
+    booleanSyntax: advanced,
   }
 }
 
@@ -379,4 +409,78 @@ export function buildBarQuery(filterDefs: FilterBarFilter[], filters: Record<str
   }
 
   return tokens.join(' ')
+}
+
+export interface CursorContext {
+  token: string
+  start: number
+  end: number
+}
+
+// getCursorContext: the token under the cursor, bounded like every other
+// token by whitespace or a parenthesis — `acceptance:)` is the qualifier
+// `acceptance:` followed by a paren, not a qualifier whose value is `)`.
+export function getCursorContext(text: string, cursor: number): CursorContext {
+  const safeCursor = Math.max(0, Math.min(cursor, text.length))
+  const leftToken = text.slice(0, safeCursor).match(/[^\s()]+$/)?.[0] ?? ''
+  const rightToken = text.slice(safeCursor).match(/^[^\s()]+/)?.[0] ?? ''
+  return {
+    token: `${leftToken}${rightToken}`,
+    start: safeCursor - leftToken.length,
+    end: safeCursor + rightToken.length,
+  }
+}
+
+const QUALIFIER_CLASS = 'text-gray-400'
+const VALUE_CLASS = 'text-[#79c0ff]'
+const WARNING_CLASS = 'text-[#d29922]'
+
+function qualifierSegments(filter: FilterBarFilter | undefined, rawKey: string, rawValue: string): DisplaySegment[] {
+  if (!filter) {
+    return [
+      { text: rawKey, className: WARNING_CLASS },
+      { text: ':', className: WARNING_CLASS },
+      ...(rawValue.length > 0 ? [{ text: rawValue, className: WARNING_CLASS }] : []),
+    ]
+  }
+
+  const segments: DisplaySegment[] = [
+    { text: filter.key, className: QUALIFIER_CLASS },
+    { text: ':', className: QUALIFIER_CLASS },
+  ]
+
+  if (!filter.multi) {
+    if (rawValue.length > 0) {
+      segments.push({ text: rawValue, className: isValidFilterValue(filter, rawValue) ? VALUE_CLASS : WARNING_CLASS })
+    }
+    return segments
+  }
+
+  const fragments = rawValue.split(',')
+  for (let index = 0; index < fragments.length; index += 1) {
+    const fragment = fragments[index]
+    if (index > 0) {
+      const hasEmptyNeighbor = fragments[index - 1].trim().length === 0 || fragment.trim().length === 0
+      segments.push({ text: ',', className: hasEmptyNeighbor ? WARNING_CLASS : QUALIFIER_CLASS })
+    }
+    if (fragment.length > 0) {
+      segments.push({ text: fragment, className: isValidFilterValue(filter, fragment) ? VALUE_CLASS : WARNING_CLASS })
+    }
+  }
+  return segments
+}
+
+// highlightBarQuery: the bar's syntax colouring, shared so a query reads the
+// same wherever it is shown. Connectives purple, parens amber, valid values
+// blue, anything the bar would reject amber.
+export function highlightBarQuery(query: string, filterDefs: FilterBarFilter[]): DisplaySegment[] {
+  const filterMap = new Map(filterDefs.map(filter => [filter.key.toLowerCase(), filter]))
+  return tokenizeBarQuery(query).flatMap((chunk): DisplaySegment[] => {
+    if (chunk.isWhitespace) return [{ text: chunk.text, className: '' }]
+    if (isParenChar(chunk.text)) return [{ text: chunk.text, className: 'text-[#d29922]' }]
+    if (isConnectiveWord(chunk.text)) return [{ text: chunk.text, className: 'text-[#d2a8ff]' }]
+    const match = chunk.text.match(/^([A-Za-z0-9_-]+):(.*)$/)
+    if (!match) return [{ text: chunk.text, className: 'text-gray-100' }]
+    return qualifierSegments(filterMap.get(match[1].toLowerCase()), match[1], match[2])
+  })
 }

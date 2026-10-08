@@ -109,37 +109,37 @@ WHERE v.snapshot_id = $1
        OR ($9::text = 'accepted' AND fa.fingerprint IS NOT NULL)
        OR ($9::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = $9::text)
-  AND (NOT $10::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
+  AND ($10::text = ''
+       OR ($10::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id))))
+                    WHERE adv.id = v.advisory_id)))
+       OR ($10::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)))))
   AND (NOT $11::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
-         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
-         OR EXISTS (SELECT 1 FROM advisories adv
-                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
-                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id)
-       ) AND v.status != 'resolved'
+       v.status != 'resolved'
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 `
 
 type CountVulnerabilitiesBySnapshotParams struct {
-	SnapshotID    uuid.UUID `json:"snapshot_id"`
-	Statuses      []string  `json:"statuses"`
-	Types         []string  `json:"types"`
-	Severities    []string  `json:"severities"`
-	Scanners      []string  `json:"scanners"`
-	Languages     []string  `json:"languages"`
-	FileQuery     string    `json:"file_query"`
-	Search        string    `json:"search"`
-	Acceptance    string    `json:"acceptance"`
-	ExploitedOnly bool      `json:"exploited_only"`
-	RiskOnly      bool      `json:"risk_only"`
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	Statuses   []string  `json:"statuses"`
+	Types      []string  `json:"types"`
+	Severities []string  `json:"severities"`
+	Scanners   []string  `json:"scanners"`
+	Languages  []string  `json:"languages"`
+	FileQuery  string    `json:"file_query"`
+	Search     string    `json:"search"`
+	Acceptance string    `json:"acceptance"`
+	Exploited  string    `json:"exploited"`
+	RiskOnly   bool      `json:"risk_only"`
 }
 
 func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountVulnerabilitiesBySnapshotParams) (int64, error) {
@@ -153,7 +153,7 @@ func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountV
 		arg.FileQuery,
 		arg.Search,
 		arg.Acceptance,
-		arg.ExploitedOnly,
+		arg.Exploited,
 		arg.RiskOnly,
 	)
 	var column_1 int64
@@ -1342,21 +1342,21 @@ WHERE v.snapshot_id = $1
        OR ($11::text = 'accepted' AND fa.fingerprint IS NOT NULL)
        OR ($11::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = $11::text)
-  AND (NOT $12::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
+  AND ($12::text = ''
+       OR ($12::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id))))
+                    WHERE adv.id = v.advisory_id)))
+       OR ($12::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)))))
   AND (NOT $13::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
-         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
-         OR EXISTS (SELECT 1 FROM advisories adv
-                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
-                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id)
-       ) AND v.status != 'resolved'
+       v.status != 'resolved'
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 ORDER BY
@@ -1379,20 +1379,20 @@ LIMIT $2 OFFSET $3
 `
 
 type ListVulnerabilitiesBySnapshotParams struct {
-	SnapshotID    uuid.UUID `json:"snapshot_id"`
-	Limit         int32     `json:"limit"`
-	Offset        int32     `json:"offset"`
-	Statuses      []string  `json:"statuses"`
-	Types         []string  `json:"types"`
-	Severities    []string  `json:"severities"`
-	Scanners      []string  `json:"scanners"`
-	Languages     []string  `json:"languages"`
-	FileQuery     string    `json:"file_query"`
-	Search        string    `json:"search"`
-	Acceptance    string    `json:"acceptance"`
-	ExploitedOnly bool      `json:"exploited_only"`
-	RiskOnly      bool      `json:"risk_only"`
-	Sort          string    `json:"sort"`
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	Limit      int32     `json:"limit"`
+	Offset     int32     `json:"offset"`
+	Statuses   []string  `json:"statuses"`
+	Types      []string  `json:"types"`
+	Severities []string  `json:"severities"`
+	Scanners   []string  `json:"scanners"`
+	Languages  []string  `json:"languages"`
+	FileQuery  string    `json:"file_query"`
+	Search     string    `json:"search"`
+	Acceptance string    `json:"acceptance"`
+	Exploited  string    `json:"exploited"`
+	RiskOnly   bool      `json:"risk_only"`
+	Sort       string    `json:"sort"`
 }
 
 type ListVulnerabilitiesBySnapshotRow struct {
@@ -1424,7 +1424,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 		arg.FileQuery,
 		arg.Search,
 		arg.Acceptance,
-		arg.ExploitedOnly,
+		arg.Exploited,
 		arg.RiskOnly,
 		arg.Sort,
 	)

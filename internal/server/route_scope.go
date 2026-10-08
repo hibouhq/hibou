@@ -117,6 +117,12 @@ var routeScopes = map[string]routeScope{
 	"DELETE /api/v1/users/me/api-keys/{keyID}":      sessionOnlyRoute(),
 	"POST /api/v1/users/me/api-keys/{keyID}/rotate": sessionOnlyRoute(),
 
+	// UI state, not something an automation token has a use for.
+	"GET /api/v1/users/me/search-presets/":              sessionOnlyRoute(),
+	"POST /api/v1/users/me/search-presets/":             sessionOnlyRoute(),
+	"PUT /api/v1/users/me/search-presets/{presetID}":    sessionOnlyRoute(),
+	"DELETE /api/v1/users/me/search-presets/{presetID}": sessionOnlyRoute(),
+
 	"GET /api/v1/orgs/onboardable": sessionOnlyRoute(),
 	"POST /api/v1/orgs/":           sessionOnlyRoute(),
 	"GET /api/v1/orgs/":            sessionOnlyRoute(),

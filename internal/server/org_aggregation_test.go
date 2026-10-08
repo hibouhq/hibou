@@ -58,3 +58,17 @@ func TestHandleListOrgComponentsOrgWideTokenScope(t *testing.T) {
 		t.Fatalf("session components = %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestHandleListOrgVulnerabilitiesRejectsInvalidQuery(t *testing.T) {
+	t.Parallel()
+
+	srv, org, _, member := newDiscoveryTestServer(t)
+	for _, query := range []string{"q=(type:dependency", "q=unknown:value"} {
+		recorder := httptest.NewRecorder()
+		req := newOrgRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/vulnerabilities?"+query, "github", org.Slug)
+		srv.handleListOrgVulnerabilities(recorder, req)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("invalid query %q = %d: %s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+}

@@ -42,9 +42,11 @@ describe.each([['Overview', OverviewTab], ['Insights', InsightsTab]] as const)('
   it.each([0, 3])('shows successful count %i with matching risk drill-down', async kevOpen => {
     const html = await render(view, kevOpen)
     expect(html).toContain(`${kevOpen} known exploited`)
-    expect(html).toContain('exploited=true')
-    expect(html).toContain('risk_only=true')
-    expect(html).not.toContain('status=detected')
+    expect(html).toContain('q=')
+    expect(html).toContain('status:detected')
+    expect(html).toContain('type:dependency')
+    expect(html).toContain('exploited:true')
+    expect(html).not.toContain('risk_only=true')
   })
 
   it('does not turn unavailable catalog evidence into zero', async () => {
@@ -58,6 +60,6 @@ describe.each([['Overview', OverviewTab], ['Insights', InsightsTab]] as const)('
     const html = await render(view, null, true)
     expect(html).toContain('At least 3 known exploited')
     expect(html).toContain('1 repository')
-    expect(html).toContain('risk_only=true')
+    expect(html).toContain('q=')
   })
 })

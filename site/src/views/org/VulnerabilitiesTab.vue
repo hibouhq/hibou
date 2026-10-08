@@ -16,28 +16,32 @@
     <FilterBar
       v-model="activeFilters"
       v-model:search-query="searchQuery"
+      v-model:advanced-query="advancedQuery"
       v-model:sort-value="currentSort"
       v-model:sort-direction="currentSortDirection"
       :filters="filterDefs"
       :sort-options="sortOptions"
       :sort-direction-options="sortDirectionOptions"
-      :total-count="pagination.total"
-      :filtered-count="hasActiveFilters ? pagination.total : undefined"
+      :total-count="baselineTotal ?? pagination.total"
+      :filtered-count="baselineTotal !== undefined && hasActiveFilters ? pagination.total : undefined"
       placeholder="Filter vulnerabilities across all repositories..."
     >
       <template #trailing>
-        <button
-          type="button"
-          class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition"
-          :class="exploitedOnly ? 'border-danger/60 bg-danger/10 text-danger' : 'border-surface-border text-gray-400 hover:border-danger/50 hover:text-danger'"
-          title="Only findings whose advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD)"
-          @click="toggleExploitedOnly"
-        >
-          <Flame class="h-3.5 w-3.5" />
-          Exploited
-        </button>
+        <SearchPresetMenu
+          surface="findings"
+          :filters="filterDefs"
+          :builtins="BUILTIN_FINDINGS_PRESETS"
+          :query="currentBarQuery"
+          @apply="applyPresetQuery"
+        />
       </template>
     </FilterBar>
+    <p
+      v-if="baselineTotal === undefined && hasActiveFilters"
+      class="text-xs text-gray-400"
+    >
+      {{ pagination.total }} matching findings
+    </p>
 
     <!-- Same detail drawer as the repository view; org-wide rows carry their own
          repository, so it is passed per row rather than read from the route. -->
@@ -204,10 +208,11 @@
 <script setup lang="ts">
 import { Flame, Biohazard } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { type LocationQueryRaw, RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { api, type AcceptanceReasonKind, type FindingAcceptance, type OrgDashboard, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
+import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
@@ -215,6 +220,10 @@ import TriageDialog from '@/components/TriageDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
 import { isComponentBacked } from '@/lib/findingDisplay'
+import { createExploitedPreset } from '@/lib/exploitedPreset'
+import { sameFilterValues, sameListQueryState } from '@/lib/listQueryState'
+import { migrateRiskOnlyQuery } from '@/lib/openRiskPreset'
+import { barQueryText, barStateFromQuery, BUILTIN_FINDINGS_PRESETS } from '@/lib/searchPresets'
 
 const { promptDialog } = useDialog()
 const route = useRoute()
@@ -223,31 +232,23 @@ const { pushToast } = useToast()
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 
-// Server-side facet (SQL EXISTS against the exploited catalogs): this view is
-// paginated in SQL, so the filter cannot be client-side. URL-synced so a
-// filtered view can be bookmarked.
-const exploitedOnly = ref(route.query.exploited === 'true')
-function toggleExploitedOnly() {
-  setExploitedOnly(!exploitedOnly.value)
-}
-function setExploitedOnly(on: boolean) {
-  if (exploitedOnly.value === on) return
-  exploitedOnly.value = on
-  pagination.value.page = 1
-  void router.replace({ query: { ...route.query, exploited: on ? 'true' : undefined } })
-}
 const vulnerabilities = ref<OrgVulnerability[]>([])
 const loading = ref(true)
-const riskOnly = computed(() => route.query.risk_only === 'true')
-const activeFilters = ref<Record<string, string>>(riskOnly.value ? {} : { status: 'detected' })
-watch(() => activeFilters.value.exploited, (token) => {
-  if (token === 'true') setExploitedOnly(true)
-  else if (token === 'false' || token === '') setExploitedOnly(false)
-})
+const activeFilters = ref<Record<string, string>>({ status: 'detected' })
+const applyExploitedPreset = createExploitedPreset()
+const exploitedOnly = computed(() => activeFilters.value.exploited === 'true')
+function toggleExploitedOnly(enabled: boolean) {
+  activeFilters.value = applyExploitedPreset(activeFilters.value, enabled)
+}
 const searchQuery = ref('')
+const advancedQuery = ref('')
 const currentSort = ref('severity')
 const currentSortDirection = ref('desc')
 const pagination = ref({ page: 1, per_page: 50, total: 0 })
+const baselineTotals = ref(new Map<string, number>())
+const baselineScopeKey = computed(() => JSON.stringify([provider.value, slug.value]))
+const baselineTotal = computed(() => baselineTotals.value.get(baselineScopeKey.value))
+let baselineRequestID = 0
 const seenTools = ref<Set<string>>(new Set())
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
@@ -258,8 +259,9 @@ const filterDefs = computed(() => [
   { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
+  { key: 'acceptance', label: 'Triage', options: ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed'] },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
-  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], hidden: true },
+  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
 ])
 const sortOptions = [
   { key: 'severity', label: 'Severity' },
@@ -270,8 +272,18 @@ const sortDirectionOptions = [
   { key: 'desc', label: '↓ Desc' },
   { key: 'asc', label: '↑ Asc' },
 ]
+const filterKeys = ['type', 'severity', 'status', 'acceptance', 'tool', 'exploited'] as const
+const managedQueryKeys = [...filterKeys, 'search', 'q', 'sort', 'order', 'page'] as const
+const sortKeys = new Set(sortOptions.map((option) => option.key))
+const sortDirectionKeys = new Set(sortDirectionOptions.map((option) => option.key))
+const syncingFromRoute = ref(false)
+let vulnerabilityRequestID = 0
 
-const hasActiveFilters = computed(() => Object.entries(activeFilters.value).some(([key, value]) => Boolean(value) && !(key === 'status' && value === 'detected')) || searchQuery.value.trim().length > 0)
+watch([provider, slug], () => {
+  applyExploitedPreset.reset()
+})
+
+const hasActiveFilters = computed(() => Object.values(activeFilters.value).some(Boolean) || searchQuery.value.trim().length > 0 || advancedQuery.value.trim().length > 0)
 const orgDashboard = inject<Ref<OrgDashboard | null>>('orgDashboard', ref(null))
 const orgMalwareOpen = computed(() => orgDashboard.value?.totals.malware_open ?? 0)
 
@@ -280,19 +292,85 @@ function applyMalwareFilter() {
 }
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
+const currentBarQuery = computed(() => barQueryText({
+  filters: activeFilters.value,
+  search: searchQuery.value,
+  advancedQuery: advancedQuery.value,
+}, filterDefs.value))
+
+function applyPresetQuery(query: string) {
+  const state = barStateFromQuery(query, filterDefs.value)
+  if (!state) return
+  activeFilters.value = state.filters
+  searchQuery.value = state.search
+  advancedQuery.value = state.advancedQuery
+}
+
 watch(
-  [activeFilters, searchQuery, currentSort, currentSortDirection],
+  [provider, slug],
+  async () => {
+    if (!provider.value || !slug.value || baselineTotals.value.has(baselineScopeKey.value)) return
+    const requestID = ++baselineRequestID
+    const scopeKey = baselineScopeKey.value
+    try {
+      const response = await api.listOrgVulnerabilities(provider.value, slug.value, { page: 1, per_page: 1 })
+      if (requestID !== baselineRequestID || scopeKey !== baselineScopeKey.value) return
+      baselineTotals.value = new Map(baselineTotals.value).set(scopeKey, response.pagination.total)
+    } catch {
+      // Keep the baseline unknown rather than presenting a filtered count as total.
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => route.query,
   () => {
+    if (route.query.risk_only === 'true') {
+      void router.replace({ query: migrateRiskOnlyQuery(route.query, filterDefs.value) })
+      return
+    }
+    const nextState = readQueryState()
+
+    syncingFromRoute.value = true
+    try {
+      if (!sameFilterValues(filterKeys, activeFilters.value, nextState.filters)) activeFilters.value = nextState.filters
+      if (searchQuery.value !== nextState.search) searchQuery.value = nextState.search
+      if (advancedQuery.value !== nextState.q) advancedQuery.value = nextState.q
+      if (currentSort.value !== nextState.sort) currentSort.value = nextState.sort
+      if (currentSortDirection.value !== nextState.order) currentSortDirection.value = nextState.order
+      if (pagination.value.page !== nextState.page) pagination.value = { ...pagination.value, page: nextState.page }
+    } finally {
+      syncingFromRoute.value = false
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  [activeFilters, searchQuery, advancedQuery, currentSort, currentSortDirection],
+  () => {
+    if (syncingFromRoute.value) return
     if (pagination.value.page !== 1) {
       pagination.value = { ...pagination.value, page: 1 }
+      return
     }
+    void syncQueryFromState()
   },
   { deep: true },
 )
 
 watch(
-  [provider, slug, activeFilters, searchQuery, currentSort, currentSortDirection, exploitedOnly, riskOnly, () => pagination.value.page],
+  () => pagination.value.page,
+  () => {
+    if (!syncingFromRoute.value) void syncQueryFromState()
+  },
+)
+
+watch(
+  [provider, slug, activeFilters, searchQuery, advancedQuery, currentSort, currentSortDirection, exploitedOnly, () => pagination.value.page],
   async () => {
+    const requestID = ++vulnerabilityRequestID
     if (!provider.value || !slug.value) {
       vulnerabilities.value = []
       return
@@ -301,17 +379,19 @@ watch(
     loading.value = true
     try {
       const res = await api.listOrgVulnerabilities(provider.value, slug.value, {
-        type: activeFilters.value.type || undefined,
-        severity: activeFilters.value.severity || undefined,
-        status: activeFilters.value.status || undefined,
-        tool: activeFilters.value.tool || undefined,
-        search: searchQuery.value || undefined,
-        exploited: exploitedOnly.value || undefined,
-        risk_only: riskOnly.value || undefined,
+        type: advancedQuery.value ? undefined : activeFilters.value.type || undefined,
+        severity: advancedQuery.value ? undefined : activeFilters.value.severity || undefined,
+        status: advancedQuery.value ? undefined : activeFilters.value.status || undefined,
+        acceptance: advancedQuery.value ? undefined : activeFilters.value.acceptance || undefined,
+        tool: advancedQuery.value ? undefined : activeFilters.value.tool || undefined,
+        search: advancedQuery.value ? undefined : searchQuery.value || undefined,
+        q: advancedQuery.value || undefined,
+        exploited: advancedQuery.value ? undefined : activeFilters.value.exploited === 'true' ? true : activeFilters.value.exploited === 'false' ? false : undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,
         per_page: pagination.value.per_page,
       })
+      if (requestID !== vulnerabilityRequestID) return
       vulnerabilities.value = res.data
       const nextTools = new Set(seenTools.value)
       for (const vulnerability of res.data) {
@@ -322,14 +402,74 @@ watch(
       seenTools.value = nextTools
       pagination.value = res.pagination
     } catch {
+      if (requestID !== vulnerabilityRequestID) return
       vulnerabilities.value = []
       pagination.value = { ...pagination.value, total: 0 }
     } finally {
-      loading.value = false
+      if (requestID === vulnerabilityRequestID) loading.value = false
     }
   },
   { immediate: true },
 )
+
+function readQueryState() {
+  const hasQuery = typeof route.query.q === 'string' && route.query.q.length > 0
+  const filters: Record<string, string> = hasQuery ? {} : { status: 'detected' }
+  for (const key of filterKeys) {
+    const value = route.query[key]
+    if (typeof value === 'string' && value) filters[key] = value
+  }
+
+  const sortValue = route.query.sort
+  const sort = typeof sortValue === 'string' && sortKeys.has(sortValue) ? sortValue : 'severity'
+  const orderValue = route.query.order
+  const order = typeof orderValue === 'string' && sortDirectionKeys.has(orderValue) ? orderValue : 'desc'
+  const search = typeof route.query.search === 'string' ? route.query.search : ''
+  const q = typeof route.query.q === 'string' ? route.query.q : ''
+  const pageValue = Number(typeof route.query.page === 'string' ? route.query.page : '1')
+  const page = Number.isInteger(pageValue) && pageValue > 0 ? pageValue : 1
+  return { filters, search, q, sort, order, page }
+}
+
+function syncQueryFromState() {
+  const nextState = {
+    filters: normalizeFilters(activeFilters.value),
+    search: searchQuery.value.trim(),
+    q: advancedQuery.value,
+    sort: currentSort.value,
+    order: currentSortDirection.value,
+    page: pagination.value.page,
+  }
+  if (sameListQueryState(filterKeys, nextState, readQueryState())) return
+
+  const nextQuery: LocationQueryRaw = { ...route.query }
+  for (const key of managedQueryKeys) delete nextQuery[key]
+  Object.assign(nextQuery, buildQueryParams(nextState))
+  return router.replace({ query: nextQuery })
+}
+
+function buildQueryParams(state: { filters: Record<string, string>; search: string; q: string; sort: string; order: string; page: number }) {
+  const params: Record<string, string> = {}
+  for (const key of filterKeys) {
+    const value = state.filters[key]
+    if (value && !(key === 'status' && value === 'detected')) params[key] = value
+  }
+  if (state.search) params.search = state.search
+  if (state.q) params.q = state.q
+  if (state.sort !== 'severity') params.sort = state.sort
+  if (state.order !== 'desc') params.order = state.order
+  if (state.page > 1) params.page = String(state.page)
+  return params
+}
+
+function normalizeFilters(filters: Record<string, string>) {
+  const normalized: Record<string, string> = advancedQuery.value ? {} : { status: filters.status || 'detected' }
+  for (const key of filterKeys) {
+    const value = filters[key]
+    if (value) normalized[key] = value
+  }
+  return normalized
+}
 
 // ── Finding detail drawer ────────────────────────────────────────────────────
 // Deep-linkable as ?finding=<fingerprint>&repo=<slug>: a row here belongs to a

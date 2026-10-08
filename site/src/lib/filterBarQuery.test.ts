@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildBarQuery, parseBarQuery, tokenizeBarQuery, type FilterBarFilter } from './filterBarQuery'
+import { buildBarQuery, getCursorContext, highlightBarQuery, parseBarQuery, tokenizeBarQuery, type FilterBarFilter } from './filterBarQuery'
 
 // The repo findings tab's filter set, shape-for-shape.
 const FILTERS: FilterBarFilter[] = [
@@ -125,5 +125,78 @@ describe('buildBarQuery', () => {
     expect(parsed.filters.severity).toBe('high')
     expect(parsed.searchText).toBe('leak')
     expect(parsed.issues).toEqual([])
+  })
+})
+
+describe('getCursorContext', () => {
+  it('stops a token at parentheses on either side', () => {
+    const text = '(status:detected OR acceptance:)'
+    expect(getCursorContext(text, text.length - 1)).toEqual({ token: 'acceptance:', start: 20, end: 31 })
+    expect(getCursorContext('(sta', 4)).toEqual({ token: 'sta', start: 1, end: 4 })
+    expect(getCursorContext('(status:det)', 11)).toEqual({ token: 'status:det', start: 1, end: 11 })
+  })
+
+  it('reads an empty token right after a paren or a space', () => {
+    expect(getCursorContext('(a:1)', 5)).toEqual({ token: '', start: 5, end: 5 })
+    expect(getCursorContext('a:1 ', 4)).toEqual({ token: '', start: 4, end: 4 })
+  })
+
+  it('spans the whole word when the cursor is inside it', () => {
+    expect(getCursorContext('severity:cri high', 11)).toEqual({ token: 'severity:cri', start: 0, end: 12 })
+  })
+})
+
+describe('validation messages', () => {
+  const defs: FilterBarFilter[] = [
+    { key: 'acceptance', label: 'Triage', options: ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed'] },
+    { key: 'type', label: 'Type', options: ['dependency', 'sast'], multi: true },
+  ]
+  const text = (query: string) => parseBarQuery(query, defs, true).issues.map(issue => issue.parts.map(part => part.text).join(''))
+
+  it('explains that a single-value filter takes no comma list', () => {
+    expect(text('acceptance:risk_accepted,')).toEqual(['acceptance: takes one value — use OR to match several'])
+  })
+
+  it('suggests valid values', () => {
+    expect(text('acceptance:')).toEqual(['acceptance: needs a value — try open, accepted, risk_accepted, false_positive, …'])
+    expect(text('type:binary')).toEqual(['binary is not a valid type — try dependency, sast'])
+    expect(text('owner:me')).toEqual(['owner is not a filter — try acceptance:, type:'])
+  })
+})
+
+describe('booleanSyntax', () => {
+  const defs: FilterBarFilter[] = [{ key: 'severity', label: 'Severity', options: ['high', 'low'], multi: true }]
+
+  it('stays set while a boolean query has issues, though nothing is sent', () => {
+    for (const query of ['(severity:high', 'severity:high OR', 'severity:nope OR severity:low']) {
+      const parsed = parseBarQuery(query, defs, true)
+      expect(parsed.booleanSyntax, query).toBe(true)
+      expect(parsed.advancedQuery, query).toBe('')
+    }
+  })
+
+  it('is unset for a plain query', () => {
+    expect(parseBarQuery('severity:nope', defs, true).booleanSyntax).toBe(false)
+  })
+})
+
+describe('highlightBarQuery', () => {
+  const defs: FilterBarFilter[] = [
+    { key: 'type', label: 'Type', options: ['dependency', 'sast'], multi: true },
+    { key: 'acceptance', label: 'Triage', options: ['open', 'risk_accepted'] },
+  ]
+
+  it('reproduces the text exactly', () => {
+    const query = '(type:dependency,sast OR acceptance:open)  AND openssl owner:x'
+    expect(highlightBarQuery(query, defs).map(segment => segment.text).join('')).toBe(query)
+  })
+
+  it('colours structure, valid values and problems', () => {
+    const byText = Object.fromEntries(highlightBarQuery('(type:sast,bogus OR nope:x)', defs).map(segment => [segment.text, segment.className]))
+    expect(byText['(']).toBe('text-[#d29922]')
+    expect(byText.OR).toBe('text-[#d2a8ff]')
+    expect(byText.sast).toBe('text-[#79c0ff]')
+    expect(byText.bogus).toBe('text-[#d29922]')
+    expect(byText.nope).toBe('text-[#d29922]')
   })
 })

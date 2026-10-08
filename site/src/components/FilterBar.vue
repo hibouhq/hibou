@@ -5,16 +5,20 @@
   >
     <div class="relative">
       <div
-        class="relative rounded-lg border border-surface-border bg-surface-overlay transition focus-within:border-accent/60"
+        class="relative rounded-md border bg-surface-overlay transition-colors focus-within:ring-1 focus-within:ring-inset"
+        :class="validationIssues.length > 0
+          ? 'border-amber-500/60 focus-within:border-amber-400 focus-within:ring-amber-400'
+          : 'border-surface-border focus-within:border-accent focus-within:ring-accent'"
         @click="focusInput"
       >
         <div
           aria-hidden="true"
-          class="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-3 py-2.5 pr-10 text-sm"
+          class="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-3 py-[5px] pr-10 text-sm"
         >
           <div
             v-if="barQuery"
-            class="min-w-0 whitespace-pre-wrap break-all"
+            class="whitespace-pre"
+            :style="{ transform: `translateX(-${inputScrollLeft}px)` }"
           >
             <template
               v-for="(segment, index) in displaySegments"
@@ -38,18 +42,23 @@
           aria-autocomplete="list"
           aria-controls="filterbar-autocomplete"
           :aria-activedescendant="showAutocomplete ? autocompleteOptionId(activeAutocompleteIndex) : undefined"
-          class="relative z-10 w-full bg-transparent px-3 py-2.5 pr-10 text-sm text-transparent caret-gray-100 placeholder:text-gray-500 focus:outline-none"
+          :aria-invalid="validationIssues.length > 0"
+          :aria-describedby="validationIssues.length > 0 ? 'filterbar-issues' : undefined"
+          class="relative z-10 w-full bg-transparent px-3 py-[5px] pr-10 text-sm text-transparent caret-gray-100 placeholder:text-gray-500 focus:outline-none focus-visible:shadow-none"
           @focus="handleInputFocus"
           @blur="handleInputBlur"
           @click="updateCursorPosition"
           @input="handleInputEvent"
           @keyup="handleCursorKeyup"
           @keydown="handleInputKeydown"
+          @scroll="syncInputScroll"
+          @mousemove="syncInputScroll"
+          @select="syncInputScroll"
         >
 
         <button
           v-if="showClearButton"
-          class="group absolute right-2 top-1/2 z-20 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-gray-500 text-gray-400 transition hover:border-gray-300 hover:text-gray-100"
+          class="group absolute right-2 top-1/2 z-20 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border border-gray-500 text-gray-400 transition hover:border-gray-300 hover:text-gray-100"
           type="button"
           title="Clear filter"
           aria-label="Clear filter"
@@ -79,7 +88,8 @@
       >
         <div
           v-if="showAutocomplete"
-          class="absolute left-0 top-[calc(100%+0.5rem)] z-40 w-full overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-lg"
+          class="absolute top-[calc(100%+0.5rem)] z-40 w-72 max-w-full overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-lg"
+          :style="{ left: `${autocompleteLeft}px` }"
         >
           <div
             id="filterbar-autocomplete"
@@ -112,41 +122,61 @@
       </Transition>
     </div>
 
-    <div
+    <ul
       v-if="validationIssues.length > 0"
-      class="rounded-lg border border-[#d29922]/40 bg-[#9e6a03]/20 px-3 py-2.5 text-sm text-[#d29922]"
+      id="filterbar-issues"
+      role="alert"
+      class="-mt-1 space-y-0.5 px-1 text-xs text-amber-300"
     >
-      <div class="flex items-start gap-2">
-        <span class="mt-0.5 text-base leading-none">⚠</span>
-        <div class="space-y-1">
-          <div class="font-medium">
-            Filter contains {{ validationIssues.length }} issue<span v-if="validationIssues.length !== 1">s</span>:
-          </div>
-          <ul class="list-disc space-y-1 pl-4 text-[#f0c674]">
-            <li
-              v-for="issue in validationIssues"
-              :key="issue.id"
-            >
-              <template
-                v-for="(part, index) in issue.parts"
-                :key="`${issue.id}-${index}`"
-              >
-                <span :class="part.className">{{ part.text }}</span>
-              </template>
-            </li>
-          </ul>
-        </div>
-      </div>
-    </div>
+      <li
+        v-for="issue in validationIssues"
+        :key="issue.id"
+        class="flex items-start gap-1.5"
+      >
+        <TriangleAlert
+          class="mt-px h-3.5 w-3.5 shrink-0"
+          aria-hidden="true"
+        />
+        <span>
+          <template
+            v-for="(part, index) in issue.parts"
+            :key="`${issue.id}-${index}`"
+          >
+            <span :class="part.className">{{ part.text }}</span>
+          </template>
+        </span>
+      </li>
+    </ul>
 
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="flex flex-wrap items-start gap-2">
         <div
-          v-for="filter in filters"
+          v-for="filter in filters.filter(filter => !filter.hidden || filter.primary || filter.control === 'boolean')"
           :key="filter.key"
           class="relative"
         >
           <button
+            v-if="filter.control === 'boolean'"
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-40"
+            :class="modelValue[filter.key] === 'true'
+              ? filter.tone === 'danger' ? 'border-danger/60 bg-danger/10 text-danger' : 'border-accent/40 bg-accent-muted text-accent'
+              : 'border-surface-border bg-surface-raised text-gray-400 hover:text-gray-100'"
+            :aria-pressed="modelValue[filter.key] === 'true'"
+            :disabled="advancedActive"
+            :title="advancedActive ? 'Edit qualifiers directly while the query uses OR or parentheses' : filter.description || filter.label"
+            @click="toggleBooleanFilter(filter)"
+          >
+            <component
+              :is="filter.toggleIcon"
+              v-if="filter.toggleIcon"
+              class="h-3.5 w-3.5"
+              aria-hidden="true"
+            />
+            {{ filter.label }}
+          </button>
+          <button
+            v-else
             class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-40"
             :class="[
               isFilterMenuOpen(filter.key) || hasFilterSelection(filter.key)
@@ -174,7 +204,7 @@
             leave-to-class="translate-y-1 opacity-0"
           >
             <div
-              v-if="isFilterMenuOpen(filter.key)"
+              v-if="filter.control !== 'boolean' && isFilterMenuOpen(filter.key)"
               class="absolute left-0 top-[calc(100%+0.5rem)] z-30 w-72 overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-lg"
             >
               <div class="border-b border-surface-border-subtle px-3 py-2.5 text-sm font-medium text-gray-100">
@@ -341,16 +371,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
+import { TriangleAlert } from 'lucide-vue-next'
 
 import type { DisplaySegment, ValidationIssue } from '@/lib/filterBarQuery'
 import {
   buildBarQuery,
+  highlightBarQuery,
   isConnectiveWord,
-  isParenChar,
-  isValidFilterValue,
+  getCursorContext,
   parseBarQuery,
-  tokenizeBarQuery,
 } from '@/lib/filterBarQuery'
 
 interface FilterDef {
@@ -363,6 +393,11 @@ interface FilterDef {
   hidden?: boolean
   defaultValue?: string
   primary?: boolean
+  control?: 'select' | 'boolean'
+  toggleIcon?: Component
+  tone?: 'accent' | 'danger'
+  description?: string
+  onToggle?: (enabled: boolean) => void
 }
 
 interface SortDef {
@@ -370,12 +405,6 @@ interface SortDef {
   label: string
   ascLabel?: string
   descLabel?: string
-}
-
-interface CursorContext {
-  token: string
-  start: number
-  end: number
 }
 
 type OpenMenu =
@@ -420,12 +449,24 @@ const searchQuery = defineModel<string>('searchQuery', { default: '' })
 // Set (and the discrete models left untouched) while the bar holds an OR /
 // parenthesised query; empty in plain mode.
 const advancedQuery = defineModel<string>('advancedQuery', { default: '' })
+function toggleBooleanFilter(filter: FilterDef) {
+  const enabled = modelValue.value[filter.key] !== 'true'
+  if (filter.onToggle) {
+    filter.onToggle(enabled)
+    return
+  }
+  const next = { ...modelValue.value }
+  if (enabled) next[filter.key] = 'true'
+  else delete next[filter.key]
+  modelValue.value = next
+}
 const sortValue = defineModel<string>('sortValue', { default: '' })
 const sortDirection = defineModel<string>('sortDirection', { default: '' })
 
 const rootRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLInputElement | null>(null)
 const barQuery = ref('')
+const inputScrollLeft = ref(0)
 const cursorPosition = ref(0)
 const inputFocused = ref(false)
 const openMenu = ref<OpenMenu>(null)
@@ -505,8 +546,7 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
 
   const separatorIndex = context.token.indexOf(':')
   if (separatorIndex === -1) {
-    // "(sta" is a paren plus the start of a key — match on the key part.
-    const keyQuery = context.token.toLowerCase().replace(/^\(+/, '')
+    const keyQuery = context.token.toLowerCase()
     return [...operatorItems(keyQuery), ...keyItems(keyQuery)]
   }
 
@@ -555,34 +595,37 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
 
 const showAutocomplete = computed(() => autocompleteItems.value.length > 0)
 
-const displaySegments = computed<DisplaySegment[]>(() => {
-  const chunks = tokenizeBarQuery(barQuery.value)
-  return chunks.flatMap((chunk) => {
-    if (chunk.isWhitespace) {
-      return [{ text: chunk.text, className: 'text-transparent' }]
-    }
+// The suggestion list opens under the word being completed, like GitHub's
+// search, instead of at the far left of the bar.
+const autocompleteLeft = ref(0)
+const AUTOCOMPLETE_WIDTH_PX = 288
+let measureCanvas: HTMLCanvasElement | null = null
 
-    // Boolean structure reads at a glance: connectives purple, parens amber.
-    if (isParenChar(chunk.text)) {
-      return [{ text: chunk.text, className: 'text-[#d29922]' }]
-    }
-    if (isConnectiveWord(chunk.text)) {
-      return [{ text: chunk.text, className: 'text-[#d2a8ff]' }]
-    }
+function updateAutocompleteLeft() {
+  const input = inputRef.value
+  if (!input) return
+  measureCanvas ??= document.createElement('canvas')
+  const context = measureCanvas.getContext('2d')
+  if (!context) return
+  const style = getComputedStyle(input)
+  context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+  const anchor = cursorContext.value?.start ?? cursorPosition.value
+  const textWidth = context.measureText(barQuery.value.slice(0, anchor)).width
+  const left = parseFloat(style.paddingLeft) + textWidth - input.scrollLeft
+  const maxLeft = Math.max(0, input.clientWidth - AUTOCOMPLETE_WIDTH_PX)
+  autocompleteLeft.value = Math.round(Math.min(Math.max(0, left), maxLeft))
+}
 
-    const match = chunk.text.match(/^([A-Za-z0-9_-]+):(.*)$/)
-    if (!match) {
-      return [{ text: chunk.text, className: 'text-gray-100' }]
-    }
-
-    return buildFilterDisplaySegments(match[1], match[2])
-  })
+watch([showAutocomplete, () => cursorContext.value?.start], ([visible]) => {
+  if (visible) void nextTick(updateAutocompleteLeft)
 })
 
-const advancedActive = computed(() => Boolean(parsedBarQuery.value.advancedQuery))
+const displaySegments = computed<DisplaySegment[]>(() => highlightBarQuery(barQuery.value, props.filters))
+
+const advancedActive = computed(() => parsedBarQuery.value.booleanSyntax)
 
 watch(
-  [modelValue, searchQuery],
+  [modelValue, searchQuery, advancedQuery],
   () => {
     if (syncingFromBar.value) {
       return
@@ -593,6 +636,7 @@ watch(
 )
 
 watch(barQuery, () => {
+  void nextTick(syncInputScroll)
   syncModelsFromBar()
   scheduleValidation()
 })
@@ -614,14 +658,22 @@ watch(autocompleteItems, (items) => {
 
 onMounted(() => {
   document.addEventListener('mousedown', handleDocumentPointer)
+  document.addEventListener('selectionchange', handleSelectionChange)
 })
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handleDocumentPointer)
+  document.removeEventListener('selectionchange', handleSelectionChange)
   if (validationTimer !== null) {
     clearTimeout(validationTimer)
   }
 })
+
+// Dragging a selection past the edge scrolls the input without any key or
+// input event; follow it so the colouring stays under the text.
+function handleSelectionChange() {
+  if (inputRef.value && document.activeElement === inputRef.value) syncInputScroll()
+}
 
 function handleDocumentPointer(event: MouseEvent) {
   const target = event.target as Node | null
@@ -646,6 +698,7 @@ function handleInputFocus() {
 function handleInputBlur() {
   inputFocused.value = false
   applyValidationNow()
+  void nextTick(syncInputScroll)
 }
 
 function handleInputEvent() {
@@ -658,6 +711,13 @@ function handleCursorKeyup() {
 
 function updateCursorPosition() {
   cursorPosition.value = inputRef.value?.selectionStart ?? barQuery.value.length
+  syncInputScroll()
+}
+
+// The coloured text is a single line under the transparent input; it must
+// scroll with the input or long queries drift away from the caret.
+function syncInputScroll() {
+  inputScrollLeft.value = inputRef.value?.scrollLeft ?? 0
 }
 
 function handleInputKeydown(event: KeyboardEvent) {
@@ -702,13 +762,14 @@ function selectAutocomplete(item: AutocompleteItem) {
   let replacement = ''
   let nextCursor = 0
 
+  // Right after a closing paren, a new word needs a space to read as one.
+  const separator = context.token === '' && before.endsWith(')') ? ' ' : ''
+
   if (item.type === 'key') {
-    // A leading paren typed with the key ("(sta") survives the completion.
-    const parens = context.token.match(/^\(+/)?.[0] ?? ''
-    replacement = `${parens}${item.key}:`
+    replacement = `${separator}${item.key}:`
     nextCursor = (before + replacement).length
   } else if (item.type === 'operator') {
-    replacement = after.length === 0 ? `${item.value} ` : item.value
+    replacement = `${separator}${item.value}${after.length === 0 ? ' ' : ''}`
     nextCursor = (before + replacement).length
   } else {
     const filter = filterMap.value.get(item.key.toLowerCase())
@@ -922,7 +983,10 @@ function syncBarFromModels() {
   // While the bar holds a boolean query, it is the source of truth: the
   // discrete models cannot express OR/parens, so rebuilding from them would
   // destroy the query. The dropdown buttons are disabled in this mode.
-  if (advancedActive.value) {
+  if (advancedQuery.value) {
+    if (barQuery.value !== advancedQuery.value) {
+      barQuery.value = advancedQuery.value
+    }
     return
   }
   const nextQuery = buildBarQuery(props.filters, modelValue.value ?? {}, searchQuery.value, props.searchable)
@@ -934,6 +998,12 @@ function syncBarFromModels() {
 
 function syncModelsFromBar() {
   const parsed = parsedBarQuery.value
+
+  // A broken boolean query has no meaning yet: keep the last valid query
+  // applied rather than falling back to the discrete filters.
+  if (parsed.booleanSyntax && parsed.issues.length > 0) {
+    return
+  }
 
   if (advancedQuery.value !== parsed.advancedQuery) {
     advancedQuery.value = parsed.advancedQuery
@@ -985,22 +1055,18 @@ function scheduleValidation() {
     clearTimeout(validationTimer)
   }
 
+  // While typing, a half-written token is not an error yet: only clear
+  // problems the edit fixed. New ones surface on blur or Enter.
   validationTimer = setTimeout(() => {
-    validationIssues.value = parsedBarQuery.value.issues
+    const issues = parsedBarQuery.value.issues
+    if (inputFocused.value) {
+      const current = new Set(issues.map(issue => issue.id))
+      validationIssues.value = validationIssues.value.filter(issue => current.has(issue.id))
+    } else {
+      validationIssues.value = issues
+    }
     validationTimer = null
   }, 250)
-}
-
-function getCursorContext(text: string, cursor: number): CursorContext {
-  const safeCursor = Math.max(0, Math.min(cursor, text.length))
-  const left = text.slice(0, safeCursor)
-  const right = text.slice(safeCursor)
-  const leftToken = left.match(/\S+$/)?.[0] ?? ''
-  const rightToken = right.match(/^\S+/)?.[0] ?? ''
-  const token = `${leftToken}${rightToken}`
-  const start = safeCursor - leftToken.length
-  const end = safeCursor + rightToken.length
-  return { token, start, end }
 }
 
 function sameRecord(left: Record<string, string>, right: Record<string, string>) {
@@ -1011,60 +1077,6 @@ function sameRecord(left: Record<string, string>, right: Record<string, string>)
     }
   }
   return true
-}
-
-// isConnectiveAt reports whether a standalone `and`/`or` word starts at the
-// given position — the boundary a qualifier's value run must not cross.
-function buildFilterDisplaySegments(rawKey: string, rawValue: string): DisplaySegment[] {
-  const filter = filterMap.value.get(rawKey.toLowerCase())
-  const qualifierClass = 'text-gray-400'
-  const valueClass = 'text-[#79c0ff]'
-  const warningClass = 'text-[#d29922]'
-
-  if (!filter) {
-    return [
-      { text: rawKey, className: warningClass },
-      { text: ':', className: warningClass },
-      ...(rawValue.length > 0 ? [{ text: rawValue, className: warningClass }] : []),
-    ]
-  }
-
-  const segments: DisplaySegment[] = [
-    { text: filter.key, className: qualifierClass },
-    { text: ':', className: qualifierClass },
-  ]
-
-  if (!filter.multi) {
-    if (rawValue.length === 0) {
-      return segments
-    }
-
-    const className = isValidFilterValue(filter, rawValue) ? valueClass : warningClass
-    segments.push({ text: rawValue, className })
-    return segments
-  }
-
-  const fragments = rawValue.split(',')
-  for (let index = 0; index < fragments.length; index += 1) {
-    const fragment = fragments[index]
-
-    if (index > 0) {
-      const prevFragment = fragments[index - 1]
-      const hasEmptyNeighbor = prevFragment.trim().length === 0 || fragment.trim().length === 0
-      segments.push({ text: ',', className: hasEmptyNeighbor ? warningClass : qualifierClass })
-    }
-
-    if (fragment.length === 0) {
-      continue
-    }
-
-    segments.push({
-      text: fragment,
-      className: isValidFilterValue(filter, fragment) ? valueClass : warningClass,
-    })
-  }
-
-  return segments
 }
 
 function filterKeyBadge(key: string): string {

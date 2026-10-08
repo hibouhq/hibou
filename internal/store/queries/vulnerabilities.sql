@@ -97,21 +97,21 @@ WHERE v.snapshot_id = $1
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
        OR (@acceptance::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = @acceptance::text)
-  AND (NOT @exploited_only::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
+  AND (@exploited::text = ''
+       OR (@exploited::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id))))
+                    WHERE adv.id = v.advisory_id)))
+       OR (@exploited::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)))))
   AND (NOT @risk_only::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
-         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
-         OR EXISTS (SELECT 1 FROM advisories adv
-                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
-                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id)
-       ) AND v.status != 'resolved'
+       v.status != 'resolved'
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 ORDER BY
@@ -152,21 +152,21 @@ WHERE v.snapshot_id = $1
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
        OR (@acceptance::text = 'disputed' AND fd.fingerprint IS NOT NULL)
        OR fa.reason_kind::text = @acceptance::text)
-  AND (NOT @exploited_only::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
+  AND (@exploited::text = ''
+       OR (@exploited::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id))))
+                    WHERE adv.id = v.advisory_id)))
+       OR (@exploited::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
+         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
+         OR EXISTS (SELECT 1 FROM advisories adv
+                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
+                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
+                    WHERE adv.id = v.advisory_id)))))
   AND (NOT @risk_only::bool OR (
-       v.type::text IN ('dependency','container','malware') AND (
-         EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
-         OR EXISTS (SELECT 1 FROM advisories adv
-                    LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
-                    JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
-                    WHERE adv.id = v.advisory_id)
-       ) AND v.status != 'resolved'
+       v.status != 'resolved'
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'));
 

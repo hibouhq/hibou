@@ -27,7 +27,7 @@
       </div>
     </header>
     <RouterLink
-      :to="{ name: 'repo-vulnerabilities', params: route.params, query: { ref: repo?.default_branch, exploited: 'true', risk_only: 'true' } }"
+      :to="{ name: 'repo-vulnerabilities', params: route.params, query: { ref: repo?.default_branch, q: OPEN_RISK_KEV_QUERY } }"
       class="flex flex-wrap items-center gap-3 border-l-2 px-4 py-3 transition hover:bg-surface-overlay"
       :class="kevOpen !== null && kevOpen > 0 ? 'border-danger/60 bg-danger/5' : 'border-surface-border bg-surface-overlay/30'"
     >
@@ -224,6 +224,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { api, type Repository } from '@/api/client'
 import InsightTrendChart from '@/components/insights/InsightTrendChart.vue'
 import { relativeTime } from '@/lib/datetime'
+import { OPEN_RISK_KEV_QUERY } from '@/lib/openRiskPreset'
 import { normalizeTrendPoints, type InsightMetric, type InsightPoint, trendBounds } from '@/lib/insights'
 
 const route = useRoute()

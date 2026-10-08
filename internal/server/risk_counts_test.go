@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -180,15 +182,21 @@ func TestRiskOnlyKEVListMatchesOpenKEVCount(t *testing.T) {
 		t.Fatalf("CreateSnapshot: %v", err)
 	}
 
-	findings := make([]store.Vulnerability, 0, 6)
-	createFinding := func(fingerprint, status string) {
+	findings := make([]store.Vulnerability, 0, 12)
+	createFinding := func(fingerprint, findingType, status string, kevListed bool) {
 		identifier := strings.ToUpper("CVE-2099-" + uuid.NewString())
-		seedKEVEntries(t, srv, "cisa", []kev.Entry{{CVEID: identifier}})
+		if kevListed {
+			seedKEVEntries(t, srv, "cisa", []kev.Entry{{CVEID: identifier}})
+		}
+		createdBy := uuid.NullUUID{}
+		if findingType == "manual" {
+			createdBy = uuid.NullUUID{UUID: member.ID, Valid: true}
+		}
 		finding, createErr := srv.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
-			Type: "dependency", SnapshotID: snapshot.ID, Title: fingerprint,
+			Type: findingType, SnapshotID: snapshot.ID, Title: fingerprint,
 			PrimaryIdentifierKind: "cve", PrimaryIdentifierValue: identifier,
 			OriginalSeverity: dbgen.SeverityLevelHigh, Severity: dbgen.SeverityLevelHigh,
-			Status: status, ScannerName: "unit-test", Fingerprint: fingerprint,
+			Status: status, ScannerName: "unit-test", Fingerprint: fingerprint, CreatedBy: createdBy,
 		})
 		if createErr != nil {
 			t.Fatalf("CreateVulnerability(%s): %v", fingerprint, createErr)
@@ -196,16 +204,26 @@ func TestRiskOnlyKEVListMatchesOpenKEVCount(t *testing.T) {
 		findings = append(findings, *finding)
 	}
 
-	createFinding("open", "detected")
-	createFinding("accepted", "detected")
-	createFinding("false-positive", "detected")
-	createFinding("disputed-suppressed", "suppressed")
-	createFinding("suppressed", "suppressed")
-	createFinding("resolved", "resolved")
+	createFinding("open", "dependency", "detected", true)
+	createFinding("accepted", "dependency", "detected", true)
+	createFinding("false-positive", "dependency", "detected", true)
+	createFinding("disputed-suppressed", "dependency", "suppressed", true)
+	createFinding("suppressed", "dependency", "suppressed", true)
+	createFinding("resolved", "dependency", "resolved", true)
+	createFinding("unlisted-dependency", "dependency", "detected", false)
+	createFinding("unlisted-sast", "sast", "detected", false)
+	createFinding("unlisted-secret", "secret", "detected", false)
+	createFinding("unlisted-manual", "manual", "detected", false)
+	createFinding("active-accepted", "sast", "detected", false)
+	createFinding("expired-accepted", "manual", "detected", false)
 
+	activeExpiry := time.Now().Add(time.Hour)
+	expiredExpiry := time.Now().Add(-time.Hour)
 	for _, acceptance := range []store.AcceptFindingInput{
 		{RepoID: repo.ID, Fingerprint: "accepted", ReasonKind: "risk_accepted", Reason: "accepted risk"},
 		{RepoID: repo.ID, Fingerprint: "false-positive", ReasonKind: "false_positive", Reason: "not vulnerable"},
+		{RepoID: repo.ID, Fingerprint: "active-accepted", ReasonKind: "risk_accepted", Reason: "accepted risk", ExpiresAt: &activeExpiry},
+		{RepoID: repo.ID, Fingerprint: "expired-accepted", ReasonKind: "risk_accepted", Reason: "accepted risk", ExpiresAt: &expiredExpiry},
 	} {
 		if _, err := srv.queries.UpsertFindingAcceptance(ctx, acceptance); err != nil {
 			t.Fatalf("UpsertFindingAcceptance(%s): %v", acceptance.Fingerprint, err)
@@ -214,7 +232,7 @@ func TestRiskOnlyKEVListMatchesOpenKEVCount(t *testing.T) {
 	if _, err := srv.db.ExecContext(ctx, `INSERT INTO finding_disputes (repo_id, fingerprint, reason) VALUES ($1, $2, $3)`, repo.ID, "disputed-suppressed", "suppression is contested"); err != nil {
 		t.Fatalf("insert dispute: %v", err)
 	}
-	for index := range findings {
+	for index := range findings[:6] {
 		findings[index].KEV = true
 	}
 
@@ -225,11 +243,11 @@ func TestRiskOnlyKEVListMatchesOpenKEVCount(t *testing.T) {
 	if wantTotal != 3 {
 		t.Fatalf("open KEV count = %d, want 3", wantTotal)
 	}
-	if _, total, err := srv.queries.ListVulnerabilitiesBySnapshotDynamic(ctx, snapshot.ID, "type::text = $2", []interface{}{"dependency"}, true, "", 50, 0); err != nil || total != wantTotal {
-		t.Fatalf("dynamic risk-only list total/error = %d/%v, want %d/nil", total, err, wantTotal)
+	if _, total, err := srv.queries.ListVulnerabilitiesBySnapshotDynamic(ctx, snapshot.ID, "type::text = $2", []interface{}{"dependency"}, true, true, "", 50, 0); err != nil || total != wantTotal {
+		t.Fatalf("dynamic exploited+risk-only list total/error = %d/%v, want %d/nil", total, err, wantTotal)
 	}
 
-	for _, query := range []string{"risk_only=true", "risk_only=true&q=type:dependency"} {
+	for _, query := range []string{"exploited=true&risk_only=true", "exploited=true&risk_only=true&q=type:dependency"} {
 		recorder := httptest.NewRecorder()
 		srv.handleGetRefFindings(recorder, newRepoRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/repos/"+repo.Slug+"/findings?ref=main&"+query, "github", org.Slug, repo.Slug))
 		if recorder.Code != http.StatusOK {
@@ -244,10 +262,31 @@ func TestRiskOnlyKEVListMatchesOpenKEVCount(t *testing.T) {
 		}
 	}
 
+	for _, testCase := range []struct {
+		query string
+		want  int
+	}{
+		{query: "risk_only=true", want: 9},
+		{query: "risk_only=true&q=type:dependency", want: 4},
+	} {
+		recorder := httptest.NewRecorder()
+		srv.handleGetRefFindings(recorder, newRepoRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/repos/"+repo.Slug+"/findings?ref=main&"+testCase.query, "github", org.Slug, repo.Slug))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("risk-only list (%s) = %d: %s", testCase.query, recorder.Code, recorder.Body.String())
+		}
+		var response findingsListResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode risk-only list (%s): %v", testCase.query, err)
+		}
+		if response.Pagination.Total != testCase.want {
+			t.Fatalf("risk-only list (%s) total = %d, want %d", testCase.query, response.Pagination.Total, testCase.want)
+		}
+	}
+
 	orgFingerprints := make(map[string]struct{}, wantTotal)
 	for page := 1; page <= 2; page++ {
 		recorder := httptest.NewRecorder()
-		path := "/api/v1/orgs/github/" + org.Slug + "/vulnerabilities?risk_only=true&per_page=2&page=" + strconv.Itoa(page)
+		path := "/api/v1/orgs/github/" + org.Slug + "/vulnerabilities?exploited=true&risk_only=true&per_page=2&page=" + strconv.Itoa(page)
 		srv.handleListOrgVulnerabilities(recorder, newOrgRequest(t, member, http.MethodGet, path, "github", org.Slug))
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("org risk-only list page %d = %d: %s", page, recorder.Code, recorder.Body.String())
@@ -277,6 +316,126 @@ func TestRiskOnlyKEVListMatchesOpenKEVCount(t *testing.T) {
 			t.Fatalf("org risk-only list missing eligible fingerprint %q: %#v", fingerprint, orgFingerprints)
 		}
 	}
+
+	openRiskQuery := "(status:detected OR (status:suppressed AND acceptance:disputed)) AND (acceptance:open OR acceptance:risk_accepted)"
+	openRiskKEVQuery := openRiskQuery + " AND type:dependency AND exploited:true"
+	listFingerprints := func(path string) (map[string]struct{}, int) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		srv.handleGetRefFindings(recorder, newRepoRequest(t, member, http.MethodGet, path, "github", org.Slug, repo.Slug))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("repo list (%s) = %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+		var response findingsListResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode repo list (%s): %v", path, err)
+		}
+		fingerprints := make(map[string]struct{}, len(response.Data))
+		for _, vulnerability := range response.Data {
+			fingerprints[vulnerability.Fingerprint] = struct{}{}
+		}
+		return fingerprints, response.Pagination.Total
+	}
+	legacyKEVFingerprints, legacyKEVTotal := listFingerprints("/api/v1/orgs/github/" + org.Slug + "/repos/" + repo.Slug + "/findings?ref=main&exploited=true&risk_only=true")
+	escapedKEVQuery := url.QueryEscape(openRiskKEVQuery)
+	queryKEVFingerprints, queryKEVTotal := listFingerprints("/api/v1/orgs/github/" + org.Slug + "/repos/" + repo.Slug + "/findings?ref=main&q=" + escapedKEVQuery)
+	if legacyKEVTotal != queryKEVTotal || !equalFingerprintSets(legacyKEVFingerprints, queryKEVFingerprints) {
+		t.Fatalf("repo KEV q parity fingerprints/total = %#v/%d, want %#v/%d", queryKEVFingerprints, queryKEVTotal, legacyKEVFingerprints, legacyKEVTotal)
+	}
+	openRiskFingerprints, openRiskTotal := listFingerprints("/api/v1/orgs/github/" + org.Slug + "/repos/" + repo.Slug + "/findings?ref=main&q=" + url.QueryEscape(openRiskQuery))
+	if openRiskTotal != 9 || len(openRiskFingerprints) != openRiskTotal {
+		t.Fatalf("repo open-risk q fingerprints/total = %#v/%d, want 9 matching fingerprints", openRiskFingerprints, openRiskTotal)
+	}
+
+	fingerprintRecorder := httptest.NewRecorder()
+	srv.handleGetRefFindingFingerprints(fingerprintRecorder, newRepoRequest(t, member, http.MethodGet, "/api/v1/orgs/github/"+org.Slug+"/repos/"+repo.Slug+"/vulnerabilities/fingerprints?ref=main&q="+escapedKEVQuery, "github", org.Slug, repo.Slug))
+	if fingerprintRecorder.Code != http.StatusOK {
+		t.Fatalf("repo fingerprint batch = %d: %s", fingerprintRecorder.Code, fingerprintRecorder.Body.String())
+	}
+	var fingerprintEnvelope struct {
+		Data findingFingerprintsResponse `json:"data"`
+	}
+	if err := json.NewDecoder(fingerprintRecorder.Body).Decode(&fingerprintEnvelope); err != nil {
+		t.Fatalf("decode repo fingerprint batch: %v", err)
+	}
+	fingerprintResponse := fingerprintEnvelope.Data
+	fingerprintBatch := make(map[string]struct{}, len(fingerprintResponse.Fingerprints))
+	for _, fingerprint := range fingerprintResponse.Fingerprints {
+		fingerprintBatch[fingerprint] = struct{}{}
+	}
+	if fingerprintResponse.Total != legacyKEVTotal || !equalFingerprintSets(fingerprintBatch, legacyKEVFingerprints) {
+		t.Fatalf("repo fingerprint batch q parity fingerprints/total = %#v/%d, want %#v/%d", fingerprintBatch, fingerprintResponse.Total, legacyKEVFingerprints, legacyKEVTotal)
+	}
+
+	orgQueryFingerprints := make(map[string]struct{}, legacyKEVTotal)
+	for page := 1; page <= 2; page++ {
+		recorder := httptest.NewRecorder()
+		path := "/api/v1/orgs/github/" + org.Slug + "/vulnerabilities?q=" + escapedKEVQuery + "&per_page=2&page=" + strconv.Itoa(page)
+		srv.handleListOrgVulnerabilities(recorder, newOrgRequest(t, member, http.MethodGet, path, "github", org.Slug))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("org KEV q list page %d = %d: %s", page, recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			Data       []orgVulnerabilityResponse `json:"data"`
+			Pagination struct {
+				Total int `json:"total"`
+			} `json:"pagination"`
+		}
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode org KEV q list page %d: %v", page, err)
+		}
+		if response.Pagination.Total != legacyKEVTotal {
+			t.Fatalf("org KEV q list page %d total = %d, want %d", page, response.Pagination.Total, legacyKEVTotal)
+		}
+		for _, vulnerability := range response.Data {
+			orgQueryFingerprints[vulnerability.Fingerprint] = struct{}{}
+		}
+	}
+	if !equalFingerprintSets(orgQueryFingerprints, legacyKEVFingerprints) {
+		t.Fatalf("org KEV q pagination fingerprints = %#v, want %#v", orgQueryFingerprints, legacyKEVFingerprints)
+	}
+
+	for _, testCase := range []struct {
+		query string
+		want  int
+		page  int
+	}{
+		{query: "q=type:dependency%20OR%20type:manual", want: 9, page: 1},
+		{query: "q=exploited:false", want: 6, page: 1},
+		{query: "q=exploited:true", want: 6, page: 1},
+		{query: "q=type:dependency&risk_only=true", want: 4, page: 2},
+	} {
+		recorder := httptest.NewRecorder()
+		path := "/api/v1/orgs/github/" + org.Slug + "/vulnerabilities?" + testCase.query + "&per_page=2&page=" + strconv.Itoa(testCase.page)
+		srv.handleListOrgVulnerabilities(recorder, newOrgRequest(t, member, http.MethodGet, path, "github", org.Slug))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("org advanced query (%s) = %d: %s", testCase.query, recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			Data       []orgVulnerabilityResponse `json:"data"`
+			Pagination struct {
+				Total int `json:"total"`
+			} `json:"pagination"`
+		}
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode org advanced query (%s): %v", testCase.query, err)
+		}
+		if response.Pagination.Total != testCase.want || len(response.Data) != min(testCase.want, 2) {
+			t.Fatalf("org advanced query (%s) total/data = %d/%d, want %d/%d", testCase.query, response.Pagination.Total, len(response.Data), testCase.want, min(testCase.want, 2))
+		}
+	}
+}
+
+func equalFingerprintSets(left, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for fingerprint := range left {
+		if _, ok := right[fingerprint]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func TestAddKEVOpenCount(t *testing.T) {

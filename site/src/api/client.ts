@@ -634,6 +634,18 @@ export interface TokenScope {
 
 export type ApiKeyApprovalStatus = 'pending' | 'approved' | 'rejected'
 
+export type SearchPresetSurface = 'findings'
+
+export interface SearchPreset {
+  id: string
+  scope_type: 'user'
+  surface: SearchPresetSurface
+  name: string
+  query: string
+  created_at: string
+  updated_at: string
+}
+
 export interface ApiKey {
   id: string
   user_id: string
@@ -1660,6 +1672,28 @@ class ApiClient {
     return this.request<void>(`/users/me/api-keys/${keyID}`, { method: 'DELETE' })
   }
 
+  listSearchPresets(surface: SearchPresetSurface) {
+    return this.request<ApiResponse<SearchPreset[]>>(`/users/me/search-presets?surface=${surface}`)
+  }
+
+  createSearchPreset(body: { surface: SearchPresetSurface; name: string; query: string }) {
+    return this.request<ApiResponse<SearchPreset>>('/users/me/search-presets', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateSearchPreset(presetID: string, body: { name: string; query: string }) {
+    return this.request<ApiResponse<SearchPreset>>(`/users/me/search-presets/${presetID}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  }
+
+  deleteSearchPreset(presetID: string) {
+    return this.request<void>(`/users/me/search-presets/${presetID}`, { method: 'DELETE' })
+  }
+
   // Org-owned tokens (ADR-020/022): managed by any org admin, survive the
   // creator leaving. Any member can create one (non-admins get a pending
   // request); management and review require an admin browser session.
@@ -2405,12 +2439,12 @@ class ApiClient {
     if (params?.tool) {
       query.set('tool', params.tool)
     }
-    if (params?.exploited) {
-      query.set('exploited', 'true')
+    if (params?.exploited !== undefined) {
+      query.set('exploited', String(params.exploited))
     }
-		if (params?.risk_only) {
-			query.set('risk_only', 'true')
-		}
+    if (params?.risk_only) {
+      query.set('risk_only', 'true')
+    }
     if (params?.status) {
       query.set('status', params.status)
     }
@@ -2700,6 +2734,8 @@ class ApiClient {
       status?: string
       tool?: string
       search?: string
+      acceptance?: string
+      q?: string
       sort?: string
       exploited?: boolean
       risk_only?: boolean
@@ -2708,13 +2744,13 @@ class ApiClient {
     },
   ) {
     const query = new URLSearchParams()
-    if (params?.exploited) {
-      query.set('exploited', 'true')
+    if (params?.exploited !== undefined) {
+      query.set('exploited', String(params.exploited))
     }
-		if (params?.risk_only) {
-			query.set('risk_only', 'true')
-		}
-    for (const key of ['type', 'severity', 'status', 'tool', 'search', 'sort'] as const) {
+    if (params?.risk_only) {
+      query.set('risk_only', 'true')
+    }
+    for (const key of ['type', 'severity', 'status', 'acceptance', 'tool', 'search', 'q', 'sort'] as const) {
       const value = params?.[key]
       if (value) {
         query.set(key, value)

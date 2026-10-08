@@ -174,7 +174,7 @@
                   <div class="flex flex-wrap items-center gap-1.5">
                     <RouterLink
                       v-if="entry.enrolled && entry.repo_slug && entry.kev_open != null"
-                      :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { exploited: 'true', risk_only: 'true' } }"
+                      :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { q: OPEN_RISK_KEV_QUERY } }"
                       class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:underline"
                       :class="entry.kev_open > 0 ? 'bg-danger/10 font-semibold text-danger' : 'text-gray-500'"
                     >
@@ -228,6 +228,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import type { OrgDashboard, RepoDashboardEntry, RepoLifecycleStatus, SeverityCounts } from '@/api/client'
 import ForgeIcon from '@/components/ForgeIcon.vue'
 import { severityBadgeClass } from '@/lib/findingDisplay'
+import { OPEN_RISK_KEV_QUERY } from '@/lib/openRiskPreset'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
@@ -287,7 +288,7 @@ function sumCounts(counts?: SeverityCounts | null) {
 }
 
 function kevLink() {
-  return { name: 'org-vulnerabilities', params: route.params, query: { exploited: 'true', risk_only: 'true' } }
+  return { name: 'org-vulnerabilities', params: route.params, query: { q: OPEN_RISK_KEV_QUERY } }
 }
 
 function statusClass(status: RepoLifecycleStatus) {

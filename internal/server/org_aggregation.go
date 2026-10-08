@@ -10,6 +10,7 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -71,6 +72,23 @@ func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Req
 	if !s.enforceOrgWideCapability(w, r, apitoken.CapVulnerabilities, apitoken.AccessRead, org.Slug) {
 		return
 	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	var queryWhere string
+	var queryParams []interface{}
+	if query != "" {
+		node, parseErr := filterquery.Parse(query)
+		if parseErr != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
+		sqlResult, sqlErr := filterquery.ToSQL(node, 2)
+		if sqlErr != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
+		queryWhere = sqlResult.Where
+		queryParams = sqlResult.Params
+	}
 
 	pairs, err := s.currentRepoSnapshots(r, org)
 	if err != nil {
@@ -91,18 +109,28 @@ func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Req
 		repoBySnapshot[pair.snapshot.ID] = pair
 	}
 
-	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshots(r.Context(), snapshotIDs, store.VulnerabilityListOptions{
-		Types:         csvQueryFilterValues(r.URL.Query().Get("type")),
-		Severities:    csvQueryFilterValues(r.URL.Query().Get("severity")),
-		Statuses:      csvQueryFilterValues(r.URL.Query().Get("status")),
-		Scanners:      mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
-		Search:        strings.TrimSpace(r.URL.Query().Get("search")),
-		ExploitedOnly: r.URL.Query().Get("exploited") == "true",
-		RiskOnly:      r.URL.Query().Get("risk_only") == "true",
-		Sort:          strings.TrimSpace(r.URL.Query().Get("sort")),
-		Limit:         pagination.PerPage,
-		Offset:        pagination.Offset,
-	})
+	var vulnerabilities []store.Vulnerability
+	var total int
+	if query != "" {
+		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshotsDynamicWithFilters(
+			r.Context(), snapshotIDs, queryWhere, queryParams,
+			normalizeExploitedFilter(r.URL.Query().Get("exploited")), r.URL.Query().Get("risk_only") == "true",
+			strings.TrimSpace(r.URL.Query().Get("sort")), pagination.PerPage, pagination.Offset,
+		)
+	} else {
+		vulnerabilities, total, err = s.queries.ListVulnerabilitiesBySnapshots(r.Context(), snapshotIDs, store.VulnerabilityListOptions{
+			Types:      csvQueryFilterValues(r.URL.Query().Get("type")),
+			Severities: csvQueryFilterValues(r.URL.Query().Get("severity")),
+			Statuses:   csvQueryFilterValues(r.URL.Query().Get("status")),
+			Scanners:   mergeCSVFilters(csvQueryFilterValues(r.URL.Query().Get("scanner")), csvQueryFilterValues(r.URL.Query().Get("tool"))),
+			Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+			Exploited:  normalizeExploitedFilter(r.URL.Query().Get("exploited")),
+			RiskOnly:   r.URL.Query().Get("risk_only") == "true",
+			Sort:       strings.TrimSpace(r.URL.Query().Get("sort")),
+			Limit:      pagination.PerPage,
+			Offset:     pagination.Offset,
+		})
+	}
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerabilities")
 		return

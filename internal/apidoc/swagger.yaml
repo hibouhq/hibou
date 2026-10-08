@@ -430,6 +430,15 @@ definitions:
       repo_id:
         type: string
     type: object
+  server.createSearchPresetRequest:
+    properties:
+      name:
+        type: string
+      query:
+        type: string
+      surface:
+        type: string
+    type: object
   server.createTeamRequest:
     properties:
       name:
@@ -1305,6 +1314,23 @@ definitions:
       action:
         type: string
     type: object
+  server.searchPreset:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      query:
+        type: string
+      scope_type:
+        type: string
+      surface:
+        type: string
+      updated_at:
+        type: string
+    type: object
   server.searchResponse:
     properties:
       pagination:
@@ -1489,6 +1515,13 @@ definitions:
       name:
         type: string
       team_id:
+        type: string
+    type: object
+  server.updateSearchPresetRequest:
+    properties:
+      name:
+        type: string
+      query:
         type: string
     type: object
   server.updateTeamRequest:
@@ -7078,6 +7111,181 @@ paths:
       summary: Rotate API key
       tags:
       - api-keys
+  /users/me/search-presets:
+    get:
+      description: List the authenticated user's saved filter-bar queries for one
+        surface
+      parameters:
+      - description: Filter bar surface
+        enum:
+        - findings
+        in: query
+        name: surface
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.searchPreset'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: List search presets
+      tags:
+      - search-presets
+    post:
+      consumes:
+      - application/json
+      description: Save a filter-bar query under a name unique (case-insensitively)
+        per user and surface
+      parameters:
+      - description: Preset
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.createSearchPresetRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.searchPreset'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create search preset
+      tags:
+      - search-presets
+  /users/me/search-presets/{presetID}:
+    delete:
+      description: Delete one of the authenticated user's presets
+      parameters:
+      - description: Preset ID
+        in: path
+        name: presetID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete search preset
+      tags:
+      - search-presets
+    put:
+      consumes:
+      - application/json
+      description: Rename or replace the query of one of the authenticated user's
+        presets
+      parameters:
+      - description: Preset ID
+        in: path
+        name: presetID
+        required: true
+        type: string
+      - description: Preset
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateSearchPresetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.searchPreset'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Update search preset
+      tags:
+      - search-presets
   /webhooks/{provider}:
     post:
       consumes:

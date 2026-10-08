@@ -1509,6 +1509,18 @@ type ScanRule struct {
 	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
+type SearchPreset struct {
+	ID          uuid.UUID     `json:"id"`
+	OwnerUserID uuid.UUID     `json:"owner_user_id"`
+	ScopeType   string        `json:"scope_type"`
+	ScopeID     uuid.NullUUID `json:"scope_id"`
+	Surface     string        `json:"surface"`
+	Name        string        `json:"name"`
+	Query       string        `json:"query"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+}
+
 type SecretScanJob struct {
 	ID             uuid.UUID      `json:"id"`
 	RepoID         uuid.UUID      `json:"repo_id"`

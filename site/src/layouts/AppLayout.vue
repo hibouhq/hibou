@@ -333,12 +333,12 @@
     />
 
     <main
-      class="min-h-screen pb-6"
+      class="min-h-screen px-4 pb-6 sm:px-6"
       :class="hasAttachedEntityTabs
-        ? 'px-0 pt-[calc(3.5rem+var(--app-banner-height,0px))]'
-        : 'px-4 pt-[calc(4.75rem+var(--app-banner-height,0px))] sm:px-6'"
+        ? 'pt-[calc(3.5rem+var(--app-banner-height,0px))]'
+        : 'pt-[calc(4.75rem+var(--app-banner-height,0px))]'"
     >
-      <div :class="hasAttachedEntityTabs ? '' : 'mx-auto max-w-7xl'">
+      <div class="mx-auto max-w-7xl">
         <RouterView />
       </div>
     </main>

@@ -480,6 +480,12 @@ func (s *Server) routes(siteFS fs.FS) {
 				r.Delete("/{keyID}", s.handleDeleteAPIKey)
 				r.Post("/{keyID}/rotate", s.handleRotateAPIKey)
 			})
+			r.Route("/users/me/search-presets", func(r chi.Router) {
+				r.Get("/", s.handleListSearchPresets)
+				r.Post("/", s.handleCreateSearchPreset)
+				r.Put("/{presetID}", s.handleUpdateSearchPreset)
+				r.Delete("/{presetID}", s.handleDeleteSearchPreset)
+			})
 			r.Route("/orgs", func(r chi.Router) {
 				r.Get("/onboardable", s.handleListOnboardableOrgs)
 				r.Post("/", s.handleCreateOrg)

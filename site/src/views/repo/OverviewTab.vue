@@ -314,6 +314,7 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type RefSummary, type Repository, type SeverityCounts, type Snapshot, type SnapshotFile } from '@/api/client'
 import { relativeTime } from '@/lib/datetime'
+import { OPEN_RISK_KEV_QUERY } from '@/lib/openRiskPreset'
 
 type SeverityKey = keyof SeverityCounts
 
@@ -512,7 +513,7 @@ function kevLink() {
   return {
     name: 'repo-vulnerabilities',
     params: route.params,
-    query: { ref: route.query.ref, snapshot: route.query.snapshot, exploited: 'true', risk_only: 'true' },
+    query: { ref: route.query.ref, snapshot: route.query.snapshot, q: OPEN_RISK_KEV_QUERY },
   }
 }
 
