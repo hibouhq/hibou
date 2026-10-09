@@ -32,3 +32,21 @@ func TestIsAdvisoryFinding(t *testing.T) {
 		t.Error("plain security tag must not be treated as an advisory")
 	}
 }
+
+func TestIsSecretFinding(t *testing.T) {
+	cases := map[string]struct {
+		rule *RuleDescriptor
+		want bool
+	}{
+		"trivy secret":        {&RuleDescriptor{Tags: []string{"secret", "security", "CRITICAL"}}, true},
+		"trivy vulnerability": {&RuleDescriptor{Tags: []string{"vulnerability", "security", "HIGH"}}, false},
+		"trivy misconfig":     {&RuleDescriptor{Tags: []string{"misconfiguration", "security", "MEDIUM"}}, false},
+		"sast about secrets":  {&RuleDescriptor{Tags: []string{"security", "secrets", "hardcoded-secret"}}, false},
+		"no rule descriptor":  {nil, false},
+	}
+	for name, tc := range cases {
+		if got := IsSecretFinding(tc.rule); got != tc.want {
+			t.Errorf("%s: IsSecretFinding = %v, want %v", name, got, tc.want)
+		}
+	}
+}

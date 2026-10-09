@@ -535,7 +535,7 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 		return fmt.Errorf("extract sarif findings %s: %w", artifact.artifact.ID, err)
 	}
 	genericFindings := make([]findings.GenericFinding, 0, len(parsedFindings))
-	droppedAdvisories := 0
+	droppedAdvisories, droppedSecrets := 0, 0
 	for _, finding := range parsedFindings {
 		// Scanners that also do dependency scanning interleave advisories
 		// (rule ID = CVE/GHSA/…) with real SAST results; the SBOM pipeline
@@ -543,6 +543,12 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 		// double-count every dependency vulnerability as a SAST finding.
 		if sarif.IsAdvisoryFinding(finding.RuleID, finding.Rule) {
 			droppedAdvisories++
+			continue
+		}
+		// Trivy also interleaves secret detections; the secret scanner owns
+		// those, so a SAST copy would duplicate every leaked credential.
+		if sarif.IsSecretFinding(finding.Rule) {
+			droppedSecrets++
 			continue
 		}
 		genericFindings = append(genericFindings, findings.GenericFinding{
@@ -565,6 +571,12 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 			Str("snapshot", snapshot.ID.String()).
 			Int("dropped", droppedAdvisories).
 			Msg("skipped dependency advisories reported as SAST findings")
+	}
+	if droppedSecrets > 0 {
+		s.log.Info().
+			Str("snapshot", snapshot.ID.String()).
+			Int("dropped", droppedSecrets).
+			Msg("skipped secret detections reported as SAST findings")
 	}
 	_, err = findings.NewIngester(queries, s.log).Ingest(ctx, snapshot.ID, genericFindings)
 	if err != nil {

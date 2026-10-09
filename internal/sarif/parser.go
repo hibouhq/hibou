@@ -62,6 +62,24 @@ func IsAdvisoryFinding(ruleID string, rule *RuleDescriptor) bool {
 	return false
 }
 
+// IsSecretFinding reports whether a SARIF result is a leaked-secret
+// detection rather than a static-analysis finding. Trivy tags every rule with
+// its result type ("vulnerability", "misconfiguration", "secret", "license");
+// secrets are reported by the dedicated secret scanner, so ingesting Trivy's
+// copies as SAST would duplicate each one. Only the exact tag counts: a SAST
+// rule tagged "secrets" or "hardcoded-secret" is still a code finding.
+func IsSecretFinding(rule *RuleDescriptor) bool {
+	if rule == nil {
+		return false
+	}
+	for _, tag := range rule.Tags {
+		if strings.EqualFold(strings.TrimSpace(tag), "secret") {
+			return true
+		}
+	}
+	return false
+}
+
 func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 	if doc == nil {
 		return nil, errors.New("document is required")
