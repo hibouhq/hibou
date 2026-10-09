@@ -29,6 +29,7 @@ type MCPStore interface {
 	GetAdvisoryByID(ctx context.Context, id uuid.UUID) (dbgen.Advisory, error)
 	GetAdvisoriesByIDs(ctx context.Context, ids []uuid.UUID) ([]dbgen.Advisory, error)
 	GetAdvisoryByAlias(ctx context.Context, alias string) (dbgen.Advisory, error)
+	ListAdvisoryCWEs(ctx context.Context, advisoryIDs []uuid.UUID) (map[uuid.UUID][]int, error)
 	GetAPIKeyByHash(ctx context.Context, hash string) (*store.APIKey, error)
 	UpdateAPIKeyLastUsed(ctx context.Context, id uuid.UUID) error
 }

@@ -52,9 +52,13 @@
             "description": "An exact branch name or a path.Match-compatible glob pattern."
           }
         },
-        "weaknesses": {
-          "$ref": "#/$defs/weaknessThresholds",
-          "description": "Optional weakness gate thresholds for matching branches. If omitted, Hibou falls back to platform-managed weakness gates."
+        "code": {
+          "$ref": "#/$defs/codeThresholds",
+          "description": "Optional caps on NEW first-party code findings (sast, dast, fuzzing, manual, generic) for matching branches. Dependency, container and malware findings belong to 'vulnerabilities', leaked secrets to 'secrets'. If omitted, Hibou falls back to platform-managed finding gates. Replaces the former 'weaknesses' key (ADR-037)."
+        },
+        "cwe": {
+          "$ref": "#/$defs/cwePolicy",
+          "description": "Optional CWE deny list: a NEW finding of any type (code, dependency, secret, manual) that carries a listed CWE fails the gate. Accepting the finding is the way past it."
         },
         "vulnerabilities": {
           "$ref": "#/$defs/vulnerabilityThresholds",
@@ -133,32 +137,6 @@
       },
       "description": "Repository-wide upload behavior settings."
     },
-    "weaknessThresholds": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Whether weakness gating is enabled for matching branches. Defaults to true. Set to false to disable weakness gating and override platform-managed weakness gates."
-        },
-        "max_critical": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum number of new critical-severity findings allowed. Omit for no limit."
-        },
-        "max_high": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum number of new high-severity findings allowed. Omit for no limit."
-        },
-        "max_medium": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Maximum number of new medium-severity findings allowed. Omit for no limit."
-        }
-      },
-      "description": "Thresholds for weakness findings on matching branches."
-    },
     "vulnerabilityThresholds": {
       "type": "object",
       "additionalProperties": false,
@@ -224,7 +202,7 @@
         },
         "deny_unknown": {
           "type": "boolean",
-          "description": "Whether components with unknown or missing license metadata fail the gate. Defaults to true \u2014 an unreviewed license is a legal risk until someone looks at it."
+          "description": "Whether components with unknown or missing license metadata fail the gate. Defaults to true — an unreviewed license is a legal risk until someone looks at it."
         },
         "exempt_purls": {
           "type": "array",
@@ -267,6 +245,98 @@
           "description": "Go regular expression a tag name must match to derive a release. Empty uses the platform default (v-prefixed semver-ish tags: v1.2.3, 1.2, v2.0.0-rc.1)."
         }
       }
+    },
+    "codeThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether code-finding gating is enabled for matching branches. Defaults to true. Set to false to disable it and override platform-managed finding gates."
+        },
+        "max_critical": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new critical-severity findings allowed. Omit for no limit."
+        },
+        "max_high": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new high-severity findings allowed. Omit for no limit."
+        },
+        "max_medium": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new medium-severity findings allowed. Omit for no limit."
+        }
+      },
+      "description": "Thresholds for new code findings on matching branches."
+    },
+    "cwePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^([Cc][Ww][Ee]-)?[0-9]+$"
+          },
+          "description": "Exact CWEs to deny, e.g. [CWE-89, CWE-78]. Must exist in the CWE catalog."
+        },
+        "deny_tree": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^([Cc][Ww][Ee]-)?[0-9]+$"
+          },
+          "description": "CWEs denied together with everything under them in MITRE Research View 1000, e.g. [CWE-74] for all injection."
+        },
+        "deny_sets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Named sets from the embedded MITRE catalog: top25 (latest CWE Top 25), owasp-top10, owasp-a01 … owasp-a10. See GET /api/v1/cwe/sets; an unknown slug is a config error."
+        },
+        "deny_categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "MITRE View 1400 categories, e.g. [injection, encryption, access-control]. See GET /api/v1/cwe/sets for the full list."
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "sast",
+              "dast",
+              "fuzzing",
+              "manual",
+              "generic",
+              "dependency",
+              "container",
+              "malware",
+              "secret"
+            ]
+          },
+          "description": "Finding types the rule applies to. Default: every type."
+        },
+        "min_severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "description": "Ignore findings below this severity. Default: any severity."
+        }
+      },
+      "description": "Deny new findings by CWE (ADR-037). Every list uses the same compiler as the cwe:, cwe-tree:, cwe-set: and cwe-category: filter qualifiers."
     }
   }
 }

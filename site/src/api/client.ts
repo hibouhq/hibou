@@ -491,7 +491,10 @@ export interface OrgSettings {
 // server resolved it for the default branch.
 export interface RepoConfigGate {
   branches: string[]
-  weaknesses?: { enforcement?: string; max_critical?: number | null; max_high?: number | null; max_medium?: number | null }
+  // ADR-037 §8: caps NEW first-party code findings (sast, dast, manual…).
+  code?: { enabled?: boolean | null; max_critical?: number | null; max_high?: number | null; max_medium?: number | null }
+  // ADR-037 §7: deny NEW findings of any type by CWE.
+  cwe?: { deny?: string[]; deny_tree?: string[]; deny_sets?: string[]; deny_categories?: string[]; types?: string[]; min_severity?: string }
   vulnerabilities?: { enabled?: boolean | null; max_critical?: number | null; max_high?: number | null; max_medium?: number | null; max_new_total?: number | null }
   licenses?: { deny_categories?: string[]; deny?: string[]; allow?: string[]; deny_unknown?: boolean | null }
   secrets?: { max_new?: number | null }
@@ -578,7 +581,10 @@ export interface Vulnerability {
   advisory_id?: string
   language?: string
   confidence?: string
-  owasp_top_10?: string
+  // Every CWE the finding carries, with its title (ADR-037): from the
+  // scanner rule, the advisory, SARIF result taxa, a manual declaration, or
+  // the finding type (secrets are CWE-798).
+  cwes?: FindingCWE[]
   secret_type?: string
   // Secret findings: the commit that introduced the leak and its author, so a
   // reader knows which credential to rotate and who to ask.
@@ -670,6 +676,89 @@ export interface ApiKey {
 
 // Aggregated finding-detail payload (drawer): finding + advisory + decision +
 // VEX + where the fingerprint is currently detected.
+/** A named CWE group: a ranking/OWASP set or a MITRE View 1400 category. */
+export interface CWESetRef {
+  slug: string
+  name: string
+  /** Position in a ranked set (CWE Top 25). */
+  rank?: number
+}
+
+export type FindingCWESource = 'rule' | 'advisory' | 'sarif_result' | 'declared' | 'type'
+
+/** A CWE a finding carries (ADR-037). The title is always present when the
+ * embedded MITRE catalog knows the id. */
+export interface FindingCWE {
+  id: number
+  name: string
+  abstraction?: string
+  deprecated?: boolean
+  source: FindingCWESource
+  category?: CWESetRef
+  /** Named sets (Top 25, OWASP) — on the finding detail only. */
+  sets?: CWESetRef[]
+}
+
+/** The compact CWE shape: id plus title. */
+export interface CWERef {
+  id: number
+  name: string
+}
+
+/** One catalog entry, as completion and hover show it. */
+export interface CWECatalogEntry {
+  id: number
+  name: string
+  abstraction?: string
+  deprecated?: boolean
+  category?: CWESetRef
+  sets?: CWESetRef[]
+  /** View 1000 entries under this one (what cwe-tree: adds). */
+  descendants?: number
+  /** View 1000 parents, nearest first (what a cwe-tree: query would name). */
+  ancestors?: number[]
+}
+
+export interface CWECatalogResponse {
+  version: string
+  entries: CWECatalogEntry[]
+}
+
+export interface CWESetSummary {
+  slug: string
+  name: string
+  kind: 'ranking' | 'owasp' | 'category'
+  member_count: number
+}
+
+export interface CWESetsResponse {
+  version: string
+  sets: CWESetSummary[]
+  categories: CWESetSummary[]
+}
+
+/** One CWE present in a scope of findings (the CWE list). */
+export interface CWEUsage {
+  id: number
+  name: string
+  abstraction?: string
+  deprecated?: boolean
+  category?: CWESetRef
+  sets?: CWESetRef[]
+  total: number
+  by_type: Record<string, number>
+  max_severity: string
+  /** View 1000 sub-types under this CWE (what cwe-tree: would add). */
+  descendants?: number
+}
+
+export interface CWEUsageReport {
+  cwes: CWEUsage[]
+  /** Findings in scope carrying no CWE — coverage gaps, never hidden. */
+  no_cwe: number
+  total_findings: number
+}
+
 export interface FindingAdvisory {
   canonical_id: string
   title?: string
@@ -677,7 +766,6 @@ export interface FindingAdvisory {
   severity?: string
   cvss_score?: string
   cvss_vector?: string
-  cwes?: string[]
   is_malware?: boolean
   malware_type?: string
   fixed_versions?: string[]
@@ -769,7 +857,7 @@ export interface ScanRule {
   default_level?: string
   security_severity?: string
   precision?: string
-  cwe_ids: string[]
+  cwes: CWERef[]
   tags: string[]
 }
 
@@ -782,6 +870,8 @@ export interface VulnerabilityFacets {
   status: Record<string, number>
   tool: Record<string, number>
   file: Record<string, number>
+  /** Busiest 20 CWEs under the current filter, keyed by numeric id ("79"). */
+  cwe?: Record<string, number>
 }
 
 export interface Advisory {
@@ -793,10 +883,10 @@ export interface Advisory {
   cvss_score?: number
   is_malware: boolean
   malware_type?: string
+  // Every CWE the advisory maps to, with titles (ADR-037).
+  cwes?: CWERef[]
   // Optional enriched fields — populated once the backend exposes them
   // (see TODO-BACKEND-deps-nodata.md). Rendered with graceful fallbacks.
-  cwe?: string
-  cwe_name?: string
   summary?: string
   fixed_versions?: string[]
   references?: string[]
@@ -2493,10 +2583,13 @@ class ApiClient {
       file?: string
       search?: string
       acceptance?: string
+      // The bar's server-side query; exclusive of the discrete params, like
+      // the list it facets.
+      q?: string
     },
   ) {
     const query = new URLSearchParams()
-    for (const key of ['ref', 'snapshot', 'type', 'severity', 'status', 'tool', 'language', 'file', 'search', 'acceptance'] as const) {
+    for (const key of ['ref', 'snapshot', 'type', 'severity', 'status', 'tool', 'language', 'file', 'search', 'acceptance', 'q'] as const) {
       const value = params?.[key]
       if (value) {
         query.set(key, value)
@@ -2506,6 +2599,27 @@ class ApiClient {
     const qs = query.toString()
     return this.request<ApiResponse<VulnerabilityFacets>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/facets${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  // ADR-037: every CWE in the ref's findings, scoped by the bar's q.
+  listRefCWEs(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string; q?: string }) {
+    const query = new URLSearchParams()
+    for (const key of ['ref', 'snapshot', 'q'] as const) {
+      const value = params?.[key]
+      if (value) query.set(key, value)
+    }
+    const qs = query.toString()
+    return this.request<ApiResponse<CWEUsageReport>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/cwes${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  // Replaces the CWEs declared on a manual finding (409 for scanner findings).
+  setFindingCWEs(provider: string, slug: string, repoSlug: string, fingerprint: string, cwes: string[]) {
+    return this.request<ApiResponse<Vulnerability>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/findings/${encodeURIComponent(fingerprint)}/cwes`,
+      { method: 'PUT', body: JSON.stringify({ cwes }) },
     )
   }
 
@@ -2723,6 +2837,31 @@ class ApiClient {
 
   getOrgDashboard(provider: string, slug: string) {
     return this.request<ApiResponse<OrgDashboard>>(`/orgs/${provider}/${slug}/dashboard`)
+  }
+
+  // ADR-037: the CWE list across the org's current snapshots.
+  listOrgCWEs(provider: string, slug: string, params?: { q?: string }) {
+    const qs = params?.q ? `?${new URLSearchParams({ q: params.q }).toString()}` : ''
+    return this.request<ApiResponse<CWEUsageReport>>(`/orgs/${provider}/${slug}/cwes${qs}`)
+  }
+
+  // Embedded MITRE catalog: resolve titles for ids (hover, chips) or search
+  // by id/title (completion). Reference data, cacheable per catalog version.
+  lookupCWEs(ids: number[]) {
+    return this.request<ApiResponse<CWECatalogResponse>>(`/cwe?ids=${ids.join(',')}`)
+  }
+
+  searchCWEs(q: string, limit = 20) {
+    return this.request<ApiResponse<CWECatalogResponse>>(`/cwe?${new URLSearchParams({ q, limit: String(limit) }).toString()}`)
+  }
+
+  // MITRE's broad roots (pillars): where a cwe-tree: query starts.
+  listCWEsByAbstraction(abstractions: string[]) {
+    return this.request<ApiResponse<CWECatalogResponse>>(`/cwe?abstraction=${abstractions.join(',')}`)
+  }
+
+  listCWESets() {
+    return this.request<ApiResponse<CWESetsResponse>>('/cwe/sets')
   }
 
   listOrgVulnerabilities(

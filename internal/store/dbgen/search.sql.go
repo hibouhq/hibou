@@ -101,7 +101,7 @@ func (q *Queries) CountSearchComponents(ctx context.Context, arg CountSearchComp
 }
 
 const searchAdvisories = `-- name: SearchAdvisories :many
-SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.cwe_ids, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at
+SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at
 FROM advisories a
 JOIN vulnerabilities v ON v.advisory_id = a.id
 JOIN snapshots s ON s.id = v.snapshot_id
@@ -144,7 +144,6 @@ func (q *Queries) SearchAdvisories(ctx context.Context, arg SearchAdvisoriesPara
 			&i.CvssScore,
 			&i.CvssVersion,
 			&i.CvssVector,
-			pq.Array(&i.CweIds),
 			&i.IsMalware,
 			&i.MalwareType,
 			&i.PublishedAt,
@@ -166,7 +165,7 @@ func (q *Queries) SearchAdvisories(ctx context.Context, arg SearchAdvisoriesPara
 }
 
 const searchAdvisoriesBySeverity = `-- name: SearchAdvisoriesBySeverity :many
-SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.cwe_ids, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at
+SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at
 FROM advisories a
 JOIN vulnerabilities v ON v.advisory_id = a.id
 JOIN snapshots s ON s.id = v.snapshot_id
@@ -212,7 +211,6 @@ func (q *Queries) SearchAdvisoriesBySeverity(ctx context.Context, arg SearchAdvi
 			&i.CvssScore,
 			&i.CvssVersion,
 			&i.CvssVector,
-			pq.Array(&i.CweIds),
 			&i.IsMalware,
 			&i.MalwareType,
 			&i.PublishedAt,

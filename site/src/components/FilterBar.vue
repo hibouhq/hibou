@@ -47,12 +47,13 @@
           class="relative z-10 w-full bg-transparent px-3 py-[5px] pr-10 text-sm text-transparent caret-gray-100 placeholder:text-gray-500 focus:outline-none focus-visible:shadow-none"
           @focus="handleInputFocus"
           @blur="handleInputBlur"
-          @click="updateCursorPosition"
+          @click="handleInputClick"
           @input="handleInputEvent"
           @keyup="handleCursorKeyup"
           @keydown="handleInputKeydown"
           @scroll="syncInputScroll"
-          @mousemove="syncInputScroll"
+          @mousemove="handleInputMouseMove"
+          @mouseleave="clearHover"
           @select="syncInputScroll"
         >
 
@@ -88,7 +89,8 @@
       >
         <div
           v-if="showAutocomplete"
-          class="absolute top-[calc(100%+0.5rem)] z-40 w-72 max-w-full overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-lg"
+          class="absolute top-[calc(100%+0.5rem)] z-40 max-w-full overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-lg"
+          :class="autocompleteHasDetail ? 'w-[28rem]' : 'w-72'"
           :style="{ left: `${autocompleteLeft}px` }"
         >
           <div
@@ -96,30 +98,84 @@
             role="listbox"
             class="max-h-72 overflow-y-auto py-1"
           >
-            <button
+            <template
               v-for="(item, index) in autocompleteItems"
-              :id="autocompleteOptionId(index)"
               :key="autocompleteItemKey(item, index)"
-              role="option"
-              :aria-selected="index === activeAutocompleteIndex"
-              class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition"
-              :class="index === activeAutocompleteIndex ? 'bg-accent-muted text-accent' : 'text-gray-300 hover:bg-surface-overlay hover:text-gray-100'"
-              type="button"
-              @mousedown.prevent
-              @mouseenter="activeAutocompleteIndex = index"
-              @click="selectAutocomplete(item)"
             >
-              <span
-                v-if="item.type === 'key'"
-                class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500"
-                :class="index === activeAutocompleteIndex ? 'text-accent/70' : ''"
-              >{{ filterKeyBadge(item.key) }}</span>
-              <span class="min-w-0 truncate font-medium">{{ item.primary }}</span>
-              <span class="ml-auto shrink-0 text-xs text-gray-500">{{ item.secondary }}</span>
-            </button>
+              <div
+                v-if="item.type === 'value' && item.group && item.group !== groupBefore(index)"
+                role="presentation"
+                class="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500"
+              >
+                {{ item.group }}
+              </div>
+              <button
+                :id="autocompleteOptionId(index)"
+                role="option"
+                :aria-selected="index === activeAutocompleteIndex"
+                class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition"
+                :class="index === activeAutocompleteIndex ? 'bg-accent-muted text-accent' : 'text-gray-300 hover:bg-surface-overlay hover:text-gray-100'"
+                type="button"
+                @mousedown.prevent
+                @mouseenter="activeAutocompleteIndex = index"
+                @click="selectAutocomplete(item)"
+              >
+                <span
+                  v-if="item.type === 'key'"
+                  class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500"
+                  :class="index === activeAutocompleteIndex ? 'text-accent/70' : ''"
+                >{{ filterKeyBadge(item.key) }}</span>
+                <span
+                  v-else-if="item.type === 'negate'"
+                  class="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full border border-current text-[11px] font-bold leading-none text-[#ff7b72]"
+                  aria-hidden="true"
+                >−</span>
+                <span
+                  v-if="item.type === 'value' && item.detail"
+                  class="flex min-w-0 flex-col"
+                >
+                  <span class="truncate font-medium">{{ item.primary }}</span>
+                  <span
+                    class="truncate text-xs"
+                    :class="index === activeAutocompleteIndex ? 'text-accent/80' : 'text-gray-500'"
+                    :title="item.detail"
+                  >{{ item.detail }}</span>
+                </span>
+                <span
+                  v-else
+                  class="min-w-0 truncate font-medium"
+                >{{ item.primary }}</span>
+                <span class="ml-auto shrink-0 text-xs text-gray-500">{{ item.secondary }}</span>
+              </button>
+            </template>
           </div>
         </div>
       </Transition>
+
+      <!-- Hover card: what a qualifier value means (ADR-037: the title of
+           CWE-89, the members of a set), without leaving the bar. -->
+      <div
+        v-if="hoverCard && !showAutocomplete && !openMenu"
+        role="tooltip"
+        class="pointer-events-none absolute top-[calc(100%+0.5rem)] z-40 w-[26rem] max-w-full rounded-lg border border-surface-border bg-surface-raised px-3 py-2 shadow-lg"
+        :style="{ left: `${hoverCard.left}px` }"
+      >
+        <div
+          v-for="line in hoverCard.lines"
+          :key="line.title"
+          class="py-0.5"
+        >
+          <div class="text-sm font-medium text-gray-100">
+            {{ line.title }}
+          </div>
+          <div
+            v-if="line.detail"
+            class="text-xs text-gray-400"
+          >
+            {{ line.detail }}
+          </div>
+        </div>
+      </div>
     </div>
 
     <ul
@@ -383,6 +439,21 @@ import {
   parseBarQuery,
 } from '@/lib/filterBarQuery'
 
+/** A value the completion offers; `detail` is a second line (a CWE title). */
+export interface FilterValueSuggestion {
+  value: string
+  label?: string
+  detail?: string
+  count?: number
+  group?: string
+}
+
+/** What a typed value means, for the hover card. */
+export interface FilterValueDescription {
+  title: string
+  detail?: string
+}
+
 interface FilterDef {
   key: string
   label: string
@@ -392,6 +463,14 @@ interface FilterDef {
   freeform?: boolean
   hidden?: boolean
   defaultValue?: string
+  // Server-grammar-only qualifier (ADR-037 cwe:): sends the bar as `q`.
+  serverQuery?: boolean
+  valuePattern?: RegExp
+  // Async completion with titled rows; replaces `options` in the dropdown
+  // under the cursor when present.
+  suggestValues?: (fragment: string) => Promise<FilterValueSuggestion[]>
+  // Hover card text for one value; may read reactive caches.
+  describeValue?: (value: string) => FilterValueDescription | undefined
   primary?: boolean
   control?: 'select' | 'boolean'
   toggleIcon?: Component
@@ -413,8 +492,10 @@ type OpenMenu =
   | null
 
 type AutocompleteItem =
-  | { type: 'key'; key: string; primary: string; secondary: string }
-  | { type: 'value'; key: string; value: string; primary: string; secondary: string }
+  | { type: 'key'; key: string; primary: string; secondary: string; negated?: boolean }
+  // GitHub's "Exclude label": turns key: into -key: in place.
+  | { type: 'negate'; key: string; primary: string; secondary: string }
+  | { type: 'value'; key: string; value: string; primary: string; secondary: string; detail?: string; group?: string }
   | { type: 'operator'; value: string; primary: string; secondary: string }
 
 const props = withDefaults(defineProps<{
@@ -513,13 +594,15 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
   }
 
   const context = cursorContext.value
-  const keyItems = (keyQuery: string): AutocompleteItem[] => props.filters
+  const keyItems = (keyQuery: string, negated = false): AutocompleteItem[] => props.filters
+    .filter((filter) => !(negated && filter.control === 'boolean'))
     .filter((filter) => keyQuery === '' || filter.key.toLowerCase().includes(keyQuery) || filter.label.toLowerCase().includes(keyQuery))
     .map((filter) => ({
       type: 'key' as const,
       key: filter.key,
-      primary: `${filter.key}:`,
-      secondary: filter.label,
+      primary: `${negated ? '-' : ''}${filter.key}:`,
+      secondary: negated ? `Exclude ${filter.label.toLowerCase()}` : filter.label,
+      negated,
     }))
   // Connectives are offered only where the grammar allows one: after a
   // completed condition or a closing paren, never at the start, after an
@@ -546,15 +629,25 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
 
   const separatorIndex = context.token.indexOf(':')
   if (separatorIndex === -1) {
+    // A leading dash starts an exclusion: offer -key: for every filter.
+    if (context.token.startsWith('-')) {
+      return keyItems(context.token.slice(1).toLowerCase(), true)
+    }
     const keyQuery = context.token.toLowerCase()
     return [...operatorItems(keyQuery), ...keyItems(keyQuery)]
   }
 
-  const key = context.token.slice(0, separatorIndex).toLowerCase()
+  const rawKey = context.token.slice(0, separatorIndex).toLowerCase()
+  const negated = rawKey.startsWith('-')
+  const key = negated ? rawKey.slice(1) : rawKey
   const filter = filterMap.value.get(key)
   if (!filter) {
     return []
   }
+  // Before any value is typed, offer turning the qualifier into an exclusion.
+  const excludeItem: AutocompleteItem[] = !negated && filter.control !== 'boolean' && context.token.slice(separatorIndex + 1) === ''
+    ? [{ type: 'negate', key: filter.key, primary: `Exclude ${filter.label.toLowerCase()}`, secondary: `-${filter.key}:` }]
+    : []
 
   const rawValue = context.token.slice(separatorIndex + 1)
   const splitValues = filter.multi ? rawValue.split(',') : [rawValue]
@@ -562,6 +655,10 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
   const selectedValues = filter.multi
     ? splitValues.slice(0, -1).map((value) => value.trim().toLowerCase()).filter(Boolean)
     : []
+
+  if (filter.suggestValues) {
+    return [...excludeItem, ...asyncValueItems.value.filter((item) => item.type === 'value' && item.key === filter.key && !selectedValues.includes(item.value.toLowerCase()))]
+  }
 
   const candidates = filter.options
     .filter((option) => !selectedValues.includes(option.toLowerCase()))
@@ -582,18 +679,137 @@ const autocompleteItems = computed<AutocompleteItem[]>(() => {
     }
   }
 
-  return visibleCandidates
+  return [...excludeItem, ...visibleCandidates
     .slice(0, 20)
     .map((option) => ({
-      type: 'value',
+      type: 'value' as const,
       key: filter.key,
       value: option,
       primary: option,
-      secondary: filter.label,
-    }))
+      secondary: negated ? `not ${filter.label.toLowerCase()}` : filter.label,
+    }))]
 })
 
 const showAutocomplete = computed(() => autocompleteItems.value.length > 0)
+const autocompleteHasDetail = computed(() => autocompleteItems.value.some((item) => item.type === 'value' && Boolean(item.detail)))
+
+function groupBefore(index: number): string | undefined {
+  const previous = autocompleteItems.value[index - 1]
+  return previous?.type === 'value' ? previous.group : undefined
+}
+
+// Async value completion (suggestValues): debounced, latest request wins.
+const asyncValueItems = ref<AutocompleteItem[]>([])
+let suggestRequest = 0
+watch(
+  () => [cursorContext.value?.token ?? '', inputFocused.value] as const,
+  async ([token, focused]) => {
+    const separator = token.indexOf(':')
+    const filter = separator > 0 ? filterMap.value.get(token.slice(0, separator).toLowerCase().replace(/^-/, '')) : undefined
+    const request = ++suggestRequest
+    if (!focused || !filter?.suggestValues) {
+      asyncValueItems.value = []
+      return
+    }
+    const values = token.slice(separator + 1).split(',')
+    const fragment = (filter.multi ? values[values.length - 1] : token.slice(separator + 1)).trim()
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    if (request !== suggestRequest) return
+    const suggestions = await filter.suggestValues(fragment).catch(() => [])
+    if (request !== suggestRequest) return
+    asyncValueItems.value = suggestions.slice(0, 30).map((suggestion) => ({
+      type: 'value' as const,
+      key: filter.key,
+      value: suggestion.value,
+      primary: suggestion.label ?? suggestion.value,
+      secondary: typeof suggestion.count === 'number' ? String(suggestion.count) : '',
+      detail: suggestion.detail,
+      group: suggestion.group,
+    }))
+  },
+)
+
+// Hover card over a qualifier token: which value is under the pointer and
+// what it means (describeValue). Bare CWE-79 tokens use the cwe: filter.
+const hoverToken = ref<{ token: string; start: number } | null>(null)
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function textWidth(text: string): number {
+  const input = inputRef.value
+  if (!input) return 0
+  measureCanvas ??= document.createElement('canvas')
+  const context = measureCanvas.getContext('2d')
+  if (!context) return 0
+  const style = getComputedStyle(input)
+  context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+  return context.measureText(text).width
+}
+
+function handleInputHover(event: MouseEvent) {
+  const input = inputRef.value
+  if (!input || !barQuery.value) return
+  const style = getComputedStyle(input)
+  const x = event.offsetX - parseFloat(style.paddingLeft) + input.scrollLeft
+  // Binary search the character under the pointer.
+  let low = 0
+  let high = barQuery.value.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (textWidth(barQuery.value.slice(0, mid + 1)) < x) low = mid + 1
+    else high = mid
+  }
+  const context = getCursorContext(barQuery.value, low)
+  const next = context.token ? { token: context.token, start: context.start } : null
+  if (next?.token === hoverToken.value?.token && next?.start === hoverToken.value?.start) return
+  if (hoverTimer !== null) clearTimeout(hoverTimer)
+  hoverTimer = setTimeout(() => {
+    hoverToken.value = next
+    hoverTimer = null
+  }, 200)
+}
+
+function handleInputMouseMove(event: MouseEvent) {
+  syncInputScroll()
+  handleInputHover(event)
+}
+
+function clearHover() {
+  if (hoverTimer !== null) clearTimeout(hoverTimer)
+  hoverTimer = null
+  hoverToken.value = null
+}
+
+const hoverCard = computed(() => {
+  const hovered = hoverToken.value
+  if (!hovered) return null
+  let key = ''
+  let raw = ''
+  const separator = hovered.token.indexOf(':')
+  let excluded = false
+  if (separator > 0) {
+    key = hovered.token.slice(0, separator).toLowerCase()
+    excluded = key.startsWith('-')
+    key = key.replace(/^-/, '')
+    raw = hovered.token.slice(separator + 1)
+  } else if (/^cwe-\d+$/i.test(hovered.token)) {
+    key = 'cwe'
+    raw = hovered.token
+  }
+  const filter = filterMap.value.get(key)
+  if (!filter?.describeValue) return null
+  const values = filter.multi ? raw.split(',') : [raw]
+  const lines = values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => filter.describeValue?.(value))
+    .filter((line): line is FilterValueDescription => Boolean(line))
+    .map((line) => (excluded ? { ...line, title: `Excluding ${line.title}` } : line))
+  if (lines.length === 0) return null
+  const input = inputRef.value
+  const left = input ? parseFloat(getComputedStyle(input).paddingLeft) + textWidth(barQuery.value.slice(0, hovered.start)) - input.scrollLeft : 0
+  const maxLeft = input ? Math.max(0, input.clientWidth - 416) : 0
+  return { left: Math.round(Math.min(Math.max(0, left), maxLeft)), lines }
+})
 
 // The suggestion list opens under the word being completed, like GitHub's
 // search, instead of at the far left of the bar.
@@ -644,6 +860,14 @@ watch(barQuery, () => {
 watch(dropdownSearch, () => {
   visibleSuggestionCounts.value = {}
 }, { deep: true })
+
+// Keyboard navigation must keep the active row in view: the list scrolls,
+// the highlight alone would walk off its edge.
+watch(activeAutocompleteIndex, (index) => {
+  void nextTick(() => {
+    document.getElementById(autocompleteOptionId(index))?.scrollIntoView({ block: 'nearest' })
+  })
+})
 
 watch(autocompleteItems, (items) => {
   if (items.length === 0) {
@@ -701,7 +925,17 @@ function handleInputBlur() {
   void nextTick(syncInputScroll)
 }
 
+// Escape and Clear mark the bar unfocused while the browser keeps focus on
+// the input, so no new focus event comes: typing or clicking in it must
+// re-arm suggestions itself.
 function handleInputEvent() {
+  inputFocused.value = true
+  clearHover()
+  updateCursorPosition()
+}
+
+function handleInputClick() {
+  inputFocused.value = true
   updateCursorPosition()
 }
 
@@ -766,7 +1000,10 @@ function selectAutocomplete(item: AutocompleteItem) {
   const separator = context.token === '' && before.endsWith(')') ? ' ' : ''
 
   if (item.type === 'key') {
-    replacement = `${separator}${item.key}:`
+    replacement = `${separator}${item.negated ? '-' : ''}${item.key}:`
+    nextCursor = (before + replacement).length
+  } else if (item.type === 'negate') {
+    replacement = `-${context.token}`
     nextCursor = (before + replacement).length
   } else if (item.type === 'operator') {
     replacement = `${separator}${item.value}${after.length === 0 ? ' ' : ''}`
@@ -777,14 +1014,15 @@ function selectAutocomplete(item: AutocompleteItem) {
       return
     }
 
+    const prefix = context.token.startsWith('-') ? '-' : ''
     if (filter.multi) {
       const separatorIndex = context.token.indexOf(':')
       const rawValues = separatorIndex === -1 ? '' : context.token.slice(separatorIndex + 1)
       const values = rawValues.split(',').map((value) => value.trim())
       values[values.length - 1] = item.value
-      replacement = `${item.key}:${values.filter(Boolean).join(',')}`
+      replacement = `${prefix}${item.key}:${values.filter(Boolean).join(',')}`
     } else {
-      replacement = `${item.key}:${item.value}`
+      replacement = `${prefix}${item.key}:${item.value}`
     }
 
     if (after.length === 0) {
@@ -811,8 +1049,14 @@ function autocompleteItemKey(item: AutocompleteItem, index: number) {
   if (item.type === 'key') {
     return `key-${item.key}-${index}`
   }
+  if (item.type === 'value' && item.group) {
+    return `value-${item.key}-${item.group}-${item.value}-${index}`
+  }
   if (item.type === 'operator') {
     return `operator-${item.value}-${index}`
+  }
+  if (item.type === 'negate') {
+    return `negate-${item.key}-${index}`
   }
   return `value-${item.key}-${item.value}-${index}`
 }
@@ -983,13 +1227,29 @@ function syncBarFromModels() {
   // While the bar holds a boolean query, it is the source of truth: the
   // discrete models cannot express OR/parens, so rebuilding from them would
   // destroy the query. The dropdown buttons are disabled in this mode.
-  if (advancedQuery.value) {
-    if (barQuery.value !== advancedQuery.value) {
-      barQuery.value = advancedQuery.value
-    }
+  const current = parseBarQuery(barQuery.value, props.filters, props.searchable)
+  // An advanced query the bar did not produce was set from outside (route
+  // restore, a CWE chip click): it is the new bar text.
+  if (advancedQuery.value && advancedQuery.value !== current.advancedQuery) {
+    barQuery.value = advancedQuery.value
     return
   }
-  const nextQuery = buildBarQuery(props.filters, modelValue.value ?? {}, searchQuery.value, props.searchable)
+  if (advancedQuery.value && current.booleanSyntax) {
+    return
+  }
+  // The bar already says exactly what the models say (the v-model echo of
+  // the bar's own edit): rewriting it would only normalize what the user is
+  // typing — trailing spaces, token order.
+  if (current.issues.length === 0
+    && current.advancedQuery === advancedQuery.value
+    && current.searchText === searchQuery.value
+    && sameRecord(current.filters, withFilterDefaults(modelValue.value ?? {}))) {
+    return
+  }
+  // A plain query with server-only qualifiers (cwe:) keeps them when a
+  // dropdown rebuilds the rest of the bar from the discrete models.
+  const rebuilt = buildBarQuery(props.filters, modelValue.value ?? {}, searchQuery.value, props.searchable)
+  const nextQuery = [rebuilt, ...current.serverTokens].filter(Boolean).join(' ')
   if (barQuery.value !== nextQuery) {
     barQuery.value = nextQuery
   }
@@ -1008,9 +1268,11 @@ function syncModelsFromBar() {
   if (advancedQuery.value !== parsed.advancedQuery) {
     advancedQuery.value = parsed.advancedQuery
   }
-  // Advanced mode leaves the discrete models untouched — the consumer runs
-  // the advanced query verbatim and ignores them while it is set.
-  if (parsed.advancedQuery) {
+  // Boolean mode leaves the discrete models untouched — the consumer runs
+  // the advanced query verbatim and ignores them while it is set. A plain
+  // query with server-only qualifiers keeps them in step, so the dropdowns
+  // show what the bar says.
+  if (parsed.booleanSyntax) {
     return
   }
 
@@ -1067,6 +1329,16 @@ function scheduleValidation() {
     }
     validationTimer = null
   }, 250)
+}
+
+// The models as the bar reads them: a hidden filter left unset means its
+// default (status:detected), exactly as parseBarQuery fills it in.
+function withFilterDefaults(filters: Record<string, string>): Record<string, string> {
+  const out = { ...filters }
+  for (const filter of props.filters) {
+    if (filter.defaultValue && !out[filter.key]) out[filter.key] = filter.defaultValue
+  }
+  return out
 }
 
 function sameRecord(left: Record<string, string>, right: Record<string, string>) {

@@ -14,7 +14,7 @@ import (
 )
 
 const getScanRule = `-- name: GetScanRule :one
-SELECT id, tool, rule_id, name, short_description, full_description, help_uri, help_markdown, default_level, security_severity, rule_precision, cwe_ids, tags, properties, created_at, updated_at FROM scan_rules WHERE tool = $1 AND rule_id = $2
+SELECT id, tool, rule_id, name, short_description, full_description, help_uri, help_markdown, default_level, security_severity, rule_precision, tags, properties, created_at, updated_at FROM scan_rules WHERE tool = $1 AND rule_id = $2
 `
 
 type GetScanRuleParams struct {
@@ -37,7 +37,6 @@ func (q *Queries) GetScanRule(ctx context.Context, arg GetScanRuleParams) (ScanR
 		&i.DefaultLevel,
 		&i.SecuritySeverity,
 		&i.RulePrecision,
-		pq.Array(&i.CweIds),
 		pq.Array(&i.Tags),
 		&i.Properties,
 		&i.CreatedAt,
@@ -47,7 +46,7 @@ func (q *Queries) GetScanRule(ctx context.Context, arg GetScanRuleParams) (ScanR
 }
 
 const listScanRulesBySnapshot = `-- name: ListScanRulesBySnapshot :many
-SELECT DISTINCT sr.id, sr.tool, sr.rule_id, sr.name, sr.short_description, sr.full_description, sr.help_uri, sr.help_markdown, sr.default_level, sr.security_severity, sr.rule_precision, sr.cwe_ids, sr.tags, sr.properties, sr.created_at, sr.updated_at
+SELECT DISTINCT sr.id, sr.tool, sr.rule_id, sr.name, sr.short_description, sr.full_description, sr.help_uri, sr.help_markdown, sr.default_level, sr.security_severity, sr.rule_precision, sr.tags, sr.properties, sr.created_at, sr.updated_at
 FROM scan_rules sr
 JOIN vulnerabilities v ON v.rule_ref_id = sr.id
 WHERE v.snapshot_id = $1
@@ -75,7 +74,6 @@ func (q *Queries) ListScanRulesBySnapshot(ctx context.Context, snapshotID uuid.U
 			&i.DefaultLevel,
 			&i.SecuritySeverity,
 			&i.RulePrecision,
-			pq.Array(&i.CweIds),
 			pq.Array(&i.Tags),
 			&i.Properties,
 			&i.CreatedAt,
@@ -106,11 +104,10 @@ INSERT INTO scan_rules (
     default_level,
     security_severity,
     rule_precision,
-    cwe_ids,
     tags,
     properties
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (tool, rule_id) DO UPDATE SET
     name              = EXCLUDED.name,
     short_description = EXCLUDED.short_description,
@@ -120,7 +117,6 @@ ON CONFLICT (tool, rule_id) DO UPDATE SET
     default_level     = EXCLUDED.default_level,
     security_severity = EXCLUDED.security_severity,
     rule_precision    = EXCLUDED.rule_precision,
-    cwe_ids           = EXCLUDED.cwe_ids,
     tags              = EXCLUDED.tags,
     properties        = EXCLUDED.properties,
     updated_at        = NOW()
@@ -138,7 +134,6 @@ type UpsertScanRuleParams struct {
 	DefaultLevel     string          `json:"default_level"`
 	SecuritySeverity string          `json:"security_severity"`
 	RulePrecision    string          `json:"rule_precision"`
-	CweIds           []string        `json:"cwe_ids"`
 	Tags             []string        `json:"tags"`
 	Properties       json.RawMessage `json:"properties"`
 }
@@ -155,7 +150,6 @@ func (q *Queries) UpsertScanRule(ctx context.Context, arg UpsertScanRuleParams) 
 		arg.DefaultLevel,
 		arg.SecuritySeverity,
 		arg.RulePrecision,
-		pq.Array(arg.CweIds),
 		pq.Array(arg.Tags),
 		arg.Properties,
 	)

@@ -1,6 +1,6 @@
 -- name: UpsertAdvisory :one
-INSERT INTO advisories (canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, cwe_ids, is_malware, malware_type, published_at, withdrawn_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+INSERT INTO advisories (canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (canonical_id) DO UPDATE SET
     title = EXCLUDED.title,
     description = EXCLUDED.description,
@@ -8,7 +8,6 @@ ON CONFLICT (canonical_id) DO UPDATE SET
     cvss_score = EXCLUDED.cvss_score,
     cvss_version = EXCLUDED.cvss_version,
     cvss_vector = EXCLUDED.cvss_vector,
-    cwe_ids = EXCLUDED.cwe_ids,
     is_malware = EXCLUDED.is_malware,
     malware_type = EXCLUDED.malware_type,
     published_at = EXCLUDED.published_at,

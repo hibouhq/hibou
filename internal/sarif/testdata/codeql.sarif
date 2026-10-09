@@ -1,0 +1,236 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "CodeQL",
+     "semanticVersion": "2.27.2",
+     "rules": [
+      {
+       "id": "js/missing-rate-limiting",
+       "name": "js/missing-rate-limiting",
+       "shortDescription": {
+        "text": "Missing rate limiting"
+       },
+       "fullDescription": {
+        "text": "An HTTP request handler that performs expensive operations without restricting the rate at which operations can be carried out is vulnerable to denial-of-service attacks."
+       },
+       "defaultConfiguration": {
+        "enabled": true,
+        "level": "warning"
+       },
+       "properties": {
+        "tags": [
+         "security",
+         "external/cwe/cwe-770",
+         "external/cwe/cwe-307",
+         "external/cwe/cwe-400"
+        ],
+        "description": "An HTTP request handler that performs expensive operations without\n              restricting the rate at which operations can be carried out is vulnerable\n              to denial-of-service attacks.",
+        "id": "js/missing-rate-limiting",
+        "kind": "problem",
+        "name": "Missing rate limiting",
+        "precision": "high",
+        "problem.severity": "warning",
+        "security-severity": "7.5"
+       }
+      },
+      {
+       "id": "js/regex-injection",
+       "name": "js/regex-injection",
+       "shortDescription": {
+        "text": "Regular expression injection"
+       },
+       "fullDescription": {
+        "text": "User input should not be used in regular expressions without first being escaped, otherwise a malicious user may be able to inject an expression that could require exponential time on certain inputs."
+       },
+       "defaultConfiguration": {
+        "enabled": true,
+        "level": "error"
+       },
+       "properties": {
+        "tags": [
+         "security",
+         "external/cwe/cwe-730",
+         "external/cwe/cwe-400"
+        ],
+        "description": "User input should not be used in regular expressions without first being escaped,\n              otherwise a malicious user may be able to inject an expression that could require\n              exponential time on certain inputs.",
+        "id": "js/regex-injection",
+        "kind": "path-problem",
+        "name": "Regular expression injection",
+        "precision": "high",
+        "problem.severity": "error",
+        "security-severity": "7.5"
+       }
+      },
+      {
+       "id": "js/server-side-unvalidated-url-redirection",
+       "name": "js/server-side-unvalidated-url-redirection",
+       "shortDescription": {
+        "text": "Server-side URL redirect"
+       },
+       "fullDescription": {
+        "text": "Server-side URL redirection based on unvalidated user input may cause redirection to malicious web sites."
+       },
+       "defaultConfiguration": {
+        "enabled": true,
+        "level": "warning"
+       },
+       "properties": {
+        "tags": [
+         "security",
+         "external/cwe/cwe-601"
+        ],
+        "description": "Server-side URL redirection based on unvalidated user input\n              may cause redirection to malicious web sites.",
+        "id": "js/server-side-unvalidated-url-redirection",
+        "kind": "path-problem",
+        "name": "Server-side URL redirect",
+        "precision": "high",
+        "problem.severity": "warning",
+        "security-severity": "6.1"
+       }
+      }
+     ]
+    },
+    "extensions": [
+     {
+      "name": "codeql/javascript-queries",
+      "semanticVersion": "2.4.7+a7057b836bf29767461026718b14d20790b9085f"
+     },
+     {
+      "name": "codeql/javascript-all",
+      "semanticVersion": "2.10.3+a7057b836bf29767461026718b14d20790b9085f"
+     },
+     {
+      "name": "codeql/threat-models",
+      "semanticVersion": "1.0.59+a7057b836bf29767461026718b14d20790b9085f"
+     }
+    ]
+   },
+   "results": [
+    {
+     "ruleId": "js/missing-rate-limiting",
+     "ruleIndex": 0,
+     "rule": {
+      "id": "js/missing-rate-limiting",
+      "index": 0
+     },
+     "message": {
+      "text": "This route handler performs [a system command](1), but is not rate-limited."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/app.js",
+         "index": 0
+        },
+        "region": {
+         "startLine": 3,
+         "startColumn": 15,
+         "endColumn": 64
+        }
+       }
+      }
+     ],
+     "partialFingerprints": {
+      "primaryLocationLineHash": "181dce7981c66a23:1",
+      "primaryLocationStartColumnFingerprint": "14"
+     }
+    },
+    {
+     "ruleId": "js/missing-rate-limiting",
+     "ruleIndex": 0,
+     "rule": {
+      "id": "js/missing-rate-limiting",
+      "index": 0
+     },
+     "message": {
+      "text": "This route handler performs [a file system access](1), but is not rate-limited."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/app.js",
+         "index": 0
+        },
+        "region": {
+         "startLine": 5,
+         "startColumn": 15,
+         "endColumn": 97
+        }
+       }
+      }
+     ],
+     "partialFingerprints": {
+      "primaryLocationLineHash": "1a5bd6f039b87eb8:1",
+      "primaryLocationStartColumnFingerprint": "14"
+     }
+    },
+    {
+     "ruleId": "js/regex-injection",
+     "ruleIndex": 1,
+     "rule": {
+      "id": "js/regex-injection",
+      "index": 1
+     },
+     "message": {
+      "text": "This regular expression is constructed from a [user-provided value](1)."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/app.js",
+         "index": 0
+        },
+        "region": {
+         "startLine": 6,
+         "startColumn": 53,
+         "endColumn": 64
+        }
+       }
+      }
+     ],
+     "partialFingerprints": {
+      "primaryLocationLineHash": "1310b03c90638e8a:1",
+      "primaryLocationStartColumnFingerprint": "52"
+     }
+    },
+    {
+     "ruleId": "js/server-side-unvalidated-url-redirection",
+     "ruleIndex": 2,
+     "rule": {
+      "id": "js/server-side-unvalidated-url-redirection",
+      "index": 2
+     },
+     "message": {
+      "text": "Untrusted URL redirection depends on a [user-provided value](1)."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/app.js",
+         "index": 0
+        },
+        "region": {
+         "startLine": 5,
+         "startColumn": 80,
+         "endColumn": 93
+        }
+       }
+      }
+     ],
+     "partialFingerprints": {
+      "primaryLocationLineHash": "1a5bd6f039b87eb8:1",
+      "primaryLocationStartColumnFingerprint": "79"
+     }
+    }
+   ]
+  }
+ ]
+}

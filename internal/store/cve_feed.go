@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/cvefeed"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
@@ -296,11 +297,13 @@ func (q *Queries) saveCVERecordTx(ctx context.Context, record cvefeed.Projection
 		CvssScore:       score,
 		CvssVector:      record.Severity.Vector,
 		Severity:        record.Severity.Label,
-		CweIds:          record.CWEs,
 		Summary:         record.Description,
 		ReferenceUrls:   record.References,
 	}); err != nil {
 		return fmt.Errorf("upsert cve record %s: %w", record.ID, err)
+	}
+	if err := q.db.SyncCVERecordCWEs(ctx, dbgen.SyncCVERecordCWEsParams{CveID: record.ID, CweIds: toInt32s(cwe.ParseAll(record.CWEs))}); err != nil {
+		return fmt.Errorf("store cwes for %s: %w", record.ID, err)
 	}
 	if err := q.db.DeleteCVEAffectedProducts(ctx, record.ID); err != nil {
 		return fmt.Errorf("clear affected products for %s: %w", record.ID, err)

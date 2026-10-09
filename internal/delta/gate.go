@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -38,7 +39,8 @@ type GateStore interface {
 // target branch, plus the two snapshots license checks run against. Sections
 // are nil when unconfigured.
 type GateConfig struct {
-	Weakness        *WeaknessGate
+	Code            *CodeGate
+	CWE             *CWEGate
 	Vulnerabilities *VulnerabilityGate
 	Licenses        *LicenseGate
 	Secrets         *SecretsGate
@@ -51,7 +53,7 @@ type GateConfig struct {
 
 // Configured reports whether any file-managed section carries thresholds.
 func (c *GateConfig) Configured() bool {
-	return c != nil && (c.Weakness != nil || c.Vulnerabilities != nil || c.Licenses != nil || c.Secrets != nil)
+	return c != nil && (c.Code != nil || c.CWE != nil || c.Vulnerabilities != nil || c.Licenses != nil || c.Secrets != nil)
 }
 
 // SecretsGate caps NEW secret findings introduced by the PR. Accepted findings
@@ -87,11 +89,37 @@ func (g *LicenseGate) EvaluatesWholeTree() bool {
 	return g != nil && strings.EqualFold(strings.TrimSpace(g.Evaluate), "all")
 }
 
-type WeaknessGate struct {
+// CodeGate caps NEW first-party code findings by severity (ADR-037 §8).
+type CodeGate struct {
 	Enabled     *bool
 	MaxCritical *int
 	MaxHigh     *int
 	MaxMedium   *int
+}
+
+// CWEGate denies NEW findings that carry a listed CWE (ADR-037 §7).
+type CWEGate struct {
+	Rules []CWERule
+	// Types restricts the gate to finding types; empty means every type.
+	Types []string
+	// MinSeverity ignores findings below it; empty means any severity.
+	MinSeverity string
+	// Invalid carries a policy that could not be compiled: evaluating it
+	// fails the gate instead of silently skipping the section.
+	Invalid error
+}
+
+// CWERule is one compiled deny list entry; Path names it in the reason
+// ("cwe.deny_tree CWE-74").
+type CWERule struct {
+	Path     string
+	Selector cwe.Selector
+}
+
+// cweLister resolves the CWEs of the delta's findings through the same
+// finding_cwes definition the filters use.
+type cweLister interface {
+	ListFindingCWEs(ctx context.Context, vulnerabilityIDs []uuid.UUID) (map[uuid.UUID][]store.FindingCWE, error)
 }
 
 // EvaluateGates checks quality gates against a delta result.
@@ -132,9 +160,9 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 		}
 	}
 
-	var weaknessGate *WeaknessGate
+	var codeGate *CodeGate
 	if cfg != nil {
-		weaknessGate = cfg.Weakness
+		codeGate = cfg.Code
 	}
 	// Malware blocks unconditionally — before any configured gate section: a
 	// malicious package is never acceptable, whether or not the repo has a
@@ -158,7 +186,16 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	}
 	reasons = append(reasons, kevReasons...)
 	reasons = append(reasons, evaluateStoredVulnerabilityGates(gates, delta.New)...)
-	reasons = append(reasons, evaluateConfiguredWeaknessGates(gates, delta.New, weaknessGate)...)
+	reasons = append(reasons, evaluateConfiguredCodeGates(gates, delta.New, codeGate)...)
+	if cfg != nil && cfg.CWE != nil {
+		cweReasons, err := s.evaluateCWEGate(ctx, delta.New, cfg.CWE)
+		if err != nil {
+			// FAIL CLOSED like KEV: "could not read CWEs" must not become
+			// "no denied CWE was introduced".
+			return nil, err
+		}
+		reasons = append(reasons, cweReasons...)
+	}
 	if cfg != nil && cfg.Vulnerabilities != nil {
 		reasons = append(reasons, evaluateNewVulnerabilityGate(delta.New, cfg.Vulnerabilities)...)
 	}
@@ -725,14 +762,128 @@ func evaluateStoredVulnerabilityGate(gate dbgen.QualityGate, critical, high, med
 	return reasons
 }
 
-func evaluateConfiguredWeaknessGates(gates []dbgen.QualityGate, vulns []store.Vulnerability, weaknessGate *WeaknessGate) []string {
-	if weaknessGate == nil {
-		return evaluateStoredFindingGates(gates, vulns)
+// evaluateConfiguredCodeGates applies the repo's `code` section, or the
+// stored gates when the file has none — both over code findings only: a
+// dependency CVE belongs to the vulnerabilities section and a leaked secret
+// to the secrets section, and counting them here too failed one finding
+// against two thresholds.
+func evaluateConfiguredCodeGates(gates []dbgen.QualityGate, vulns []store.Vulnerability, codeGate *CodeGate) []string {
+	code := make([]store.Vulnerability, 0, len(vulns))
+	for _, vuln := range vulns {
+		if isCodeFinding(vuln) {
+			code = append(code, vuln)
+		}
 	}
-	if !weaknessGate.EnabledValue() {
+	if codeGate == nil {
+		return evaluateStoredFindingGates(gates, code)
+	}
+	if !codeGate.EnabledValue() {
 		return nil
 	}
-	return evaluateRepoWeaknessThresholds(vulns, weaknessGate)
+	return evaluateRepoCodeThresholds(code, codeGate)
+}
+
+// isCodeFinding is the `code` section's scope: first-party findings about the
+// repository's own code.
+func isCodeFinding(vuln store.Vulnerability) bool {
+	switch strings.ToLower(strings.TrimSpace(vuln.Type)) {
+	case "sast", "dast", "fuzzing", "manual", "generic":
+		return true
+	}
+	return false
+}
+
+// evaluateCWEGate fails the gate for every new finding (of an in-scope type
+// and severity) that carries a denied CWE. Reasons name the CWE by title and
+// the rule that denied it, so the PR check explains itself.
+func (s *Service) evaluateCWEGate(ctx context.Context, newVulns []store.Vulnerability, gate *CWEGate) ([]string, error) {
+	if gate == nil {
+		return nil, nil
+	}
+	if gate.Invalid != nil {
+		return nil, fmt.Errorf("cwe gate policy is invalid: %w", gate.Invalid)
+	}
+	if len(gate.Rules) == 0 {
+		return nil, nil
+	}
+	lister, ok := s.store.(cweLister)
+	if !ok {
+		return nil, errors.New("cwe gate configured but the store cannot resolve finding CWEs")
+	}
+	types := make(map[string]struct{}, len(gate.Types))
+	for _, kind := range gate.Types {
+		types[strings.ToLower(strings.TrimSpace(kind))] = struct{}{}
+	}
+	minRank := severityRank(gate.MinSeverity)
+	candidates := make([]store.Vulnerability, 0, len(newVulns))
+	ids := make([]uuid.UUID, 0, len(newVulns))
+	for _, vuln := range newVulns {
+		if _, in := types[strings.ToLower(vuln.Type)]; len(types) > 0 && !in {
+			continue
+		}
+		if severityRank(string(vuln.Severity)) < minRank {
+			continue
+		}
+		candidates = append(candidates, vuln)
+		ids = append(ids, vuln.ID)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	byFinding, err := lister.ListFindingCWEs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("cwe lookup: %w", err)
+	}
+	reasons := make([]string, 0)
+	for _, vuln := range candidates {
+		carried := make([]int, 0, len(byFinding[vuln.ID]))
+		for _, item := range byFinding[vuln.ID] {
+			carried = append(carried, item.ID)
+		}
+		for _, rule := range gate.Rules {
+			id, matched := rule.Selector.Match(carried)
+			if !matched {
+				continue
+			}
+			reasons = append(reasons, fmt.Sprintf("new %s finding %s%s carries %s, denied by %s",
+				vuln.Type, vulnLabel(vuln), vulnLocation(vuln), describeCWE(id), rule.Path))
+			break
+		}
+	}
+	return reasons, nil
+}
+
+func describeCWE(id int) string {
+	if name := cwe.Default().Name(id); name != "" {
+		return fmt.Sprintf("%s (%s)", cwe.Format(id), name)
+	}
+	return cwe.Format(id)
+}
+
+func vulnLocation(vuln store.Vulnerability) string {
+	if vuln.FilePath == nil || *vuln.FilePath == "" {
+		return ""
+	}
+	if vuln.StartLine != nil && *vuln.StartLine > 0 {
+		return fmt.Sprintf(" in %s:%d", *vuln.FilePath, *vuln.StartLine)
+	}
+	return " in " + *vuln.FilePath
+}
+
+func severityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return 5
+	case "high":
+		return 4
+	case "medium":
+		return 3
+	case "low":
+		return 2
+	case "info":
+		return 1
+	}
+	return 0
 }
 
 func evaluateStoredFindingGates(gates []dbgen.QualityGate, vulns []store.Vulnerability) []string {
@@ -749,7 +900,7 @@ func evaluateStoredFindingGates(gates []dbgen.QualityGate, vulns []store.Vulnera
 	return reasons
 }
 
-func evaluateRepoWeaknessThresholds(vulns []store.Vulnerability, thresholds *WeaknessGate) []string {
+func evaluateRepoCodeThresholds(vulns []store.Vulnerability, thresholds *CodeGate) []string {
 	if thresholds == nil {
 		return nil
 	}
@@ -757,18 +908,18 @@ func evaluateRepoWeaknessThresholds(vulns []store.Vulnerability, thresholds *Wea
 	critical, high, medium := countNewVulnerabilitySeverities(vulns)
 	reasons := make([]string, 0, 3)
 	if thresholds.MaxCritical != nil && critical > *thresholds.MaxCritical {
-		reasons = append(reasons, fmt.Sprintf("repo config exceeded max critical weaknesses: %d > %d", critical, *thresholds.MaxCritical))
+		reasons = append(reasons, fmt.Sprintf("repo config exceeded max critical code findings: %d > %d", critical, *thresholds.MaxCritical))
 	}
 	if thresholds.MaxHigh != nil && high > *thresholds.MaxHigh {
-		reasons = append(reasons, fmt.Sprintf("repo config exceeded max high weaknesses: %d > %d", high, *thresholds.MaxHigh))
+		reasons = append(reasons, fmt.Sprintf("repo config exceeded max high code findings: %d > %d", high, *thresholds.MaxHigh))
 	}
 	if thresholds.MaxMedium != nil && medium > *thresholds.MaxMedium {
-		reasons = append(reasons, fmt.Sprintf("repo config exceeded max medium weaknesses: %d > %d", medium, *thresholds.MaxMedium))
+		reasons = append(reasons, fmt.Sprintf("repo config exceeded max medium code findings: %d > %d", medium, *thresholds.MaxMedium))
 	}
 	return reasons
 }
 
-func (w *WeaknessGate) EnabledValue() bool {
+func (w *CodeGate) EnabledValue() bool {
 	if w == nil || w.Enabled == nil {
 		return true
 	}

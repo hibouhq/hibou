@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -30,6 +32,35 @@ type createFindingRequest struct {
 	StartLine int32  `json:"start_line"`
 	EndLine   int32  `json:"end_line"`
 	Solution  string `json:"solution"`
+	// CWEs classify the finding (ADR-037) in any spelling the normalizer
+	// accepts ("CWE-89", "89"). Unlike scanner claims they must exist in the
+	// CWE catalog: typed or agent-generated input is validated.
+	CWEs []string `json:"cwes,omitempty"`
+}
+
+type updateFindingCWEsRequest struct {
+	CWEs []string `json:"cwes"`
+}
+
+// declaredCWEs validates a declared CWE list against the catalog.
+func declaredCWEs(values []string) ([]int, error) {
+	catalog := cwe.Default()
+	ids := make([]int, 0, len(values))
+	for _, value := range values {
+		id, ok := cwe.Parse(value)
+		if !ok {
+			return nil, fmt.Errorf("cwes: %q is not a CWE id", value)
+		}
+		if _, known := catalog.Lookup(id); !known {
+			return nil, fmt.Errorf("cwes: %s is not in the CWE catalog (version %s)", cwe.Format(id), catalog.Version)
+		}
+		ids = append(ids, id)
+	}
+	return cwe.Dedupe(ids), nil
+}
+
+func findingCWEDeclarer(origin findingOrigin) store.FindingCWEDeclarer {
+	return store.FindingCWEDeclarer{UserID: origin.CreatedBy, APIKeyID: origin.APIKeyID}
 }
 
 // @Summary      File a finding
@@ -69,6 +100,11 @@ func (s *Server) handleCreateFinding(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, status, message)
 		return
 	}
+	cwes, err := declaredCWEs(input.CWEs)
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	origin := resolveFindingOrigin(r.Context(), user)
 	params.Origin = origin.Origin
@@ -78,10 +114,32 @@ func (s *Server) handleCreateFinding(w http.ResponseWriter, r *http.Request) {
 	params.OriginOwnerID = origin.OwnerID
 	params.CreatedBy = origin.CreatedBy
 
-	finding, err := s.queries.CreateVulnerability(r.Context(), *params)
+	// The finding and its declared CWEs land together or not at all.
+	tx, err := s.queries.BeginTx(r.Context())
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to create finding")
 		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	txQueries := s.queries.WithTx(tx)
+	finding, err := txQueries.CreateVulnerability(r.Context(), *params)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create finding")
+		return
+	}
+	if len(cwes) > 0 {
+		if err := txQueries.ReplaceDeclaredFindingCWEs(r.Context(), repo.ID, finding.Fingerprint, cwes, findingCWEDeclarer(origin)); err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to store finding cwes")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create finding")
+		return
+	}
+	created := []store.Vulnerability{*finding}
+	if err := s.queries.AttachFindingCWEs(r.Context(), created); err == nil {
+		finding = &created[0]
 	}
 
 	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionFindingCreate, map[string]any{
@@ -90,9 +148,77 @@ func (s *Server) handleCreateFinding(w http.ResponseWriter, r *http.Request) {
 		"severity":    string(finding.Severity),
 		"origin":      finding.Origin,
 		"token_name":  finding.OriginTokenName,
+		"cwes":        cwe.FormatAll(cwes),
 	})
 
 	api.JSON(w, http.StatusCreated, finding)
+}
+
+// @Summary      Set a manual finding's CWEs
+// @Description  Replaces the CWEs declared on a manual finding (ADR-037). Scanner and dependency findings take their CWEs from the scanner rule or the advisory and cannot be reclassified here. Ids must exist in the CWE catalog; an empty list clears the declaration.
+// @Tags         vulnerabilities
+// @Accept       json
+// @Produce      json
+// @Param        provider     path  string  true  "Forge provider"
+// @Param        slug         path  string  true  "Organization slug"
+// @Param        repoSlug     path  string  true  "Repository slug"
+// @Param        fingerprint  path  string  true  "Finding fingerprint"
+// @Param        payload      body  server.updateFindingCWEsRequest  true  "CWEs"
+// @Success      200  {object}  api.Response{data=store.Vulnerability}
+// @Failure      400  {object}  api.Response
+// @Failure      404  {object}  api.Response
+// @Failure      409  {object}  api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/cwes [put]
+func (s *Server) handleSetFindingCWEs(w http.ResponseWriter, r *http.Request) {
+	org, repo, user, ok := s.loadAuthorizedRepoWithUser(w, r, false)
+	if !ok {
+		return
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapVulnerabilities, apitoken.AccessWrite, org.Slug, repo.Slug) {
+		return
+	}
+	fingerprint := pathFingerprint(r)
+	var input updateFindingCWEsRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	cwes, err := declaredCWEs(input.CWEs)
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	finding, err := s.queries.GetLatestVulnerabilityByFingerprint(r.Context(), repo.ID, fingerprint)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding")
+		return
+	}
+	if finding == nil {
+		api.JSONError(w, http.StatusNotFound, "finding not found")
+		return
+	}
+	if finding.Type != string(store.VulnerabilityTypeManual) {
+		api.JSONError(w, http.StatusConflict, "only manual findings take declared CWEs: this finding's CWEs come from its scanner rule or advisory")
+		return
+	}
+	origin := resolveFindingOrigin(r.Context(), user)
+	if err := s.queries.ReplaceDeclaredFindingCWEs(r.Context(), repo.ID, finding.Fingerprint, cwes, findingCWEDeclarer(origin)); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to store finding cwes")
+		return
+	}
+	updated := []store.Vulnerability{*finding}
+	if err := s.queries.AttachFindingCWEs(r.Context(), updated); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding cwes")
+		return
+	}
+	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionFindingCWEs, map[string]any{
+		"finding_id":  finding.ID.String(),
+		"fingerprint": finding.Fingerprint,
+		"cwes":        cwe.FormatAll(cwes),
+		"origin":      string(origin.Origin),
+	})
+	api.JSON(w, http.StatusOK, updated[0])
 }
 
 // buildManualFindingParams validates the request and resolves the snapshot it

@@ -300,7 +300,7 @@ func TestEvaluateGatesFallsBackToOrgWideGatesOnlyWhenRepoHasNone(t *testing.T) {
 	}
 }
 
-func TestEvaluateGatesWithConfigOverridesDBWeaknessGates(t *testing.T) {
+func TestEvaluateGatesWithConfigOverridesDBCodeGates(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
 	mock := newMockStore()
@@ -315,20 +315,20 @@ func TestEvaluateGatesWithConfigOverridesDBWeaknessGates(t *testing.T) {
 		Enabled:        true,
 	}}
 	service := NewService(mock, zerolog.Nop())
-	weaknessGate := &WeaknessGate{MaxCritical: intPtr(1), MaxHigh: intPtr(1)}
+	codeGate := &CodeGate{MaxCritical: intPtr(1), MaxHigh: intPtr(1)}
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
 		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelMedium}},
-	}, &GateConfig{Weakness: weaknessGate})
+	}, &GateConfig{Code: codeGate})
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
 	}
 	if !result.Passed {
-		t.Fatalf("expected repo config to override DB weakness gate, got %#v", result)
+		t.Fatalf("expected repo config to override DB code gate, got %#v", result)
 	}
 }
 
-func TestEvaluateGatesWithConfigCanDisableWeaknessGates(t *testing.T) {
+func TestEvaluateGatesWithConfigCanDisableCodeGates(t *testing.T) {
 	repoID := uuid.New()
 	orgID := uuid.New()
 	mock := newMockStore()
@@ -344,16 +344,16 @@ func TestEvaluateGatesWithConfigCanDisableWeaknessGates(t *testing.T) {
 	}}
 	service := NewService(mock, zerolog.Nop())
 	disabled := false
-	weaknessGate := &WeaknessGate{Enabled: &disabled}
+	codeGate := &CodeGate{Enabled: &disabled}
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
 		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelMedium}},
-	}, &GateConfig{Weakness: weaknessGate})
+	}, &GateConfig{Code: codeGate})
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
 	}
 	if !result.Passed {
-		t.Fatalf("expected disabled weakness gates to pass, got %#v", result)
+		t.Fatalf("expected disabled code gates to pass, got %#v", result)
 	}
 }
 
@@ -371,11 +371,11 @@ func TestEvaluateGatesWithConfigKeepsDBVulnerabilityGates(t *testing.T) {
 		Enabled:     true,
 	}}
 	service := NewService(mock, zerolog.Nop())
-	weaknessGate := &WeaknessGate{MaxCritical: intPtr(10)}
+	codeGate := &CodeGate{MaxCritical: intPtr(10)}
 
 	result, err := service.EvaluateGatesWithConfig(context.Background(), repoID, orgID, &DeltaResult{
 		New: []storepkg.Vulnerability{{Severity: storepkg.SeverityLevelCritical}},
-	}, &GateConfig{Weakness: weaknessGate})
+	}, &GateConfig{Code: codeGate})
 	if err != nil {
 		t.Fatalf("EvaluateGatesWithConfig returned error: %v", err)
 	}

@@ -1,0 +1,249 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "SpotBugs",
+     "version": "4.9.8",
+     "supportedTaxonomies": [
+      {
+       "name": "CWE",
+       "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+      }
+     ],
+     "rules": [
+      {
+       "id": "CIPHER_INTEGRITY",
+       "shortDescription": {
+        "text": "Cipher with no integrity."
+       },
+       "messageStrings": {
+        "default": {
+         "text": "The cipher does not provide data integrity."
+        }
+       },
+       "helpUri": "https://find-sec-bugs.github.io/bugs.htm#CIPHER_INTEGRITY",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "353",
+          "guid": "d5eee5a3-428a-56c9-8338-c0bd8aa08841",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      },
+      {
+       "id": "COMMAND_INJECTION",
+       "shortDescription": {
+        "text": "Potential Command Injection."
+       },
+       "messageStrings": {
+        "default": {
+         "text": "This usage of {0} can be vulnerable to Command Injection."
+        }
+       },
+       "helpUri": "https://find-sec-bugs.github.io/bugs.htm#COMMAND_INJECTION",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "78",
+          "guid": "de860c32-bc93-5e70-89d7-0877e5abaefb",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      },
+      {
+       "id": "DES_USAGE",
+       "shortDescription": {
+        "text": "DES is insecure."
+       },
+       "messageStrings": {
+        "default": {
+         "text": "DES should be replaced with AES."
+        }
+       },
+       "helpUri": "https://find-sec-bugs.github.io/bugs.htm#DES_USAGE",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "327",
+          "guid": "09eca73c-fb11-5ac5-9ef3-eba96de7209c",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    "extensions": [
+     {
+      "name": "edu.umd.cs.findbugs.plugins.core",
+      "version": "4.9.8"
+     },
+     {
+      "name": "com.h3xstream.findsecbugs",
+      "version": ""
+     }
+    ]
+   },
+   "taxonomies": [
+    {
+     "name": "CWE",
+     "version": "4.10",
+     "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310",
+     "isComprehensive": true,
+     "organization": "MITRE",
+     "taxa": [
+      {
+       "id": "327",
+       "guid": "09eca73c-fb11-5ac5-9ef3-eba96de7209c",
+       "shortDescription": {
+        "text": "Use of a Broken or Risky Cryptographic Algorithm"
+       }
+      },
+      {
+       "id": "353",
+       "guid": "d5eee5a3-428a-56c9-8338-c0bd8aa08841",
+       "shortDescription": {
+        "text": "Missing Support for Integrity Check"
+       }
+      },
+      {
+       "id": "78",
+       "guid": "de860c32-bc93-5e70-89d7-0877e5abaefb",
+       "shortDescription": {
+        "text": "Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+       }
+      }
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ruleId": "CIPHER_INTEGRITY",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Cipher with no integrity"
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/Vuln.java"
+        },
+        "region": {
+         "startLine": 5
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "hash()",
+         "kind": "function",
+         "fullyQualifiedName": "Vuln.hash()"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "COMMAND_INJECTION",
+     "ruleIndex": 1,
+     "message": {
+      "id": "default",
+      "text": "Potential Command Injection",
+      "arguments": [
+       "java/lang/Runtime.exec(Ljava/lang/String;)Ljava/lang/Process;"
+      ]
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/Vuln.java"
+        },
+        "region": {
+         "startLine": 4
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "cmd(String)",
+         "kind": "function",
+         "fullyQualifiedName": "Vuln.cmd(String)"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "DES_USAGE",
+     "ruleIndex": 2,
+     "message": {
+      "id": "default",
+      "text": "DES is insecure"
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/Vuln.java"
+        },
+        "region": {
+         "startLine": 5
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "hash()",
+         "kind": "function",
+         "fullyQualifiedName": "Vuln.hash()"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

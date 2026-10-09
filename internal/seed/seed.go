@@ -84,6 +84,8 @@ type seededAdvisory struct {
 	publishedAt time.Time
 	ranges      []seededAffectedRange
 	targets     []seededMatchTarget
+	// cwes as NVD maps them, so dependency findings join the CWE views.
+	cwes []int
 }
 
 var seedOrgs = []seededOrg{
@@ -109,7 +111,7 @@ var seedOrgs = []seededOrg{
 				findings: []seededFinding{
 					finding("gosec", "hardcoded-secret-in-source", store.SeverityLevelCritical, "open", "internal/handler/auth.go", 47, 47, "JWT signing secret is hardcoded in the authentication handler.", map[string]any{"confidence": "high", "category": "credentials"}),
 					finding("semgrep", "sql-injection-via-string-concatenation", store.SeverityLevelHigh, "open", "internal/repository/users.go", 83, 86, "SQL query concatenates user input into the WHERE clause.", map[string]any{"owasp": "A03:2021-Injection"}),
-					finding("codeql", "path-traversal", store.SeverityLevelHigh, "open", "internal/http/download.go", 66, 72, "Download handler joins user input into a filesystem path without normalization.", map[string]any{"cwe": "CWE-22"}),
+					finding("codeql", "path-traversal", store.SeverityLevelHigh, "open", "internal/http/download.go", 66, 72, "Download handler joins user input into a filesystem path without normalization.", map[string]any{}),
 					finding("semgrep", "ssrf-via-user-input", store.SeverityLevelMedium, "ignored", "internal/http/proxy.go", 51, 57, "Webhook preview endpoint fetches arbitrary user-supplied URLs.", map[string]any{"reason": "test fixture only"}),
 					finding("gitleaks", "aws-access-key-exposed", store.SeverityLevelCritical, "fixed", "deploy/bootstrap.env", 12, 12, "Bootstrap environment file previously contained an AWS access key.", map[string]any{"ticket": "SEC-101"}),
 					finding("semgrep", "insecure-deserialization", store.SeverityLevelLow, "false_positive", "internal/cache/session.go", 28, 34, "Gob decode path was flagged as unsafe deserialization but only reads trusted cache entries.", map[string]any{"reviewed_by": "appsec"}),
@@ -129,7 +131,7 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/next@14.1.0", "next", "14.1.0", "npm"),
 				},
 				findings: []seededFinding{
-					finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelHigh, "open", "src/components/AdminPanel.tsx", 118, 121, "Dashboard renders raw HTML from markdown previews without sanitization.", map[string]any{"cwe": "CWE-79"}),
+					finding("semgrep", "go.lang.security.audit.xss.no-direct-write", store.SeverityLevelHigh, "open", "src/components/AdminPanel.tsx", 118, 121, "Dashboard renders raw HTML from markdown previews without sanitization.", map[string]any{}),
 					finding("trufflehog", "github-token-exposed", store.SeverityLevelCritical, "open", "src/api/client.ts", 14, 14, "Frontend bundle contains a GitHub token used for local API calls.", map[string]any{"exposure": "client-side"}),
 					finding("gitleaks", "private-key-detected", store.SeverityLevelCritical, "fixed", "certs/dev-dashboard.pem", 1, 27, "Development TLS key was committed to the repository.", map[string]any{"rotation": "completed"}),
 					finding("eslint-security", "prototype-pollution", store.SeverityLevelHigh, "open", "src/lib/mergeFilters.ts", 37, 45, "User-controlled filter objects are merged recursively into application state.", map[string]any{"package": "lodash.merge"}),
@@ -389,6 +391,7 @@ var seedAdvisories = []seededAdvisory{
 	},
 	{
 		canonicalID: "CVE-2023-44487",
+		cwes:        []int{400},
 		title:       "HTTP/2 Rapid Reset",
 		description: "golang.org/x/net HTTP/2 server implementations may be vulnerable to the Rapid Reset attack leading to denial of service.",
 		severity:    store.SeverityLevelHigh,
@@ -404,6 +407,7 @@ var seedAdvisories = []seededAdvisory{
 	},
 	{
 		canonicalID: "CVE-2023-39325",
+		cwes:        []int{770},
 		title:       "golang.org/x/net HTTP/2 resource consumption",
 		description: "Certain HTTP/2 requests can consume excessive resources in affected golang.org/x/net versions.",
 		severity:    store.SeverityLevelHigh,
@@ -418,6 +422,7 @@ var seedAdvisories = []seededAdvisory{
 	},
 	{
 		canonicalID: "CVE-2024-21626",
+		cwes:        []int{403},
 		title:       "runc container escape",
 		description: "Affected runc versions may permit a crafted image or container to escape intended filesystem boundaries.",
 		severity:    store.SeverityLevelCritical,
@@ -430,6 +435,7 @@ var seedAdvisories = []seededAdvisory{
 	},
 	{
 		canonicalID: "CVE-2023-45853",
+		cwes:        []int{190},
 		title:       "zlib buffer overflow",
 		description: "Affected Zlib.Portable packages bundle a vulnerable zlib version that may permit buffer overflow conditions during decompression.",
 		severity:    store.SeverityLevelMedium,
@@ -615,6 +621,9 @@ func seedAdvisoryData(ctx context.Context, queries *store.Queries, tx *sql.Tx, s
 		).Scan(&advisoryID); err != nil {
 			return err
 		}
+		if err := qtx.AddAdvisoryCWEs(ctx, advisoryID, advisory.cwes); err != nil {
+			return err
+		}
 
 		affectedRangeIDs := make([]uuid.UUID, 0, len(advisory.ranges))
 		for _, affectedRange := range advisory.ranges {
@@ -686,13 +695,59 @@ func seedAdvisoryData(ctx context.Context, queries *store.Queries, tx *sql.Tx, s
 	return nil
 }
 
+// seedRuleCWEs gives seeded rules the CWEs those scanners report in their
+// SARIF (ADR-037 survey). ESLint, Checkov and Trivy misconfiguration rules
+// carry none on purpose: the demo shows real coverage gaps under cwe:none.
+// Secret-scanner findings are CWE-798 by type, without a rule.
+var seedRuleCWEs = map[string][]int{
+	"semgrep/sql-injection-via-string-concatenation":     {89},
+	"semgrep/hardcoded-secret-in-source":                 {798},
+	"semgrep/go.lang.security.audit.xss.no-direct-write": {79},
+	"semgrep/open-redirect":                              {601},
+	"semgrep/insecure-deserialization":                   {502},
+	"semgrep/ssrf-via-user-input":                        {918},
+	"semgrep/missing-burst-ceiling":                      {770},
+	"semgrep/cors-misconfiguration":                      {942},
+	"gosec/use-of-weak-hash-md5":                         {328},
+	"gosec/insecure-tls-version":                         {327},
+	"gosec/hardcoded-secret-in-source":                   {798},
+	"gosec/G115":                                         {190},
+	"codeql/path-traversal":                              {22, 23, 36},
+	"codeql/command-injection":                           {78, 88},
+	"bandit/shell-injection":                             {78},
+	"bandit/hardcoded-database-password":                 {259},
+}
+
+// seedRule upserts the scan rule a seeded finding references when the
+// scanner would classify it, and records its CWEs.
+func seedRule(ctx context.Context, queries *store.Queries, tool, ruleID string) (uuid.NullUUID, error) {
+	cwes, ok := seedRuleCWEs[tool+"/"+ruleID]
+	if !ok {
+		return uuid.NullUUID{}, nil
+	}
+	id, err := queries.UpsertScanRule(ctx, dbgen.UpsertScanRuleParams{
+		Tool: tool, RuleID: ruleID, Name: ruleID, Tags: []string{"security"}, Properties: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		return uuid.NullUUID{}, err
+	}
+	if err := queries.SyncScanRuleCWEs(ctx, map[uuid.UUID][]int{id: cwes}); err != nil {
+		return uuid.NullUUID{}, err
+	}
+	return uuid.NullUUID{UUID: id, Valid: true}, nil
+}
+
 func seedFindings(ctx context.Context, queries *store.Queries, snapshotID uuid.UUID, findings []seededFinding) error {
 	for _, seededFinding := range findings {
+		ruleRef, err := seedRule(ctx, queries, seededFinding.tool, seededFinding.ruleID)
+		if err != nil {
+			return err
+		}
 		startLine := seededFinding.start
 		endLine := seededFinding.end
 		locationHash := findingLocationHash(seededFinding.tool, seededFinding.ruleID, seededFinding.filePath, startLine, endLine)
 
-		_, err := queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+		_, err = queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
 			Type:                   seededFindingType(seededFinding.tool),
 			SnapshotID:             snapshotID,
 			Title:                  truncateSeedText(seededFinding.message, 200),
@@ -709,6 +764,7 @@ func seedFindings(ctx context.Context, queries *store.Queries, snapshotID uuid.U
 			LocationHash:           nullSeedString(locationHash),
 			Fingerprint:            locationHash,
 			Metadata:               seededFinding.metadata,
+			RuleRefID:              ruleRef,
 		})
 		if err != nil {
 			return err

@@ -10,11 +10,10 @@ INSERT INTO scan_rules (
     default_level,
     security_severity,
     rule_precision,
-    cwe_ids,
     tags,
     properties
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (tool, rule_id) DO UPDATE SET
     name              = EXCLUDED.name,
     short_description = EXCLUDED.short_description,
@@ -24,7 +23,6 @@ ON CONFLICT (tool, rule_id) DO UPDATE SET
     default_level     = EXCLUDED.default_level,
     security_severity = EXCLUDED.security_severity,
     rule_precision    = EXCLUDED.rule_precision,
-    cwe_ids           = EXCLUDED.cwe_ids,
     tags              = EXCLUDED.tags,
     properties        = EXCLUDED.properties,
     updated_at        = NOW()

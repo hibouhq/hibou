@@ -156,6 +156,14 @@
               />
 
               <div class="mt-5 space-y-5">
+                <!-- ADR-037: one CWE section for every finding type, titled. -->
+                <FindingCweList
+                  :finding="detail.finding"
+                  :provider="provider"
+                  :slug="slug"
+                  :repo-slug="repoSlug"
+                  @updated="cwes => { if (detail) { detail.finding.cwes = cwes; emit('cwesUpdated', fingerprint, cwes) } }"
+                />
                 <FindingSection
                   v-if="detail.finding.fixed_in_prs?.length"
                   title="Fix already in flight"
@@ -462,7 +470,7 @@ import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from '
 
 import { Flame, X } from 'lucide-vue-next'
 
-import { api, type AcceptanceReasonKind, type FindingDetail, type FindingDispute, type Repository, type Vulnerability } from '@/api/client'
+import { api, type FindingCWE, type AcceptanceReasonKind, type FindingDetail, type FindingDispute, type Repository, type Vulnerability } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import CodeFindingDetails from '@/components/finding/CodeFindingDetails.vue'
@@ -471,6 +479,7 @@ import FindingKEVDetails from '@/components/finding/FindingKEVDetails.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
 import FindingTimeline from '@/components/finding/FindingTimeline.vue'
 import GenericFindingDetails from '@/components/finding/GenericFindingDetails.vue'
+import FindingCweList from '@/components/finding/FindingCweList.vue'
 import SecretFindingDetails from '@/components/finding/SecretFindingDetails.vue'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
 import { advisoryUrl, findingShape, findingTypeBadgeClass, isComponentBacked, severityBadgeClass } from '@/lib/findingDisplay'
@@ -491,6 +500,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
+  // ADR-037: a manual finding's declared CWEs changed; the list row follows.
+  cwesUpdated: [fingerprint: string, cwes: FindingCWE[]]
   // The finding travels with the event: the modal is deep-linkable, so the
   // list behind it may not hold this row, and a parent-side lookup would
   // silently drop the VEX option (or do nothing at all on revoke).

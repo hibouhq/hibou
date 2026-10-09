@@ -1,14 +1,21 @@
 # yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json
 version: 1
 
-# Configure branch-aware weakness quality gates for code findings.
-# Vulnerability (CVE) gates stay managed in Hibou itself.
+# Configure branch-aware quality gates. `code` caps new first-party code
+# findings (SAST, DAST, manual); dependency (CVE) gates stay managed in Hibou.
 quality_gates:
   - branches: ["main"]
     # enforcement: advisory   # advisory (default, informational/non-blocking) | blocking
-    weaknesses:
+    code:
       max_critical: 0
       max_high: 0
+    # cwe:                               # deny new findings carrying these CWEs, any type (SAST, DAST, CVE...)
+    #   deny: ["CWE-798", "CWE-502"]     # exact CWEs
+    #   deny_tree: ["CWE-74"]            # a CWE and every sub-type (CWE-74 covers SQLi, XSS, command injection...)
+    #   deny_sets: ["top25"]             # top25 | owasp-top10 | owasp-a01 ... owasp-a10
+    #   deny_categories: ["injection", "encryption"]  # MITRE View 1400 categories
+    #   types: ["sast", "dependency"]    # restrict to these finding types (default: all)
+    #   min_severity: high               # ignore findings below this severity (default: any)
     # licenses:
     #   deny_categories: ["copyleft", "network-copyleft", "source-available"]
     #   deny: ["LGPL-2.1-*"]           # narrows a category the policy otherwise allows

@@ -10,11 +10,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hibouhq/hibou/internal/cwe"
 )
 
 const maxDocumentSize = 50 << 20
-
-var cwePattern = regexp.MustCompile(`(?i)\bCWE-\d+\b`)
 
 func Parse(r io.Reader) (*Document, error) {
 	if r == nil {
@@ -90,10 +90,14 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 		// Lowercased so the same scanner keys identically wherever the name
 		// appears (SARIF driver "Trivy", server-side provider "trivy").
 		toolName := strings.ToLower(strings.TrimSpace(run.Tool.Driver.Name))
+		taxonomy := newCWETaxonomy(run)
 		for _, result := range run.Results {
-			rule := resolveRule(run.Tool.Driver.Rules, result)
+			rule := resolveRule(run.Tool, result)
 			filePath, startLine, endLine := resultLocation(result)
 			ruleID := strings.TrimSpace(result.RuleID)
+			if ruleID == "" && result.Rule != nil {
+				ruleID = strings.TrimSpace(result.Rule.ID)
+			}
 			if ruleID == "" {
 				ruleID = strings.TrimSpace(rule.ID)
 			}
@@ -112,7 +116,8 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 				Message:      strings.TrimSpace(result.Message.Text),
 				Fingerprint:  fingerprint,
 				LocationHash: sha256Hex(toolName + "/" + ruleID + "/" + filePath + "/" + strconv.Itoa(int(startLine))),
-				Rule:         ruleDescriptor(ruleID, rule),
+				Rule:         ruleDescriptor(ruleID, rule, taxonomy),
+				ResultCWEs:   taxonomy.resultCWEs(result.Taxa),
 			}
 			applySuppression(&finding, result.Suppressions)
 			findings = append(findings, finding)
@@ -124,7 +129,7 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 
 // ruleDescriptor normalizes a SARIF reportingDescriptor into the per-rule
 // catalog record. Returns nil when there is no rule id to key on.
-func ruleDescriptor(ruleID string, rule ReportingDescriptor) *RuleDescriptor {
+func ruleDescriptor(ruleID string, rule ReportingDescriptor, taxonomy cweTaxonomy) *RuleDescriptor {
 	if ruleID == "" {
 		return nil
 	}
@@ -140,7 +145,7 @@ func ruleDescriptor(ruleID string, rule ReportingDescriptor) *RuleDescriptor {
 		HelpURI:          strings.TrimSpace(rule.HelpURI),
 		SecuritySeverity: strings.TrimSpace(props.SecuritySeverity),
 		Precision:        strings.TrimSpace(props.Precision),
-		CWEs:             extractCWEs(props.Tags),
+		CWEs:             cwe.Dedupe(append(taxonomy.ruleCWEs(rule.Relationships), tagCWEs(props.Tags)...)),
 		Tags:             props.Tags,
 		Properties:       rule.Properties,
 	}
@@ -176,7 +181,20 @@ func applySuppression(finding *Finding, suppressions []Suppression) {
 	}
 }
 
-func resolveRule(rules []ReportingDescriptor, result Result) ReportingDescriptor {
+// resolveRule finds the result's reportingDescriptor: result.rule (§3.27.7,
+// which may point into tool.extensions per §3.54.2), then ruleIndex into the
+// driver, then ruleId.
+func resolveRule(tool Tool, result Result) ReportingDescriptor {
+	if ref := result.Rule; ref != nil {
+		component, ok := referencedComponent(tool, ref.ToolComponent)
+		if ok {
+			if descriptor, found := lookupDescriptor(component.Rules, *ref); found {
+				return descriptor
+			}
+		}
+	}
+
+	rules := tool.Driver.Rules
 	if result.RuleIndex != nil {
 		idx := *result.RuleIndex
 		if idx >= 0 && idx < len(rules) {
@@ -195,6 +213,163 @@ func resolveRule(rules []ReportingDescriptor, result Result) ReportingDescriptor
 	}
 
 	return ReportingDescriptor{}
+}
+
+// referencedComponent applies §3.54.2: no index and no guid means the driver,
+// an index selects tool.extensions, a guid matches the driver or an extension.
+func referencedComponent(tool Tool, ref *ToolComponentReference) (ToolComponent, bool) {
+	if ref == nil || (ref.Index == nil && ref.GUID == "") {
+		return tool.Driver, true
+	}
+	if ref.Index != nil {
+		idx := *ref.Index
+		if idx >= 0 && idx < len(tool.Extensions) {
+			return tool.Extensions[idx], true
+		}
+		return ToolComponent{}, false
+	}
+	if strings.EqualFold(tool.Driver.GUID, ref.GUID) {
+		return tool.Driver, true
+	}
+	for _, extension := range tool.Extensions {
+		if strings.EqualFold(extension.GUID, ref.GUID) {
+			return extension, true
+		}
+	}
+	return ToolComponent{}, false
+}
+
+// lookupDescriptor resolves a reportingDescriptorReference within one
+// component's descriptors: index, then guid, then id.
+func lookupDescriptor(descriptors []ReportingDescriptor, ref ReportingDescriptorReference) (ReportingDescriptor, bool) {
+	if ref.Index != nil {
+		idx := *ref.Index
+		if idx >= 0 && idx < len(descriptors) {
+			return descriptors[idx], true
+		}
+	}
+	if ref.GUID != "" {
+		for _, descriptor := range descriptors {
+			if strings.EqualFold(descriptor.GUID, ref.GUID) {
+				return descriptor, true
+			}
+		}
+	}
+	if id := strings.TrimSpace(ref.ID); id != "" {
+		for _, descriptor := range descriptors {
+			if descriptor.ID == id {
+				return descriptor, true
+			}
+		}
+	}
+	return ReportingDescriptor{}, false
+}
+
+// cweTaxonomy recognizes references to the CWE taxonomy within one run.
+// Every producer uses its own GUID for "CWE" (gosec, KICS, SpotBugs, ZAP and
+// Flawfinder all differ), so a GUID only counts when this run itself declares
+// it as CWE; otherwise the component name "CWE" is the signal all of them
+// share (ADR-037 §2), even though §3.54.3 excludes name from lookup.
+type cweTaxonomy struct {
+	guids map[string]struct{}
+	// taxa of the inline CWE taxonomy, for targets that give index/guid but no id.
+	taxa []ReportingDescriptor
+}
+
+func newCWETaxonomy(run Run) cweTaxonomy {
+	taxonomy := cweTaxonomy{guids: map[string]struct{}{}}
+	for _, component := range run.Taxonomies {
+		if !isCWEName(component.Name) {
+			continue
+		}
+		if component.GUID != "" {
+			taxonomy.guids[strings.ToLower(component.GUID)] = struct{}{}
+		}
+		taxonomy.taxa = append(taxonomy.taxa, component.Taxa...)
+	}
+	for _, supported := range run.Tool.Driver.SupportedTaxonomies {
+		if isCWEName(supported.Name) && supported.GUID != "" {
+			taxonomy.guids[strings.ToLower(supported.GUID)] = struct{}{}
+		}
+	}
+	return taxonomy
+}
+
+func isCWEName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "CWE")
+}
+
+func (t cweTaxonomy) refersToCWE(ref *ToolComponentReference) bool {
+	if ref == nil {
+		return false
+	}
+	if isCWEName(ref.Name) {
+		return true
+	}
+	_, ok := t.guids[strings.ToLower(ref.GUID)]
+	return ref.GUID != "" && ok
+}
+
+// cweOf reads the CWE a taxon reference names: its id through the
+// normalizer ("327" and "CWE-120" both occur), else index/guid into the inline
+// taxa. An external taxonomy has no inline taxa, so an id-less target there is
+// unresolvable and skipped.
+func (t cweTaxonomy) cweOf(ref ReportingDescriptorReference) (int, bool) {
+	if !t.refersToCWE(ref.ToolComponent) {
+		return 0, false
+	}
+	if id, ok := cwe.Parse(ref.ID); ok {
+		return id, true
+	}
+	if taxon, ok := lookupDescriptor(t.taxa, ReportingDescriptorReference{Index: ref.Index, GUID: ref.GUID}); ok {
+		return cwe.Parse(taxon.ID)
+	}
+	return 0, false
+}
+
+// ruleCWEs keeps relationships that classify every result of the rule
+// (ADR-037 §2.1): equal and superset by §3.27.8, plus relevant — the default
+// when kinds is absent, and how KICS and Flawfinder state their mapping.
+// subset/incomparable only overlap the CWE, so they count per result (taxa);
+// disjoint and the ordering kinds never classify.
+func (t cweTaxonomy) ruleCWEs(relationships []ReportingDescriptorRelationship) []int {
+	out := make([]int, 0, len(relationships))
+	for _, relationship := range relationships {
+		if !classifiesRule(relationship.Kinds) {
+			continue
+		}
+		if id, ok := t.cweOf(relationship.Target); ok {
+			out = append(out, id)
+		}
+	}
+	return cwe.Dedupe(out)
+}
+
+func classifiesRule(kinds []string) bool {
+	if len(kinds) == 0 {
+		return true
+	}
+	for _, kind := range kinds {
+		switch strings.TrimSpace(kind) {
+		case "equal", "superset", "relevant":
+			return true
+		}
+	}
+	return false
+}
+
+// resultCWEs reads result.taxa: the taxa this occurrence falls into.
+func (t cweTaxonomy) resultCWEs(taxa []ReportingDescriptorReference) []int {
+	if len(taxa) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(taxa))
+	for _, ref := range taxa {
+		if id, ok := t.cweOf(ref); ok {
+			out = append(out, id)
+		}
+	}
+	return cwe.Dedupe(out)
 }
 
 func resultLocation(result Result) (string, int32, int32) {
@@ -221,24 +396,17 @@ func mapSeverity(level string) string {
 	}
 }
 
-func extractCWEs(tags []string) []string {
-	if len(tags) == 0 {
-		return nil
-	}
-
-	seen := map[string]struct{}{}
-	cwes := make([]string, 0)
+// tagCWEs reads the tag convention: "external/cwe/cwe-<n>" (CodeQL, bandit,
+// mobsfscan, njsscan) or a tag starting with "CWE-<n>" (semgrep). CodeQL pads
+// ids ("cwe-078"); the normalizer maps that to 78 like everyone else's.
+func tagCWEs(tags []string) []int {
+	out := make([]int, 0, len(tags))
 	for _, tag := range tags {
-		for _, match := range cwePattern.FindAllString(tag, -1) {
-			normalized := strings.ToUpper(match)
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			cwes = append(cwes, normalized)
+		if id, ok := cwe.ParseTag(tag); ok {
+			out = append(out, id)
 		}
 	}
-	return cwes
+	return out
 }
 
 func producerFingerprint(result Result) string {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/store"
@@ -220,7 +221,8 @@ func buildEffectiveConfig(
 
 	response.Sections = append(response.Sections,
 		effectiveDependencyVulnerabilitySection(matched, enabledGates, gateSource),
-		effectiveWeaknessSection(matched, enabledGates, gateSource),
+		effectiveCodeSection(matched, enabledGates, gateSource),
+		effectiveCWESection(matched),
 		effectiveLicenseSection(matched, orgLicensePolicy),
 		effectiveCoverageSection(matched, cfg),
 		effectiveSecretsSection(matched),
@@ -270,20 +272,20 @@ func effectiveDependencyVulnerabilitySection(matched *repoconfig.QualityGate, ga
 	return section
 }
 
-func effectiveWeaknessSection(matched *repoconfig.QualityGate, gates []dbgen.QualityGate, gateSource string) effectiveSection {
-	section := effectiveSection{Name: "Code weaknesses", Status: sectionNotConfigured, Rules: []effectiveRule{}}
+func effectiveCodeSection(matched *repoconfig.QualityGate, gates []dbgen.QualityGate, gateSource string) effectiveSection {
+	section := effectiveSection{Name: "Code findings", Status: sectionNotConfigured, Rules: []effectiveRule{}}
 
-	// The interaction that surprises everyone: a file weakness section REPLACES
+	// The interaction that surprises everyone: a file code section REPLACES
 	// the stored max_new_findings gates rather than adding to them, and an
 	// explicitly disabled one switches the whole axis off — stored gates
-	// included. Mirrors evaluateConfiguredWeaknessGates.
-	if matched != nil && matched.Weaknesses != nil {
-		if !matched.Weaknesses.EnabledValue() {
+	// included. Mirrors evaluateConfiguredCodeGates.
+	if matched != nil && matched.Code != nil {
+		if !matched.Code.EnabledValue() {
 			section.Status = sectionDisabled
 			section.Note = "Disabled in .hibou.yaml. Stored max-new-findings gates are skipped too."
 			return section
 		}
-		thresholds := matched.Weaknesses
+		thresholds := matched.Code
 		section.Rules = append(section.Rules, optionalIntRules(sourceFile, "", map[string]*int{
 			"Max critical": thresholds.MaxCritical,
 			"Max high":     thresholds.MaxHigh,
@@ -313,6 +315,51 @@ func effectiveWeaknessSection(matched *repoconfig.QualityGate, gates []dbgen.Qua
 	}
 	if len(section.Rules) > 0 {
 		section.Status = sectionEnforced
+	}
+	return section
+}
+
+// effectiveCWESection lists the CWE deny rules with their titles, so the
+// settings page says what is blocked in words, not only ids.
+func effectiveCWESection(matched *repoconfig.QualityGate) effectiveSection {
+	section := effectiveSection{Name: "CWE deny list", Status: sectionNotConfigured, Rules: []effectiveRule{}}
+	if matched == nil || matched.CWE == nil {
+		return section
+	}
+	policy := matched.CWE
+	catalog := cwe.Default()
+	add := func(label string, values []string, describe func(string) string) {
+		for _, value := range values {
+			section.Rules = append(section.Rules, effectiveRule{Label: label, Value: strings.TrimSpace(value), Source: sourceFile, Detail: describe(value)})
+		}
+	}
+	title := func(value string) string {
+		id, _ := cwe.Parse(value)
+		return catalog.Name(id)
+	}
+	add("Deny", policy.Deny, title)
+	add("Deny with descendants", policy.DenyTree, func(value string) string {
+		id, _ := cwe.Parse(value)
+		return fmt.Sprintf("%s · %d CWEs", catalog.Name(id), len(catalog.Descendants(id)))
+	})
+	add("Deny set", policy.DenySets, func(value string) string {
+		set, _ := catalog.Set(value)
+		return fmt.Sprintf("%s · %d CWEs", set.Name, len(set.Members))
+	})
+	add("Deny category", policy.DenyCategories, func(value string) string {
+		category, _ := catalog.Category(value)
+		return fmt.Sprintf("%s · %d CWEs", category.Name, len(category.Members))
+	})
+	if len(section.Rules) > 0 {
+		section.Status = sectionEnforced
+		scope := "every finding type"
+		if len(policy.Types) > 0 {
+			scope = strings.Join(policy.Types, ", ")
+		}
+		if policy.MinSeverity != "" {
+			scope += ", severity " + policy.MinSeverity + " and above"
+		}
+		section.Note = "Applies to new findings of " + scope + ". Accepting a finding (risk or false positive) is the way past a denied CWE."
 	}
 	return section
 }
@@ -509,7 +556,7 @@ func effectiveConfigWarnings(
 		case len(gates) == 0:
 			warnings = append(warnings, "No quality gates at all: scans are recorded, but nothing can fail a pull request except the malicious-package block.")
 		default:
-			warnings = append(warnings, "No .hibou.yaml quality gates. Only the stored gates below apply, so weakness, coverage, secret and license thresholds are unset.")
+			warnings = append(warnings, "No .hibou.yaml quality gates. Only the stored gates below apply, so code, CWE, coverage, secret and license thresholds are unset.")
 		}
 	} else if matched == nil {
 		warnings = append(warnings, fmt.Sprintf("No .hibou.yaml gate matches %q, so none of its thresholds apply to this branch.", branch))
@@ -519,10 +566,10 @@ func effectiveConfigWarnings(
 		warnings = append(warnings, "The stored thresholds are inherited from the organization; this repository has no gate rows of its own. Adding one replaces the inherited set entirely.")
 	}
 
-	if matched != nil && matched.Weaknesses != nil && !matched.Weaknesses.EnabledValue() {
+	if matched != nil && matched.Code != nil && !matched.Code.EnabledValue() {
 		for _, gate := range gates {
 			if gate.MaxNewFindings.Valid {
-				warnings = append(warnings, fmt.Sprintf("Weaknesses are disabled in .hibou.yaml, which also skips the stored max-new-findings threshold on gate %q.", gate.Name))
+				warnings = append(warnings, fmt.Sprintf("The code section is disabled in .hibou.yaml, which also skips the stored max-new-findings threshold on gate %q.", gate.Name))
 				break
 			}
 		}

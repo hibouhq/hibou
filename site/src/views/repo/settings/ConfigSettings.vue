@@ -447,18 +447,31 @@ function gateRules(gate: RepoConfigGate): GateRule[] {
     }
   }
 
-  const weaknesses = gate.weaknesses
-  if (weaknesses) {
+  const code = gate.code
+  if (code && code.enabled !== false) {
     const parts = [
-      limit(weaknesses.max_critical) !== null ? `critical ≤ ${weaknesses.max_critical}` : '',
-      limit(weaknesses.max_high) !== null ? `high ≤ ${weaknesses.max_high}` : '',
-      limit(weaknesses.max_medium) !== null ? `medium ≤ ${weaknesses.max_medium}` : '',
+      limit(code.max_critical) !== null ? `critical ≤ ${code.max_critical}` : '',
+      limit(code.max_high) !== null ? `high ≤ ${code.max_high}` : '',
+      limit(code.max_medium) !== null ? `medium ≤ ${code.max_medium}` : '',
     ].filter(Boolean)
     if (parts.length > 0) {
-      rules.push({
-        label: `Weaknesses${weaknesses.enforcement ? ` (${weaknesses.enforcement})` : ''}`,
-        value: parts.join(' · '),
-      })
+      rules.push({ label: 'Code findings', value: parts.join(' · ') })
+    }
+  }
+
+  // ADR-037: titles for each denied CWE are on the effective-config view.
+  const cwePolicy = gate.cwe
+  if (cwePolicy) {
+    const parts = [
+      cwePolicy.deny?.length ? `deny ${cwePolicy.deny.join(', ')}` : '',
+      cwePolicy.deny_tree?.length ? `with descendants ${cwePolicy.deny_tree.join(', ')}` : '',
+      cwePolicy.deny_sets?.length ? `lists ${cwePolicy.deny_sets.join(', ')}` : '',
+      cwePolicy.deny_categories?.length ? `categories ${cwePolicy.deny_categories.join(', ')}` : '',
+      cwePolicy.types?.length ? `types ${cwePolicy.types.join(', ')}` : '',
+      cwePolicy.min_severity ? `≥ ${cwePolicy.min_severity}` : '',
+    ].filter(Boolean)
+    if (parts.length > 0) {
+      rules.push({ label: 'CWE deny list', value: parts.join(' · ') })
     }
   }
 

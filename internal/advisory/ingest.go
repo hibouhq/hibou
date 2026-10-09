@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/sanitize"
 	storepkg "github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -31,6 +32,7 @@ type IngesterStore interface {
 	ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUID) ([]dbgen.AdvisorySource, error)
 	CreateAffectedRange(ctx context.Context, arg dbgen.CreateAffectedRangeParams) (dbgen.AffectedRange, error)
 	DeleteAffectedRangesByAdvisoryAndSource(ctx context.Context, arg dbgen.DeleteAffectedRangesByAdvisoryAndSourceParams) error
+	AddAdvisoryCWEs(ctx context.Context, advisoryID uuid.UUID, ids []int) error
 }
 
 type Ingester struct {
@@ -126,6 +128,11 @@ func (ing *Ingester) ingestOne(ctx context.Context, providerName string, result 
 	finalRecord, err := ing.finalizeAdvisoryRecord(ctx, queries, advisoryRecord, canonicalID, result)
 	if err != nil {
 		return dbgen.Advisory{}, err
+	}
+	// Union across providers (ADR-037 §4): one provider omitting a CWE never
+	// erases another's; NVD's "no mapping" placeholders are dropped here.
+	if err := queries.AddAdvisoryCWEs(ctx, finalRecord.ID, cwe.ParseAll(result.CWEIDs)); err != nil {
+		return dbgen.Advisory{}, fmt.Errorf("store cwes for advisory %s: %w", canonicalID, err)
 	}
 
 	if tx != nil {
@@ -256,7 +263,6 @@ func (ing *Ingester) finalizeAdvisoryRecord(ctx context.Context, queries Ingeste
 		CvssScore:   toNullScore(mergedScore),
 		CvssVersion: toNullCVSSVersion(mergedVersion),
 		CvssVector:  mergedVector,
-		CweIds:      advisoryRecord.CweIds,
 		IsMalware:   isMalware,
 		MalwareType: coalesceMalwareType(advisoryRecord.MalwareType, normalizeMalwareType(result.MalwareType)),
 		PublishedAt: advisoryRecord.PublishedAt,
@@ -338,7 +344,6 @@ func mergedAdvisoryUpsert(existing dbgen.Advisory, found bool, canonicalID strin
 		CvssScore:   toNullScore(result.CVSSScore),
 		CvssVersion: toNullCVSSVersion(result.CVSSVersion),
 		CvssVector:  result.CVSSVector,
-		CweIds:      mergeStrings(existing.CweIds, result.CWEIDs),
 		IsMalware:   isMalware,
 		MalwareType: malwareType,
 		PublishedAt: publishedAt,
@@ -616,22 +621,4 @@ func uniqueAliases(providerID string, aliases []string) []string {
 		ordered = append(ordered, trimmed)
 	}
 	return ordered
-}
-
-func mergeStrings(left, right []string) []string {
-	seen := make(map[string]struct{}, len(left)+len(right))
-	merged := make([]string, 0, len(left)+len(right))
-	for _, value := range append(append([]string(nil), left...), right...) {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
-			continue
-		}
-		key := strings.ToUpper(trimmed)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, trimmed)
-	}
-	return merged
 }

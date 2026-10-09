@@ -186,6 +186,48 @@ func (ns NullDeploymentStatus) Value() (driver.Value, error) {
 	return string(ns.DeploymentStatus), nil
 }
 
+type FindingCweSource string
+
+const (
+	FindingCweSourceSarifResult FindingCweSource = "sarif_result"
+	FindingCweSourceDeclared    FindingCweSource = "declared"
+)
+
+func (e *FindingCweSource) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = FindingCweSource(s)
+	case string:
+		*e = FindingCweSource(s)
+	default:
+		return fmt.Errorf("unsupported scan type for FindingCweSource: %T", src)
+	}
+	return nil
+}
+
+type NullFindingCweSource struct {
+	FindingCweSource FindingCweSource `json:"finding_cwe_source"`
+	Valid            bool             `json:"valid"` // Valid is true if FindingCweSource is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullFindingCweSource) Scan(value interface{}) error {
+	if value == nil {
+		ns.FindingCweSource, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.FindingCweSource.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullFindingCweSource) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.FindingCweSource), nil
+}
+
 type FindingOrigin string
 
 const (
@@ -910,7 +952,6 @@ type Advisory struct {
 	CvssScore   sql.NullString  `json:"cvss_score"`
 	CvssVersion NullCvssVersion `json:"cvss_version"`
 	CvssVector  string          `json:"cvss_vector"`
-	CweIds      []string        `json:"cwe_ids"`
 	IsMalware   bool            `json:"is_malware"`
 	MalwareType NullMalwareType `json:"malware_type"`
 	PublishedAt sql.NullTime    `json:"published_at"`
@@ -935,6 +976,11 @@ type AdvisoryCache struct {
 	AdvisoryCount int32           `json:"advisory_count"`
 	FetchedAt     time.Time       `json:"fetched_at"`
 	ExpiresAt     time.Time       `json:"expires_at"`
+}
+
+type AdvisoryCwe struct {
+	AdvisoryID uuid.UUID `json:"advisory_id"`
+	CweID      int32     `json:"cwe_id"`
 }
 
 type AdvisoryEvent struct {
@@ -1141,9 +1187,13 @@ type CveRecord struct {
 	CvssScore       sql.NullString `json:"cvss_score"`
 	CvssVector      string         `json:"cvss_vector"`
 	Severity        string         `json:"severity"`
-	CweIds          []string       `json:"cwe_ids"`
 	Summary         string         `json:"summary"`
 	ReferenceUrls   []string       `json:"reference_urls"`
+}
+
+type CveRecordCwe struct {
+	CveID string `json:"cve_id"`
+	CweID int32  `json:"cwe_id"`
 }
 
 type CveSubscription struct {
@@ -1191,6 +1241,22 @@ type FindingAcceptance struct {
 	ReasonKind       AcceptanceReasonKind `json:"reason_kind"`
 	Labels           []string             `json:"labels"`
 	VexJustification NullVexJustification `json:"vex_justification"`
+}
+
+type FindingCwe struct {
+	VulnerabilityID uuid.UUID `json:"vulnerability_id"`
+	CweID           int32     `json:"cwe_id"`
+	Source          string    `json:"source"`
+}
+
+type FindingCweAssertion struct {
+	RepoID           uuid.UUID        `json:"repo_id"`
+	Fingerprint      string           `json:"fingerprint"`
+	CweID            int32            `json:"cwe_id"`
+	Source           FindingCweSource `json:"source"`
+	DeclaredBy       uuid.NullUUID    `json:"declared_by"`
+	DeclaredApiKeyID uuid.NullUUID    `json:"declared_api_key_id"`
+	CreatedAt        time.Time        `json:"created_at"`
 }
 
 type FindingDispute struct {
@@ -1502,11 +1568,15 @@ type ScanRule struct {
 	DefaultLevel     string          `json:"default_level"`
 	SecuritySeverity string          `json:"security_severity"`
 	RulePrecision    string          `json:"rule_precision"`
-	CweIds           []string        `json:"cwe_ids"`
 	Tags             []string        `json:"tags"`
 	Properties       json.RawMessage `json:"properties"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+type ScanRuleCwe struct {
+	ScanRuleID uuid.UUID `json:"scan_rule_id"`
+	CweID      int32     `json:"cwe_id"`
 }
 
 type SearchPreset struct {
@@ -1732,7 +1802,6 @@ type Vulnerability struct {
 	HasRemediation          bool             `json:"has_remediation"`
 	RemediationLink         sql.NullString   `json:"remediation_link"`
 	Reachability            NullReachability `json:"reachability"`
-	OwaspTop10              sql.NullString   `json:"owasp_top_10"`
 	DueDate                 sql.NullTime     `json:"due_date"`
 	PresentOnDefaultBranch  bool             `json:"present_on_default_branch"`
 	ResolvedOnDefaultBranch bool             `json:"resolved_on_default_branch"`

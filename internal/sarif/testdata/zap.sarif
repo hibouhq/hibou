@@ -1,0 +1,428 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "ZAP",
+     "guid": "3716e880-7ee2-34d2-9cf1-0f88c0dc613a",
+     "version": "2.17.0",
+     "semanticVersion": "2.17.0",
+     "supportedTaxonomies": [
+      {
+       "guid": "b000a760-3e52-3565-a35c-f61369da53b7",
+       "name": "CWE"
+      }
+     ],
+     "rules": [
+      {
+       "id": "10020",
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options."
+       },
+       "name": "Missing Anti-clickjacking Header",
+       "properties": {
+        "references": [
+         "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options"
+        ],
+        "solution": {
+         "text": "Modern Web browsers support the Content-Security-Policy and X-Frame-Options HTTP headers. Ensure one of them is set on all web pages returned by your site/app.\nIf you expect the page to be framed only by pages on your server (e.g. it's part of a FRAMESET) then you'll want to use SAMEORIGIN, otherwise if you never expect the page to be framed, you should use DENY. Alternatively consider implementing Content Security Policy's \"frame-ancestors\" directive."
+        },
+        "confidence": "medium"
+       },
+       "relationships": [
+        {
+         "kinds": [
+          "superset"
+         ],
+         "target": {
+          "guid": "d8d0ef05-721c-3cbc-8dff-5209722467f8",
+          "id": "1021",
+          "toolComponent": {
+           "guid": "b000a760-3e52-3565-a35c-f61369da53b7",
+           "name": "CWE"
+          }
+         }
+        }
+       ],
+       "shortDescription": {
+        "text": "Missing Anti-clickjacking Header"
+       }
+      },
+      {
+       "id": "10038",
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks a"
+       },
+       "name": "Content Security Policy (CSP) Header Not Set",
+       "properties": {
+        "references": [
+         "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP",
+         "https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html",
+         "https://www.w3.org/TR/CSP/",
+         "https://w3c.github.io/webappsec-csp/",
+         "https://web.dev/articles/csp",
+         "https://caniuse.com/#feat=contentsecuritypolicy",
+         "https://content-security-policy.com/"
+        ],
+        "solution": {
+         "text": "Ensure that your web server, application server, load balancer, etc. is configured to set the Content-Security-Policy header."
+        },
+        "confidence": "high"
+       },
+       "relationships": [
+        {
+         "kinds": [
+          "superset"
+         ],
+         "target": {
+          "guid": "c60fb1e0-6538-36e7-9dfd-7702d6cf8b1f",
+          "id": "693",
+          "toolComponent": {
+           "guid": "b000a760-3e52-3565-a35c-f61369da53b7",
+           "name": "CWE"
+          }
+         }
+        }
+       ],
+       "shortDescription": {
+        "text": "Content Security Policy (CSP) Header Not Set"
+       }
+      },
+      {
+       "id": "90003",
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "The integrity attribute is missing on a script or link tag served by an external server. The integrity tag prevents an attacker who have gained access to this server from injecting a malicious content"
+       },
+       "name": "Sub Resource Integrity Attribute Missing",
+       "properties": {
+        "references": [
+         "https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Subresource_Integrity"
+        ],
+        "solution": {
+         "text": "Provide a valid integrity attribute to the tag."
+        },
+        "confidence": "high"
+       },
+       "relationships": [
+        {
+         "kinds": [
+          "superset"
+         ],
+         "target": {
+          "guid": "eb01dc93-7427-3531-834c-821484840b8b",
+          "id": "345",
+          "toolComponent": {
+           "guid": "b000a760-3e52-3565-a35c-f61369da53b7",
+           "name": "CWE"
+          }
+         }
+        }
+       ],
+       "shortDescription": {
+        "text": "Sub Resource Integrity Attribute Missing"
+       }
+      }
+     ]
+    }
+   },
+   "taxonomies": [
+    {
+     "guid": "b000a760-3e52-3565-a35c-f61369da53b7",
+     "isComprehensive": true,
+     "name": "CWE",
+     "organization": "MITRE",
+     "taxa": [
+      {
+       "id": "345",
+       "guid": "eb01dc93-7427-3531-834c-821484840b8b"
+      },
+      {
+       "id": "693",
+       "guid": "c60fb1e0-6538-36e7-9dfd-7702d6cf8b1f"
+      },
+      {
+       "id": "1021",
+       "guid": "d8d0ef05-721c-3cbc-8dff-5209722467f8"
+      }
+     ],
+     "version": "4.8"
+    }
+   ],
+   "results": [
+    {
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/"
+        },
+        "region": {
+         "startLine": 1
+        }
+       },
+       "properties": {
+        "attack": ""
+       }
+      }
+     ],
+     "message": {
+      "text": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options."
+     },
+     "ruleId": "10020",
+     "webRequest": {
+      "protocol": "HTTP",
+      "version": "1.1",
+      "target": "http://web:8000/",
+      "method": "GET",
+      "headers": {
+       "cache-control": "no-cache",
+       "host": "web:8000",
+       "pragma": "no-cache",
+       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+      },
+      "body": {}
+     },
+     "webResponse": {
+      "statusCode": 200,
+      "reasonPhrase": "OK",
+      "protocol": "HTTP",
+      "version": "1.0",
+      "headers": {
+       "Content-Length": "242",
+       "Content-type": "text/html",
+       "Date": "Fri, 09 Oct 2026 18:33:04 GMT",
+       "Last-Modified": "Fri, 09 Oct 2026 18:32:47 GMT",
+       "Server": "SimpleHTTP/0.6 Python/3.12.15"
+      },
+      "body": {
+       "text": "<html><head><script src=\"http://cdn.example.com/x.js\"></script></head><body>\n<form action=\"/login\" method=\"get\"><input name=\"password\" type=\"password\"></form>\n<a href=\"/page2.html\">p2</a><!-- TODO: admin password is hunter2 --></body></html>\n"
+      },
+      "noResponseReceived": true
+     }
+    },
+    {
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/page2.html"
+        },
+        "region": {
+         "startLine": 1
+        }
+       },
+       "properties": {
+        "attack": ""
+       }
+      }
+     ],
+     "message": {
+      "text": "The response does not protect against 'ClickJacking' attacks. It should include either Content-Security-Policy with 'frame-ancestors' directive or X-Frame-Options."
+     },
+     "ruleId": "10020",
+     "webRequest": {
+      "protocol": "HTTP",
+      "version": "1.1",
+      "target": "http://web:8000/page2.html",
+      "method": "GET",
+      "headers": {
+       "cache-control": "no-cache",
+       "host": "web:8000",
+       "pragma": "no-cache",
+       "referer": "http://web:8000/",
+       "user-agent": ""
+      },
+      "body": {}
+     },
+     "webResponse": {
+      "statusCode": 200,
+      "reasonPhrase": "OK",
+      "protocol": "HTTP",
+      "version": "1.0",
+      "headers": {
+       "Content-Length": "32",
+       "Content-type": "text/html",
+       "Date": "Fri, 09 Oct 2026 18:33:05 GMT",
+       "Last-Modified": "Fri, 09 Oct 2026 18:32:47 GMT",
+       "Server": "SimpleHTTP/0.6 Python/3.12.15"
+      },
+      "body": {
+       "text": "<html><body>hello</body></html>\n"
+      },
+      "noResponseReceived": true
+     }
+    },
+    {
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/"
+        },
+        "region": {
+         "startLine": 1
+        }
+       },
+       "properties": {
+        "attack": ""
+       }
+      }
+     ],
+     "message": {
+      "text": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks a"
+     },
+     "ruleId": "10038",
+     "webRequest": {
+      "protocol": "HTTP",
+      "version": "1.1",
+      "target": "http://web:8000/",
+      "method": "GET",
+      "headers": {
+       "cache-control": "no-cache",
+       "host": "web:8000",
+       "pragma": "no-cache",
+       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+      },
+      "body": {}
+     },
+     "webResponse": {
+      "statusCode": 200,
+      "reasonPhrase": "OK",
+      "protocol": "HTTP",
+      "version": "1.0",
+      "headers": {
+       "Content-Length": "242",
+       "Content-type": "text/html",
+       "Date": "Fri, 09 Oct 2026 18:33:04 GMT",
+       "Last-Modified": "Fri, 09 Oct 2026 18:32:47 GMT",
+       "Server": "SimpleHTTP/0.6 Python/3.12.15"
+      },
+      "body": {
+       "text": "<html><head><script src=\"http://cdn.example.com/x.js\"></script></head><body>\n<form action=\"/login\" method=\"get\"><input name=\"password\" type=\"password\"></form>\n<a href=\"/page2.html\">p2</a><!-- TODO: admin password is hunter2 --></body></html>\n"
+      },
+      "noResponseReceived": true
+     }
+    },
+    {
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/login?password=ZAP"
+        },
+        "region": {
+         "startLine": 1
+        }
+       },
+       "properties": {
+        "attack": ""
+       }
+      }
+     ],
+     "message": {
+      "text": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks. These attacks a"
+     },
+     "ruleId": "10038",
+     "webRequest": {
+      "protocol": "HTTP",
+      "version": "1.1",
+      "target": "http://web:8000/login?password=ZAP",
+      "method": "GET",
+      "headers": {
+       "cache-control": "no-cache",
+       "host": "web:8000",
+       "pragma": "no-cache",
+       "referer": "http://web:8000/",
+       "user-agent": ""
+      },
+      "body": {}
+     },
+     "webResponse": {
+      "statusCode": 404,
+      "reasonPhrase": "File not found",
+      "protocol": "HTTP",
+      "version": "1.0",
+      "headers": {
+       "Connection": "close",
+       "Content-Length": "335",
+       "Content-Type": "text/html;charset=utf-8",
+       "Date": "Fri, 09 Oct 2026 18:33:05 GMT",
+       "Server": "SimpleHTTP/0.6 Python/3.12.15"
+      },
+      "body": {
+       "text": "<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: 404</p>\n        <p>Message: File not found.</p>\n        <p>Error code explanation: 404 - Nothing matches the given URI.</p>\n    </body>\n</html>\n"
+      },
+      "noResponseReceived": true
+     }
+    },
+    {
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/"
+        },
+        "region": {
+         "startLine": 1
+        }
+       },
+       "properties": {
+        "attack": ""
+       }
+      }
+     ],
+     "message": {
+      "text": "The integrity attribute is missing on a script or link tag served by an external server. The integrity tag prevents an attacker who have gained access to this server from injecting a malicious content"
+     },
+     "ruleId": "90003",
+     "webRequest": {
+      "protocol": "HTTP",
+      "version": "1.1",
+      "target": "http://web:8000/",
+      "method": "GET",
+      "headers": {
+       "cache-control": "no-cache",
+       "host": "web:8000",
+       "pragma": "no-cache",
+       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+      },
+      "body": {}
+     },
+     "webResponse": {
+      "statusCode": 200,
+      "reasonPhrase": "OK",
+      "protocol": "HTTP",
+      "version": "1.0",
+      "headers": {
+       "Content-Length": "242",
+       "Content-type": "text/html",
+       "Date": "Fri, 09 Oct 2026 18:33:04 GMT",
+       "Last-Modified": "Fri, 09 Oct 2026 18:32:47 GMT",
+       "Server": "SimpleHTTP/0.6 Python/3.12.15"
+      },
+      "body": {
+       "text": "<html><head><script src=\"http://cdn.example.com/x.js\"></script></head><body>\n<form action=\"/login\" method=\"get\"><input name=\"password\" type=\"password\"></form>\n<a href=\"/page2.html\">p2</a><!-- TODO: admin password is hunter2 --></body></html>\n"
+      },
+      "noResponseReceived": true
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -341,7 +341,7 @@ ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET
     status = CASE WHEN vulnerabilities.status = 'resolved' THEN vulnerabilities.status ELSE EXCLUDED.status END,
     metadata = EXCLUDED.metadata,
     rule_ref_id = EXCLUDED.rule_ref_id
-RETURNING id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id
+RETURNING id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id
 `
 
 type CreateVulnerabilityParams struct {
@@ -476,7 +476,6 @@ func (q *Queries) CreateVulnerability(ctx context.Context, arg CreateVulnerabili
 		&i.HasRemediation,
 		&i.RemediationLink,
 		&i.Reachability,
-		&i.OwaspTop10,
 		&i.DueDate,
 		&i.PresentOnDefaultBranch,
 		&i.ResolvedOnDefaultBranch,
@@ -609,7 +608,7 @@ func (q *Queries) GetFindingFirstObservation(ctx context.Context, arg GetFinding
 }
 
 const getLatestVulnerabilityByFingerprint = `-- name: GetLatestVulnerabilityByFingerprint :one
-SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
+SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
 WHERE repo_id = $1 AND fingerprint = $2
 ORDER BY created_at DESC
 LIMIT 1
@@ -662,7 +661,6 @@ func (q *Queries) GetLatestVulnerabilityByFingerprint(ctx context.Context, arg G
 		&i.HasRemediation,
 		&i.RemediationLink,
 		&i.Reachability,
-		&i.OwaspTop10,
 		&i.DueDate,
 		&i.PresentOnDefaultBranch,
 		&i.ResolvedOnDefaultBranch,
@@ -693,7 +691,7 @@ func (q *Queries) GetLatestVulnerabilityByFingerprint(ctx context.Context, arg G
 }
 
 const getVulnerabilityByID = `-- name: GetVulnerabilityByID :one
-SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities WHERE id = $1
+SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities WHERE id = $1
 `
 
 func (q *Queries) GetVulnerabilityByID(ctx context.Context, id uuid.UUID) (Vulnerability, error) {
@@ -736,7 +734,6 @@ func (q *Queries) GetVulnerabilityByID(ctx context.Context, id uuid.UUID) (Vulne
 		&i.HasRemediation,
 		&i.RemediationLink,
 		&i.Reachability,
-		&i.OwaspTop10,
 		&i.DueDate,
 		&i.PresentOnDefaultBranch,
 		&i.ResolvedOnDefaultBranch,
@@ -862,7 +859,7 @@ func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID
 }
 
 const listAllVulnerabilitiesBySnapshot = `-- name: ListAllVulnerabilitiesBySnapshot :many
-SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
+SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
 WHERE snapshot_id = $1
 ORDER BY
   CASE WHEN type IN ('malware', 'secret') THEN 0 ELSE 1 END,
@@ -916,7 +913,6 @@ func (q *Queries) ListAllVulnerabilitiesBySnapshot(ctx context.Context, snapshot
 			&i.HasRemediation,
 			&i.RemediationLink,
 			&i.Reachability,
-			&i.OwaspTop10,
 			&i.DueDate,
 			&i.PresentOnDefaultBranch,
 			&i.ResolvedOnDefaultBranch,
@@ -1313,7 +1309,7 @@ func (q *Queries) ListUnreachableDependencyAdvisories(ctx context.Context, snaps
 }
 
 const listVulnerabilitiesBySnapshot = `-- name: ListVulnerabilitiesBySnapshot :many
-SELECT v.id, v.type, v.snapshot_id, v.title, v.description, v.original_severity, v.severity, v.severity_override_reason, v.severity_override_by, v.status, v.state_comment, v.detected_at, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line, v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language, v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability, v.owasp_top_10, v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type, v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata, v.created_at, v.updated_at, v.first_seen_at, v.last_seen_at, v.severity_rank, v.rule_ref_id, v.primary_identifier_kind, v.primary_identifier_value, v.org_id, v.repo_id, v.origin, v.origin_api_key_id, v.origin_token_name, v.origin_owner_type, v.origin_owner_id,
+SELECT v.id, v.type, v.snapshot_id, v.title, v.description, v.original_severity, v.severity, v.severity_override_reason, v.severity_override_by, v.status, v.state_comment, v.detected_at, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line, v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language, v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability, v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type, v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata, v.created_at, v.updated_at, v.first_seen_at, v.last_seen_at, v.severity_rank, v.rule_ref_id, v.primary_identifier_kind, v.primary_identifier_value, v.org_id, v.repo_id, v.origin, v.origin_api_key_id, v.origin_token_name, v.origin_owner_type, v.origin_owner_id,
   fa.reason_kind AS acceptance_reason_kind,
   fa.reason AS acceptance_reason,
   fa.labels AS acceptance_labels,
@@ -1472,7 +1468,6 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 			&i.Vulnerability.HasRemediation,
 			&i.Vulnerability.RemediationLink,
 			&i.Vulnerability.Reachability,
-			&i.Vulnerability.OwaspTop10,
 			&i.Vulnerability.DueDate,
 			&i.Vulnerability.PresentOnDefaultBranch,
 			&i.Vulnerability.ResolvedOnDefaultBranch,
@@ -1522,7 +1517,7 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 }
 
 const listVulnerabilitiesBySnapshotAndType = `-- name: ListVulnerabilitiesBySnapshotAndType :many
-SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
+SELECT id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id FROM vulnerabilities
 WHERE snapshot_id = $1 AND type = $2
   AND status = ANY($5::vulnerability_status[])
 ORDER BY severity ASC, detected_at DESC
@@ -1589,7 +1584,6 @@ func (q *Queries) ListVulnerabilitiesBySnapshotAndType(ctx context.Context, arg 
 			&i.HasRemediation,
 			&i.RemediationLink,
 			&i.Reachability,
-			&i.OwaspTop10,
 			&i.DueDate,
 			&i.PresentOnDefaultBranch,
 			&i.ResolvedOnDefaultBranch,
@@ -1742,7 +1736,7 @@ func (q *Queries) MarkStaleVulnerabilities(ctx context.Context, arg MarkStaleVul
 }
 
 const searchVulnerabilities = `-- name: SearchVulnerabilities :many
-SELECT v.id, v.type, v.snapshot_id, v.title, v.description, v.original_severity, v.severity, v.severity_override_reason, v.severity_override_by, v.status, v.state_comment, v.detected_at, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line, v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language, v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability, v.owasp_top_10, v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type, v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata, v.created_at, v.updated_at, v.first_seen_at, v.last_seen_at, v.severity_rank, v.rule_ref_id, v.primary_identifier_kind, v.primary_identifier_value, v.org_id, v.repo_id, v.origin, v.origin_api_key_id, v.origin_token_name, v.origin_owner_type, v.origin_owner_id
+SELECT v.id, v.type, v.snapshot_id, v.title, v.description, v.original_severity, v.severity, v.severity_override_reason, v.severity_override_by, v.status, v.state_comment, v.detected_at, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line, v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language, v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability, v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type, v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata, v.created_at, v.updated_at, v.first_seen_at, v.last_seen_at, v.severity_rank, v.rule_ref_id, v.primary_identifier_kind, v.primary_identifier_value, v.org_id, v.repo_id, v.origin, v.origin_api_key_id, v.origin_token_name, v.origin_owner_type, v.origin_owner_id
 FROM vulnerabilities v
 WHERE v.org_id = $1
   AND (v.title ILIKE $2 ESCAPE '\' OR v.description ILIKE $2 ESCAPE '\' OR v.primary_identifier_value ILIKE $2 ESCAPE '\')
@@ -1807,7 +1801,6 @@ func (q *Queries) SearchVulnerabilities(ctx context.Context, arg SearchVulnerabi
 			&i.HasRemediation,
 			&i.RemediationLink,
 			&i.Reachability,
-			&i.OwaspTop10,
 			&i.DueDate,
 			&i.PresentOnDefaultBranch,
 			&i.ResolvedOnDefaultBranch,
@@ -1908,7 +1901,7 @@ SET status = $2,
     resolved_by = CASE WHEN $2 = 'resolved' THEN $4 ELSE resolved_by END,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id
+RETURNING id, type, snapshot_id, title, description, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, severity_rank, rule_ref_id, primary_identifier_kind, primary_identifier_value, org_id, repo_id, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id
 `
 
 type UpdateVulnerabilityStatusParams struct {
@@ -1963,7 +1956,6 @@ func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, arg UpdateVulne
 		&i.HasRemediation,
 		&i.RemediationLink,
 		&i.Reachability,
-		&i.OwaspTop10,
 		&i.DueDate,
 		&i.PresentOnDefaultBranch,
 		&i.ResolvedOnDefaultBranch,

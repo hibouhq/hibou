@@ -34,7 +34,12 @@ var (
 	_ acceptanceLister    = (*StoreAdapter)(nil)
 	_ licensePolicyReader = (*StoreAdapter)(nil)
 	_ kevLister           = (*StoreAdapter)(nil)
+	_ cweLister           = (*StoreAdapter)(nil)
 )
+
+func (a *StoreAdapter) ListFindingCWEs(ctx context.Context, vulnerabilityIDs []uuid.UUID) (map[uuid.UUID][]store.FindingCWE, error) {
+	return a.queries.ListFindingCWEs(ctx, vulnerabilityIDs)
+}
 
 func (a *StoreAdapter) ListComponentsBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Component, error) {
 	return a.queries.ListComponentsBySnapshot(ctx, snapshotID)

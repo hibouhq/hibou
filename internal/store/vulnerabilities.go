@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
@@ -33,9 +34,13 @@ type VulnerabilityListOptions struct {
 	// RiskOnly keeps findings which count as actual risk: active or
 	// disputed-suppressed, and not accepted as false positive.
 	RiskOnly bool
-	Sort     string
-	Limit    int
-	Offset   int
+	// Filter is a parsed filterquery expression (the bar's `q`). Where a path
+	// honors it, it is exclusive: the discrete fields above are ignored, the
+	// same contract the list endpoints have.
+	Filter filterquery.Node
+	Sort   string
+	Limit  int
+	Offset int
 }
 
 // normalizeAcceptanceFilter whitelists the acceptance filter value; anything
@@ -88,7 +93,6 @@ type Vulnerability struct {
 	HasRemediation          bool            `json:"has_remediation"`
 	RemediationLink         *string         `json:"remediation_link,omitempty"`
 	Reachability            *string         `json:"reachability,omitempty"`
-	OwaspTop10              *string         `json:"owasp_top_10,omitempty"`
 	DueDate                 *time.Time      `json:"due_date,omitempty"`
 	PresentOnDefaultBranch  bool            `json:"present_on_default_branch"`
 	ResolvedOnDefaultBranch bool            `json:"resolved_on_default_branch"`
@@ -123,6 +127,10 @@ type Vulnerability struct {
 	// (PLAN §3). Enriched per page after the query, like FixedInPRs — never a
 	// column.
 	KEV bool `json:"kev,omitempty"`
+	// CWEs every source attributes to the finding (ADR-037): rule, advisory,
+	// SARIF result taxa, a manual declaration, or the finding type. Attached
+	// per page through the finding_cwes view — never a column.
+	CWEs []FindingCWE `json:"cwes"`
 }
 
 // VulnerabilityAcceptance is the accepted decision as projected onto a
@@ -543,6 +551,9 @@ type VulnerabilityFacets struct {
 	Status   map[string]int `json:"status"`
 	Tool     map[string]int `json:"tool"`
 	File     map[string]int `json:"file"`
+	// CWE is keyed by the numeric id ("79"); the busiest 20 under the current
+	// filter (ADR-037). Titles come from the catalog endpoint.
+	CWE map[string]int `json:"cwe"`
 }
 
 // FacetVulnerabilitiesBySnapshot computes per-option counts for each filter
@@ -562,45 +573,57 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 	search := escapeLikeFragment(opts.Search)
 	acceptance := normalizeAcceptanceFilter(opts.Acceptance)
 
-	// The acceptance filter needs the finding_acceptances join; only pay for
-	// it when the filter is active. Column names stay unqualified — none of
-	// the referenced vulnerability columns exist on finding_acceptances.
-	fromClause := "vulnerabilities"
-	if acceptance != "" {
-		fromClause = "vulnerabilities v LEFT JOIN finding_acceptances fa ON fa.repo_id = v.repo_id AND fa.fingerprint = v.fingerprint AND (fa.expires_at IS NULL OR fa.expires_at > now())"
+	// The acceptance/dispute joins are only paid for when something reads
+	// them: the acceptance filter, or a filterquery expression (its
+	// acceptance:/label: qualifiers reference fa and fd). Every vulnerability
+	// column is qualified with v so the joins can never make one ambiguous.
+	fromClause := "vulnerabilities v"
+	if acceptance != "" || opts.Filter != nil {
+		fromClause = "vulnerabilities v\n" + acceptanceJoinClause
 	}
 
 	// buildConds assembles WHERE conditions, omitting the filter for `exclude`
 	// so that dimension's own selection does not constrain its own facet.
-	buildConds := func(exclude string) (string, []interface{}) {
+	// A filterquery expression replaces the discrete filters entirely, like
+	// the list it facets; its own dimensions then cannot be excluded.
+	buildConds := func(exclude string) (string, []interface{}, error) {
 		conds := make([]string, 0, 7)
 		args := make([]interface{}, 0, 8)
 		add := func(v interface{}) int { args = append(args, v); return len(args) }
 
-		conds = append(conds, fmt.Sprintf("snapshot_id = $%d", add(snapshotID)))
+		conds = append(conds, fmt.Sprintf("v.snapshot_id = $%d", add(snapshotID)))
+		if opts.Filter != nil {
+			compiled, err := filterquery.ToSQL(opts.Filter, len(args)+1)
+			if err != nil {
+				return "", nil, err
+			}
+			conds = append(conds, compiled.Where)
+			args = append(args, compiled.Params...)
+			return strings.Join(conds, " AND "), args, nil
+		}
 		if exclude != "status" {
-			conds = append(conds, fmt.Sprintf("status = ANY($%d)", add(pq.Array(statuses))))
+			conds = append(conds, fmt.Sprintf("v.status = ANY($%d)", add(pq.Array(statuses))))
 		}
 		if exclude != "type" && len(types) > 0 {
-			conds = append(conds, fmt.Sprintf("type = ANY($%d)", add(pq.Array(types))))
+			conds = append(conds, fmt.Sprintf("v.type = ANY($%d)", add(pq.Array(types))))
 		}
 		if exclude != "severity" && len(severities) > 0 {
-			conds = append(conds, fmt.Sprintf("severity = ANY($%d)", add(pq.Array(severities))))
+			conds = append(conds, fmt.Sprintf("v.severity = ANY($%d)", add(pq.Array(severities))))
 		}
 		if exclude != "tool" && len(scanners) > 0 {
-			conds = append(conds, fmt.Sprintf("lower(scanner_name) = ANY($%d)", add(pq.Array(scanners))))
+			conds = append(conds, fmt.Sprintf("lower(v.scanner_name) = ANY($%d)", add(pq.Array(scanners))))
 		}
 		if len(languages) > 0 {
-			conds = append(conds, fmt.Sprintf("language = ANY($%d)", add(pq.Array(languages))))
+			conds = append(conds, fmt.Sprintf("v.language = ANY($%d)", add(pq.Array(languages))))
 		}
 		if exclude != "file" && fileQuery != "" {
-			conds = append(conds, fmt.Sprintf(`file_path ILIKE $%d ESCAPE '\'`, add("%"+fileQuery+"%")))
+			conds = append(conds, fmt.Sprintf(`v.file_path ILIKE $%d ESCAPE '\'`, add("%"+fileQuery+"%")))
 		}
 		if search != "" {
 			idx := add("%" + search + "%")
 			// primary_identifier_value is included so searching a CVE/GHSA/rule id
 			// finds the finding — it is the identifier users actually paste.
-			conds = append(conds, fmt.Sprintf(`(title ILIKE $%d ESCAPE '\' OR component_name ILIKE $%d ESCAPE '\' OR component_purl ILIKE $%d ESCAPE '\' OR primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
+			conds = append(conds, fmt.Sprintf(`(v.title ILIKE $%d ESCAPE '\' OR v.component_name ILIKE $%d ESCAPE '\' OR v.component_purl ILIKE $%d ESCAPE '\' OR v.primary_identifier_value ILIKE $%d ESCAPE '\')`, idx, idx, idx, idx))
 		}
 		if acceptance != "" {
 			switch acceptance {
@@ -608,17 +631,17 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 				conds = append(conds, "fa.fingerprint IS NULL")
 			case "accepted":
 				conds = append(conds, "fa.fingerprint IS NOT NULL")
+			case "disputed":
+				conds = append(conds, "fd.fingerprint IS NOT NULL")
 			default:
 				conds = append(conds, fmt.Sprintf("fa.reason_kind::text = $%d", add(acceptance)))
 			}
 		}
-		return strings.Join(conds, " AND "), args
+		return strings.Join(conds, " AND "), args, nil
 	}
 
-	facetMap := func(exclude, column, extraWhere, extra string) (map[string]int, error) {
-		where, args := buildConds(exclude)
-		// #nosec G201 -- `column`/`extraWhere`/`fromClause` are constant fragments; all filter values use positional params.
-		query := fmt.Sprintf("SELECT %s::text AS k, COUNT(*)::bigint FROM %s WHERE %s%s GROUP BY %s%s", column, fromClause, where, extraWhere, column, extra)
+	// countRows reads (key, count) pairs into a map.
+	countRows := func(query string, args []interface{}) (map[string]int, error) {
 		rows, err := q.sqlDB.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, err
@@ -639,26 +662,49 @@ func (q *Queries) FacetVulnerabilitiesBySnapshot(ctx context.Context, snapshotID
 		}
 		return out, rows.Err()
 	}
+	facetMap := func(exclude, column, extraWhere, extra string) (map[string]int, error) {
+		where, args, err := buildConds(exclude)
+		if err != nil {
+			return nil, err
+		}
+		// #nosec G201 -- `column`/`extraWhere`/`fromClause` are constant fragments; all filter values use positional params.
+		return countRows(fmt.Sprintf("SELECT %s::text AS k, COUNT(*)::bigint FROM %s WHERE %s%s GROUP BY %s%s", column, fromClause, where, extraWhere, column, extra), args)
+	}
+	// The CWE dimension aggregates the filtered rows' CWEs set-wise (hash
+	// joins against the claim tables), never per row through the view.
+	cweFacet := func() (map[string]int, error) {
+		where, args, err := buildConds("cwe")
+		if err != nil {
+			return nil, err
+		}
+		// #nosec G201 -- `fromClause` and the row builder are constant fragments; all filter values use positional params.
+		return countRows(fmt.Sprintf(`WITH f AS (SELECT %s FROM %s WHERE %s)
+SELECT x.cwe_id::text, COUNT(DISTINCT x.id)::bigint FROM (%s) x
+GROUP BY x.cwe_id ORDER BY COUNT(DISTINCT x.id) DESC, x.cwe_id LIMIT 20`, findingCWEKeyColumns, fromClause, where, findingCWERowsSQL("f")), args)
+	}
 
 	facets := &VulnerabilityFacets{}
 	var err error
-	if facets.Type, err = facetMap("type", "type", "", ""); err != nil {
+	if facets.Type, err = facetMap("type", "v.type", "", ""); err != nil {
 		return nil, err
 	}
-	if facets.Severity, err = facetMap("severity", "severity", "", ""); err != nil {
+	if facets.Severity, err = facetMap("severity", "v.severity", "", ""); err != nil {
 		return nil, err
 	}
-	if facets.Status, err = facetMap("status", "status", "", ""); err != nil {
+	if facets.Status, err = facetMap("status", "v.status", "", ""); err != nil {
 		return nil, err
 	}
-	if facets.Tool, err = facetMap("tool", "scanner_name", "", ""); err != nil {
+	if facets.Tool, err = facetMap("tool", "v.scanner_name", "", ""); err != nil {
 		return nil, err
 	}
 	// File paths are unbounded; cap to the busiest 100 so the payload stays
 	// small. Dependency findings are excluded: their location is a package
 	// coordinate (gopkg.in/yaml.v2@v2.2.2), not a repository file, and offering
 	// those as file filters is nonsense.
-	if facets.File, err = facetMap("file", "file_path", " AND type <> 'dependency'", " ORDER BY COUNT(*) DESC LIMIT 100"); err != nil {
+	if facets.File, err = facetMap("file", "v.file_path", " AND v.type <> 'dependency'", " ORDER BY COUNT(*) DESC LIMIT 100"); err != nil {
+		return nil, err
+	}
+	if facets.CWE, err = cweFacet(); err != nil {
 		return nil, err
 	}
 	return facets, nil
@@ -811,7 +857,6 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		HasRemediation:          row.HasRemediation,
 		RemediationLink:         stringPtrFromNull(row.RemediationLink),
 		Reachability:            reachabilityPtrFromNull(row.Reachability),
-		OwaspTop10:              stringPtrFromNull(row.OwaspTop10),
 		DueDate:                 timePtrFromNull(row.DueDate),
 		PresentOnDefaultBranch:  row.PresentOnDefaultBranch,
 		ResolvedOnDefaultBranch: row.ResolvedOnDefaultBranch,
@@ -869,7 +914,7 @@ func scanVulnerabilityWithAcceptance(scanner interface {
 	return vulnerability, nil
 }
 
-const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, owasp_top_10, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
+const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
 
 func dynamicVulnerabilitySelectColumns() string {
 	return "v." + strings.ReplaceAll(vulnerabilitySelectColumns, ", ", ", v.")
@@ -956,7 +1001,6 @@ func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {
 		&row.HasRemediation,
 		&row.RemediationLink,
 		&row.Reachability,
-		&row.OwaspTop10,
 		&row.DueDate,
 		&row.PresentOnDefaultBranch,
 		&row.ResolvedOnDefaultBranch,

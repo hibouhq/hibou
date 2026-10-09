@@ -30,6 +30,9 @@ type GenericFinding struct {
 	Message     string
 	Fingerprint string
 	Rule        *ScanRuleInput
+	// ResultCWEs are this occurrence's own classification (SARIF
+	// result.taxa); stored per finding, never on the rule (ADR-037 §2.2).
+	ResultCWEs []int
 	// Suppressed: the scanner excluded this result in-source (SARIF
 	// suppressions[], ADR-023). Ingested with status 'suppressed' —
 	// visible, never open, never gating.
@@ -50,9 +53,11 @@ type ScanRuleInput struct {
 	DefaultLevel     string
 	SecuritySeverity string
 	Precision        string
-	CWEs             []string
-	Tags             []string
-	Properties       json.RawMessage
+	// CWEs classify every result of the rule; they replace the rule's stored
+	// set, since the scanner's current definition is authoritative.
+	CWEs       []int
+	Tags       []string
+	Properties json.RawMessage
 }
 
 type Ingester struct {
@@ -63,6 +68,8 @@ type Ingester struct {
 type IngestStore interface {
 	CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error)
 	UpsertScanRule(ctx context.Context, params dbgen.UpsertScanRuleParams) (uuid.UUID, error)
+	SyncScanRuleCWEs(ctx context.Context, byRule map[uuid.UUID][]int) error
+	ReplaceSnapshotSARIFResultCWEs(ctx context.Context, snapshotID uuid.UUID, fingerprints []string, cwes map[string][]int) error
 }
 
 func NewIngester(store IngestStore, log zerolog.Logger) *Ingester {
@@ -75,15 +82,30 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 	}
 
 	created := 0
+	// A SARIF log repeats the same rule for every occurrence: upsert each rule
+	// once per ingest (an ON CONFLICT DO UPDATE per result rewrote the row,
+	// one dead tuple per occurrence) and write all rule CWEs in one batch.
+	ruleRefs := map[string]uuid.NullUUID{}
+	ruleCWEs := map[uuid.UUID][]int{}
+	fingerprints := make([]string, 0, len(findings))
+	resultCWEs := map[string][]int{}
 	for _, finding := range findings {
 		severity, err := severityFromString(finding.Severity)
 		if err != nil {
 			return created, err
 		}
 
-		ruleRef, err := i.upsertRule(ctx, finding)
-		if err != nil {
-			return created, err
+		ruleKey := strings.TrimSpace(finding.Tool) + "\x00" + strings.TrimSpace(finding.RuleID)
+		ruleRef, seen := ruleRefs[ruleKey]
+		if !seen {
+			ruleRef, err = i.upsertRule(ctx, finding)
+			if err != nil {
+				return created, err
+			}
+			ruleRefs[ruleKey] = ruleRef
+			if ruleRef.Valid {
+				ruleCWEs[ruleRef.UUID] = finding.Rule.CWEs
+			}
 		}
 
 		startLine := finding.StartLine
@@ -92,6 +114,10 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		fingerprint := strings.TrimSpace(finding.Fingerprint)
 		if fingerprint == "" {
 			fingerprint = locationHash
+		}
+		fingerprints = append(fingerprints, fingerprint)
+		if len(finding.ResultCWEs) > 0 {
+			resultCWEs[fingerprint] = append(resultCWEs[fingerprint], finding.ResultCWEs...)
 		}
 		status := "detected"
 		metadata := json.RawMessage(`{}`)
@@ -136,6 +162,12 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		created++
 	}
 
+	if err := i.store.SyncScanRuleCWEs(ctx, ruleCWEs); err != nil {
+		return created, fmt.Errorf("store rule cwes: %w", err)
+	}
+	if err := i.store.ReplaceSnapshotSARIFResultCWEs(ctx, snapshotID, fingerprints, resultCWEs); err != nil {
+		return created, fmt.Errorf("store result cwes: %w", err)
+	}
 	return created, nil
 }
 
@@ -163,7 +195,6 @@ func (i *Ingester) upsertRule(ctx context.Context, finding GenericFinding) (uuid
 		DefaultLevel:     finding.Rule.DefaultLevel,
 		SecuritySeverity: finding.Rule.SecuritySeverity,
 		RulePrecision:    finding.Rule.Precision,
-		CweIds:           nonNilSlice(finding.Rule.CWEs),
 		Tags:             nonNilSlice(finding.Rule.Tags),
 		Properties:       properties,
 	})

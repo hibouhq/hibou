@@ -196,13 +196,24 @@ func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.G
 		return nil
 	}
 	out := &delta.GateConfig{}
-	if gate.Weaknesses != nil {
-		out.Weakness = &delta.WeaknessGate{
-			Enabled:     gate.Weaknesses.Enabled,
-			MaxCritical: gate.Weaknesses.MaxCritical,
-			MaxHigh:     gate.Weaknesses.MaxHigh,
-			MaxMedium:   gate.Weaknesses.MaxMedium,
+	if gate.Code != nil {
+		out.Code = &delta.CodeGate{
+			Enabled:     gate.Code.Enabled,
+			MaxCritical: gate.Code.MaxCritical,
+			MaxHigh:     gate.Code.MaxHigh,
+			MaxMedium:   gate.Code.MaxMedium,
 		}
+	}
+	if gate.CWE != nil {
+		// Parse validated the selectors, so an error cannot happen for a
+		// loaded file; if it ever does, dropping the section would fail open,
+		// so the gate carries the error and fails the evaluation instead.
+		rules, err := gate.CWE.Selectors()
+		cweGate := &delta.CWEGate{Types: gate.CWE.Types, MinSeverity: gate.CWE.MinSeverity, Invalid: err}
+		for _, rule := range rules {
+			cweGate.Rules = append(cweGate.Rules, delta.CWERule{Path: rule.Path, Selector: rule.Selector})
+		}
+		out.CWE = cweGate
 	}
 	if gate.Vulnerabilities != nil {
 		out.Vulnerabilities = &delta.VulnerabilityGate{

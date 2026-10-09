@@ -561,6 +561,7 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 			Message:                  finding.Message,
 			Fingerprint:              finding.Fingerprint,
 			Rule:                     scanRuleInput(finding.Rule),
+			ResultCWEs:               finding.ResultCWEs,
 			Suppressed:               finding.Suppressed,
 			SuppressionKind:          finding.SuppressionKind,
 			SuppressionJustification: finding.SuppressionJustification,

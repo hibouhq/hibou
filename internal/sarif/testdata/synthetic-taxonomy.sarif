@@ -1,0 +1,76 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "synthetic",
+     "guid": "00000000-0000-4000-8000-000000000001",
+     "rules": [
+      {
+       "id": "DRV1",
+       "relationships": [
+        {"target": {"id": "89", "toolComponent": {"name": "CWE"}}, "kinds": ["equal"]},
+        {"target": {"id": "74", "toolComponent": {"name": "CWE"}}, "kinds": ["disjoint"]},
+        {"target": {"id": "20", "toolComponent": {"name": "CWE"}}, "kinds": ["canPrecede"]},
+        {"target": {"id": "707", "toolComponent": {"name": "CWE"}}, "kinds": ["subset"]}
+       ]
+      }
+     ]
+    },
+    "extensions": [
+     {
+      "name": "synthetic/pack",
+      "guid": "00000000-0000-4000-8000-000000000002",
+      "rules": [
+       {
+        "id": "EXT1",
+        "relationships": [
+         {"target": {"index": 1, "toolComponent": {"guid": "00000000-0000-4000-8000-0000000000c0"}}, "kinds": ["superset"]}
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "taxonomies": [
+    {
+     "name": "CWE",
+     "guid": "00000000-0000-4000-8000-0000000000c0",
+     "taxa": [
+      {"id": "79", "guid": "00000000-0000-4000-8000-0000000000a1"},
+      {"id": "22", "guid": "00000000-0000-4000-8000-0000000000a2"},
+      {"id": "200", "guid": "00000000-0000-4000-8000-0000000000a3"}
+     ]
+    },
+    {
+     "name": "Custom",
+     "guid": "00000000-0000-4000-8000-0000000000d0",
+     "taxa": [{"id": "79"}]
+    }
+   ],
+   "results": [
+    {
+     "ruleId": "EXT1",
+     "rule": {"id": "EXT1", "index": 0, "toolComponent": {"index": 0}},
+     "level": "error",
+     "message": {"text": "extension rule"},
+     "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/a.go"}, "region": {"startLine": 3}}}]
+    },
+    {
+     "ruleId": "DRV1",
+     "ruleIndex": 0,
+     "level": "warning",
+     "message": {"text": "driver rule with per-result taxa"},
+     "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/b.go"}, "region": {"startLine": 7}}}],
+     "taxa": [
+      {"id": "707", "toolComponent": {"name": "CWE"}},
+      {"guid": "00000000-0000-4000-8000-0000000000a3", "toolComponent": {"guid": "00000000-0000-4000-8000-0000000000c0"}},
+      {"id": "79", "toolComponent": {"name": "Custom"}}
+     ]
+    }
+   ]
+  }
+ ]
+}

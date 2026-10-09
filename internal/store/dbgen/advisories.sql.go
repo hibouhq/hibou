@@ -77,7 +77,7 @@ func (q *Queries) DeleteAffectedRangesByAdvisoryAndSource(ctx context.Context, a
 }
 
 const getAdvisoriesByIDs = `-- name: GetAdvisoriesByIDs :many
-SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, cwe_ids, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE id = ANY($1::uuid[])
+SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE id = ANY($1::uuid[])
 `
 
 func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]Advisory, error) {
@@ -98,7 +98,6 @@ func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 			&i.CvssScore,
 			&i.CvssVersion,
 			&i.CvssVector,
-			pq.Array(&i.CweIds),
 			&i.IsMalware,
 			&i.MalwareType,
 			&i.PublishedAt,
@@ -120,7 +119,7 @@ func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 }
 
 const getAdvisoryByAlias = `-- name: GetAdvisoryByAlias :one
-SELECT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.cwe_ids, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at FROM advisories a
+SELECT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at FROM advisories a
 JOIN advisory_aliases aa ON aa.advisory_id = a.id
 WHERE aa.alias = $1
 `
@@ -137,7 +136,6 @@ func (q *Queries) GetAdvisoryByAlias(ctx context.Context, alias string) (Advisor
 		&i.CvssScore,
 		&i.CvssVersion,
 		&i.CvssVector,
-		pq.Array(&i.CweIds),
 		&i.IsMalware,
 		&i.MalwareType,
 		&i.PublishedAt,
@@ -149,7 +147,7 @@ func (q *Queries) GetAdvisoryByAlias(ctx context.Context, alias string) (Advisor
 }
 
 const getAdvisoryByCanonicalID = `-- name: GetAdvisoryByCanonicalID :one
-SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, cwe_ids, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE canonical_id = $1
+SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE canonical_id = $1
 `
 
 func (q *Queries) GetAdvisoryByCanonicalID(ctx context.Context, canonicalID string) (Advisory, error) {
@@ -164,7 +162,6 @@ func (q *Queries) GetAdvisoryByCanonicalID(ctx context.Context, canonicalID stri
 		&i.CvssScore,
 		&i.CvssVersion,
 		&i.CvssVector,
-		pq.Array(&i.CweIds),
 		&i.IsMalware,
 		&i.MalwareType,
 		&i.PublishedAt,
@@ -176,7 +173,7 @@ func (q *Queries) GetAdvisoryByCanonicalID(ctx context.Context, canonicalID stri
 }
 
 const getAdvisoryByID = `-- name: GetAdvisoryByID :one
-SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, cwe_ids, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE id = $1
+SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE id = $1
 `
 
 func (q *Queries) GetAdvisoryByID(ctx context.Context, id uuid.UUID) (Advisory, error) {
@@ -191,7 +188,6 @@ func (q *Queries) GetAdvisoryByID(ctx context.Context, id uuid.UUID) (Advisory, 
 		&i.CvssScore,
 		&i.CvssVersion,
 		&i.CvssVector,
-		pq.Array(&i.CweIds),
 		&i.IsMalware,
 		&i.MalwareType,
 		&i.PublishedAt,
@@ -268,7 +264,7 @@ func (q *Queries) GetComponentsByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 }
 
 const listAdvisoriesByPackage = `-- name: ListAdvisoriesByPackage :many
-SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.cwe_ids, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at FROM advisories a
+SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at FROM advisories a
 JOIN affected_ranges ar ON ar.advisory_id = a.id
 WHERE ar.ecosystem = $1 AND ar.package_name = $2
 ORDER BY a.severity, a.created_at DESC
@@ -297,7 +293,6 @@ func (q *Queries) ListAdvisoriesByPackage(ctx context.Context, arg ListAdvisorie
 			&i.CvssScore,
 			&i.CvssVersion,
 			&i.CvssVector,
-			pq.Array(&i.CweIds),
 			&i.IsMalware,
 			&i.MalwareType,
 			&i.PublishedAt,
@@ -599,8 +594,8 @@ func (q *Queries) UpdateAdvisoryCanonicalID(ctx context.Context, arg UpdateAdvis
 }
 
 const upsertAdvisory = `-- name: UpsertAdvisory :one
-INSERT INTO advisories (canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, cwe_ids, is_malware, malware_type, published_at, withdrawn_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+INSERT INTO advisories (canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (canonical_id) DO UPDATE SET
     title = EXCLUDED.title,
     description = EXCLUDED.description,
@@ -608,13 +603,12 @@ ON CONFLICT (canonical_id) DO UPDATE SET
     cvss_score = EXCLUDED.cvss_score,
     cvss_version = EXCLUDED.cvss_version,
     cvss_vector = EXCLUDED.cvss_vector,
-    cwe_ids = EXCLUDED.cwe_ids,
     is_malware = EXCLUDED.is_malware,
     malware_type = EXCLUDED.malware_type,
     published_at = EXCLUDED.published_at,
     withdrawn_at = EXCLUDED.withdrawn_at,
     updated_at = NOW()
-RETURNING id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, cwe_ids, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at
+RETURNING id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at
 `
 
 type UpsertAdvisoryParams struct {
@@ -625,7 +619,6 @@ type UpsertAdvisoryParams struct {
 	CvssScore   sql.NullString  `json:"cvss_score"`
 	CvssVersion NullCvssVersion `json:"cvss_version"`
 	CvssVector  string          `json:"cvss_vector"`
-	CweIds      []string        `json:"cwe_ids"`
 	IsMalware   bool            `json:"is_malware"`
 	MalwareType NullMalwareType `json:"malware_type"`
 	PublishedAt sql.NullTime    `json:"published_at"`
@@ -641,7 +634,6 @@ func (q *Queries) UpsertAdvisory(ctx context.Context, arg UpsertAdvisoryParams) 
 		arg.CvssScore,
 		arg.CvssVersion,
 		arg.CvssVector,
-		pq.Array(arg.CweIds),
 		arg.IsMalware,
 		arg.MalwareType,
 		arg.PublishedAt,
@@ -657,7 +649,6 @@ func (q *Queries) UpsertAdvisory(ctx context.Context, arg UpsertAdvisoryParams) 
 		&i.CvssScore,
 		&i.CvssVersion,
 		&i.CvssVector,
-		pq.Array(&i.CweIds),
 		&i.IsMalware,
 		&i.MalwareType,
 		&i.PublishedAt,

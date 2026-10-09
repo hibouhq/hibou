@@ -35,6 +35,15 @@ definitions:
       name:
         type: string
     type: object
+  cwe.SetRef:
+    properties:
+      name:
+        type: string
+      rank:
+        type: integer
+      slug:
+        type: string
+    type: object
   dbgen.NotificationDestinationType:
     enum:
     - webhook
@@ -328,6 +337,14 @@ definitions:
     type: object
   server.createFindingRequest:
     properties:
+      cwes:
+        description: |-
+          CWEs classify the finding (ADR-037) in any spelling the normalizer
+          accepts ("CWE-89", "89"). Unlike scanner claims they must exist in the
+          CWE catalog: typed or agent-generated input is validated.
+        items:
+          type: string
+        type: array
       description:
         type: string
       end_line:
@@ -444,6 +461,61 @@ definitions:
       name:
         type: string
       slug:
+        type: string
+    type: object
+  server.cweCatalogEntryResponse:
+    properties:
+      abstraction:
+        type: string
+      category:
+        $ref: '#/definitions/cwe.SetRef'
+      deprecated:
+        type: boolean
+      descendants:
+        description: |-
+          Descendants counts the View 1000 entries under this one, so a
+          cwe-tree: suggestion can say how much it covers.
+        type: integer
+      id:
+        type: integer
+      name:
+        type: string
+      sets:
+        items:
+          $ref: '#/definitions/cwe.SetRef'
+        type: array
+    type: object
+  server.cweCatalogResponse:
+    properties:
+      entries:
+        items:
+          $ref: '#/definitions/server.cweCatalogEntryResponse'
+        type: array
+      version:
+        type: string
+    type: object
+  server.cweSetResponse:
+    properties:
+      kind:
+        type: string
+      member_count:
+        type: integer
+      name:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.cweSetsResponse:
+    properties:
+      categories:
+        items:
+          $ref: '#/definitions/server.cweSetResponse'
+        type: array
+      sets:
+        items:
+          $ref: '#/definitions/server.cweSetResponse'
+        type: array
+      version:
         type: string
     type: object
   server.deploymentResponse:
@@ -587,10 +659,6 @@ definitions:
         type: string
       cvss_vector:
         type: string
-      cwes:
-        items:
-          type: string
-        type: array
       description:
         type: string
       fixed_versions:
@@ -1450,6 +1518,13 @@ definitions:
           type: integer
         type: array
     type: object
+  server.updateFindingCWEsRequest:
+    properties:
+      cwes:
+        items:
+          type: string
+        type: array
+    type: object
   server.updateIntegrationRequest:
     properties:
       config:
@@ -1643,6 +1718,42 @@ definitions:
       message:
         type: string
     type: object
+  store.CWEUsage:
+    properties:
+      abstraction:
+        type: string
+      by_type:
+        additionalProperties:
+          type: integer
+        type: object
+      category:
+        $ref: '#/definitions/cwe.SetRef'
+      deprecated:
+        type: boolean
+      id:
+        type: integer
+      max_severity:
+        type: string
+      name:
+        type: string
+      sets:
+        items:
+          $ref: '#/definitions/cwe.SetRef'
+        type: array
+      total:
+        type: integer
+    type: object
+  store.CWEUsageReport:
+    properties:
+      cwes:
+        items:
+          $ref: '#/definitions/store.CWEUsage'
+        type: array
+      no_cwe:
+        type: integer
+      total_findings:
+        type: integer
+    type: object
   store.Client:
     properties:
       client_type:
@@ -1737,6 +1848,45 @@ definitions:
       vex_justification:
         type: string
     type: object
+  store.FindingCWE:
+    properties:
+      abstraction:
+        type: string
+      category:
+        allOf:
+        - $ref: '#/definitions/cwe.SetRef'
+        description: Category is the MITRE View 1400 category (Injection, Encryption,
+          …).
+      deprecated:
+        type: boolean
+      id:
+        type: integer
+      name:
+        type: string
+      sets:
+        description: |-
+          Sets are the named sets (Top 25, OWASP) the CWE belongs to; filled on
+          the finding detail only, from the in-memory catalog.
+        items:
+          $ref: '#/definitions/cwe.SetRef'
+        type: array
+      source:
+        $ref: '#/definitions/store.FindingCWESource'
+    type: object
+  store.FindingCWESource:
+    enum:
+    - rule
+    - advisory
+    - sarif_result
+    - declared
+    - type
+    type: string
+    x-enum-varnames:
+    - FindingCWESourceRule
+    - FindingCWESourceAdvisory
+    - FindingCWESourceSARIFResult
+    - FindingCWESourceDeclared
+    - FindingCWESourceType
   store.FindingDispute:
     properties:
       created_at:
@@ -2259,6 +2409,14 @@ definitions:
         type: string
       created_by:
         type: string
+      cwes:
+        description: |-
+          CWEs every source attributes to the finding (ADR-037): rule, advisory,
+          SARIF result taxa, a manual declaration, or the finding type. Attached
+          per page through the finding_cwes view — never a column.
+        items:
+          $ref: '#/definitions/store.FindingCWE'
+        type: array
       description:
         type: string
       detected_at:
@@ -2322,8 +2480,6 @@ definitions:
         type: string
       original_severity:
         $ref: '#/definitions/store.SeverityLevel'
-      owasp_top_10:
-        type: string
       present_on_default_branch:
         type: boolean
       primary_identifier_kind:
@@ -2524,6 +2680,64 @@ paths:
       summary: List auth providers
       tags:
       - auth
+  /cwe:
+    get:
+      description: 'Embedded MITRE CWE catalog lookup for completion and hover: ids=79,89
+        resolves titles in one call; q=sql matches ids and titles. Reference data
+        only — no tenant data — so any authenticated caller may use it. The response
+        is stable for a catalog version and cacheable.'
+      parameters:
+      - description: Id (79, CWE-79) or title fragment
+        in: query
+        name: q
+        type: string
+      - description: Comma-separated ids to resolve
+        in: query
+        name: ids
+        type: string
+      - description: Maximum results for q (default 20, max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.cweCatalogResponse'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Search the CWE catalog
+      tags:
+      - cwe
+  /cwe/sets:
+    get:
+      description: 'The named sets cwe-set: accepts (CWE Top 25, OWASP Top 10 and
+        its categories) and the MITRE View 1400 categories cwe-category: accepts,
+        with the catalog edition in each name.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.cweSetsResponse'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: CWE named sets and categories
+      tags:
+      - cwe
   /health:
     get:
       description: Returns server health status
@@ -4026,6 +4240,46 @@ paths:
       summary: Trigger an org-wide component scan
       tags:
       - organizations
+  /orgs/{provider}/{slug}/cwes:
+    get:
+      description: The CWE list over every repository's current snapshot. q scopes
+        it like the org findings list; without q, open findings are counted.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Filter query (same grammar as the findings list)
+        in: query
+        name: q
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.CWEUsageReport'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: CWEs across an organization
+      tags:
+      - cwe
   /orgs/{provider}/{slug}/integrations:
     get:
       description: List integrations in an organization visible to organization members
@@ -5310,6 +5564,52 @@ paths:
       summary: Effective repository gate configuration
       tags:
       - repositories
+  /orgs/{provider}/{slug}/repos/{repoSlug}/cwes:
+    get:
+      description: Every CWE carried by the ref's findings, with per-type counts,
+        plus how many findings carry none. q scopes it exactly like the findings list;
+        without q, open findings are counted.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Filter query (same grammar as the findings list)
+        in: query
+        name: q
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.CWEUsageReport'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: CWEs in a repository
+      tags:
+      - cwe
   /orgs/{provider}/{slug}/repos/{repoSlug}/finding-acceptances:
     get:
       parameters:
@@ -5463,6 +5763,70 @@ paths:
       security:
       - BearerAuth: []
       summary: Finding detail
+      tags:
+      - vulnerabilities
+  /orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/cwes:
+    put:
+      consumes:
+      - application/json
+      description: Replaces the CWEs declared on a manual finding (ADR-037). Scanner
+        and dependency findings take their CWEs from the scanner rule or the advisory
+        and cannot be reclassified here. Ids must exist in the CWE catalog; an empty
+        list clears the declaration.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Finding fingerprint
+        in: path
+        name: fingerprint
+        required: true
+        type: string
+      - description: CWEs
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.updateFindingCWEsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/store.Vulnerability'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Set a manual finding's CWEs
       tags:
       - vulnerabilities
   /orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/history:

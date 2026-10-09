@@ -138,18 +138,10 @@
                     </div>
                   </td>
                   <td class="px-3 py-2 text-xs">
-                    <a
-                      v-if="advisory.cwe && cweLink(advisory.cwe)"
-                      :href="cweLink(advisory.cwe)"
-                      class="text-accent hover:underline"
-                      target="_blank"
-                      rel="noopener"
-                      :title="advisory.cwe_name"
-                    >{{ advisory.cwe }}</a>
-                    <span
-                      v-else-if="advisory.cwe"
-                      :title="advisory.cwe_name"
-                    >{{ advisory.cwe }}</span>
+                    <CweChips
+                      v-if="advisory.cwes?.length"
+                      :cwes="advisory.cwes"
+                    />
                     <span
                       v-else
                       class="text-gray-600"
@@ -234,6 +226,7 @@
 import { computed, onMounted, onUnmounted } from 'vue'
 
 import type { ComponentWithVulns } from '@/api/client'
+import CweChips from '@/components/finding/CweChips.vue'
 import { advisoryUrl } from '@/lib/findingDisplay'
 import { ecosystemKey, sourceKey } from '@/lib/purl'
 
@@ -249,7 +242,7 @@ const ecoKey = computed(() => ecosystemKey(props.component.ecosystem))
 const advisories = computed(() => props.component.advisories ?? [])
 const sources = computed(() => props.component.sources ?? [])
 const usagePaths = computed(() => props.component.usage_paths ?? [])
-const advisoriesEnriched = computed(() => advisories.value.some((advisory) => advisory.cwe || advisory.summary || advisory.fixed_versions?.length))
+const advisoriesEnriched = computed(() => advisories.value.some((advisory) => advisory.cwes?.length || advisory.summary || advisory.fixed_versions?.length))
 
 function sourceKeyFor(source: string) {
   return sourceKey(source)
@@ -264,10 +257,6 @@ function sevKey(severity: string): string {
   return 'low'
 }
 
-function cweLink(cwe: string): string {
-  const match = (cwe || '').match(/CWE-(\d+)/i)
-  return match ? `https://cwe.mitre.org/data/definitions/${match[1]}.html` : ''
-}
 
 function onEsc(event: KeyboardEvent) {
   if (event.key === 'Escape') {

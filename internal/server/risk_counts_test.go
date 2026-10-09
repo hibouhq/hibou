@@ -95,7 +95,7 @@ func TestReleaseKEVOpenUsesPinnedSnapshotRiskSemantics(t *testing.T) {
 	aliasCVE := strings.ToUpper("CVE-2099-" + uuid.NewString()[:8])
 	bareCVE := strings.ToUpper("CVE-2099-" + uuid.NewString()[:8])
 	advisory, err := srv.queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
-		CanonicalID: "GHSA-" + uuid.NewString(), Title: "alias KEV", Description: "", Severity: dbgen.SeverityLevelMedium, CweIds: []string{},
+		CanonicalID: "GHSA-" + uuid.NewString(), Title: "alias KEV", Description: "", Severity: dbgen.SeverityLevelMedium,
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)

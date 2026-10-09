@@ -17,9 +17,35 @@ type mockIngestStore struct {
 	err             error
 	seen            map[string]bool
 	rules           map[string]uuid.UUID
+	ruleCWECalls    map[uuid.UUID]int
+	syncCalls       int
+	upserts         int
+	ruleCWEs        map[uuid.UUID][]int
+	resultCWEs      map[string][]int
+	resultPrints    []string
+}
+
+func (m *mockIngestStore) SyncScanRuleCWEs(_ context.Context, byRule map[uuid.UUID][]int) error {
+	if m.ruleCWEs == nil {
+		m.ruleCWEs = map[uuid.UUID][]int{}
+		m.ruleCWECalls = map[uuid.UUID]int{}
+	}
+	m.syncCalls++
+	for ruleID, ids := range byRule {
+		m.ruleCWEs[ruleID] = ids
+		m.ruleCWECalls[ruleID]++
+	}
+	return nil
+}
+
+func (m *mockIngestStore) ReplaceSnapshotSARIFResultCWEs(_ context.Context, _ uuid.UUID, fingerprints []string, cwes map[string][]int) error {
+	m.resultPrints = fingerprints
+	m.resultCWEs = cwes
+	return nil
 }
 
 func (m *mockIngestStore) UpsertScanRule(_ context.Context, params dbgen.UpsertScanRuleParams) (uuid.UUID, error) {
+	m.upserts++
 	if m.rules == nil {
 		m.rules = map[string]uuid.UUID{}
 	}
@@ -81,7 +107,7 @@ func TestIngestCreatesFindingsAndComputesFingerprint(t *testing.T) {
 		StartLine: 10,
 		EndLine:   11,
 		Message:   "Issue",
-		Rule:      &ScanRuleInput{Name: "Test rule", HelpURI: "https://example.com/rule-1", CWEs: []string{"CWE-798"}},
+		Rule:      &ScanRuleInput{Name: "Test rule", HelpURI: "https://example.com/rule-1", CWEs: []int{798}},
 	}})
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
@@ -91,6 +117,11 @@ func TestIngestCreatesFindingsAndComputesFingerprint(t *testing.T) {
 	}
 	if len(store.rules) != 1 {
 		t.Fatalf("expected rule to be upserted once into the catalog, got %d", len(store.rules))
+	}
+	for _, ruleID := range store.rules {
+		if got := store.ruleCWEs[ruleID]; len(got) != 1 || got[0] != 798 {
+			t.Fatalf("rule CWEs = %v, want [798]", got)
+		}
 	}
 	if store.vulnerabilities[0].LocationHash == nil || store.vulnerabilities[0].Fingerprint != *store.vulnerabilities[0].LocationHash {
 		t.Fatalf("expected fingerprint to default to location hash, got fingerprint=%q location_hash=%#v", store.vulnerabilities[0].Fingerprint, store.vulnerabilities[0].LocationHash)
@@ -176,5 +207,36 @@ func TestIngestSuppressedFinding(t *testing.T) {
 	}
 	if active := byFingerprint["fp-act"]; active.Status != "detected" {
 		t.Fatalf("active finding status = %q, want detected", active.Status)
+	}
+}
+
+// ADR-037: a rule is upserted once per ingest and all rule CWEs go out in one
+// batch (a SARIF log repeats the rule for every result), and result.taxa CWEs
+// are recorded per fingerprint in one batch covering every reported fingerprint.
+func TestIngestStoresRuleAndResultCWEs(t *testing.T) {
+	store := &mockIngestStore{}
+	ingester := NewIngester(store, zerolog.Nop())
+	rule := &ScanRuleInput{Name: "SQL injection", CWEs: []int{89}}
+	_, err := ingester.Ingest(context.Background(), uuid.New(), []GenericFinding{
+		{Tool: "gosec", RuleID: "G201", Severity: "high", FilePath: "a.go", StartLine: 1, Message: "a", Fingerprint: "fp-a", Rule: rule, ResultCWEs: []int{564}},
+		{Tool: "gosec", RuleID: "G201", Severity: "high", FilePath: "b.go", StartLine: 2, Message: "b", Fingerprint: "fp-b", Rule: rule},
+	})
+	if err != nil {
+		t.Fatalf("Ingest returned error: %v", err)
+	}
+	if len(store.ruleCWECalls) != 1 {
+		t.Fatalf("expected one rule, got %d", len(store.ruleCWECalls))
+	}
+	if store.upserts != 1 || store.syncCalls != 1 {
+		t.Fatalf("rule upserts = %d, CWE syncs = %d; want 1 each", store.upserts, store.syncCalls)
+	}
+	if len(store.resultPrints) != 2 || store.resultPrints[0] != "fp-a" || store.resultPrints[1] != "fp-b" {
+		t.Fatalf("result CWE batch must cover every fingerprint, got %v", store.resultPrints)
+	}
+	if got := store.resultCWEs["fp-a"]; len(got) != 1 || got[0] != 564 {
+		t.Fatalf("fp-a result CWEs = %v", got)
+	}
+	if _, ok := store.resultCWEs["fp-b"]; ok {
+		t.Fatal("fp-b has no result taxa")
 	}
 }

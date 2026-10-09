@@ -15,6 +15,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
@@ -74,7 +75,7 @@ type vulnerabilityItem struct {
 	Description   string    `json:"description,omitempty"`
 	Severity      string    `json:"severity"`
 	CvssScore     *float64  `json:"cvss_score,omitempty"`
-	CweIDs        []string  `json:"cwe_ids,omitempty"`
+	CWEs          []cwe.Ref `json:"cwes,omitempty"`
 	IsMalware     bool      `json:"is_malware"`
 	MalwareType   *string   `json:"malware_type,omitempty"`
 	AffectedCount int       `json:"affected_count"`
@@ -127,13 +128,13 @@ func (s *service) handleListVulnerabilities(ctx context.Context, request mcp.Cal
 		return toolError("failed to load vulnerabilities")
 	}
 	activeVulnerabilities := filterActiveVulnerabilities(vulnerabilities)
-	advisories, err := s.loadAdvisories(ctx, activeVulnerabilities)
+	advisories, advisoryCWEs, err := s.loadAdvisories(ctx, activeVulnerabilities)
 	if err != nil {
 		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("failed to load advisories for MCP vulnerability list")
 		return toolError("failed to load advisories")
 	}
 
-	items, summary := buildVulnerabilityResponse(activeVulnerabilities, advisories, severityFilter)
+	items, summary := buildVulnerabilityResponse(activeVulnerabilities, advisories, advisoryCWEs, severityFilter)
 	response := map[string]any{
 		"organization":        orgArg,
 		"repository":          repo.Slug,
@@ -225,6 +226,11 @@ func (s *service) handleImpactAnalysis(ctx context.Context, request mcp.CallTool
 		s.log.Error().Err(err).Str("org_id", org.ID.String()).Str("alias", cveID).Msg("failed to resolve advisory alias for MCP impact analysis")
 		return toolError("advisory not found for alias " + cveID)
 	}
+	advisoryCWEs, err := s.store.ListAdvisoryCWEs(ctx, []uuid.UUID{advisory.ID})
+	if err != nil {
+		s.log.Error().Err(err).Str("advisory_id", advisory.ID.String()).Msg("failed to load advisory cwes for MCP impact analysis")
+		return toolError("failed to load advisory")
+	}
 
 	response := map[string]any{
 		"organization": orgArg,
@@ -235,7 +241,7 @@ func (s *service) handleImpactAnalysis(ctx context.Context, request mcp.CallTool
 			"description":  advisory.Description,
 			"severity":     strings.ToLower(string(advisory.Severity)),
 			"cvss_score":   parseNullFloat(advisory.CvssScore.String, advisory.CvssScore.Valid),
-			"cwe_ids":      advisory.CweIds,
+			"cwes":         cwe.Default().Refs(advisoryCWEs[advisory.ID]),
 			"is_malware":   advisory.IsMalware,
 			"malware_type": nullEnumString(string(advisory.MalwareType.MalwareType), advisory.MalwareType.Valid),
 			"published_at": nullTimeString(advisory.PublishedAt),
@@ -423,7 +429,7 @@ func (s *service) resolveRef(ctx context.Context, repoID uuid.UUID, refName stri
 	return nil, fmt.Errorf("ref not found: %s", refName)
 }
 
-func (s *service) loadAdvisories(ctx context.Context, vulnerabilities []store.Vulnerability) (map[uuid.UUID]dbgen.Advisory, error) {
+func (s *service) loadAdvisories(ctx context.Context, vulnerabilities []store.Vulnerability) (map[uuid.UUID]dbgen.Advisory, map[uuid.UUID][]int, error) {
 	ids := make([]uuid.UUID, 0, len(vulnerabilities))
 	seen := make(map[uuid.UUID]struct{}, len(vulnerabilities))
 	for _, vulnerability := range vulnerabilities {
@@ -437,20 +443,24 @@ func (s *service) loadAdvisories(ctx context.Context, vulnerabilities []store.Vu
 		ids = append(ids, *vulnerability.AdvisoryID)
 	}
 	if len(ids) == 0 {
-		return map[uuid.UUID]dbgen.Advisory{}, nil
+		return map[uuid.UUID]dbgen.Advisory{}, map[uuid.UUID][]int{}, nil
 	}
 	rows, err := s.store.GetAdvisoriesByIDs(ctx, ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result := make(map[uuid.UUID]dbgen.Advisory, len(rows))
 	for _, advisory := range rows {
 		result[advisory.ID] = advisory
 	}
-	return result, nil
+	cwes, err := s.store.ListAdvisoryCWEs(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	return result, cwes, nil
 }
 
-func buildVulnerabilityResponse(vulnerabilities []store.Vulnerability, advisories map[uuid.UUID]dbgen.Advisory, severityFilter string) ([]vulnerabilityItem, []vulnerabilitySummary) {
+func buildVulnerabilityResponse(vulnerabilities []store.Vulnerability, advisories map[uuid.UUID]dbgen.Advisory, advisoryCWEs map[uuid.UUID][]int, severityFilter string) ([]vulnerabilityItem, []vulnerabilitySummary) {
 	type counts struct {
 		affected int
 	}
@@ -484,7 +494,7 @@ func buildVulnerabilityResponse(vulnerabilities []store.Vulnerability, advisorie
 			Description:   advisory.Description,
 			Severity:      severity,
 			CvssScore:     parseNullFloat(advisory.CvssScore.String, advisory.CvssScore.Valid),
-			CweIDs:        advisory.CweIds,
+			CWEs:          cwe.Default().Refs(advisoryCWEs[advisory.ID]),
 			IsMalware:     advisory.IsMalware,
 			MalwareType:   nullEnumString(string(advisory.MalwareType.MalwareType), advisory.MalwareType.Valid),
 			AffectedCount: count.affected,

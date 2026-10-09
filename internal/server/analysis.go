@@ -16,6 +16,7 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/store"
@@ -35,15 +36,16 @@ type severityCounts struct {
 }
 
 type advisoryResponse struct {
-	ID            uuid.UUID `json:"id"`
-	CanonicalID   string    `json:"canonical_id"`
-	Title         string    `json:"title"`
-	Severity      string    `json:"severity"`
-	CvssScore     *float64  `json:"cvss_score,omitempty"`
-	IsMalware     bool      `json:"is_malware"`
-	MalwareType   *string   `json:"malware_type,omitempty"`
-	Cwe           *string   `json:"cwe,omitempty"`
-	CweName       *string   `json:"cwe_name,omitempty"`
+	ID          uuid.UUID `json:"id"`
+	CanonicalID string    `json:"canonical_id"`
+	Title       string    `json:"title"`
+	Severity    string    `json:"severity"`
+	CvssScore   *float64  `json:"cvss_score,omitempty"`
+	IsMalware   bool      `json:"is_malware"`
+	MalwareType *string   `json:"malware_type,omitempty"`
+	// CWEs carry their titles (ADR-037): every CWE the advisory maps to, not
+	// just the first.
+	CWEs          []cwe.Ref `json:"cwes"`
 	Summary       *string   `json:"summary,omitempty"`
 	FixedVersions []string  `json:"fixed_versions,omitempty"`
 	References    []string  `json:"references,omitempty"`
@@ -321,6 +323,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 
 		s.attachFixingPullRequests(r.Context(), repo.ID, vulnerabilities)
 		s.attachKEV(r.Context(), vulnerabilities)
+		s.attachCWEs(r.Context(), vulnerabilities)
 		api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 		return
 	}
@@ -335,22 +338,23 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	// Both branches enrich identically — the PR view goes through this default
 	// branch and was missing the exploited badges.
 	s.attachKEV(r.Context(), vulnerabilities)
+	s.attachCWEs(r.Context(), vulnerabilities)
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 
 type scanRuleResponse struct {
-	Tool             string   `json:"tool"`
-	RuleID           string   `json:"rule_id"`
-	Name             string   `json:"name"`
-	ShortDescription string   `json:"short_description,omitempty"`
-	FullDescription  string   `json:"full_description,omitempty"`
-	HelpURI          string   `json:"help_uri,omitempty"`
-	HelpMarkdown     string   `json:"help_markdown,omitempty"`
-	DefaultLevel     string   `json:"default_level,omitempty"`
-	SecuritySeverity string   `json:"security_severity,omitempty"`
-	Precision        string   `json:"precision,omitempty"`
-	CweIDs           []string `json:"cwe_ids"`
-	Tags             []string `json:"tags"`
+	Tool             string    `json:"tool"`
+	RuleID           string    `json:"rule_id"`
+	Name             string    `json:"name"`
+	ShortDescription string    `json:"short_description,omitempty"`
+	FullDescription  string    `json:"full_description,omitempty"`
+	HelpURI          string    `json:"help_uri,omitempty"`
+	HelpMarkdown     string    `json:"help_markdown,omitempty"`
+	DefaultLevel     string    `json:"default_level,omitempty"`
+	SecuritySeverity string    `json:"security_severity,omitempty"`
+	Precision        string    `json:"precision,omitempty"`
+	CWEs             []cwe.Ref `json:"cwes"`
+	Tags             []string  `json:"tags"`
 }
 
 // handleGetRefRules returns the deduplicated scan-rule catalog for the resolved
@@ -376,6 +380,16 @@ func (s *Server) handleGetRefRules(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list scan rules")
 		return
 	}
+	ruleIDs := make([]uuid.UUID, 0, len(rules))
+	for _, rule := range rules {
+		ruleIDs = append(ruleIDs, rule.ID)
+	}
+	ruleCWEs, err := s.queries.ListScanRuleCWEs(r.Context(), ruleIDs)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list scan rules")
+		return
+	}
+	catalog := cwe.Default()
 
 	resp := make([]scanRuleResponse, 0, len(rules))
 	for _, rule := range rules {
@@ -390,7 +404,7 @@ func (s *Server) handleGetRefRules(w http.ResponseWriter, r *http.Request) {
 			DefaultLevel:     rule.DefaultLevel,
 			SecuritySeverity: rule.SecuritySeverity,
 			Precision:        rule.RulePrecision,
-			CweIDs:           rule.CweIds,
+			CWEs:             catalog.Refs(ruleCWEs[rule.ID]),
 			Tags:             rule.Tags,
 		})
 	}
@@ -412,6 +426,21 @@ func (s *Server) handleGetRefFindingFacets(w http.ResponseWriter, r *http.Reques
 		Status:   map[string]int{},
 		Tool:     map[string]int{},
 		File:     map[string]int{},
+		CWE:      map[string]int{},
+	}
+	// An advanced bar query facets exactly what the list shows: the same
+	// filterquery expression, exclusive of the discrete params.
+	var filter filterquery.Node
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		node, err := filterquery.Parse(q)
+		if err == nil {
+			_, err = filterquery.ToSQL(node, 2)
+		}
+		if err != nil {
+			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
+			return
+		}
+		filter = node
 	}
 
 	snapshot, ok := s.resolveSnapshotForRequestWithFallback(r, w, repo, s.queries.GetLatestSnapshotWithVulnerabilitiesByRef)
@@ -432,6 +461,7 @@ func (s *Server) handleGetRefFindingFacets(w http.ResponseWriter, r *http.Reques
 		FileQuery:  strings.TrimSpace(r.URL.Query().Get("file")),
 		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
 		Acceptance: strings.TrimSpace(r.URL.Query().Get("acceptance")),
+		Filter:     filter,
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to compute facets")
@@ -1459,6 +1489,7 @@ type advisoryEnrichment struct {
 	Aliases       []string
 	Sources       []string
 	Source        *string
+	CWEs          []int
 }
 
 func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulnerability) ([]countedVuln, error) {
@@ -1602,6 +1633,10 @@ func (s *Server) loadAdvisoryEnrichment(ctx context.Context, advisoryIDs []uuid.
 	if err != nil {
 		return nil, err
 	}
+	cwesByAdvisory, err := s.queries.ListAdvisoryCWEs(ctx, advisoryIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	enrichmentByID := make(map[uuid.UUID]advisoryEnrichment, len(advisoryIDs))
 	for advisoryID, advisory := range advisoryByID {
@@ -1612,6 +1647,7 @@ func (s *Server) loadAdvisoryEnrichment(ctx context.Context, advisoryIDs []uuid.
 			Aliases:       mergeAdvisoryAliases(advisory.CanonicalID, aliasesByAdvisory[advisoryID], euvdAliasesByAdvisory[advisoryID]),
 			Sources:       normalizedSources,
 			Source:        selectPrimaryProvider(normalizedSources),
+			CWEs:          cwesByAdvisory[advisoryID],
 		}
 	}
 
@@ -1732,13 +1768,6 @@ func advisoryToResponse(advisory dbgen.Advisory, enrichment advisoryEnrichment) 
 		value := string(advisory.MalwareType.MalwareType)
 		malwareType = &value
 	}
-	var cwe *string
-	for _, candidate := range advisory.CweIds {
-		if value := strings.TrimSpace(candidate); value != "" {
-			cwe = &value
-			break
-		}
-	}
 	var summary *string
 	if value := strings.TrimSpace(advisory.Description); value != "" {
 		summary = &value
@@ -1751,7 +1780,7 @@ func advisoryToResponse(advisory dbgen.Advisory, enrichment advisoryEnrichment) 
 		CvssScore:     cvssScore,
 		IsMalware:     advisory.IsMalware,
 		MalwareType:   malwareType,
-		Cwe:           cwe,
+		CWEs:          cwe.Default().Refs(enrichment.CWEs),
 		Summary:       summary,
 		FixedVersions: enrichment.FixedVersions,
 		References:    enrichment.References,
@@ -2065,6 +2094,15 @@ func severityRank(severity string) int {
 // (PLAN §3) — the same membership the gate blocks on, matched through the
 // advisory id (canonical + aliases) or the bare identifier. One batched
 // lookup per page, never per row; best-effort like the other enrichments.
+// attachCWEs decorates a page with each finding's CWEs and titles (ADR-037)
+// in one batched query. Best-effort like the KEV badge: a failed lookup costs
+// the chips, not the list.
+func (s *Server) attachCWEs(ctx context.Context, vulnerabilities []store.Vulnerability) {
+	if err := s.queries.AttachFindingCWEs(ctx, vulnerabilities); err != nil {
+		s.log.Warn().Err(err).Msg("failed to attach finding cwes")
+	}
+}
+
 func (s *Server) attachKEV(ctx context.Context, vulnerabilities []store.Vulnerability) bool {
 	advisoryIDs := make([]uuid.UUID, 0, len(vulnerabilities))
 	identifiers := make([]string, 0, len(vulnerabilities))

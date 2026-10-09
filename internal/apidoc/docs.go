@@ -177,6 +177,100 @@ const docTemplate = `{
                 }
             }
         },
+        "/cwe": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Embedded MITRE CWE catalog lookup for completion and hover: ids=79,89 resolves titles in one call; q=sql matches ids and titles. Reference data only — no tenant data — so any authenticated caller may use it. The response is stable for a catalog version and cacheable.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cwe"
+                ],
+                "summary": "Search the CWE catalog",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Id (79, CWE-79) or title fragment",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated ids to resolve",
+                        "name": "ids",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum results for q (default 20, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.cweCatalogResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/cwe/sets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The named sets cwe-set: accepts (CWE Top 25, OWASP Top 10 and its categories) and the MITRE View 1400 categories cwe-category: accepts, with the catalog edition in each name.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cwe"
+                ],
+                "summary": "CWE named sets and categories",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.cweSetsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "Returns server health status",
@@ -2641,6 +2735,71 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/cwes": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The CWE list over every repository's current snapshot. q scopes it like the org findings list; without q, open findings are counted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cwe"
+                ],
+                "summary": "CWEs across an organization",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter query (same grammar as the findings list)",
+                        "name": "q",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.CWEUsageReport"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/integrations": {
             "get": {
                 "security": [
@@ -4719,6 +4878,78 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/cwes": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Every CWE carried by the ref's findings, with per-type counts, plus how many findings carry none. q scopes it exactly like the findings list; without q, open findings are counted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cwe"
+                ],
+                "summary": "CWEs in a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter query (same grammar as the findings list)",
+                        "name": "q",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.CWEUsageReport"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/finding-acceptances": {
             "get": {
                 "security": [
@@ -4955,6 +5186,103 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/cwes": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Replaces the CWEs declared on a manual finding (ADR-037). Scanner and dependency findings take their CWEs from the scanner rule or the advisory and cannot be reclassified here. Ids must exist in the CWE catalog; an empty list clears the declaration.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "vulnerabilities"
+                ],
+                "summary": "Set a manual finding's CWEs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Finding fingerprint",
+                        "name": "fingerprint",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "CWEs",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.updateFindingCWEsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.Vulnerability"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -7820,6 +8148,20 @@ const docTemplate = `{
                 }
             }
         },
+        "cwe.SetRef": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "integer"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
         "dbgen.NotificationDestinationType": {
             "type": "string",
             "enum": [
@@ -8242,6 +8584,13 @@ const docTemplate = `{
         "server.createFindingRequest": {
             "type": "object",
             "properties": {
+                "cwes": {
+                    "description": "CWEs classify the finding (ADR-037) in any spelling the normalizer\naccepts (\"CWE-89\", \"89\"). Unlike scanner claims they must exist in the\nCWE catalog: typed or agent-generated input is validated.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "description": {
                     "type": "string"
                 },
@@ -8415,6 +8764,87 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.cweCatalogEntryResponse": {
+            "type": "object",
+            "properties": {
+                "abstraction": {
+                    "type": "string"
+                },
+                "category": {
+                    "$ref": "#/definitions/cwe.SetRef"
+                },
+                "deprecated": {
+                    "type": "boolean"
+                },
+                "descendants": {
+                    "description": "Descendants counts the View 1000 entries under this one, so a\ncwe-tree: suggestion can say how much it covers.",
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "sets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cwe.SetRef"
+                    }
+                }
+            }
+        },
+        "server.cweCatalogResponse": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.cweCatalogEntryResponse"
+                    }
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.cweSetResponse": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "member_count": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.cweSetsResponse": {
+            "type": "object",
+            "properties": {
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.cweSetResponse"
+                    }
+                },
+                "sets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.cweSetResponse"
+                    }
+                },
+                "version": {
                     "type": "string"
                 }
             }
@@ -8609,12 +9039,6 @@ const docTemplate = `{
                 },
                 "cvss_vector": {
                     "type": "string"
-                },
-                "cwes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
                 },
                 "description": {
                     "type": "string"
@@ -9815,6 +10239,17 @@ const docTemplate = `{
                 }
             }
         },
+        "server.updateFindingCWEsRequest": {
+            "type": "object",
+            "properties": {
+                "cwes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "server.updateIntegrationRequest": {
             "type": "object",
             "properties": {
@@ -10100,6 +10535,61 @@ const docTemplate = `{
                 }
             }
         },
+        "store.CWEUsage": {
+            "type": "object",
+            "properties": {
+                "abstraction": {
+                    "type": "string"
+                },
+                "by_type": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "category": {
+                    "$ref": "#/definitions/cwe.SetRef"
+                },
+                "deprecated": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "max_severity": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "sets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cwe.SetRef"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "store.CWEUsageReport": {
+            "type": "object",
+            "properties": {
+                "cwes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.CWEUsage"
+                    }
+                },
+                "no_cwe": {
+                    "type": "integer"
+                },
+                "total_findings": {
+                    "type": "integer"
+                }
+            }
+        },
         "store.Client": {
             "type": "object",
             "properties": {
@@ -10238,6 +10728,58 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "store.FindingCWE": {
+            "type": "object",
+            "properties": {
+                "abstraction": {
+                    "type": "string"
+                },
+                "category": {
+                    "description": "Category is the MITRE View 1400 category (Injection, Encryption, …).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/cwe.SetRef"
+                        }
+                    ]
+                },
+                "deprecated": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "sets": {
+                    "description": "Sets are the named sets (Top 25, OWASP) the CWE belongs to; filled on\nthe finding detail only, from the in-memory catalog.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cwe.SetRef"
+                    }
+                },
+                "source": {
+                    "$ref": "#/definitions/store.FindingCWESource"
+                }
+            }
+        },
+        "store.FindingCWESource": {
+            "type": "string",
+            "enum": [
+                "rule",
+                "advisory",
+                "sarif_result",
+                "declared",
+                "type"
+            ],
+            "x-enum-varnames": [
+                "FindingCWESourceRule",
+                "FindingCWESourceAdvisory",
+                "FindingCWESourceSARIFResult",
+                "FindingCWESourceDeclared",
+                "FindingCWESourceType"
+            ]
         },
         "store.FindingDispute": {
             "type": "object",
@@ -11010,6 +11552,13 @@ const docTemplate = `{
                 "created_by": {
                     "type": "string"
                 },
+                "cwes": {
+                    "description": "CWEs every source attributes to the finding (ADR-037): rule, advisory,\nSARIF result taxa, a manual declaration, or the finding type. Attached\nper page through the finding_cwes view — never a column.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.FindingCWE"
+                    }
+                },
                 "description": {
                     "type": "string"
                 },
@@ -11091,9 +11640,6 @@ const docTemplate = `{
                 },
                 "original_severity": {
                     "$ref": "#/definitions/store.SeverityLevel"
-                },
-                "owasp_top_10": {
-                    "type": "string"
                 },
                 "present_on_default_branch": {
                     "type": "boolean"

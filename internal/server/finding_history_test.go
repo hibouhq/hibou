@@ -244,7 +244,7 @@ func TestFindingHistoryIncludesKEVCatalogEvents(t *testing.T) {
 	cveID := "CVE-" + strings.ToUpper(uuid.NewString())
 	canonicalID := "GHSA-" + uuid.NewString()
 	advisory, err := fixture.srv.queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
-		CanonicalID: canonicalID, Title: "history test", Severity: dbgen.SeverityLevelHigh, CweIds: []string{},
+		CanonicalID: canonicalID, Title: "history test", Severity: dbgen.SeverityLevelHigh,
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
@@ -296,7 +296,7 @@ func TestFindingHistoryKEVSeedDelistRetainsListingDate(t *testing.T) {
 	cveID := "CVE-" + strings.ToUpper(uuid.NewString())
 	undatedCVEID := "CVE-" + strings.ToUpper(uuid.NewString())
 	advisory, err := fixture.srv.queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
-		CanonicalID: "GHSA-" + uuid.NewString(), Title: "history delist test", Severity: dbgen.SeverityLevelHigh, CweIds: []string{},
+		CanonicalID: "GHSA-" + uuid.NewString(), Title: "history delist test", Severity: dbgen.SeverityLevelHigh,
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)

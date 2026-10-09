@@ -269,7 +269,7 @@ func (q *Queries) GetAutoApplyMapping(ctx context.Context, subscriptionID uuid.U
 }
 
 const getCVERecord = `-- name: GetCVERecord :one
-SELECT cve_id, state, assigner, published_at, record_updated_at, first_seen_at, cvss_score, cvss_vector, severity, cwe_ids, summary, reference_urls FROM cve_records WHERE cve_id = $1
+SELECT cve_id, state, assigner, published_at, record_updated_at, first_seen_at, cvss_score, cvss_vector, severity, summary, reference_urls FROM cve_records WHERE cve_id = $1
 `
 
 func (q *Queries) GetCVERecord(ctx context.Context, cveID string) (CveRecord, error) {
@@ -285,7 +285,6 @@ func (q *Queries) GetCVERecord(ctx context.Context, cveID string) (CveRecord, er
 		&i.CvssScore,
 		&i.CvssVector,
 		&i.Severity,
-		pq.Array(&i.CweIds),
 		&i.Summary,
 		pq.Array(&i.ReferenceUrls),
 	)
@@ -1362,8 +1361,8 @@ func (q *Queries) TouchSubscriptionMatched(ctx context.Context, id uuid.UUID) er
 const upsertCVERecord = `-- name: UpsertCVERecord :exec
 INSERT INTO cve_records (
     cve_id, state, assigner, published_at, record_updated_at,
-    cvss_score, cvss_vector, severity, cwe_ids, summary, reference_urls
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    cvss_score, cvss_vector, severity, summary, reference_urls
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (cve_id) DO UPDATE SET
     state = EXCLUDED.state,
     assigner = EXCLUDED.assigner,
@@ -1372,7 +1371,6 @@ ON CONFLICT (cve_id) DO UPDATE SET
     cvss_score = EXCLUDED.cvss_score,
     cvss_vector = EXCLUDED.cvss_vector,
     severity = EXCLUDED.severity,
-    cwe_ids = EXCLUDED.cwe_ids,
     summary = EXCLUDED.summary,
     reference_urls = EXCLUDED.reference_urls
 `
@@ -1386,7 +1384,6 @@ type UpsertCVERecordParams struct {
 	CvssScore       sql.NullString `json:"cvss_score"`
 	CvssVector      string         `json:"cvss_vector"`
 	Severity        string         `json:"severity"`
-	CweIds          []string       `json:"cwe_ids"`
 	Summary         string         `json:"summary"`
 	ReferenceUrls   []string       `json:"reference_urls"`
 }
@@ -1404,7 +1401,6 @@ func (q *Queries) UpsertCVERecord(ctx context.Context, arg UpsertCVERecordParams
 		arg.CvssScore,
 		arg.CvssVector,
 		arg.Severity,
-		pq.Array(arg.CweIds),
 		arg.Summary,
 		pq.Array(arg.ReferenceUrls),
 	)

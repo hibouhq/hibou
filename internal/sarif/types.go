@@ -11,20 +11,41 @@ type Document struct {
 type Run struct {
 	Tool    Tool     `json:"tool"`
 	Results []Result `json:"results"`
+	// Taxonomies holds standard taxonomies such as CWE (§3.14.8); rules and
+	// results point into them through relationships and taxa.
+	Taxonomies                     []ToolComponent                 `json:"taxonomies"`
+	ExternalPropertyFileReferences *ExternalPropertyFileReferences `json:"externalPropertyFileReferences,omitempty"`
+}
+
+// ExternalPropertyFileReferences (§3.15) is only read for its taxonomy
+// GUIDs: Flawfinder declares CWE as an external file and never inlines it.
+type ExternalPropertyFileReferences struct {
+	Taxonomies []ExternalPropertyFileReference `json:"taxonomies"`
+}
+
+type ExternalPropertyFileReference struct {
+	GUID string `json:"guid"`
 }
 
 type Tool struct {
 	Driver ToolComponent `json:"driver"`
+	// Extensions (§3.18.3) may define rules too; result.rule.toolComponent.index
+	// points into this array.
+	Extensions []ToolComponent `json:"extensions"`
 }
 
 type ToolComponent struct {
-	Name    string                `json:"name"`
-	Version string                `json:"version"`
-	Rules   []ReportingDescriptor `json:"rules"`
+	Name                string                   `json:"name"`
+	GUID                string                   `json:"guid"`
+	Version             string                   `json:"version"`
+	Rules               []ReportingDescriptor    `json:"rules"`
+	Taxa                []ReportingDescriptor    `json:"taxa"`
+	SupportedTaxonomies []ToolComponentReference `json:"supportedTaxonomies"`
 }
 
 type ReportingDescriptor struct {
 	ID                   string                  `json:"id"`
+	GUID                 string                  `json:"guid"`
 	Name                 string                  `json:"name"`
 	ShortDescription     *Message                `json:"shortDescription,omitempty"`
 	FullDescription      *Message                `json:"fullDescription,omitempty"`
@@ -32,6 +53,32 @@ type ReportingDescriptor struct {
 	HelpURI              string                  `json:"helpUri"`
 	DefaultConfiguration *ReportingConfiguration `json:"defaultConfiguration,omitempty"`
 	Properties           json.RawMessage         `json:"properties,omitempty"`
+	// Relationships (§3.49.15) map the rule onto taxa — the spec's way of
+	// saying "this rule is CWE-327" (gosec, SpotBugs, KICS, ZAP, Flawfinder).
+	Relationships []ReportingDescriptorRelationship `json:"relationships"`
+}
+
+// ReportingDescriptorRelationship (§3.53) links a rule to a taxon. Kinds
+// defaults to ["relevant"] when absent.
+type ReportingDescriptorRelationship struct {
+	Target ReportingDescriptorReference `json:"target"`
+	Kinds  []string                     `json:"kinds"`
+}
+
+// ReportingDescriptorReference (§3.52) identifies a rule or taxon by id,
+// index or guid within the tool component it names.
+type ReportingDescriptorReference struct {
+	ID            string                  `json:"id"`
+	Index         *int                    `json:"index,omitempty"`
+	GUID          string                  `json:"guid"`
+	ToolComponent *ToolComponentReference `json:"toolComponent,omitempty"`
+}
+
+// ToolComponentReference (§3.54) identifies a driver, extension or taxonomy.
+type ToolComponentReference struct {
+	Name  string `json:"name"`
+	Index *int   `json:"index,omitempty"`
+	GUID  string `json:"guid"`
 }
 
 type MultiformatMessage struct {
@@ -52,14 +99,20 @@ type reportingDescriptorProperties struct {
 }
 
 type Result struct {
-	RuleID              string            `json:"ruleId"`
-	RuleIndex           *int              `json:"ruleIndex,omitempty"`
-	Level               string            `json:"level"`
-	Message             Message           `json:"message"`
-	Locations           []Location        `json:"locations"`
-	Fingerprints        map[string]string `json:"fingerprints"`
-	PartialFingerprints map[string]string `json:"partialFingerprints"`
-	CodeFlows           []map[string]any  `json:"codeFlows"`
+	RuleID    string `json:"ruleId"`
+	RuleIndex *int   `json:"ruleIndex,omitempty"`
+	// Rule (§3.27.7) is the spec-complete rule reference; it can point into
+	// tool.extensions, which ruleIndex cannot.
+	Rule *ReportingDescriptorReference `json:"rule,omitempty"`
+	// Taxa (§3.27.8) lists taxa this occurrence falls into beyond what the
+	// rule's equal/superset relationships already imply.
+	Taxa                []ReportingDescriptorReference `json:"taxa"`
+	Level               string                         `json:"level"`
+	Message             Message                        `json:"message"`
+	Locations           []Location                     `json:"locations"`
+	Fingerprints        map[string]string              `json:"fingerprints"`
+	PartialFingerprints map[string]string              `json:"partialFingerprints"`
+	CodeFlows           []map[string]any               `json:"codeFlows"`
 	// Suppressions is SARIF's occurrence-level exclusion record (ADR-023
 	// appendix): semgrep/ESLint/checkov emit suppressed results by default,
 	// gosec with -track-suppressions. Empty array = active result (that is
@@ -104,18 +157,20 @@ type Message struct {
 // SARIF reportingDescriptor. It maps 1:1 onto the scan_rules table so rule text
 // is stored once instead of copied onto every finding.
 type RuleDescriptor struct {
-	RuleID           string          `json:"rule_id"`
-	Name             string          `json:"name"`
-	ShortDescription string          `json:"short_description"`
-	FullDescription  string          `json:"full_description"`
-	HelpURI          string          `json:"help_uri"`
-	HelpMarkdown     string          `json:"help_markdown"`
-	DefaultLevel     string          `json:"default_level"`
-	SecuritySeverity string          `json:"security_severity"`
-	Precision        string          `json:"precision"`
-	CWEs             []string        `json:"cwes"`
-	Tags             []string        `json:"tags"`
-	Properties       json.RawMessage `json:"properties"`
+	RuleID           string `json:"rule_id"`
+	Name             string `json:"name"`
+	ShortDescription string `json:"short_description"`
+	FullDescription  string `json:"full_description"`
+	HelpURI          string `json:"help_uri"`
+	HelpMarkdown     string `json:"help_markdown"`
+	DefaultLevel     string `json:"default_level"`
+	SecuritySeverity string `json:"security_severity"`
+	Precision        string `json:"precision"`
+	// CWEs are the rule's classification (ADR-037 §2): taxonomy relationships
+	// of kind equal/superset/relevant, then anchored tags.
+	CWEs       []int           `json:"cwes"`
+	Tags       []string        `json:"tags"`
+	Properties json.RawMessage `json:"properties"`
 }
 
 type Finding struct {
@@ -129,6 +184,9 @@ type Finding struct {
 	Fingerprint  string          `json:"fingerprint"`
 	LocationHash string          `json:"location_hash"`
 	Rule         *RuleDescriptor `json:"rule,omitempty"`
+	// ResultCWEs come from this occurrence's result.taxa only; they are stored
+	// per finding, never on the rule (ADR-037 §2.2).
+	ResultCWEs []int `json:"result_cwes,omitempty"`
 	// Suppressed marks a result the scanner itself excluded in-source
 	// (#nosemgrep, eslint-disable, checkov:skip, #nosec…). It must never
 	// become an open finding (ADR-023).

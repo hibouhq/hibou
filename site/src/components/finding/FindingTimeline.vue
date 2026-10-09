@@ -189,6 +189,7 @@ const LABELS: Record<string, string> = {
   became_reachable: 'Reachable again',
   status_change: 'Status changed',
   reported: 'Reported manually',
+  reclassified: 'CWEs changed',
   accepted: 'Risk accepted',
   false_positive: 'Marked false positive',
   reopened: 'Reopened',
@@ -242,6 +243,10 @@ function eventDetail(event: FindingHistoryEvent): string {
   if (comment) parts.push(comment)
   if (justification) parts.push(`VEX: ${justification.replace(/_/g, ' ')}`)
   if (expires) parts.push(`expires ${formatDateTime(expires)}`)
+  const cwes = event.detail?.cwes
+  if (event.kind === 'reclassified' && Array.isArray(cwes)) {
+    parts.push(cwes.length > 0 ? cwes.join(', ') : 'cleared')
+  }
   return parts.join(' · ')
 }
 

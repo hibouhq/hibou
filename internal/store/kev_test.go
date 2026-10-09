@@ -67,7 +67,6 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 	// Advisory matched through its canonical id.
 	direct, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
 		CanonicalID: sharedCVE, Title: "direct", Severity: dbgen.SeverityLevelHigh,
-		CweIds: []string{},
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory (direct): %v", err)
@@ -75,7 +74,6 @@ func TestKEVCatalogRoundTrip(t *testing.T) {
 	// Advisory matched only through a CVE alias, the GHSA-canonical case.
 	aliased, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
 		CanonicalID: "GHSA-kev0-test-0001", Title: "aliased", Severity: dbgen.SeverityLevelMedium,
-		CweIds: []string{},
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory (aliased): %v", err)

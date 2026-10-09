@@ -9,7 +9,7 @@ func TestParseValidConfig(t *testing.T) {
 	cfg, err := Parse([]byte(`version: 1
 quality_gates:
   - branches: ["main", "release/*"]
-    weaknesses:
+    code:
       max_critical: 0
       max_high: 1
 `))
@@ -19,8 +19,8 @@ quality_gates:
 	if cfg.Version != 1 || len(cfg.QualityGates) != 1 {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
-	if cfg.QualityGates[0].Weaknesses == nil || cfg.QualityGates[0].Weaknesses.EnabledValue() != true {
-		t.Fatalf("expected enabled weakness thresholds, got %#v", cfg.QualityGates[0].Weaknesses)
+	if cfg.QualityGates[0].Code == nil || cfg.QualityGates[0].Code.EnabledValue() != true {
+		t.Fatalf("expected enabled code thresholds, got %#v", cfg.QualityGates[0].Code)
 	}
 }
 
@@ -66,14 +66,14 @@ func TestParseConfigWithEnabledFalse(t *testing.T) {
 	cfg, err := Parse([]byte(`version: 1
 quality_gates:
   - branches: ["experiment/*"]
-    weaknesses:
+    code:
       enabled: false
 `))
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
-	if cfg.QualityGates[0].Weaknesses == nil || cfg.QualityGates[0].Weaknesses.EnabledValue() {
-		t.Fatalf("expected weakness gate to be disabled, got %#v", cfg.QualityGates[0].Weaknesses)
+	if cfg.QualityGates[0].Code == nil || cfg.QualityGates[0].Code.EnabledValue() {
+		t.Fatalf("expected code gate to be disabled, got %#v", cfg.QualityGates[0].Code)
 	}
 }
 
@@ -198,7 +198,7 @@ func TestDefaultProducesValidConfig(t *testing.T) {
 	if _, err := Parse(DefaultYAML()); err != nil {
 		t.Fatalf("DefaultYAML produced invalid config: %v", err)
 	}
-	if gate := Default().MatchGate("main"); gate == nil || gate.Weaknesses == nil {
+	if gate := Default().MatchGate("main"); gate == nil || gate.Code == nil {
 		t.Fatalf("expected default config to match main gate")
 	}
 }
@@ -261,5 +261,54 @@ func TestCompiledTagPatternNilReceiver(t *testing.T) {
 	var releases *ReleasesConfig
 	if releases.CompiledTagPattern() != nil {
 		t.Error("nil ReleasesConfig must yield no pattern (platform default applies)")
+	}
+}
+
+// ADR-037 §7: a CWE deny section parses into selectors, and anything that
+// would make it silently inert is a config error.
+func TestCWEPolicy(t *testing.T) {
+	cfg, err := Parse([]byte(`version: 1
+quality_gates:
+  - branches: ["main"]
+    cwe:
+      deny: [CWE-89, "78"]
+      deny_tree: [CWE-74]
+      deny_sets: [top25]
+      deny_categories: [injection]
+      types: [sast, dependency]
+      min_severity: medium
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	rules, err := cfg.QualityGates[0].CWE.Selectors()
+	if err != nil || len(rules) != 5 {
+		t.Fatalf("Selectors = %d rules, %v", len(rules), err)
+	}
+	if rules[2].Path != "cwe.deny_tree CWE-74" || !rules[2].Selector.Matches([]int{89}) {
+		t.Fatalf("tree rule = %+v", rules[2])
+	}
+
+	for name, section := range map[string]string{
+		"unknown id":       "deny: [CWE-99999]",
+		"malformed id":     "deny: [sqli]",
+		"coverage test":    "deny: [none]",
+		"unknown set":      "deny_sets: [top-26]",
+		"unknown category": "deny_categories: [sorcery]",
+		"unknown type":     "deny: [CWE-89]\n      types: [binary]",
+		"unknown severity": "deny: [CWE-89]\n      min_severity: severe",
+		"denies nothing":   "types: [sast]",
+	} {
+		_, err := Parse([]byte("version: 1\nquality_gates:\n  - branches: [\"main\"]\n    cwe:\n      " + section + "\n"))
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestWeaknessesKeyPointsAtRename(t *testing.T) {
+	_, err := Parse([]byte("version: 1\nquality_gates:\n  - branches: [\"main\"]\n    weaknesses:\n      max_high: 0\n"))
+	if err == nil || !strings.Contains(err.Error(), "renamed to code") {
+		t.Fatalf("want a rename hint, got %v", err)
 	}
 }

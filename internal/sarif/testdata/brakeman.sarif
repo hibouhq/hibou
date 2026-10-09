@@ -1,0 +1,129 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "Brakeman",
+     "semanticVersion": "8.1.0",
+     "rules": [
+      {
+       "id": "BRAKE0120",
+       "name": "EOLRails/Unmaintained Dependency",
+       "fullDescription": {
+        "text": "Checks for unsupported versions of Rails."
+       },
+       "helpUri": "https://brakemanscanner.org/docs/warning_types/unmaintained_dependency/",
+       "help": {
+        "text": "More info: https://brakemanscanner.org/docs/warning_types/unmaintained_dependency/.",
+        "markdown": "[More info](https://brakemanscanner.org/docs/warning_types/unmaintained_dependency/)."
+       },
+       "properties": {
+        "tags": [
+         "EOLRails"
+        ]
+       }
+      },
+      {
+       "id": "BRAKE0013",
+       "name": "Evaluation/Dangerous Eval",
+       "fullDescription": {
+        "text": "Searches for evaluation of user input."
+       },
+       "helpUri": "https://brakemanscanner.org/docs/warning_types/dangerous_eval/",
+       "help": {
+        "text": "More info: https://brakemanscanner.org/docs/warning_types/dangerous_eval/.",
+        "markdown": "[More info](https://brakemanscanner.org/docs/warning_types/dangerous_eval/)."
+       },
+       "properties": {
+        "tags": [
+         "Evaluation"
+        ]
+       }
+      },
+      {
+       "id": "BRAKE0014",
+       "name": "Execute/Command Injection",
+       "fullDescription": {
+        "text": "Finds instances of possible command injection."
+       },
+       "helpUri": "https://brakemanscanner.org/docs/warning_types/command_injection/",
+       "help": {
+        "text": "More info: https://brakemanscanner.org/docs/warning_types/command_injection/.",
+        "markdown": "[More info](https://brakemanscanner.org/docs/warning_types/command_injection/)."
+       },
+       "properties": {
+        "tags": [
+         "Execute"
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "results": [
+    {
+     "ruleId": "BRAKE0120",
+     "ruleIndex": 0,
+     "level": "error",
+     "message": {
+      "text": "Support for Rails 7.1.0 ended on 2025-10-01."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/Gemfile.lock"
+        },
+        "region": {
+         "startLine": 3
+        }
+       }
+      }
+     ]
+    },
+    {
+     "ruleId": "BRAKE0013",
+     "ruleIndex": 1,
+     "level": "error",
+     "message": {
+      "text": "Parameter value evaluated as code."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/users_controller.rb"
+        },
+        "region": {
+         "startLine": 3
+        }
+       }
+      }
+     ]
+    },
+    {
+     "ruleId": "BRAKE0014",
+     "ruleIndex": 2,
+     "level": "error",
+     "message": {
+      "text": "Possible command injection."
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/users_controller.rb"
+        },
+        "region": {
+         "startLine": 2
+        }
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

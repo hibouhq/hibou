@@ -23,6 +23,7 @@ const router = createRouter({
             { path: 'overview', name: 'org-overview', component: () => import('@/views/org/OverviewTab.vue') },
             { path: 'insights', name: 'org-insights', component: () => import('@/views/org/InsightsTab.vue') },
             { path: 'vulnerabilities', name: 'org-vulnerabilities', component: () => import('@/views/org/VulnerabilitiesTab.vue') },
+            { path: 'cwes', name: 'org-cwes', component: () => import('@/views/org/CwesTab.vue') },
             { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
             { path: 'licenses', name: 'org-licenses', component: () => import('@/views/org/LicensesTab.vue') },
             { path: 'clients', name: 'org-clients', component: () => import('@/views/org/ClientsTab.vue') },
@@ -88,6 +89,11 @@ const router = createRouter({
               path: 'vulnerabilities',
               name: 'repo-vulnerabilities',
               component: () => import('@/views/repo/VulnerabilitiesTab.vue'),
+            },
+            {
+              path: 'cwes',
+              name: 'repo-cwes',
+              component: () => import('@/views/repo/CwesTab.vue'),
             },
             {
               path: 'dependencies',

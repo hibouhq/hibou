@@ -53,6 +53,7 @@
       :repo-slug="drawer.repoSlug"
       :fingerprint="drawer.fingerprint"
       @close="closeDrawer"
+      @cwes-updated="applyCWEsToRows"
       @accept="openTriageDialog"
       @reopen="reopenFinding"
       @revoke="markSecretRevoked"
@@ -164,6 +165,14 @@
                       class="text-gray-300"
                     />
                   </button>
+                  <CweChips
+                    v-if="vulnerability.cwes?.length"
+                    class="mt-1"
+                    :cwes="vulnerability.cwes"
+                    :max="4"
+                    clickable
+                    @select="filterByCWE"
+                  />
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   <div class="flex items-center gap-1.5">
@@ -210,12 +219,15 @@ import { Flame, Biohazard } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { type LocationQueryRaw, RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { api, type AcceptanceReasonKind, type FindingAcceptance, type OrgDashboard, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
+import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type OrgDashboard, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
+import CweChips from '@/components/finding/CweChips.vue'
+import { cweFilterDefs } from '@/lib/cweFilters'
+import { appendBarToken, withHiddenDefaults } from '@/lib/filterBarQuery'
 import TriageDialog from '@/components/TriageDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
@@ -262,7 +274,24 @@ const filterDefs = computed(() => [
   { key: 'acceptance', label: 'Triage', options: ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed'] },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
+  // ADR-037. No org facet endpoint: completion searches the catalog.
+  ...cweFilterDefs(() => undefined),
 ])
+
+// The query the server runs, with the hidden status:detected default.
+const serverQuery = computed(() => (advancedQuery.value ? withHiddenDefaults(advancedQuery.value, filterDefs.value) : ''))
+
+function applyCWEsToRows(fingerprint: string, cwes: FindingCWE[]) {
+  vulnerabilities.value = vulnerabilities.value.map(row => (row.fingerprint === fingerprint ? { ...row, cwes } : row))
+}
+
+function filterByCWE(id: number) {
+  advancedQuery.value = appendBarToken(filterDefs.value, {
+    filters: activeFilters.value,
+    searchText: searchQuery.value,
+    advancedQuery: advancedQuery.value,
+  }, `cwe:${id}`)
+}
 const sortOptions = [
   { key: 'severity', label: 'Severity' },
   { key: 'detected', label: 'Detected', ascLabel: 'Oldest', descLabel: 'Newest' },
@@ -385,7 +414,7 @@ watch(
         acceptance: advancedQuery.value ? undefined : activeFilters.value.acceptance || undefined,
         tool: advancedQuery.value ? undefined : activeFilters.value.tool || undefined,
         search: advancedQuery.value ? undefined : searchQuery.value || undefined,
-        q: advancedQuery.value || undefined,
+        q: serverQuery.value || undefined,
         exploited: advancedQuery.value ? undefined : activeFilters.value.exploited === 'true' ? true : activeFilters.value.exploited === 'false' ? false : undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,

@@ -1,0 +1,190 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "Bandit",
+     "version": "1.9.4",
+     "semanticVersion": "1.9.4",
+     "rules": [
+      {
+       "id": "B404",
+       "name": "blacklist",
+       "properties": {
+        "tags": [
+         "security",
+         "external/cwe/cwe-78"
+        ],
+        "precision": "high"
+       },
+       "helpUri": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess"
+      },
+      {
+       "id": "B602",
+       "name": "subprocess_popen_with_shell_equals_true",
+       "properties": {
+        "tags": [
+         "security",
+         "external/cwe/cwe-78"
+        ],
+        "precision": "high"
+       },
+       "helpUri": "https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html"
+      },
+      {
+       "id": "B607",
+       "name": "start_process_with_partial_path",
+       "properties": {
+        "tags": [
+         "security",
+         "external/cwe/cwe-78"
+        ],
+        "precision": "high"
+       },
+       "helpUri": "https://bandit.readthedocs.io/en/1.9.4/plugins/b607_start_process_with_partial_path.html"
+      }
+     ]
+    }
+   },
+   "results": [
+    {
+     "message": {
+      "text": "Consider possible security implications associated with the subprocess module."
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "region": {
+         "endColumn": 18,
+         "endLine": 2,
+         "startColumn": 1,
+         "startLine": 2
+        },
+        "artifactLocation": {
+         "uri": "src/branch.py"
+        }
+       }
+      }
+     ],
+     "properties": {
+      "issue_confidence": "HIGH",
+      "issue_severity": "LOW"
+     },
+     "ruleId": "B404",
+     "ruleIndex": 0
+    },
+    {
+     "message": {
+      "text": "subprocess call with shell=True identified, security issue."
+     },
+     "level": "error",
+     "locations": [
+      {
+       "physicalLocation": {
+        "region": {
+         "endColumn": 47,
+         "endLine": 9,
+         "startColumn": 12,
+         "startLine": 9
+        },
+        "artifactLocation": {
+         "uri": "src/branch.py"
+        }
+       }
+      }
+     ],
+     "properties": {
+      "issue_confidence": "HIGH",
+      "issue_severity": "HIGH"
+     },
+     "ruleId": "B602",
+     "ruleIndex": 1
+    },
+    {
+     "message": {
+      "text": "Consider possible security implications associated with the subprocess module."
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "region": {
+         "endColumn": 18,
+         "endLine": 2,
+         "startColumn": 1,
+         "startLine": 2
+        },
+        "artifactLocation": {
+         "uri": "src/constant.py"
+        }
+       }
+      }
+     ],
+     "properties": {
+      "issue_confidence": "HIGH",
+      "issue_severity": "LOW"
+     },
+     "ruleId": "B404",
+     "ruleIndex": 0
+    },
+    {
+     "message": {
+      "text": "Starting a process with a partial executable path"
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "region": {
+         "endColumn": 54,
+         "endLine": 7,
+         "startColumn": 12,
+         "startLine": 7
+        },
+        "artifactLocation": {
+         "uri": "src/constant.py"
+        }
+       }
+      }
+     ],
+     "properties": {
+      "issue_confidence": "HIGH",
+      "issue_severity": "LOW"
+     },
+     "ruleId": "B607",
+     "ruleIndex": 2
+    },
+    {
+     "message": {
+      "text": "subprocess call with shell=True seems safe, but may be changed in the future, consider rewriting without shell"
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "region": {
+         "endColumn": 54,
+         "endLine": 7,
+         "startColumn": 12,
+         "startLine": 7
+        },
+        "artifactLocation": {
+         "uri": "src/constant.py"
+        }
+       }
+      }
+     ],
+     "properties": {
+      "issue_confidence": "HIGH",
+      "issue_severity": "LOW"
+     },
+     "ruleId": "B602",
+     "ruleIndex": 1
+    }
+   ]
+  }
+ ]
+}

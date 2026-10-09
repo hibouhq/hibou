@@ -1,6 +1,7 @@
 package sarif
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestParseAndExtractFindings(t *testing.T) {
 	if finding.Rule.Name != "Hardcoded secret" || finding.Rule.HelpURI != "https://example.com/rule-1" {
 		t.Fatalf("unexpected rule descriptor: %#v", finding.Rule)
 	}
-	if len(finding.Rule.CWEs) != 1 || finding.Rule.CWEs[0] != "CWE-798" {
+	if len(finding.Rule.CWEs) != 1 || finding.Rule.CWEs[0] != 798 {
 		t.Fatalf("expected CWE-798 on rule, got %#v", finding.Rule.CWEs)
 	}
 }
@@ -151,9 +152,11 @@ func TestExtractFindingsFallsBackToPartialFingerprints(t *testing.T) {
 	}
 }
 
-func TestExtractCWEsFromTags(t *testing.T) {
-	cwes := extractCWEs([]string{"security", "cwe-79", "x:CWE-89", "cwe-79"})
-	if len(cwes) != 2 || cwes[0] != "CWE-79" || cwes[1] != "CWE-89" {
+// Only the two anchored tag conventions classify a rule (ADR-037 §2.3); a
+// CWE mentioned mid-tag does not.
+func TestTagCWEs(t *testing.T) {
+	cwes := tagCWEs([]string{"security", "cwe-79", "x:CWE-89", "external/cwe/cwe-078", "CWE-22: Path Traversal"})
+	if !slices.Equal(cwes, []int{79, 78, 22}) {
 		t.Fatalf("unexpected CWEs: %#v", cwes)
 	}
 }

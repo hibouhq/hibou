@@ -43,7 +43,7 @@ func TestBuildEffectiveConfigAlwaysReportsEverySection(t *testing.T) {
 
 	response := buildEffectiveConfig("main", nil, nil, sourceRepoGate, false, nil)
 
-	for _, name := range []string{"Dependency vulnerabilities", "Code weaknesses", "Licenses", "Coverage", "Secrets", "Always applied"} {
+	for _, name := range []string{"Dependency vulnerabilities", "Code findings", "Licenses", "Coverage", "Secrets", "Always applied"} {
 		section := sectionByName(t, response, name)
 		if name == "Always applied" {
 			continue
@@ -123,7 +123,7 @@ func TestBuildEffectiveConfigMarksEmptyLicensePolicyDisabled(t *testing.T) {
 	}
 }
 
-// The interaction nobody expects, mirroring evaluateConfiguredWeaknessGates: a
+// The interaction nobody expects, mirroring evaluateConfiguredCodeGates: a
 // file weakness section replaces the stored findings gates, and an explicitly
 // disabled one switches the axis off entirely — stored gates included.
 func TestBuildEffectiveConfigWeaknessFileGateOverridesStoredGates(t *testing.T) {
@@ -137,7 +137,7 @@ func TestBuildEffectiveConfigWeaknessFileGateOverridesStoredGates(t *testing.T) 
 	}}
 
 	// No file section: the stored findings gate is what applies.
-	section := sectionByName(t, buildEffectiveConfig("main", nil, stored, sourceOrgGate, false, nil), "Code weaknesses")
+	section := sectionByName(t, buildEffectiveConfig("main", nil, stored, sourceOrgGate, false, nil), "Code findings")
 	if section.Status != sectionEnforced {
 		t.Fatalf("status = %q, want enforced from the stored gate", section.Status)
 	}
@@ -148,11 +148,11 @@ func TestBuildEffectiveConfigWeaknessFileGateOverridesStoredGates(t *testing.T) 
 
 	// File section present: it replaces the stored gate, and says so.
 	cfg := &repoconfig.RepoConfig{QualityGates: []repoconfig.QualityGate{{
-		Branches:   []string{"main"},
-		Weaknesses: &repoconfig.WeaknessThresholds{MaxHigh: intPtr(3)},
+		Branches: []string{"main"},
+		Code:     &repoconfig.CodeThresholds{MaxHigh: intPtr(3)},
 	}}}
 	response := buildEffectiveConfig("main", cfg, stored, sourceOrgGate, false, nil)
-	section = sectionByName(t, response, "Code weaknesses")
+	section = sectionByName(t, response, "Code findings")
 	if section.Note == "" {
 		t.Error("the replace-not-add behaviour must be stated")
 	}
@@ -164,9 +164,9 @@ func TestBuildEffectiveConfigWeaknessFileGateOverridesStoredGates(t *testing.T) 
 
 	// File section explicitly disabled: the whole axis is off, including the
 	// stored gate, and that must be warned about rather than silently applied.
-	cfg.QualityGates[0].Weaknesses.Enabled = boolPtr(false)
+	cfg.QualityGates[0].Code.Enabled = boolPtr(false)
 	response = buildEffectiveConfig("main", cfg, stored, sourceOrgGate, false, nil)
-	section = sectionByName(t, response, "Code weaknesses")
+	section = sectionByName(t, response, "Code findings")
 	if section.Status != sectionDisabled {
 		t.Errorf("status = %q, want disabled", section.Status)
 	}
@@ -177,7 +177,7 @@ func TestBuildEffectiveConfigWeaknessFileGateOverridesStoredGates(t *testing.T) 
 		}
 	}
 	if !found {
-		t.Errorf("disabling weaknesses must warn that it skips the stored gate: %v", response.Warnings)
+		t.Errorf("disabling the code section must warn that it skips the stored gate: %v", response.Warnings)
 	}
 }
 
@@ -234,15 +234,15 @@ func TestBuildEffectiveConfigReportsUnmatchedBranch(t *testing.T) {
 	t.Parallel()
 
 	cfg := &repoconfig.RepoConfig{QualityGates: []repoconfig.QualityGate{{
-		Branches:   []string{"main"},
-		Weaknesses: &repoconfig.WeaknessThresholds{MaxHigh: intPtr(0)},
+		Branches: []string{"main"},
+		Code:     &repoconfig.CodeThresholds{MaxHigh: intPtr(0)},
 	}}}
 	response := buildEffectiveConfig("release/2.0", cfg, nil, sourceRepoGate, false, nil)
 
 	if response.FileGateMatched {
 		t.Error("no gate covers release/2.0")
 	}
-	if section := sectionByName(t, response, "Code weaknesses"); section.Status != sectionNotConfigured {
+	if section := sectionByName(t, response, "Code findings"); section.Status != sectionNotConfigured {
 		t.Errorf("weaknesses = %q, want not-configured on an unmatched branch", section.Status)
 	}
 	found := false
@@ -260,7 +260,7 @@ func TestBuildEffectiveConfigReportsUnmatchedBranch(t *testing.T) {
 	if !response.FileGateMatched {
 		t.Error("main must match")
 	}
-	if section := sectionByName(t, response, "Code weaknesses"); section.Status != sectionEnforced {
+	if section := sectionByName(t, response, "Code findings"); section.Status != sectionEnforced {
 		t.Errorf("weaknesses on main = %q, want enforced", section.Status)
 	}
 }
@@ -271,8 +271,8 @@ func TestBuildEffectiveConfigDisclosesAdvisoryEnforcement(t *testing.T) {
 	t.Parallel()
 
 	cfg := &repoconfig.RepoConfig{QualityGates: []repoconfig.QualityGate{{
-		Branches:   []string{"main"},
-		Weaknesses: &repoconfig.WeaknessThresholds{MaxHigh: intPtr(0)},
+		Branches: []string{"main"},
+		Code:     &repoconfig.CodeThresholds{MaxHigh: intPtr(0)},
 	}}}
 	response := buildEffectiveConfig("main", cfg, nil, sourceRepoGate, false, nil)
 	found := false
@@ -316,7 +316,7 @@ func TestBuildEffectiveConfigShowsReachabilityFiltering(t *testing.T) {
 }
 
 // Both the stored gate and the file section are evaluated for dependency
-// vulnerabilities — unlike weaknesses, where the file replaces the stored gate.
+// vulnerabilities — unlike the code section, where the file replaces the stored gate.
 func TestBuildEffectiveConfigDependencySectionIsAdditive(t *testing.T) {
 	t.Parallel()
 
@@ -389,8 +389,8 @@ func TestEffectiveLicenseSectionResolvesOrgPolicy(t *testing.T) {
 
 	// A file gate with no licenses section still inherits.
 	cfg := &repoconfig.RepoConfig{QualityGates: []repoconfig.QualityGate{{
-		Branches:   []string{"main"},
-		Weaknesses: &repoconfig.WeaknessThresholds{MaxHigh: intPtr(0)},
+		Branches: []string{"main"},
+		Code:     &repoconfig.CodeThresholds{MaxHigh: intPtr(0)},
 	}}}
 	section = sectionByName(t, buildEffectiveConfig("main", cfg, nil, sourceRepoGate, false, orgPolicy), "Licenses")
 	if section.Status != sectionEnforced {

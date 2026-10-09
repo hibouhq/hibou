@@ -235,6 +235,7 @@
 <script setup lang="ts">
 import {
   Activity,
+  Bug,
   ChevronDown,
   Container,
   FlaskConical,
@@ -473,6 +474,7 @@ const tabs = computed(() => {
   return [
     { label: 'Overview', name: 'repo-overview', icon: LayoutDashboard, to: { name: 'repo-overview', params: route.params, query } },
     { label: 'Vulnerabilities', name: 'repo-vulnerabilities', icon: ShieldAlert, to: { name: 'repo-vulnerabilities', params: route.params, query } },
+    { label: 'CWE', name: 'repo-cwes', icon: Bug, to: { name: 'repo-cwes', params: route.params, query } },
     { label: 'Coverage', name: 'repo-coverage', icon: Activity, to: { name: 'repo-coverage', params: route.params, query } },
     { label: 'Tests', name: 'repo-tests', icon: FlaskConical, to: { name: 'repo-tests', params: route.params, query } },
     { label: 'Dependencies', name: 'repo-dependencies', icon: Package, to: { name: 'repo-dependencies', params: route.params, query } },

@@ -14,6 +14,7 @@ import (
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/cvefeed"
 	"github.com/hibouhq/hibou/internal/cvetriage"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -327,12 +328,16 @@ func (s *Server) loadProjection(r *http.Request, cveID string) (cvefeed.Projecti
 	if err != nil {
 		return cvefeed.Projection{}, err
 	}
+	cwes, err := s.queries.ListCVERecordCWEs(r.Context(), cveID)
+	if err != nil {
+		return cvefeed.Projection{}, err
+	}
 	projection := cvefeed.Projection{
 		ID:          stored.CveID,
 		State:       stored.State,
 		Assigner:    stored.Assigner,
 		Description: stored.Summary,
-		CWEs:        stored.CweIds,
+		CWEs:        cwe.FormatAll(cwes),
 	}
 	if stored.PublishedAt.Valid {
 		projection.Published = stored.PublishedAt.Time

@@ -4,6 +4,28 @@
     v-if="section !== 'details'"
     class="space-y-5"
   >
+    <!-- How bad, at a glance: the score decides priority, so it is on the
+         overview rather than buried in Details. -->
+    <FindingSection
+      v-if="cvss"
+      title="Score"
+      boxed
+    >
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span
+          class="text-2xl font-semibold tabular-nums"
+          :class="cvss.className"
+        >{{ cvss.score }}</span>
+        <span class="text-xs text-gray-400">CVSS{{ cvss.version ? ` v${cvss.version}` : '' }} · {{ cvss.band }}</span>
+      </div>
+      <p
+        v-if="advisory?.cvss_vector"
+        class="mt-1 break-all font-mono text-[11px] text-gray-500"
+      >
+        {{ advisory.cvss_vector }}
+      </p>
+    </FindingSection>
+
     <!-- What is affected. For a dependency finding the package is the subject,
          so it leads; the file path a scanner may have attached is incidental. -->
     <FindingSection
@@ -125,19 +147,6 @@
         class="mt-2"
         :facts="advisoryFacts"
       />
-      <div
-        v-if="cwes.length > 0"
-        class="mt-2 flex flex-wrap gap-1.5"
-      >
-        <a
-          v-for="cwe in cwes"
-          :key="cwe"
-          :href="cweUrl(cwe)"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="rounded-md border border-surface-border px-2 py-0.5 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
-        >{{ cwe }}</a>
-      </div>
     </FindingSection>
 
     <FindingSection
@@ -214,7 +223,7 @@ import { isLocallyCurated } from '@/lib/purl'
 import type { Fact } from '@/components/finding/facts'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
-import { advisoryUrl, cweUrl } from '@/lib/findingDisplay'
+import { advisoryUrl } from '@/lib/findingDisplay'
 
 // Component-backed findings (dependency, container, malware): a package, an
 // advisory, and a version to upgrade to.
@@ -240,7 +249,6 @@ const aliases = computed(() => advisory.value?.aliases ?? [])
 // The drawer header already carries the title; only a different advisory title
 // adds anything.
 const advisoryTitle = computed(() => (advisory.value?.title !== finding.value.title ? advisory.value?.title ?? '' : ''))
-const cwes = computed(() => advisory.value?.cwes ?? [])
 const fixedVersions = computed(() => advisory.value?.fixed_versions ?? [])
 const references = computed(() => advisory.value?.references ?? [])
 const visibleReferences = computed(() => (allReferences.value ? references.value : references.value.slice(0, REFERENCE_PREVIEW)))
@@ -305,6 +313,17 @@ const packageFacts = computed<Fact[]>(() => [
   { label: 'Package URL', value: finding.value.component_purl, mono: true, wide: true },
   { label: 'Manifest', value: finding.value.file_path, mono: true, wide: true, hint: 'The file the dependency was declared in' },
 ])
+
+// CVSS v3/v4 qualitative bands (FIRST): the colour says the band before the
+// number is read.
+const cvss = computed(() => {
+  const score = Number.parseFloat(advisory.value?.cvss_score ?? '')
+  if (!Number.isFinite(score)) return null
+  const version = /^CVSS:(\d\.\d)\//i.exec(advisory.value?.cvss_vector ?? '')?.[1]
+  const band = score >= 9 ? 'critical' : score >= 7 ? 'high' : score >= 4 ? 'medium' : score > 0 ? 'low' : 'none'
+  const className = { critical: 'text-red-300', high: 'text-orange-300', medium: 'text-amber-300', low: 'text-sky-300', none: 'text-gray-400' }[band]
+  return { score: score.toFixed(1), version, band, className }
+})
 
 const advisoryFacts = computed<Fact[]>(() => [
   { label: 'CVSS', value: advisory.value?.cvss_score },

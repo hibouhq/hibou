@@ -37,6 +37,7 @@ const (
 var findingActivityActions = []string{
 	audit.ActionFindingAcceptance,
 	audit.ActionFindingCreate,
+	audit.ActionFindingCWEs,
 	audit.ActionFindingDispute,
 	audit.ActionSecretRevoked,
 }
@@ -48,6 +49,7 @@ var findingActivityActions = []string{
 // what a plain member can read — do it deliberately.
 var findingActivityContextKeys = []string{
 	"status",
+	"cwes",
 	"reason",
 	"reason_kind",
 	"labels",
@@ -409,6 +411,8 @@ func activityEventKind(action, status string) string {
 		return "reported"
 	case audit.ActionSecretRevoked:
 		return "revoked"
+	case audit.ActionFindingCWEs:
+		return "reclassified"
 	case audit.ActionFindingDispute:
 		if status == "undisputed" {
 			return "dispute_withdrawn"

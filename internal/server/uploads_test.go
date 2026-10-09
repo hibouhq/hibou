@@ -1911,7 +1911,6 @@ func seedVEXAdvisoryForTestID(t *testing.T, srv *Server, canonicalID string) {
 		Title:       "VEX test advisory",
 		Description: "test advisory for uploaded VEX import",
 		Severity:    dbgen.SeverityLevelLow,
-		CweIds:      []string{},
 		CvssScore:   sql.NullString{},
 		CvssVersion: dbgen.NullCvssVersion{},
 		PublishedAt: sql.NullTime{},

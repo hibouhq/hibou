@@ -457,11 +457,13 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 		Severity:    dbgen.SeverityLevelHigh,
 		CvssScore:   sql.NullString{String: "8.8", Valid: true},
 		CvssVector:  "",
-		CweIds:      []string{"CWE-20", "CWE-79"},
 		IsMalware:   false,
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory(enriched): %v", err)
+	}
+	if err := srv.queries.AddAdvisoryCWEs(context.Background(), enrichedAdvisory.ID, []int{20, 79}); err != nil {
+		t.Fatalf("AddAdvisoryCWEs: %v", err)
 	}
 	if err := srv.queries.UpsertAdvisoryAlias(context.Background(), dbgen.UpsertAdvisoryAliasParams{AdvisoryID: enrichedAdvisory.ID, Alias: kevID}); err != nil {
 		t.Fatalf("UpsertAdvisoryAlias: %v", err)
@@ -527,7 +529,6 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 		Description: "",
 		Severity:    dbgen.SeverityLevelMedium,
 		CvssVector:  "",
-		CweIds:      []string{},
 		IsMalware:   false,
 	})
 	if err != nil {
@@ -569,11 +570,12 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	if enriched.Summary == nil || *enriched.Summary != "Summary from advisory description" {
 		t.Fatalf("enriched summary = %v, want advisory description", enriched.Summary)
 	}
-	if enriched.Cwe == nil || *enriched.Cwe != "CWE-20" {
-		t.Fatalf("enriched cwe = %v, want CWE-20", enriched.Cwe)
+	// ADR-037: every CWE, each with its catalog title — not just the first id.
+	if len(enriched.CWEs) != 2 || enriched.CWEs[0].ID != 20 || enriched.CWEs[1].ID != 79 {
+		t.Fatalf("enriched cwes = %+v, want CWE-20 and CWE-79", enriched.CWEs)
 	}
-	if enriched.CweName != nil {
-		t.Fatalf("enriched cwe_name = %v, want nil without catalog", enriched.CweName)
+	if enriched.CWEs[0].Name != "Improper Input Validation" {
+		t.Fatalf("CWE-20 name = %q, want the catalog title", enriched.CWEs[0].Name)
 	}
 	if enriched.Source == nil || *enriched.Source != "ghsa" {
 		t.Fatalf("enriched source = %v, want ghsa", enriched.Source)
@@ -774,7 +776,6 @@ func TestHandleGetRefComponentGraphReturnsNodesEdgesAndDeterministicRoot(t *test
 		Title:       "graph advisory",
 		Description: "desc",
 		Severity:    dbgen.SeverityLevelHigh,
-		CweIds:      []string{},
 	})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)

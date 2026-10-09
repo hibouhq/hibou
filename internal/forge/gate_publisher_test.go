@@ -23,7 +23,7 @@ type mockForgeProvider struct {
 }
 
 type mockRepoConfigLoader struct {
-	weaknessGate      *delta.WeaknessGate
+	codeGate          *delta.CodeGate
 	enforcement       string
 	err               error
 	providerID        string
@@ -105,10 +105,10 @@ func (m *mockRepoConfigLoader) LoadGateConfig(_ context.Context, providerID, own
 	if m.err != nil {
 		return nil, m.err
 	}
-	if m.weaknessGate == nil {
+	if m.codeGate == nil {
 		return nil, nil
 	}
-	return &delta.GateConfig{Weakness: m.weaknessGate}, nil
+	return &delta.GateConfig{Code: m.codeGate}, nil
 }
 
 func (m *mockRepoConfigLoader) LoadEnforcement(_ context.Context, _, _, _, _, _ string) (string, error) {
@@ -359,10 +359,10 @@ func TestGatePublisherSkipsNonPRSnapshots(t *testing.T) {
 	}
 }
 
-func TestGatePublisherUsesRepoConfigWeaknessGateWhenAvailable(t *testing.T) {
+func TestGatePublisherUsesRepoConfigCodeGateWhenAvailable(t *testing.T) {
 	store := newGatePublisherStore()
 	forgeProvider := &mockForgeProvider{}
-	repoConfigLoader := &mockRepoConfigLoader{weaknessGate: &delta.WeaknessGate{MaxCritical: intTestPtr(1)}}
+	repoConfigLoader := &mockRepoConfigLoader{codeGate: &delta.CodeGate{MaxCritical: intTestPtr(1)}}
 	orgID := uuid.New()
 	repoID := uuid.New()
 	prRefID := uuid.New()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type mockIngesterStore struct {
 	aliases       map[string]uuid.UUID
 	sources       map[uuid.UUID]map[string]dbgen.AdvisorySource
 	ranges        map[uuid.UUID][]dbgen.AffectedRange
+	cwes          map[uuid.UUID][]int
 }
 
 func newMockIngesterStore() *mockIngesterStore {
@@ -37,7 +39,18 @@ func newMockIngesterStore() *mockIngesterStore {
 		aliases:      map[string]uuid.UUID{},
 		sources:      map[uuid.UUID]map[string]dbgen.AdvisorySource{},
 		ranges:       map[uuid.UUID][]dbgen.AffectedRange{},
+		cwes:         map[uuid.UUID][]int{},
 	}
+}
+
+func (m *mockIngesterStore) AddAdvisoryCWEs(_ context.Context, advisoryID uuid.UUID, ids []int) error {
+	state := m.state()
+	for _, id := range ids {
+		if !slices.Contains(state.cwes[advisoryID], id) {
+			state.cwes[advisoryID] = append(state.cwes[advisoryID], id)
+		}
+	}
+	return nil
 }
 
 func (m *mockIngesterStore) state() *mockIngesterStore {
@@ -104,7 +117,6 @@ func (m *mockIngesterStore) UpsertAdvisory(_ context.Context, arg dbgen.UpsertAd
 	current.CvssScore = arg.CvssScore
 	current.CvssVersion = arg.CvssVersion
 	current.CvssVector = arg.CvssVector
-	current.CweIds = append([]string(nil), arg.CweIds...)
 	current.IsMalware = arg.IsMalware
 	current.MalwareType = arg.MalwareType
 	current.PublishedAt = arg.PublishedAt
@@ -292,7 +304,7 @@ func TestIngesterIngestNewAdvisory(t *testing.T) {
 		CVSSScore:   &score,
 		CVSSVersion: &version,
 		CVSSVector:  "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-		CWEIDs:      []string{"CWE-79"},
+		CWEIDs:      []string{"CWE-79", "NVD-CWE-noinfo"},
 		PublishedAt: &publishedAt,
 		AffectedRanges: []AffectedRange{{
 			Ecosystem:   "npm",
@@ -327,6 +339,10 @@ func TestIngesterIngestNewAdvisory(t *testing.T) {
 	}
 	if len(store.ranges[advisoryID]) != 1 {
 		t.Fatalf("expected one affected range, got %d", len(store.ranges[advisoryID]))
+	}
+	// ADR-037: normalized to integers; NVD's "no mapping" placeholder dropped.
+	if got := store.cwes[advisoryID]; !slices.Equal(got, []int{79}) {
+		t.Fatalf("expected advisory CWEs [79], got %v", got)
 	}
 }
 

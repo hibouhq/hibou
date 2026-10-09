@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -34,15 +35,14 @@ type findingDetailResponse struct {
 }
 
 type findingAdvisoryResponse struct {
-	CanonicalID string   `json:"canonical_id"`
-	Title       string   `json:"title,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Severity    string   `json:"severity,omitempty"`
-	CVSSScore   string   `json:"cvss_score,omitempty"`
-	CVSSVector  string   `json:"cvss_vector,omitempty"`
-	CWEs        []string `json:"cwes,omitempty"`
-	IsMalware   bool     `json:"is_malware,omitempty"`
-	MalwareType string   `json:"malware_type,omitempty"`
+	CanonicalID string `json:"canonical_id"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Severity    string `json:"severity,omitempty"`
+	CVSSScore   string `json:"cvss_score,omitempty"`
+	CVSSVector  string `json:"cvss_vector,omitempty"`
+	IsMalware   bool   `json:"is_malware,omitempty"`
+	MalwareType string `json:"malware_type,omitempty"`
 	// The three fields a dependency finding is actually triaged on: what to
 	// upgrade to, where to read the details, and which other identifier the
 	// same advisory travels under. Same enrichment the components view uses.
@@ -170,6 +170,19 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 
 	response.KEV = s.findingKEV(r.Context(), finding, response.Advisory)
 
+	// CWEs live on the finding, whatever their source, so SAST, dependency
+	// and manual details render them alike (ADR-037 §6).
+	findings := []store.Vulnerability{*finding}
+	if err := s.queries.AttachFindingCWEs(r.Context(), findings); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding cwes")
+		return
+	}
+	catalog := cwe.Default()
+	for index := range findings[0].CWEs {
+		findings[0].CWEs[index].Sets = catalog.SetRefs(findings[0].CWEs[index].ID)
+	}
+	finding.CWEs = findings[0].CWEs
+
 	api.JSON(w, http.StatusOK, response)
 }
 
@@ -194,7 +207,6 @@ func (s *Server) advisoryDetail(ctx context.Context, advisory dbgen.Advisory) *f
 		Description: advisory.Description,
 		Severity:    string(advisory.Severity),
 		CVSSVector:  advisory.CvssVector,
-		CWEs:        advisory.CweIds,
 		IsMalware:   advisory.IsMalware,
 	}
 	if advisory.CvssScore.Valid {

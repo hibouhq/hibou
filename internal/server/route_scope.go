@@ -82,6 +82,10 @@ const (
 // the path segment is the canonical slug for any request that resolves.
 var routeScopes = map[string]routeScope{
 	"GET /api/v1/users/me": selfRoute(),
+	// ADR-037 catalog lookup: reference data any authenticated caller needs
+	// to render CWE titles, so no capability gates it.
+	"GET /api/v1/cwe":      selfRoute(),
+	"GET /api/v1/cwe/sets": selfRoute(),
 
 	"GET /api/v1/instance/settings/banners": sessionOnlyRoute(),
 	"PUT /api/v1/instance/settings/banners": sessionOnlyRoute(),
@@ -137,6 +141,7 @@ var routeScopes = map[string]routeScope{
 
 	"GET " + orgRoute + "/dashboard":           needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/vulnerabilities":     needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + orgRoute + "/cwes":                needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/search":              needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/compliance/export":   needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/compliance/iso27001": needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
@@ -257,10 +262,12 @@ var routeScopes = map[string]routeScope{
 	"GET " + repoRoute + "/vulnerabilities":        needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + repoRoute + "/vulnerabilities/facets": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + repoRoute + "/vulnerabilities/rules":  needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + repoRoute + "/cwes":                   needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + repoRoute + "/findings/{fingerprint}": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	// Same capability as the detail it belongs to: the history says what
 	// happened to this one finding, which is what reading the finding means.
 	"GET " + repoRoute + "/findings/{fingerprint}/history": needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"PUT " + repoRoute + "/findings/{fingerprint}/cwes":    needs(apitoken.CapVulnerabilities, apitoken.AccessWrite),
 	"POST " + repoRoute + "/reachability":                  needs(apitoken.CapUploads, apitoken.AccessWrite),
 	"GET " + repoRoute + "/vulnerabilities/fingerprints":   needs(apitoken.CapVulnerabilities, apitoken.AccessRead),
 

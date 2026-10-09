@@ -89,6 +89,7 @@
       :repo-slug="repoSlug"
       :fingerprint="drawerFingerprint"
       @close="closeDrawer"
+      @cwes-updated="applyCWEsToRows"
       @accept="(kind, finding, exploited) => { closeDrawer(); openTriageDialog(kind, [finding.fingerprint], finding, exploited) }"
       @reopen="(fingerprint) => { closeDrawer(); void reopenFindings([fingerprint]) }"
       @revoke="(finding) => { closeDrawer(); void markSecretRevoked(finding) }"
@@ -293,6 +294,14 @@
                   >
                     {{ formatLocation(vulnerability) }}
                   </div>
+                  <CweChips
+                    v-if="vulnerability.cwes?.length"
+                    class="mt-1"
+                    :cwes="vulnerability.cwes"
+                    :max="4"
+                    clickable
+                    @select="filterByCWE"
+                  />
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
                   <div class="flex items-center gap-1.5">
@@ -416,7 +425,7 @@ import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
 import { Biohazard, KeyRound, Flame } from 'lucide-vue-next'
 
-import { api, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
+import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
 import FilterBar from '@/components/FilterBar.vue'
 import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
@@ -424,6 +433,9 @@ import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
+import CweChips from '@/components/finding/CweChips.vue'
+import { cweFilterDefs } from '@/lib/cweFilters'
+import { appendBarToken, withHiddenDefaults } from '@/lib/filterBarQuery'
 import { triageState } from '@/lib/triage'
 import { sameFilterValues, sameListQueryState } from '@/lib/listQueryState'
 import { migrateRiskOnlyQuery } from '@/lib/openRiskPreset'
@@ -535,7 +547,7 @@ function ruleName(vulnerability: Vulnerability): string {
 }
 const seenTools = ref<Set<string>>(new Set())
 const seenFiles = ref<Set<string>>(new Set())
-const facetCounts = ref<VulnerabilityFacets>({ type: {}, severity: {}, status: {}, tool: {}, file: {} })
+const facetCounts = ref<VulnerabilityFacets>({ type: {}, severity: {}, status: {}, tool: {}, file: {}, cwe: {} })
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
 const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
@@ -558,7 +570,26 @@ const filterDefs = computed(() => [
   // hidden: no dropdown pill (the red toggle is the UI) — the def exists so a
   // typed `exploited:true` token validates and lands in activeFilters.
   { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
+  // ADR-037: server-side qualifiers; suggestions and hover show CWE titles.
+  ...cweFilterDefs(() => facetCounts.value.cwe),
 ])
+
+// The query the server runs: the bar's advanced text plus the hidden
+// status:detected default, so adding cwe:79 never widens to resolved rows.
+const serverQuery = computed(() => (advancedQuery.value ? withHiddenDefaults(advancedQuery.value, filterDefs.value) : ''))
+
+function applyCWEsToRows(fingerprint: string, cwes: FindingCWE[]) {
+  vulnerabilities.value = vulnerabilities.value.map(row => (row.fingerprint === fingerprint ? { ...row, cwes } : row))
+}
+
+// A CWE chip adds cwe:<id> to whatever the bar says.
+function filterByCWE(id: number) {
+  advancedQuery.value = appendBarToken(filterDefs.value, {
+    filters: activeFilters.value,
+    searchText: searchQuery.value,
+    advancedQuery: advancedQuery.value,
+  }, `cwe:${id}`)
+}
 const sortOptions = [
   { key: 'detected', label: 'Detected', ascLabel: 'Oldest', descLabel: 'Newest' },
   { key: 'severity', label: 'Severity' },
@@ -710,7 +741,7 @@ async function loadVulnerabilities() {
         exploited: advancedQuery.value ? undefined : activeFilters.value.exploited === 'true' ? true : activeFilters.value.exploited === 'false' ? false : undefined,
         // An OR/parenthesised bar query runs as the server-side filterquery;
         // the server uses it exclusively when present.
-        q: advancedQuery.value || undefined,
+        q: serverQuery.value || undefined,
         sort: `${currentSort.value}_${currentSortDirection.value}`,
         page: pagination.value.page,
         per_page: pagination.value.per_page,
@@ -778,10 +809,12 @@ function mergeFacetOptions(counts: Record<string, number> | undefined, seen: Set
 // Faceted option counts. Refetched whenever the scope or filters change, but
 // not on pagination/sort — facets describe the whole filtered result set.
 watch(
+  // Discrete filters only, never `q`: each facet excludes its own dimension,
+  // so the CWE facet must not be narrowed by the bar's own cwe: tokens.
   [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot, activeFilters, searchQuery],
   async () => {
     if (!provider.value || !slug.value || !repoSlug.value) {
-      facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {} }
+      facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {}, cwe: {} }
       return
     }
 
@@ -799,7 +832,7 @@ watch(
       })
       facetCounts.value = facetsRes.data
     } catch {
-      facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {} }
+      facetCounts.value = { type: {}, severity: {}, status: {}, tool: {}, file: {}, cwe: {} }
     }
   },
   { deep: true, immediate: true },
@@ -1016,7 +1049,9 @@ function currentFilterParams(): Record<string, string> {
   add('search', advanced ? undefined : searchQuery.value)
   add('acceptance', advanced ? undefined : activeFilters.value.acceptance)
   add('exploited', advanced ? undefined : activeFilters.value.exploited)
-  add('q', advancedQuery.value)
+  // Exactly the list's query, hidden defaults included: "select all" must
+  // select what the list shows.
+  add('q', serverQuery.value)
   return params
 }
 

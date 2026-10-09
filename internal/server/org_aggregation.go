@@ -137,6 +137,7 @@ func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Req
 	}
 
 	s.attachKEV(r.Context(), vulnerabilities)
+	s.attachCWEs(r.Context(), vulnerabilities)
 	responses := make([]orgVulnerabilityResponse, len(vulnerabilities))
 	for i := range vulnerabilities {
 		vuln := vulnerabilities[i]

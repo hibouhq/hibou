@@ -3,9 +3,13 @@ package filterquery
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/lib/pq"
+
+	"github.com/hibouhq/hibou/internal/cwe"
 )
 
 type TokenType int
@@ -32,6 +36,9 @@ type Node interface{ nodeType() string }
 type QualifierNode struct {
 	Key   string
 	Value string
+	// Negated is GitHub's exclusion: -type:dependency keeps every row the
+	// qualifier would NOT match.
+	Negated bool
 }
 
 func (QualifierNode) nodeType() string { return "qualifier" }
@@ -79,6 +86,12 @@ var AllowedColumns = map[string]string{
 	// Known-exploited membership (ADR-032): resolved against the kev_entries
 	// mirror, not a column — see exploitedQualifierToSQL.
 	"exploited": "",
+	// CWE (ADR-037): resolved against the finding_cwes view — see CWESQL.
+	cwe.KindExact: "",
+	cwe.KindTree:  "",
+	cwe.KindSet:   "",
+	// View 1400 categories (ADR-037): cwe-category:injection.
+	cwe.KindCategory: "",
 }
 
 const maxDepth = 16
@@ -187,10 +200,12 @@ func (p *parser) parsePrimary(depth int) (Node, error) {
 		separator := strings.Index(tok.value, ":")
 		key := strings.ToLower(strings.TrimSpace(tok.value[:separator]))
 		value := strings.ToLower(strings.TrimSpace(tok.value[separator+1:]))
+		negated := strings.HasPrefix(key, "-")
+		key = strings.TrimPrefix(key, "-")
 		if key == "" || value == "" {
 			return nil, fmt.Errorf("invalid qualifier %q", tok.value)
 		}
-		return QualifierNode{Key: key, Value: value}, nil
+		return QualifierNode{Key: key, Value: value, Negated: negated}, nil
 	case TokenLParen:
 		if depth >= maxDepth {
 			return nil, fmt.Errorf("filter nesting exceeds maximum depth of %d", maxDepth)
@@ -208,8 +223,14 @@ func (p *parser) parsePrimary(depth int) (Node, error) {
 		}
 		return GroupNode{Child: child}, nil
 	case TokenText:
-		parts := []string{p.consume().value}
-		for p.peek().typ == TokenText {
+		first := p.consume()
+		// A bare "CWE-79" is what people paste; it means the CWE, not a title
+		// substring (ADR-037 §5).
+		if bareCWEPattern.MatchString(first.value) {
+			return QualifierNode{Key: cwe.KindExact, Value: strings.ToLower(first.value)}, nil
+		}
+		parts := []string{first.value}
+		for p.peek().typ == TokenText && !bareCWEPattern.MatchString(p.peek().value) {
 			parts = append(parts, p.consume().value)
 		}
 		return TextNode{Value: strings.Join(parts, " ")}, nil
@@ -289,7 +310,14 @@ func buildSQL(node Node, param int, depth int) (string, []interface{}, int, erro
 
 	switch typed := node.(type) {
 	case QualifierNode:
-		return qualifierToSQL(typed, param)
+		where, params, next, err := qualifierToSQL(typed, param)
+		if err != nil || !typed.Negated {
+			return where, params, next, err
+		}
+		// COALESCE: a predicate over a NULL column (no acceptance row, no
+		// language) is NULL, and NOT NULL would drop the row instead of
+		// keeping it — "-acceptance:risk" must keep open findings.
+		return "NOT COALESCE((" + where + "), FALSE)", params, next, nil
 	case TextNode:
 		return textNodeToSQL(typed, param), []interface{}{escapeLikeFragment(typed.Value)}, param + 1, nil
 	case AndNode:
@@ -335,6 +363,13 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 	}
 
 	switch node.Key {
+	case cwe.KindExact, cwe.KindTree, cwe.KindSet, cwe.KindCategory:
+		selector, err := cwe.ParseSelector(node.Key, values)
+		if err != nil {
+			return "", nil, param, err
+		}
+		where, params, next := CWESQL("v", selector, param)
+		return where, params, next, nil
 	case "exploited":
 		return exploitedQualifierToSQL(values, param)
 	case "acceptance":
@@ -354,6 +389,76 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 	default:
 		return singleOrArraySQL(column, values, param, "%s = $%d", "%s = ANY($%d::text[])")
 	}
+}
+
+// bareCWEPattern recognizes a free-text token that is a CWE identifier.
+var bareCWEPattern = regexp.MustCompile(`(?i)^cwe-[0-9]+$`)
+
+// CWESQL compiles a selector into a predicate over the vulnerabilities row
+// aliased alias. It encodes the same four sources as the finding_cwes view
+// (rule, advisory, per-finding assertion, finding type) but against the
+// row's own columns, because the shape decides how it scales:
+//
+//   - an id set compiles to uncorrelated IN (SELECT … WHERE cwe_id = ANY($n))
+//     branches. Under the OR that joins them Postgres cannot turn sublinks
+//     into joins, but an uncorrelated IN becomes a hashed SubPlan: computed
+//     once from the covering (cwe_id, …) index, then one hash probe per row.
+//     A correlated EXISTS through the view would instead run per row and
+//     re-read vulnerabilities inside it.
+//   - "any"/"none" have no id to drive from, so they probe the claim tables'
+//     primary keys per row (index-only, bounded) instead of hashing whole tables.
+//   - the secret → CWE-798 mapping is folded in Go: no subquery at all.
+//
+// The selector arrives expanded (tree descendants and set members resolved
+// from the embedded catalog), so every qualifier is one membership test.
+func CWESQL(alias string, selector cwe.Selector, param int) (string, []interface{}, int) {
+	parts := make([]string, 0, 3)
+	params := make([]interface{}, 0, 1)
+	next := param
+	if len(selector.IDs) > 0 {
+		ids := fmt.Sprintf("$%d::int[]", next)
+		params = append(params, pq.Array(selector.IDs))
+		next++
+		branches := []string{
+			fmt.Sprintf("%s.rule_ref_id IN (SELECT scan_rule_id FROM scan_rule_cwes WHERE cwe_id = ANY(%s))", alias, ids),
+			fmt.Sprintf("%s.advisory_id IN (SELECT advisory_id FROM advisory_cwes WHERE cwe_id = ANY(%s))", alias, ids),
+			fmt.Sprintf("(%s.repo_id, %s.fingerprint) IN (SELECT repo_id, fingerprint FROM finding_cwe_assertions WHERE cwe_id = ANY(%s) AND source = 'sarif_result')", alias, alias, ids),
+			fmt.Sprintf("(%s.type = 'manual' AND (%s.repo_id, %s.fingerprint) IN (SELECT repo_id, fingerprint FROM finding_cwe_assertions WHERE cwe_id = ANY(%s) AND source = 'declared'))", alias, alias, alias, ids),
+		}
+		if slices.Contains(selector.IDs, secretCWE) {
+			branches = append(branches, alias+".type = 'secret'")
+		}
+		parts = append(parts, "("+strings.Join(branches, " OR ")+")")
+	}
+	if selector.Any || selector.None {
+		carries := carriesAnyCWESQL(alias)
+		if selector.Any {
+			parts = append(parts, carries)
+		}
+		if selector.None {
+			parts = append(parts, "NOT "+carries)
+		}
+	}
+	if len(parts) == 0 {
+		// A selector that expands to nothing (an empty set) matches nothing.
+		return "FALSE", params, next
+	}
+	if len(parts) == 1 {
+		return parts[0], params, next
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", params, next
+}
+
+// secretCWE is the CWE a leaked secret carries by definition (the view's
+// 'type' branch).
+const secretCWE = 798
+
+func carriesAnyCWESQL(alias string) string {
+	return fmt.Sprintf("(EXISTS (SELECT 1 FROM scan_rule_cwes WHERE scan_rule_id = %[1]s.rule_ref_id)"+
+		" OR EXISTS (SELECT 1 FROM advisory_cwes WHERE advisory_id = %[1]s.advisory_id)"+
+		" OR EXISTS (SELECT 1 FROM finding_cwe_assertions fa WHERE fa.repo_id = %[1]s.repo_id AND fa.fingerprint = %[1]s.fingerprint"+
+		" AND (fa.source = 'sarif_result' OR %[1]s.type = 'manual'))"+
+		" OR %[1]s.type = 'secret')", alias)
 }
 
 // exploitedSQL is the known-exploited membership test the gate blocks on

@@ -4,8 +4,8 @@
 -- the gap between them is the detection lag worth reporting.
 INSERT INTO cve_records (
     cve_id, state, assigner, published_at, record_updated_at,
-    cvss_score, cvss_vector, severity, cwe_ids, summary, reference_urls
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    cvss_score, cvss_vector, severity, summary, reference_urls
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (cve_id) DO UPDATE SET
     state = EXCLUDED.state,
     assigner = EXCLUDED.assigner,
@@ -14,7 +14,6 @@ ON CONFLICT (cve_id) DO UPDATE SET
     cvss_score = EXCLUDED.cvss_score,
     cvss_vector = EXCLUDED.cvss_vector,
     severity = EXCLUDED.severity,
-    cwe_ids = EXCLUDED.cwe_ids,
     summary = EXCLUDED.summary,
     reference_urls = EXCLUDED.reference_urls;
 

@@ -74,19 +74,6 @@
         class="mt-2"
         :facts="ruleFacts"
       />
-      <div
-        v-if="cwes.length > 0"
-        class="mt-2 flex flex-wrap gap-1.5"
-      >
-        <a
-          v-for="cwe in cwes"
-          :key="cwe"
-          :href="cweUrl(cwe)"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="rounded-md border border-surface-border px-2 py-0.5 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
-        >{{ cwe }}</a>
-      </div>
     </FindingSection>
   </div>
 </template>
@@ -100,7 +87,6 @@ import type { Fact } from '@/components/finding/facts'
 import FindingCodeSnippet from '@/components/finding/FindingCodeSnippet.vue'
 import FindingFacts from '@/components/finding/FindingFacts.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
-import { cweUrl } from '@/lib/findingDisplay'
 
 // First-party code findings (sast, dast, fuzzing): a rule fired at a place in
 // the source. No package, no advisory, no upgrade — a code change fixes it.
@@ -122,7 +108,6 @@ const fallbackSha = computed(() => props.detail.occurrences[0]?.commit_sha ?? ''
 // The title is already in the drawer header; repeating it as the message adds
 // nothing, so only a distinct description is shown.
 const message = computed(() => (finding.value.description !== finding.value.title ? finding.value.description : ''))
-const cwes = computed(() => props.detail.advisory?.cwes ?? [])
 
 const lineLabel = computed(() => {
   const start = finding.value.start_line
@@ -134,7 +119,6 @@ const lineLabel = computed(() => {
 const ruleFacts = computed<Fact[]>(() => [
   { label: 'Language', value: finding.value.language },
   { label: 'Confidence', value: finding.value.confidence },
-  { label: 'OWASP', value: finding.value.owasp_top_10 },
   { label: 'Scanner', value: finding.value.scanner_vendor },
 ])
 </script>

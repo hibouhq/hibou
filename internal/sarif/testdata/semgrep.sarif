@@ -1,0 +1,205 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "Semgrep OSS",
+     "semanticVersion": "1.172.0",
+     "rules": [
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Detected subprocess function '$FUNC' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.quote()'."
+       },
+       "help": {
+        "markdown": "Detected subprocess function '$FUNC' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.quote()'.\n\n#### \ud83d\udc8e Enable cross-file an",
+        "text": "Detected subprocess function '$FUNC' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.quote()'.\n\ud83d\udc8e Enable cross-file analysis"
+       },
+       "helpUri": "https://semgrep.dev/r/python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args",
+       "id": "python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args",
+       "name": "python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "OWASP-A05:2025 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Found 'subprocess' function '$FUNC' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which"
+       },
+       "help": {
+        "markdown": "Found 'subprocess' function '$FUNC' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which",
+        "text": "Found 'subprocess' function '$FUNC' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which"
+       },
+       "helpUri": "https://semgrep.dev/r/python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+       "id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+       "name": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "OWASP-A05:2025 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "Use of angular.element can lead to XSS if user-input is treated as part of the HTML element within `$SINK`. It is recommended to contextually output encode user-input, before inserting into `$SINK`. I"
+       },
+       "help": {
+        "markdown": "Use of angular.element can lead to XSS if user-input is treated as part of the HTML element within `$SINK`. It is recommended to contextually output encode user-input, before inserting into `$SINK`. I",
+        "text": "Use of angular.element can lead to XSS if user-input is treated as part of the HTML element within `$SINK`. It is recommended to contextually output encode user-input, before inserting into `$SINK`. I"
+       },
+       "helpUri": "https://semgrep.dev/r/javascript.angular.security.detect-angular-element-taint.detect-angular-element-taint",
+       "id": "javascript.angular.security.detect-angular-element-taint.detect-angular-element-taint",
+       "name": "javascript.angular.security.detect-angular-element-taint.detect-angular-element-taint",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
+         "MEDIUM CONFIDENCE",
+         "OWASP-A03:2021 - Injection",
+         "OWASP-A05:2025 - Injection",
+         "OWASP-A07:2017 - Cross-Site Scripting (XSS)",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: javascript.angular.security.detect-angular-element-taint.detect-angular-element-taint"
+       }
+      }
+     ]
+    }
+   },
+   "results": [
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/branch.py"
+        },
+        "region": {
+         "endColumn": 34,
+         "endLine": 9,
+         "startColumn": 27,
+         "startLine": 9
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected subprocess function 'run' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.quote()'."
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/branch.py"
+        },
+        "region": {
+         "endColumn": 46,
+         "endLine": 9,
+         "startColumn": 42,
+         "startLine": 9
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Found 'subprocess' function 'run' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which m"
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/direct.py"
+        },
+        "region": {
+         "endColumn": 34,
+         "endLine": 7,
+         "startColumn": 27,
+         "startLine": 7
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected subprocess function 'run' with user controlled data. A malicious actor could leverage this to perform command injection. You may consider using 'shlex.quote()'."
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "src/direct.py"
+        },
+        "region": {
+         "endColumn": 46,
+         "endLine": 7,
+         "startColumn": 42,
+         "startLine": 7
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Found 'subprocess' function 'run' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which m"
+     },
+     "properties": {},
+     "ruleId": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true"
+    }
+   ]
+  }
+ ]
+}
