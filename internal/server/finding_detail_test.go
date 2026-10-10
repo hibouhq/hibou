@@ -21,9 +21,9 @@ func TestFindingKEVIncludesSourceRecordIdentifiersAndEUVDAdvisoryAlias(t *testin
 	srv, _, _, _ := newDiscoveryTestServer(t)
 	ctx := context.Background()
 	canonicalID := "GHSA-detail-" + uuid.NewString()
-	advisory, err := srv.queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
-		CanonicalID: canonicalID, Title: "detail", Severity: dbgen.SeverityLevelHigh,
-	})
+	advisory, err := upsertRatedAdvisory(ctx, srv.queries, dbgen.UpsertAdvisoryParams{
+		CanonicalID: canonicalID, Title: "detail",
+	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}

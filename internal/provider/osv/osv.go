@@ -422,21 +422,13 @@ func mapVulnerability(vuln vulnerability) (provider.AdvisoryResult, error) {
 		return provider.AdvisoryResult{}, fmt.Errorf("osv: marshal raw vulnerability %s: %w", vuln.ID, err)
 	}
 
-	severity, cvssScore, cvssVersion, cvssVector := parseCVSS(vuln.Severity)
-	if severity == nil {
-		severity = normalizeDBSeverity(vuln.DatabaseSpecific.Severity)
-	}
-
 	result := provider.AdvisoryResult{
 		ProviderName:   "osv",
 		ProviderID:     vuln.ID,
 		Aliases:        append([]string(nil), vuln.Aliases...),
 		Title:          vuln.Summary,
 		Description:    vuln.Details,
-		Severity:       severity,
-		CVSSScore:      cvssScore,
-		CVSSVersion:    cvssVersion,
-		CVSSVector:     cvssVector,
+		Ratings:        ratingsFor(vuln),
 		CWEIDs:         append([]string(nil), vuln.DatabaseSpecific.CWEIDs...),
 		AffectedRanges: mapAffectedRanges(vuln.Affected),
 		RawData:        rawData,
@@ -460,80 +452,92 @@ func mapVulnerability(vuln vulnerability) (provider.AdvisoryResult, error) {
 	return result, nil
 }
 
-func parseCVSS(entries []severityEntry) (*advisory.Severity, *float64, *advisory.CVSSVersion, string) {
-	var preferred *severityEntry
-	for i := range entries {
-		entry := &entries[i]
+// RatingsFromRaw rebuilds a stored record's ratings (ADR-038 §8): raw_data
+// is the record as mapVulnerability received it.
+func RatingsFromRaw(raw json.RawMessage) ([]advisory.Rating, error) {
+	var vuln vulnerability
+	if err := json.Unmarshal(raw, &vuln); err != nil {
+		return nil, fmt.Errorf("osv: decode stored record: %w", err)
+	}
+	return ratingsFor(vuln), nil
+}
+
+// ratingsFor maps every severity statement of a record (ADR-038 §2). The OSV
+// schema makes severity[].score a CVSS vector, never a number: scoring it is
+// internal/cvss's job. The rater is the database that published the record;
+// GitHub's database_specific.severity is that rater's own label.
+func ratingsFor(vuln vulnerability) []advisory.Rating {
+	rater := raterFor(vuln.ID)
+	ratings := make([]advisory.Rating, 0, len(vuln.Severity)+1)
+	for _, entry := range vuln.Severity {
+		score := strings.TrimSpace(entry.Score)
 		switch strings.ToUpper(entry.Type) {
-		case "CVSS_V3", "CVSS_V31", "CVSS_V30", "CVSS_V4":
-			preferred = entry
-			goto done
-		case "CVSS_V2":
-			if preferred == nil {
-				preferred = entry
+		case "CVSS_V2", "CVSS_V3", "CVSS_V4":
+			var supplied *float64
+			if value, err := strconv.ParseFloat(score, 64); err == nil {
+				supplied, score = &value, ""
+			}
+			if rating, ok := advisory.NewRating(rater, score, supplied, nil); ok {
+				if rating.Version == nil {
+					// A bare number: only the entry type says which version.
+					rating.Version = versionForType(entry.Type)
+				}
+				ratings = append(ratings, rating)
+			}
+		case "UBUNTU":
+			// Ubuntu's priority word ("negligible" ... "critical").
+			if rating, ok := advisory.NewRating("ubuntu", "", nil, advisory.ParseLabel(score)); ok {
+				ratings = append(ratings, rating)
 			}
 		}
 	}
-
-done:
-	if preferred == nil {
-		return nil, nil, nil, ""
+	if label := advisory.ParseLabel(vuln.DatabaseSpecific.Severity); label != nil {
+		if rating, ok := advisory.NewRating(rater, "", nil, label); ok {
+			ratings = append(ratings, rating)
+		}
 	}
-
-	version := detectCVSSVersion(preferred.Type, preferred.Score)
-	vector := ""
-	if strings.Contains(preferred.Score, "/") || strings.HasPrefix(strings.ToUpper(preferred.Score), "CVSS:") {
-		vector = preferred.Score
-	}
-
-	if score, err := strconv.ParseFloat(preferred.Score, 64); err == nil {
-		sev := advisory.NormalizeSeverity(score)
-		return &sev, &score, version, vector
-	}
-
-	return nil, nil, version, vector
+	return ratings
 }
 
-func detectCVSSVersion(severityType, score string) *advisory.CVSSVersion {
-	scoreUpper := strings.ToUpper(score)
+func versionForType(severityType string) *advisory.CVSSVersion {
 	var version advisory.CVSSVersion
-	switch {
-	case strings.HasPrefix(scoreUpper, "CVSS:4.0/") || strings.EqualFold(severityType, "CVSS_V4"):
-		version = advisory.CVSSVersionV40
-	case strings.HasPrefix(scoreUpper, "CVSS:3.1/") || strings.EqualFold(severityType, "CVSS_V31"):
-		version = advisory.CVSSVersionV31
-	case strings.HasPrefix(scoreUpper, "CVSS:3.0/") || strings.EqualFold(severityType, "CVSS_V30"):
-		version = advisory.CVSSVersionV30
-	case strings.EqualFold(severityType, "CVSS_V3"):
-		version = advisory.CVSSVersionV31
-	case strings.EqualFold(severityType, "CVSS_V2"):
+	switch strings.ToUpper(severityType) {
+	case "CVSS_V2":
 		version = advisory.CVSSVersionV2
+	case "CVSS_V3":
+		version = advisory.CVSSVersionV31
+	case "CVSS_V4":
+		version = advisory.CVSSVersionV40
 	default:
 		return nil
 	}
 	return &version
 }
 
-func normalizeDBSeverity(raw string) *advisory.Severity {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "critical":
-		severity := advisory.SeverityCritical
-		return &severity
-	case "high":
-		severity := advisory.SeverityHigh
-		return &severity
-	case "medium", "moderate":
-		severity := advisory.SeverityMedium
-		return &severity
-	case "low":
-		severity := advisory.SeverityLow
-		return &severity
-	case "info", "informational":
-		severity := advisory.SeverityInfo
-		return &severity
-	default:
-		return nil
+// raterFor names who published an OSV record, from its ID prefix.
+func raterFor(id string) string {
+	prefix, _, _ := strings.Cut(strings.ToUpper(strings.TrimSpace(id)), "-")
+	switch prefix {
+	case "GHSA":
+		return "ghsa"
+	case "PYSEC":
+		return "pypa"
+	case "CVE":
+		return "nvd"
+	case "DSA", "DLA", "DTSA", "DEBIAN":
+		return "debian"
+	case "UBUNTU", "USN":
+		return "ubuntu"
+	case "RHSA", "RHBA", "RHEA":
+		return "redhat"
+	case "ALSA":
+		return "alma"
+	case "RLSA":
+		return "rocky"
+	case "MAL":
+		return "ossf"
 	}
+	return strings.ToLower(prefix)
 }
 
 func mapAffectedRanges(affected []affectedPackage) []advisory.AffectedRange {

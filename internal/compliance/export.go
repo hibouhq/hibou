@@ -58,6 +58,7 @@ type Summary struct {
 	Critical       int `json:"critical"`
 	High           int `json:"high"`
 	Medium         int `json:"medium"`
+	Unknown        int `json:"unknown"`
 	Low            int `json:"low"`
 	Info           int `json:"info"`
 	VEXNotAffected int `json:"vex_not_affected"`
@@ -472,6 +473,8 @@ func addSummary(summary *Summary, severity string) {
 		summary.High++
 	case "medium":
 		summary.Medium++
+	case "unknown":
+		summary.Unknown++
 	case "low":
 		summary.Low++
 	default:
@@ -487,9 +490,11 @@ func severityRank(severity string) int {
 		return 1
 	case "medium":
 		return 2
-	case "low":
+	case "unknown":
 		return 3
-	default:
+	case "low":
 		return 4
+	default:
+		return 5
 	}
 }

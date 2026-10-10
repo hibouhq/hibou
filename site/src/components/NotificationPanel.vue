@@ -48,7 +48,13 @@
             :class="rowClass(item)"
             @click="select(item)"
           >
+            <MalwareIcon
+              v-if="item.type === 'malware.detected'"
+              size="sm"
+              class="mt-0.5"
+            />
             <span
+              v-else
               class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
               :class="severityDot(item.severity, item.status)"
             />
@@ -73,6 +79,7 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import type { Notification } from '@/api/client'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 import { relativeTime } from '@/lib/datetime'
 
@@ -97,6 +104,9 @@ function select(item: Notification) {
 // Critical notifications (malware, at minimum) get a red-tinted row, not just
 // a dot — priority must survive a flooded inbox.
 function rowClass(item: Notification): string {
+  if (item.status === 'unread' && item.type === 'malware.detected') {
+    return 'border-l-2 border-l-malware bg-malware/10'
+  }
   if (item.status === 'unread' && (item.severity || '').toLowerCase() === 'critical') {
     return 'border-l-2 border-l-danger bg-danger/10'
   }

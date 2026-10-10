@@ -235,7 +235,7 @@ const currentDeployments = computed(() => {
   return [...latestByEnvironment.values()].sort((a, b) => a.environment.localeCompare(b.environment))
 })
 
-const IMPACT_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info']
+const IMPACT_SEVERITY_ORDER = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 
 const impactSeverityCounts = computed(() => {
   const counts: Record<string, number> = {}

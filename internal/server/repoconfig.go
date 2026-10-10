@@ -220,6 +220,7 @@ func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.G
 			MaxCritical: gate.Vulnerabilities.MaxCritical,
 			MaxHigh:     gate.Vulnerabilities.MaxHigh,
 			MaxMedium:   gate.Vulnerabilities.MaxMedium,
+			MaxUnknown:  gate.Vulnerabilities.MaxUnknown,
 			MaxNewTotal: gate.Vulnerabilities.MaxNewTotal,
 		}
 	}

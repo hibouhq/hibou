@@ -2,13 +2,18 @@
 version: 1
 
 # Configure branch-aware quality gates. `code` caps new first-party code
-# findings (SAST, DAST, manual); dependency (CVE) gates stay managed in Hibou.
+# findings (SAST, DAST, manual); `vulnerabilities` caps new dependency (CVE)
+# findings, on top of the gates managed in Hibou.
 quality_gates:
   - branches: ["main"]
     # enforcement: advisory   # advisory (default, informational/non-blocking) | blocking
     code:
       max_critical: 0
       max_high: 0
+    # vulnerabilities:                   # caps NEW dependency vulnerabilities a PR introduces
+    #   max_critical: 0
+    #   max_high: 0
+    #   max_unknown: 5                   # not rated by any source yet; other caps ignore them, KEV still blocks
     # cwe:                               # deny new findings carrying these CWEs, any type (SAST, DAST, CVE...)
     #   deny: ["CWE-798", "CWE-502"]     # exact CWEs
     #   deny_tree: ["CWE-74"]            # a CWE and every sub-type (CWE-74 covers SQLi, XSS, command injection...)

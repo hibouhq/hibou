@@ -28,6 +28,11 @@
               :class="isActiveTab(tab.name) ? 'text-gray-300' : 'text-gray-500'"
             />
             {{ tab.label }}
+            <MalwareIcon
+              v-if="tab.name === 'repo-vulnerabilities' && (summary?.malware_open ?? 0) > 0"
+              size="sm"
+              :label="`${summary?.malware_open} malicious ${summary?.malware_open === 1 ? 'package' : 'packages'} detected`"
+            />
             <span
               v-if="tabCount(tab.name) !== null"
               class="inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] leading-[18px]"
@@ -253,6 +258,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { api, type EnhancedRef, type RefSummary, type Repository, type Snapshot } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { relativeTime } from '@/lib/datetime'
 import { visibleRepoTabCount } from '@/lib/repoTabs'
 import { useOrgStore } from '@/stores/org'
@@ -659,12 +665,12 @@ async function loadSummary() {
   }
 }
 
-function totalSeverity(counts?: { critical: number; high: number; medium: number; low: number; info: number }) {
+function totalSeverity(counts?: { critical: number; high: number; medium: number; unknown?: number; low: number; info: number }) {
   if (!counts) {
     return 0
   }
 
-  return counts.critical + counts.high + counts.medium + counts.low + counts.info
+  return counts.critical + counts.high + counts.medium + (counts.unknown ?? 0) + counts.low + counts.info
 }
 
 function tabCount(name: string): string | number | null {

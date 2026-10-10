@@ -27,6 +27,7 @@ type mockIngesterStore struct {
 	advisories    map[uuid.UUID]dbgen.Advisory
 	aliases       map[string]uuid.UUID
 	sources       map[uuid.UUID]map[string]dbgen.AdvisorySource
+	ratings       map[uuid.UUID]dbgen.SyncAdvisorySourceRatingsParams
 	ranges        map[uuid.UUID][]dbgen.AffectedRange
 	cwes          map[uuid.UUID][]int
 }
@@ -38,9 +39,79 @@ func newMockIngesterStore() *mockIngesterStore {
 		advisories:   map[uuid.UUID]dbgen.Advisory{},
 		aliases:      map[string]uuid.UUID{},
 		sources:      map[uuid.UUID]map[string]dbgen.AdvisorySource{},
+		ratings:      map[uuid.UUID]dbgen.SyncAdvisorySourceRatingsParams{},
 		ranges:       map[uuid.UUID][]dbgen.AffectedRange{},
 		cwes:         map[uuid.UUID][]int{},
 	}
+}
+
+func (m *mockIngesterStore) GetAdvisoryByID(_ context.Context, id uuid.UUID) (dbgen.Advisory, error) {
+	advisory, ok := m.state().advisories[id]
+	if !ok {
+		return dbgen.Advisory{}, sql.ErrNoRows
+	}
+	return advisory, nil
+}
+
+func (m *mockIngesterStore) SyncAdvisorySourceRatings(_ context.Context, arg dbgen.SyncAdvisorySourceRatingsParams) error {
+	m.state().ratings[arg.AdvisorySourceID] = arg
+	return nil
+}
+
+func (m *mockIngesterStore) ListAdvisoryRatings(_ context.Context, advisoryIDs []uuid.UUID) ([]dbgen.ListAdvisoryRatingsRow, error) {
+	state := m.state()
+	var rows []dbgen.ListAdvisoryRatingsRow
+	for _, advisoryID := range advisoryIDs {
+		for _, source := range state.sources[advisoryID] {
+			params := state.ratings[source.ID]
+			for i, rater := range params.Raters {
+				row := dbgen.ListAdvisoryRatingsRow{AdvisoryID: advisoryID, Provider: source.Provider, Rater: rater, CvssVector: params.Vectors[i]}
+				if params.Versions[i] != "" {
+					row.CvssVersion = dbgen.NullCvssVersion{CvssVersion: dbgen.CvssVersion(params.Versions[i]), Valid: true}
+				}
+				if params.Scores[i] != "" {
+					row.CvssScore = sql.NullString{String: params.Scores[i], Valid: true}
+				}
+				if params.Labels[i] != "" {
+					row.Label = dbgen.NullSeverityLevel{SeverityLevel: dbgen.SeverityLevel(params.Labels[i]), Valid: true}
+				}
+				rows = append(rows, row)
+			}
+		}
+	}
+	return rows, nil
+}
+
+func (m *mockIngesterStore) SetAdvisoryRating(_ context.Context, arg dbgen.SetAdvisoryRatingParams) (dbgen.Advisory, error) {
+	state := m.state()
+	current := state.advisories[arg.AdvisoryID]
+	current.Severity = arg.Severity
+	current.CvssScore = arg.CvssScore
+	current.CvssVersion = arg.CvssVersion
+	current.CvssVector = arg.CvssVector
+	current.RatedBy = arg.RatedBy
+	state.advisories[arg.AdvisoryID] = current
+	return current, nil
+}
+
+func (m *mockIngesterStore) ListFindingsForRating(context.Context, []uuid.UUID) ([]dbgen.ListFindingsForRatingRow, error) {
+	return nil, nil
+}
+
+func (m *mockIngesterStore) SetFindingRating(context.Context, dbgen.SetFindingRatingParams) error {
+	return nil
+}
+
+func (m *mockIngesterStore) ListCVERatingsForAdvisory(context.Context, uuid.UUID) ([]dbgen.ListCVERatingsForAdvisoryRow, error) {
+	return nil, nil
+}
+
+func (m *mockIngesterStore) UpsertCVEAdvisorySource(context.Context, dbgen.UpsertCVEAdvisorySourceParams) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
+func (m *mockIngesterStore) DeleteCVEAdvisorySource(context.Context, uuid.UUID) error {
+	return nil
 }
 
 func (m *mockIngesterStore) AddAdvisoryCWEs(_ context.Context, advisoryID uuid.UUID, ids []int) error {
@@ -94,6 +165,7 @@ func (m *mockIngesterStore) WithTx(_ *sql.Tx) IngesterStore {
 		advisories:   state.advisories,
 		aliases:      state.aliases,
 		sources:      state.sources,
+		ratings:      state.ratings,
 		ranges:       state.ranges,
 	}
 }
@@ -113,10 +185,6 @@ func (m *mockIngesterStore) UpsertAdvisory(_ context.Context, arg dbgen.UpsertAd
 	current.CanonicalID = arg.CanonicalID
 	current.Title = arg.Title
 	current.Description = arg.Description
-	current.Severity = arg.Severity
-	current.CvssScore = arg.CvssScore
-	current.CvssVersion = arg.CvssVersion
-	current.CvssVector = arg.CvssVector
 	current.IsMalware = arg.IsMalware
 	current.MalwareType = arg.MalwareType
 	current.PublishedAt = arg.PublishedAt
@@ -149,7 +217,7 @@ func (m *mockIngesterStore) UpsertAdvisoryAlias(_ context.Context, arg dbgen.Ups
 	return nil
 }
 
-func (m *mockIngesterStore) UpsertAdvisorySource(_ context.Context, arg dbgen.UpsertAdvisorySourceParams) error {
+func (m *mockIngesterStore) UpsertAdvisorySource(_ context.Context, arg dbgen.UpsertAdvisorySourceParams) (uuid.UUID, error) {
 	m.recordTxScopedCall()
 	if _, ok := m.sources[arg.AdvisoryID]; !ok {
 		m.sources[arg.AdvisoryID] = map[string]dbgen.AdvisorySource{}
@@ -162,23 +230,10 @@ func (m *mockIngesterStore) UpsertAdvisorySource(_ context.Context, arg dbgen.Up
 	current.AdvisoryID = arg.AdvisoryID
 	current.Provider = arg.Provider
 	current.ProviderID = arg.ProviderID
-	current.Severity = arg.Severity
-	current.CvssScore = arg.CvssScore
-	current.CvssVersion = arg.CvssVersion
-	current.CvssVector = arg.CvssVector
 	current.RawData = arg.RawData
 	current.FetchedAt = arg.FetchedAt
 	m.sources[arg.AdvisoryID][arg.Provider] = current
-	return nil
-}
-
-func (m *mockIngesterStore) ListSourcesByAdvisory(_ context.Context, advisoryID uuid.UUID) ([]dbgen.AdvisorySource, error) {
-	providerSources := m.sources[advisoryID]
-	items := make([]dbgen.AdvisorySource, 0, len(providerSources))
-	for _, source := range providerSources {
-		items = append(items, source)
-	}
-	return items, nil
+	return current.ID, nil
 }
 
 func (m *mockIngesterStore) CreateAffectedRange(_ context.Context, arg dbgen.CreateAffectedRangeParams) (dbgen.AffectedRange, error) {
@@ -290,9 +345,6 @@ func TestIngesterIngestRollsBackTransactionOnWriteFailure(t *testing.T) {
 func TestIngesterIngestNewAdvisory(t *testing.T) {
 	store := newMockIngesterStore()
 	ingester := NewIngester(store, zerolog.Nop())
-	severity := SeverityHigh
-	score := 7.4
-	version := CVSSVersionV31
 	publishedAt := time.Now().UTC().Truncate(time.Second)
 
 	ids, err := ingester.Ingest(context.Background(), "osv", []IngestResult{{
@@ -300,10 +352,8 @@ func TestIngesterIngestNewAdvisory(t *testing.T) {
 		Aliases:     []string{"CVE-2026-1111", "GHSA-1111"},
 		Title:       "leftpad advisory",
 		Description: "desc",
-		Severity:    &severity,
-		CVSSScore:   &score,
-		CVSSVersion: &version,
-		CVSSVector:  "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		// A vector OSV sends with no score: hibou computes 7.4 itself.
+		Ratings:     []Rating{mustRating(t, "ghsa", "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N", nil)},
 		CWEIDs:      []string{"CWE-79", "NVD-CWE-noinfo"},
 		PublishedAt: &publishedAt,
 		AffectedRanges: []AffectedRange{{
@@ -328,8 +378,8 @@ func TestIngesterIngestNewAdvisory(t *testing.T) {
 	if stored.Severity != dbgen.SeverityLevelHigh {
 		t.Fatalf("expected severity high, got %q", stored.Severity)
 	}
-	if !stored.CvssScore.Valid || stored.CvssScore.String != "7.4" {
-		t.Fatalf("expected cvss score to be stored, got %#v", stored.CvssScore)
+	if !stored.CvssScore.Valid || stored.CvssScore.String != "7.4" || stored.RatedBy != "ghsa" {
+		t.Fatalf("expected computed cvss score 7.4 rated by ghsa, got %#v by %q", stored.CvssScore, stored.RatedBy)
 	}
 	if got := store.aliases["GHSA-1111"]; got != advisoryID {
 		t.Fatalf("expected provider ID alias to be recorded, got %s", got)
@@ -357,28 +407,18 @@ func TestIngesterIngestExistingAdvisoryMergesSeverity(t *testing.T) {
 		Severity:    dbgen.SeverityLevelHigh,
 	}
 	store.aliases["GHSA-existing"] = existingID
+	githubSource := uuid.New()
 	store.sources[existingID] = map[string]dbgen.AdvisorySource{
-		"github": {
-			ID:         uuid.New(),
-			AdvisoryID: existingID,
-			Provider:   "github",
-			ProviderID: "GHSA-existing",
-			CvssScore:  sql.NullString{String: "7.2", Valid: true},
-		},
+		"github": {ID: githubSource, AdvisoryID: existingID, Provider: "github", ProviderID: "GHSA-existing"},
 	}
+	store.ratings[githubSource] = ratingsParams(githubSource, []Rating{mustRating(t, "ghsa", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H", nil)})
 
 	ingester := NewIngester(store, zerolog.Nop())
-	score := 9.8
-	version := CVSSVersionV31
-	severity := SeverityCritical
 	ids, err := ingester.Ingest(context.Background(), "nvd", []IngestResult{{
-		ProviderID:  "CVE-2026-2222",
-		Aliases:     []string{"GHSA-existing", "CVE-2026-2222"},
-		Title:       "updated",
-		Severity:    &severity,
-		CVSSScore:   &score,
-		CVSSVersion: &version,
-		CVSSVector:  "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		ProviderID: "CVE-2026-2222",
+		Aliases:    []string{"GHSA-existing", "CVE-2026-2222"},
+		Title:      "updated",
+		Ratings:    []Rating{mustRating(t, "nvd", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", nil)},
 	}})
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
@@ -494,33 +534,34 @@ func TestIngesterReconcilesTrivyAndOSVSources(t *testing.T) {
 }
 
 // OSV MAL-* records carry no CVSS and no database_specific.severity, so
-// severity derivation alone would file malicious packages as info. The floor
-// pins every malware advisory to critical, on both the insert and merge paths.
+// rating alone would file malicious packages as unknown. The floor pins every
+// malware advisory to critical.
 func TestMalwareSeverityFloor(t *testing.T) {
-	if got := severityForResult(IngestResult{IsMalware: true}); got != dbgen.SeverityLevelCritical {
-		t.Fatalf("severityForResult(malware, no CVSS) = %q, want critical", got)
+	store := newMockIngesterStore()
+	ingester := NewIngester(store, zerolog.Nop())
+	ids, err := ingester.Ingest(context.Background(), "osv", []IngestResult{{ProviderID: "MAL-2025-1", IsMalware: true}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := severityForResult(IngestResult{}); got != dbgen.SeverityLevelInfo {
-		t.Fatalf("severityForResult(no signal) = %q, want info", got)
+	if got := store.advisories[ids["MAL-2025-1"]].Severity; got != dbgen.SeverityLevelCritical {
+		t.Fatalf("malware severity = %q, want critical", got)
 	}
+	ids, err = ingester.Ingest(context.Background(), "osv", []IngestResult{{ProviderID: "GO-2025-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.advisories[ids["GO-2025-1"]].Severity; got != dbgen.SeverityLevelUnknown {
+		t.Fatalf("unrated severity = %q, want unknown (ADR-038 §3)", got)
+	}
+}
 
-	if got := malwareSeverityFloor(dbgen.SeverityLevelInfo, true); got != dbgen.SeverityLevelCritical {
-		t.Fatalf("floor(info, malware) = %q, want critical", got)
+func mustRating(t *testing.T, rater, vector string, label *Severity) Rating {
+	t.Helper()
+	rating, ok := NewRating(rater, vector, nil, label)
+	if !ok {
+		t.Fatalf("rating %s %s rejected", rater, vector)
 	}
-	if got := malwareSeverityFloor(dbgen.SeverityLevelLow, false); got != dbgen.SeverityLevelLow {
-		t.Fatalf("floor(low, not malware) = %q, want low", got)
-	}
-
-	// An existing malware advisory stuck at info (pre-fix rows) is lifted on
-	// the next ingest even though 'found' normally keeps the stored severity.
-	existing := dbgen.Advisory{ID: uuid.New(), CanonicalID: "MAL-2025-1", Severity: dbgen.SeverityLevelInfo, IsMalware: true}
-	params := mergedAdvisoryUpsert(existing, true, "MAL-2025-1", IngestResult{ProviderID: "MAL-2025-1"})
-	if params.Severity != dbgen.SeverityLevelCritical {
-		t.Fatalf("merged severity = %q, want critical", params.Severity)
-	}
-	if !params.IsMalware {
-		t.Fatal("merged upsert lost is_malware")
-	}
+	return rating
 }
 
 // ADR-028's dedup guarantee, exercised end to end rather than asserted.

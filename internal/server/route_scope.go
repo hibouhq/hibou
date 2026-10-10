@@ -86,6 +86,8 @@ var routeScopes = map[string]routeScope{
 	// to render CWE titles, so no capability gates it.
 	"GET /api/v1/cwe":      selfRoute(),
 	"GET /api/v1/cwe/sets": selfRoute(),
+	// Tools page: inline documents only, nothing stored is read.
+	"POST /api/v1/tools/sbom/compare": sessionOnlyRoute(),
 
 	"GET /api/v1/instance/settings/banners": sessionOnlyRoute(),
 	"PUT /api/v1/instance/settings/banners": sessionOnlyRoute(),

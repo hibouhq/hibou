@@ -10,6 +10,7 @@ export function severityKey(severity: unknown): string {
   if (value === 'critical' || value === 'veryhigh') return 'critical'
   if (value === 'high') return 'high'
   if (value === 'medium' || value === 'moderate') return 'medium'
+  if (value === 'unknown') return 'unknown'
   if (value === 'low') return 'low'
   return 'info'
 }
@@ -18,6 +19,7 @@ const SEVERITY_CLASSES: Record<string, string> = {
   critical: 'bg-sev-critical/15 text-sev-critical',
   high: 'bg-sev-high/15 text-sev-high',
   medium: 'bg-sev-medium/15 text-sev-medium',
+  unknown: 'border border-dashed border-sev-unknown/50 text-sev-unknown',
   low: 'bg-sev-low/15 text-sev-low',
   info: 'bg-sev-info/15 text-sev-info',
 }
@@ -27,13 +29,19 @@ export function severityBadgeClass(severity: unknown): string {
 }
 
 const TYPE_CLASSES: Record<string, string> = {
-  malware: 'bg-red-500/15 text-red-400',
+  malware: 'bg-malware/15 text-malware',
   secret: 'bg-amber-500/15 text-amber-400',
   dependency: 'bg-blue-500/15 text-blue-400',
-  sast: 'bg-purple-500/15 text-purple-400',
+  // Fuchsia, not purple: violet is reserved for malware.
+  sast: 'bg-fuchsia-500/15 text-fuchsia-400',
   dast: 'bg-cyan-500/15 text-cyan-400',
   fuzzing: 'bg-teal-500/15 text-teal-400',
   container: 'bg-slate-500/15 text-slate-400',
+}
+
+/** A component that a malware advisory matched: it outranks any CVE. */
+export function isMalwareComponent(component: { advisories?: Array<{ is_malware?: boolean }> }): boolean {
+  return component.advisories?.some(advisory => advisory.is_malware) ?? false
 }
 
 export function findingTypeBadgeClass(type: string): string {

@@ -1906,16 +1906,13 @@ func seedVEXAdvisoryForTest(t *testing.T, srv *Server) {
 func seedVEXAdvisoryForTestID(t *testing.T, srv *Server, canonicalID string) {
 	t.Helper()
 
-	if _, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+	if _, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
 		CanonicalID: canonicalID,
 		Title:       "VEX test advisory",
 		Description: "test advisory for uploaded VEX import",
-		Severity:    dbgen.SeverityLevelLow,
-		CvssScore:   sql.NullString{},
-		CvssVersion: dbgen.NullCvssVersion{},
 		PublishedAt: sql.NullTime{},
 		WithdrawnAt: sql.NullTime{},
-	}); err != nil {
+	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelLow, CvssScore: sql.NullString{}, CvssVersion: dbgen.NullCvssVersion{}}); err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,6 +132,45 @@ type Vulnerability struct {
 	// SARIF result taxa, a manual declaration, or the finding type. Attached
 	// per page through the finding_cwes view — never a column.
 	CWEs []FindingCWE `json:"cwes"`
+	// CVSS is the rating the finding uses and RatedBy who gave it (ADR-038
+	// §2): for an OS package, its distro's own rating. Copied like severity.
+	CVSS    *CVSSScore `json:"cvss,omitempty"`
+	RatedBy string     `json:"rated_by,omitempty"`
+	// EPSS, RatingsDisagree and Ratings are attached per page (ADR-038 §6).
+	// Ratings lists every rater; list rows carry it only when they disagree,
+	// the hover behind the list's marker.
+	EPSS            *EPSSScore      `json:"epss,omitempty"`
+	RatingsDisagree bool            `json:"ratings_disagree,omitempty"`
+	Ratings         []FindingRating `json:"ratings,omitempty"`
+}
+
+// CVSSScore is one CVSS rating as the API shows it.
+type CVSSScore struct {
+	Score   *float64 `json:"score,omitempty"`
+	Version string   `json:"version,omitempty"`
+	Vector  string   `json:"vector,omitempty"`
+}
+
+// EPSSScore is a finding's exploitation probability: the highest among its
+// advisory's CVEs, from the daily mirror.
+type EPSSScore struct {
+	CVEID      string  `json:"cve_id"`
+	Score      float64 `json:"score"`
+	Percentile float64 `json:"percentile"`
+	Date       string  `json:"date,omitempty"`
+}
+
+// FindingRating is one rater's statement about a finding's advisory.
+type FindingRating struct {
+	Rater    string   `json:"rater"`
+	Provider string   `json:"provider"`
+	Version  string   `json:"version,omitempty"`
+	Vector   string   `json:"vector,omitempty"`
+	Score    *float64 `json:"score,omitempty"`
+	Label    string   `json:"label,omitempty"`
+	Severity string   `json:"severity"`
+	// Used marks the rating the finding's severity comes from.
+	Used bool `json:"used,omitempty"`
 }
 
 // VulnerabilityAcceptance is the accepted decision as projected onto a
@@ -746,7 +786,8 @@ func escapeLikeFragment(value string) string {
 
 func normalizeVulnerabilitySort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "severity_asc", "severity_desc", "status_asc", "status_desc", "detected_asc", "detected_desc":
+	case "severity_asc", "severity_desc", "status_asc", "status_desc", "detected_asc", "detected_desc",
+		"risk_desc", "risk_asc", "epss_desc", "epss_asc", "cvss_desc", "cvss_asc":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "detected_desc"
@@ -876,7 +917,29 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		UpdatedAt:               row.UpdatedAt,
 		FirstSeenAt:             row.FirstSeenAt,
 		LastSeenAt:              row.LastSeenAt,
+		CVSS:                    cvssFromRow(row.CvssScore, row.CvssVersion, row.CvssVector),
+		RatedBy:                 row.RatedBy,
 	}
+}
+
+// CVSSFromColumns renders stored CVSS columns, nil when there is no rating.
+func CVSSFromColumns(score sql.NullString, version dbgen.NullCvssVersion, vector string) *CVSSScore {
+	return cvssFromRow(score, version, vector)
+}
+
+// cvssFromRow is the rating a finding copied, nil when it has none.
+func cvssFromRow(score sql.NullString, version dbgen.NullCvssVersion, vector string) *CVSSScore {
+	if !score.Valid && vector == "" {
+		return nil
+	}
+	out := &CVSSScore{Vector: vector}
+	if parsed, err := strconv.ParseFloat(score.String, 64); err == nil && score.Valid {
+		out.Score = &parsed
+	}
+	if version.Valid {
+		out.Version = string(version.CvssVersion)
+	}
+	return out
 }
 
 const acceptanceProjectionColumns = "fa.reason_kind, fa.reason, fa.labels, fa.vex_justification, fa.accepted_by, fa.expires_at, fa.created_at, fd.reason, fd.created_at"
@@ -914,7 +977,7 @@ func scanVulnerabilityWithAcceptance(scanner interface {
 	return vulnerability, nil
 }
 
-const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id"
+const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id, cvss_score, cvss_version, cvss_vector, rated_by"
 
 func dynamicVulnerabilitySelectColumns() string {
 	return "v." + strings.ReplaceAll(vulnerabilitySelectColumns, ", ", ", v.")
@@ -922,12 +985,17 @@ func dynamicVulnerabilitySelectColumns() string {
 
 //nolint:dupword // SQL CASE ... END END closes nested CASE expressions.
 func vulnerabilityOrderByClause(sortParam int) string {
-	// Open malware pins to the top of the default sorts (detected date at repo
-	// level, severity desc at org level): a malicious package must be the first
-	// row anyone sees. Ascending severity and status sorts are deliberate user
-	// choices and stay untouched.
+	// Open malware pins to the top of every sort: a malicious package must be
+	// the first row anyone sees. "Open" matches openMalwareCount (detected, or
+	// suppressed with a dispute; a false-positive acceptance clears it), so
+	// the banner count and the pinned rows agree. KEV pins next, for the
+	// default and risk sorts.
 	return fmt.Sprintf(`ORDER BY
-	CASE WHEN ($%d::text IN ('', 'detected_desc', 'severity_desc'))
+	CASE WHEN type = 'malware'
+		AND (status = 'detected' OR (status = 'suppressed' AND fd.fingerprint IS NOT NULL))
+		AND COALESCE(fa.reason_kind::text, '') <> 'false_positive'
+	THEN 0 ELSE 1 END ASC,
+	CASE WHEN ($%d::text IN ('', 'detected_desc', 'severity_desc', 'risk_desc'))
 		AND type IN ('dependency', 'container', 'malware') AND (
 			EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(primary_identifier_value))
 			OR EXISTS (
@@ -937,28 +1005,19 @@ func vulnerabilityOrderByClause(sortParam int) string {
 				WHERE a.id = advisory_id
 			)
 		) THEN 0 ELSE 1 END ASC,
-  CASE WHEN ($%d::text IN ('', 'detected_asc', 'detected_desc', 'severity_desc')) AND type = 'malware' AND status = 'detected' THEN 0 ELSE 1 END ASC,
-  CASE WHEN $%d::text = 'severity_asc' THEN CASE severity
-    WHEN 'info' THEN 1
-    WHEN 'low' THEN 2
-    WHEN 'medium' THEN 3
-    WHEN 'high' THEN 4
-    WHEN 'critical' THEN 5
-    ELSE 0
-  END END ASC,
-  CASE WHEN $%d::text = 'severity_desc' THEN CASE severity
-    WHEN 'info' THEN 1
-    WHEN 'low' THEN 2
-    WHEN 'medium' THEN 3
-    WHEN 'high' THEN 4
-    WHEN 'critical' THEN 5
-    ELSE 0
-  END END DESC,
+  CASE WHEN $%d::text IN ('risk_desc', 'epss_desc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = advisory_id)) END DESC NULLS LAST,
+  CASE WHEN $%d::text IN ('risk_desc', 'cvss_desc') THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN $%d::text = 'risk_desc' THEN severity_rank END DESC,
+  CASE WHEN $%d::text IN ('risk_asc', 'epss_asc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = advisory_id)) END ASC NULLS FIRST,
+  CASE WHEN $%d::text IN ('risk_asc', 'cvss_asc') THEN cvss_score END ASC NULLS FIRST,
+  CASE WHEN $%d::text = 'risk_asc' THEN severity_rank END ASC,
+  CASE WHEN $%d::text = 'severity_asc' THEN severity_rank END ASC,
+  CASE WHEN $%d::text = 'severity_desc' THEN severity_rank END DESC,
   CASE WHEN $%d::text = 'status_asc' THEN status END ASC,
   CASE WHEN $%d::text = 'status_desc' THEN status END DESC,
   CASE WHEN $%d::text = 'detected_asc' THEN detected_at END ASC,
   CASE WHEN $%d::text = 'detected_desc' OR $%d::text = '' THEN detected_at END DESC,
-	id DESC`, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam)
+	id DESC`, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam, sortParam)
 }
 
 func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {
@@ -1020,6 +1079,10 @@ func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {
 		&row.OriginTokenName,
 		&row.OriginOwnerType,
 		&row.OriginOwnerID,
+		&row.CvssScore,
+		&row.CvssVersion,
+		&row.CvssVector,
+		&row.RatedBy,
 	}
 }
 

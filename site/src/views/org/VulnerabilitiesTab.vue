@@ -1,16 +1,16 @@
 <template>
   <div class="space-y-4">
     <button
-      v-if="orgMalwareOpen > 0 && activeFilters.type !== 'malware'"
+      v-if="orgMalwareOpen > 0 && advancedQuery !== OPEN_RISK_MALWARE_QUERY"
       type="button"
-      class="flex w-full items-center gap-2.5 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-left transition hover:border-danger"
+      class="flex w-full items-center gap-2.5 rounded-xl border border-malware/60 bg-malware/10 px-4 py-3 text-left transition hover:border-malware"
       @click="applyMalwareFilter"
     >
-      <Biohazard class="h-5 w-5 shrink-0 text-danger" />
-      <span class="text-sm font-semibold text-red-200">
+      <MalwareIcon />
+      <span class="text-sm font-semibold text-violet-100">
         {{ orgMalwareOpen }} malware {{ orgMalwareOpen === 1 ? 'finding' : 'findings' }} across this organization — review immediately
       </span>
-      <span class="ml-auto text-xs text-red-300/80">Show only malware →</span>
+      <span class="ml-auto text-xs text-violet-200/80">Show only malware →</span>
     </button>
 
     <FilterBar
@@ -93,6 +93,18 @@
                 <th class="px-3 py-2 font-medium">
                   Severity
                 </th>
+                <th
+                  class="px-3 py-2 font-medium"
+                  title="The CVSS score this finding uses; ◆ when raters disagree"
+                >
+                  CVSS
+                </th>
+                <th
+                  class="px-3 py-2 font-medium"
+                  title="Probability of exploitation in the next 30 days (FIRST EPSS)"
+                >
+                  EPSS
+                </th>
                 <th class="px-3 py-2 font-medium">
                   Repository
                 </th>
@@ -118,13 +130,15 @@
                 v-for="vulnerability in vulnerabilities"
                 :key="vulnerability.id"
                 class="cursor-pointer transition hover:bg-white/5"
+                :class="vulnerability.type === 'malware' ? 'border-l-2 border-malware bg-malware/5' : ''"
                 @click="openDrawer(vulnerability)"
               >
                 <td class="px-3 py-2.5">
                   <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
                     <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                      <MalwareIcon v-if="vulnerability.type === 'malware'" />
                       <span
-                        v-if="vulnerability.kev"
+                        v-else-if="vulnerability.kev"
                         class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-danger-muted text-white"
                         role="img"
                         aria-label="Known exploited vulnerability"
@@ -139,6 +153,12 @@
                     <span :class="severityClass(vulnerability.severity)">{{ vulnerability.severity }}</span>
                   </span>
                 </td>
+                <td class="px-3 py-2.5 text-xs">
+                  <CvssCell :finding="vulnerability" />
+                </td>
+                <td class="px-3 py-2.5 text-xs">
+                  <EpssCell :epss="vulnerability.epss" />
+                </td>
                 <td class="px-3 py-2.5">
                   <RouterLink
                     :to="`/orgs/${provider}/${slug}/repos/${vulnerability.repo_slug}/vulnerabilities`"
@@ -149,7 +169,7 @@
                   </RouterLink>
                 </td>
                 <td class="px-3 py-2.5">
-                  <span class="rounded-full bg-surface-overlay px-2 py-0.5 text-xs text-gray-300">{{ vulnerability.type }}</span>
+                  <span :class="findingTypeBadgeClass(vulnerability.type)">{{ vulnerability.type }}</span>
                 </td>
                 <td class="px-3 py-2.5 font-mono text-xs text-accent">
                   {{ vulnerability.primary_identifier_value || vulnerability.scanner_name || 'n/a' }}
@@ -215,7 +235,7 @@
 </template>
 
 <script setup lang="ts">
-import { Flame, Biohazard } from 'lucide-vue-next'
+import { Flame } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { type LocationQueryRaw, RouterLink, useRoute, useRouter } from 'vue-router'
 
@@ -226,15 +246,19 @@ import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import CweChips from '@/components/finding/CweChips.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
+import CvssCell from '@/components/finding/CvssCell.vue'
+import EpssCell from '@/components/finding/EpssCell.vue'
 import { cweFilterDefs } from '@/lib/cweFilters'
+import { riskFilterDefs } from '@/lib/riskFilters'
 import { appendBarToken, withHiddenDefaults } from '@/lib/filterBarQuery'
 import TriageDialog from '@/components/TriageDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
-import { isComponentBacked } from '@/lib/findingDisplay'
+import { findingTypeBadgeClass, isComponentBacked } from '@/lib/findingDisplay'
 import { createExploitedPreset } from '@/lib/exploitedPreset'
 import { sameFilterValues, sameListQueryState } from '@/lib/listQueryState'
-import { migrateRiskOnlyQuery } from '@/lib/openRiskPreset'
+import { migrateRiskOnlyQuery, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 import { barQueryText, barStateFromQuery, BUILTIN_FINDINGS_PRESETS } from '@/lib/searchPresets'
 
 const { promptDialog } = useDialog()
@@ -264,7 +288,7 @@ let baselineRequestID = 0
 const seenTools = ref<Set<string>>(new Set())
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
-const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
+const severityOptions = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 const statusOptions = ['detected', 'resolved', 'suppressed']
 const toolOptions = computed(() => Array.from(seenTools.value).sort())
 const filterDefs = computed(() => [
@@ -276,6 +300,8 @@ const filterDefs = computed(() => [
   { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
   // ADR-037. No org facet endpoint: completion searches the catalog.
   ...cweFilterDefs(() => undefined),
+  // ADR-038 §6: server-side comparisons on the rating and the EPSS mirror.
+  ...riskFilterDefs(),
 ])
 
 // The query the server runs, with the hidden status:detected default.
@@ -295,6 +321,10 @@ function filterByCWE(id: number) {
 const sortOptions = [
   { key: 'severity', label: 'Severity' },
   { key: 'detected', label: 'Detected', ascLabel: 'Oldest', descLabel: 'Newest' },
+  // ADR-038 §5: KEV, then EPSS, then CVSS — an order, not a blended score.
+  { key: 'risk', label: 'Risk' },
+  { key: 'epss', label: 'EPSS' },
+  { key: 'cvss', label: 'CVSS' },
   { key: 'status', label: 'Status' },
 ]
 const sortDirectionOptions = [
@@ -316,8 +346,11 @@ const hasActiveFilters = computed(() => Object.values(activeFilters.value).some(
 const orgDashboard = inject<Ref<OrgDashboard | null>>('orgDashboard', ref(null))
 const orgMalwareOpen = computed(() => orgDashboard.value?.totals.malware_open ?? 0)
 
+// The same set the banner counts (orgDashboard malware_open).
 function applyMalwareFilter() {
-  activeFilters.value = { ...activeFilters.value, type: 'malware' }
+  activeFilters.value = {}
+  searchQuery.value = ''
+  advancedQuery.value = OPEN_RISK_MALWARE_QUERY
 }
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
@@ -656,6 +689,8 @@ function severityClass(level: string) {
     critical: 'rounded-full bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400',
     high: 'rounded-full bg-orange-500/15 px-2.5 py-1 text-xs font-medium text-orange-400',
     medium: 'rounded-full bg-yellow-500/15 px-2.5 py-1 text-xs font-medium text-yellow-400',
+    // Unknown: no source rates it (ADR-038 §3). Neutral, dashed: not low.
+    unknown: 'rounded-full border border-dashed border-gray-500/50 px-2.5 py-1 text-xs font-medium text-gray-300',
     low: 'rounded-full bg-gray-500/15 px-2.5 py-1 text-xs font-medium text-gray-400',
     info: 'rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-400',
   }

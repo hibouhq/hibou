@@ -103,7 +103,7 @@ func (q *Queries) ListAliasesByAdvisoryIDs(ctx context.Context, advisoryIDs []uu
 	return q.db.ListAliasesByAdvisoryIDs(ctx, advisoryIDs)
 }
 
-func (q *Queries) UpsertAdvisorySource(ctx context.Context, arg dbgen.UpsertAdvisorySourceParams) error {
+func (q *Queries) UpsertAdvisorySource(ctx context.Context, arg dbgen.UpsertAdvisorySourceParams) (uuid.UUID, error) {
 	return q.db.UpsertAdvisorySource(ctx, arg)
 }
 

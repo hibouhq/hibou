@@ -130,11 +130,13 @@ type trendPointResponse struct {
 	FindingsCritical int       `json:"findings_critical"`
 	FindingsHigh     int       `json:"findings_high"`
 	FindingsMedium   int       `json:"findings_medium"`
+	FindingsUnknown  int       `json:"findings_unknown"`
 	FindingsLow      int       `json:"findings_low"`
 	FindingsInfo     int       `json:"findings_info"`
 	VulnsCritical    int       `json:"vulns_critical"`
 	VulnsHigh        int       `json:"vulns_high"`
 	VulnsMedium      int       `json:"vulns_medium"`
+	VulnsUnknown     int       `json:"vulns_unknown"`
 	VulnsLow         int       `json:"vulns_low"`
 	VulnsInfo        int       `json:"vulns_info"`
 	ComponentsTotal  int       `json:"components_total"`
@@ -1074,11 +1076,13 @@ func (s *Server) buildTrendPoint(r *http.Request, snapshot store.Snapshot, accep
 		FindingsCritical: findings.Critical,
 		FindingsHigh:     findings.High,
 		FindingsMedium:   findings.Medium,
+		FindingsUnknown:  findings.Unknown,
 		FindingsLow:      findings.Low,
 		FindingsInfo:     findings.Info,
 		VulnsCritical:    vulns.Critical,
 		VulnsHigh:        vulns.High,
 		VulnsMedium:      vulns.Medium,
+		VulnsUnknown:     vulns.Unknown,
 		VulnsLow:         vulns.Low,
 		VulnsInfo:        vulns.Info,
 		ComponentsTotal:  int(componentCount),

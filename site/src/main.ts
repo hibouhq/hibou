@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 
 import router from '@/router'
+import { installTooltips } from '@/lib/tooltip'
 import { useAuthStore } from '@/stores/auth'
 import App from './App.vue'
 import './style/main.css'
@@ -32,3 +33,4 @@ router.beforeEach(async (to) => {
 })
 
 app.mount('#app')
+installTooltips()

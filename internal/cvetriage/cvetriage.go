@@ -131,14 +131,9 @@ func BuildIngestResult(decision Decision, record cvefeed.Projection) (advisory.I
 		CWEIDs:         record.CWEs,
 		AffectedRanges: ranges,
 	}
-	if severity := advisorySeverity(record); severity != nil {
-		result.Severity = severity
-	}
-	if record.Severity.Scored() {
-		score := record.Severity.Score
-		result.CVSSScore = &score
-		result.CVSSVector = record.Severity.Vector
-	}
+	// No ratings of its own: the record's rating reaches the advisory as its
+	// CVE-feed source, which every advisory with this CVE alias gets
+	// (ADR-038 §2), so an authored advisory and an upstream one rate alike.
 	if !record.Published.IsZero() {
 		published := record.Published
 		result.PublishedAt = &published
@@ -153,27 +148,6 @@ func BuildIngestResult(decision Decision, record cvefeed.Projection) (advisory.I
 		result.WithdrawnAt = &withdrawn
 	}
 	return result, nil
-}
-
-func advisorySeverity(record cvefeed.Projection) *advisory.Severity {
-	switch record.Severity.Label {
-	case "critical":
-		severity := advisory.SeverityCritical
-		return &severity
-	case "high":
-		severity := advisory.SeverityHigh
-		return &severity
-	case "medium":
-		severity := advisory.SeverityMedium
-		return &severity
-	case "low":
-		severity := advisory.SeverityLow
-		return &severity
-	case "info":
-		severity := advisory.SeverityInfo
-		return &severity
-	}
-	return nil
 }
 
 // summarize prefers the CNA's own one-line title where the description carries

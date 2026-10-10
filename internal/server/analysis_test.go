@@ -450,15 +450,12 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 	enrichedCanonicalID := "GHSA-" + uuid.NewString()
 	kevID := "CVE-2099-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	euvdID := "EUVD-" + kevID[len("CVE-"):]
-	enrichedAdvisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+	enrichedAdvisory, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
 		CanonicalID: enrichedCanonicalID,
 		Title:       "Example advisory",
 		Description: "Summary from advisory description",
-		Severity:    dbgen.SeverityLevelHigh,
-		CvssScore:   sql.NullString{String: "8.8", Valid: true},
-		CvssVector:  "",
 		IsMalware:   false,
-	})
+	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh, CvssScore: sql.NullString{String: "8.8", Valid: true}, CvssVector: ""})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory(enriched): %v", err)
 	}
@@ -469,21 +466,19 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 		t.Fatalf("UpsertAdvisoryAlias: %v", err)
 	}
 	seedKEVEntries(t, srv, "euvd", []kev.Entry{{CVEID: kevID, VulnerabilityName: euvdID}})
-	if err := srv.queries.UpsertAdvisorySource(context.Background(), dbgen.UpsertAdvisorySourceParams{
+	if _, err := srv.queries.UpsertAdvisorySource(context.Background(), dbgen.UpsertAdvisorySourceParams{
 		AdvisoryID: enrichedAdvisory.ID,
 		Provider:   "GHSA",
 		ProviderID: enrichedCanonicalID,
-		CvssVector: "",
 		RawData:    json.RawMessage(`{"references":[{"url":"https://example.test/advisories/secondary"},{"url":"https://example.test/advisories/primary"},{"url":"not-a-url"}]}`),
 		FetchedAt:  snapshot.CreatedAt,
 	}); err != nil {
 		t.Fatalf("UpsertAdvisorySource(ghsa): %v", err)
 	}
-	if err := srv.queries.UpsertAdvisorySource(context.Background(), dbgen.UpsertAdvisorySourceParams{
+	if _, err := srv.queries.UpsertAdvisorySource(context.Background(), dbgen.UpsertAdvisorySourceParams{
 		AdvisoryID: enrichedAdvisory.ID,
 		Provider:   "NVD",
 		ProviderID: kevID,
-		CvssVector: "",
 		RawData:    json.RawMessage(`{"references":[{"url":"https://example.test/advisories/primary"}]}`),
 		FetchedAt:  snapshot.CreatedAt,
 	}); err != nil {
@@ -523,14 +518,12 @@ func TestHandleGetRefComponentsIncludesAdvisoryEnrichment(t *testing.T) {
 		t.Fatalf("CreateAffectedRange(duplicate): %v", err)
 	}
 
-	plainAdvisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+	plainAdvisory, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
 		CanonicalID: "HIBOU-2026-0001",
 		Title:       "No source advisory",
 		Description: "",
-		Severity:    dbgen.SeverityLevelMedium,
-		CvssVector:  "",
 		IsMalware:   false,
-	})
+	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelMedium, CvssVector: ""})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory(plain): %v", err)
 	}
@@ -771,12 +764,11 @@ func TestHandleGetRefComponentGraphReturnsNodesEdgesAndDeterministicRoot(t *test
 		t.Fatalf("UpsertComponentDependency(left->right): %v", err)
 	}
 
-	advisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+	advisory, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
 		CanonicalID: "GHSA-graph-0001",
 		Title:       "graph advisory",
 		Description: "desc",
-		Severity:    dbgen.SeverityLevelHigh,
-	})
+	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}

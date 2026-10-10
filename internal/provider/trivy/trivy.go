@@ -441,17 +441,12 @@ func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[
 	}
 
 	rawData, _ := json.Marshal(vuln)
-	severity, cvssScore, cvssVersion, cvssVector := mapCVSS(vuln)
-
 	result := provider.AdvisoryResult{
 		ProviderName:   "trivy",
 		ProviderID:     vuln.VulnerabilityID,
 		Title:          vuln.Title,
 		Description:    vuln.Description,
-		Severity:       severity,
-		CVSSScore:      cvssScore,
-		CVSSVersion:    cvssVersion,
-		CVSSVector:     cvssVector,
+		Ratings:        ratingsFor(vuln),
 		CWEIDs:         append([]string(nil), vuln.CweIDs...),
 		AffectedRanges: []advisory.AffectedRange{buildAffectedRange(ecosystem, packageName, release, vuln)},
 		RawData:        rawData,
@@ -483,80 +478,70 @@ func buildAffectedRange(ecosystem, packageName, release string, vuln trivyVulner
 	return rng
 }
 
-func mapCVSS(vuln trivyVulnerability) (*advisory.Severity, *float64, *advisory.CVSSVersion, string) {
-	entry, ok := preferredCVSS(vuln.CVSS)
-	severity := mapSeverity(vuln.Severity)
-	if !ok {
-		return severity, nil, nil, ""
+// RatingsFromRaw rebuilds a stored record's ratings (ADR-038 §8): raw_data
+// is the vulnerability as mapVulnerability received it.
+func RatingsFromRaw(raw json.RawMessage) ([]advisory.Rating, error) {
+	var vuln trivyVulnerability
+	if err := json.Unmarshal(raw, &vuln); err != nil {
+		return nil, fmt.Errorf("trivy: decode stored record: %w", err)
 	}
-	if entry.V40Score > 0 {
-		ver := advisory.CVSSVersionV40
-		score := entry.V40Score
-		return severityFromScore(severity, score), &score, &ver, entry.V40Vector
-	}
-	if entry.V3Score > 0 {
-		ver := advisory.CVSSVersionV31
-		score := entry.V3Score
-		return severityFromScore(severity, score), &score, &ver, entry.V3Vector
-	}
-	if entry.V2Score > 0 {
-		ver := advisory.CVSSVersionV2
-		score := entry.V2Score
-		return severityFromScore(severity, score), &score, &ver, entry.V2Vector
-	}
-	return severity, nil, nil, ""
+	return ratingsFor(vuln), nil
 }
 
-// preferredCVSS picks a stable CVSS source, preferring nvd then redhat, then any.
-func preferredCVSS(cvss map[string]trivyCVSS) (trivyCVSS, bool) {
-	if len(cvss) == 0 {
-		return trivyCVSS{}, false
+// ratingsFor keeps every rating Trivy reports (ADR-038 §2): one per vendor
+// and CVSS version of the cvss map, each carrying that vendor's own label,
+// plus label-only ratings for vendors that publish no CVSS (Debian, Ubuntu).
+// Which one a finding uses is decided later, per finding.
+func ratingsFor(vuln trivyVulnerability) []advisory.Rating {
+	labels := make(map[string]*advisory.Severity, len(vuln.VendorSeverity)+1)
+	for vendor, raw := range vuln.VendorSeverity {
+		labels[advisory.NormalizeRater(vendor)] = advisory.ParseLabel(raw)
 	}
-	for _, source := range []string{"nvd", "redhat", "ghsa"} {
-		if entry, ok := cvss[source]; ok {
-			return entry, true
+	if source := advisory.NormalizeRater(vuln.SeveritySource); source != "" && labels[source] == nil {
+		labels[source] = advisory.ParseLabel(vuln.Severity)
+	}
+
+	vendors := make([]string, 0, len(vuln.CVSS))
+	for vendor := range vuln.CVSS {
+		vendors = append(vendors, vendor)
+	}
+	sort.Strings(vendors)
+
+	ratings := make([]advisory.Rating, 0, len(vendors)*2+len(labels))
+	rated := make(map[string]bool, len(vendors))
+	for _, vendor := range vendors {
+		entry := vuln.CVSS[vendor]
+		label := labels[advisory.NormalizeRater(vendor)]
+		for _, pair := range []struct {
+			vector string
+			score  float64
+		}{{entry.V3Vector, entry.V3Score}, {entry.V40Vector, entry.V40Score}, {entry.V2Vector, entry.V2Score}} {
+			if pair.vector == "" && pair.score <= 0 {
+				continue // this version is absent; the label is added below if nothing else carries it
+			}
+			score := pair.score
+			if rating, ok := advisory.NewRating(vendor, pair.vector, &score, label); ok {
+				ratings = append(ratings, rating)
+				rated[rating.Rater] = true
+			}
 		}
 	}
-	sources := make([]string, 0, len(cvss))
-	for source := range cvss {
-		sources = append(sources, source)
+	labelled := make([]string, 0, len(labels))
+	for vendor := range labels {
+		labelled = append(labelled, vendor)
 	}
-	sort.Strings(sources)
-	return cvss[sources[0]], true
+	sort.Strings(labelled)
+	for _, vendor := range labelled {
+		if rated[vendor] || labels[vendor] == nil {
+			continue
+		}
+		if rating, ok := advisory.NewRating(vendor, "", nil, labels[vendor]); ok {
+			ratings = append(ratings, rating)
+		}
+	}
+	return ratings
 }
 
-func severityFromScore(fallback *advisory.Severity, score float64) *advisory.Severity {
-	if score > 0 {
-		sev := advisory.NormalizeSeverity(score)
-		return &sev
-	}
-	return fallback
-}
-
-func mapSeverity(raw string) *advisory.Severity {
-	switch strings.ToUpper(strings.TrimSpace(raw)) {
-	case "CRITICAL":
-		sev := advisory.SeverityCritical
-		return &sev
-	case "HIGH":
-		sev := advisory.SeverityHigh
-		return &sev
-	case "MEDIUM":
-		sev := advisory.SeverityMedium
-		return &sev
-	case "LOW":
-		sev := advisory.SeverityLow
-		return &sev
-	default:
-		return nil
-	}
-}
-
-// selectFixedVersion chooses the fixed version to use as the exclusive upper
-// bound. When the advisory lists multiple fix branches (e.g. "1.2.5, 2.0.1") we
-// pick the smallest fix strictly greater than the installed version so the
-// installed (vulnerable) version still falls inside [0, fixed). Falls back to the
-// first listed version when comparison is not possible.
 func selectFixedVersion(ecosystem, installed, rawFixed string) string {
 	candidates := splitVersions(rawFixed)
 	if len(candidates) == 0 {

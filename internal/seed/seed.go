@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/provider/rawratings"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -41,6 +44,27 @@ type seededComponent struct {
 	name      string
 	version   string
 	ecosystem string
+	// sinceDaysAgo / untilDaysAgo bound when the repository carried the
+	// component (0 = always / still). Dependency findings follow the
+	// component, so history, releases and Insights trends move with it.
+	sinceDaysAgo int
+	untilDaysAgo int
+}
+
+// presentAt reports whether the component was in a snapshot taken daysAgo.
+func (c seededComponent) presentAt(daysAgo int) bool {
+	return (c.sinceDaysAgo == 0 || daysAgo <= c.sinceDaysAgo) && (c.untilDaysAgo == 0 || daysAgo > c.untilDaysAgo)
+}
+
+// added and retired give a component a lifetime in the seeded history.
+func (c seededComponent) added(daysAgo int) seededComponent {
+	c.sinceDaysAgo = daysAgo
+	return c
+}
+
+func (c seededComponent) retired(daysAgo int) seededComponent {
+	c.untilDaysAgo = daysAgo
+	return c
 }
 
 type seededFinding struct {
@@ -56,6 +80,15 @@ type seededFinding struct {
 }
 
 type seededSnapshotState struct {
+	snapshotID   uuid.UUID
+	componentIDs map[string]uuid.UUID
+	// history is every other snapshot of the repo (main history, tags,
+	// branches, PR), each with the components it carried: dependency
+	// findings are matched on all of them, not only the latest.
+	history []datedSnapshot
+}
+
+type datedSnapshot struct {
 	snapshotID   uuid.UUID
 	componentIDs map[string]uuid.UUID
 }
@@ -78,7 +111,6 @@ type seededAdvisory struct {
 	canonicalID string
 	title       string
 	description string
-	severity    store.SeverityLevel
 	isMalware   bool
 	malwareType any
 	publishedAt time.Time
@@ -86,6 +118,16 @@ type seededAdvisory struct {
 	targets     []seededMatchTarget
 	// cwes as NVD maps them, so dependency findings join the CWE views.
 	cwes []int
+	// sources are provider records as the provider returns them, trimmed to
+	// the rating fields: severity and CVSS are derived from them by the same
+	// code as live data (ADR-038 §8), never set by hand.
+	sources []seededSource
+}
+
+type seededSource struct {
+	provider   string
+	providerID string
+	raw        string
 }
 
 var seedOrgs = []seededOrg{
@@ -101,12 +143,15 @@ var seedOrgs = []seededOrg{
 				team:  "backend",
 				label: "v1.0.0",
 				components: []seededComponent{
-					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go"),
+					// Upgraded 10 days ago: Terrapin (CVE-2023-48795) shows as fixed.
+					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go").retired(10),
+					component("pkg:golang/golang.org/x/crypto@0.17.0", "golang.org/x/crypto", "0.17.0", "go").added(10),
 					component("pkg:golang/github.com/gin-gonic/gin@1.9.1", "github.com/gin-gonic/gin", "1.9.1", "go"),
 					component("pkg:npm/jsonwebtoken@9.0.2", "jsonwebtoken", "9.0.2", "npm"),
 					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
 					component("pkg:golang/github.com/jackc/pgx/v5@5.5.4", "github.com/jackc/pgx/v5", "5.5.4", "go"),
 					component("pkg:golang/github.com/spf13/cobra@1.8.0", "github.com/spf13/cobra", "1.8.0", "go"),
+					component("pkg:golang/stdlib@1.13.6", "stdlib", "1.13.6", "go"),
 				},
 				findings: []seededFinding{
 					finding("gosec", "hardcoded-secret-in-source", store.SeverityLevelCritical, "open", "internal/handler/auth.go", 47, 47, "JWT signing secret is hardcoded in the authentication handler.", map[string]any{"confidence": "high", "category": "credentials"}),
@@ -128,6 +173,8 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/lodash@4.17.21", "lodash", "4.17.21", "npm"),
 					component("pkg:npm/express@4.18.2", "express", "4.18.2", "npm"),
 					component("pkg:npm/event-stream@3.3.6", "event-stream", "3.3.6", "npm"),
+					// Pulled in by event-stream two weeks ago: malware appears mid-history.
+					component("pkg:npm/flatmap-stream@0.1.1", "flatmap-stream", "0.1.1", "npm").added(14),
 					component("pkg:npm/next@14.1.0", "next", "14.1.0", "npm"),
 				},
 				findings: []seededFinding{
@@ -226,7 +273,9 @@ var seedOrgs = []seededOrg{
 					component("pkg:pypi/cryptography@41.0.4", "cryptography", "41.0.4", "pypi"),
 					component("pkg:npm/axios@1.6.0", "axios", "1.6.0", "npm"),
 					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
-					component("pkg:golang/github.com/opencontainers/runc@1.1.11", "github.com/opencontainers/runc", "1.1.11", "go"),
+					component("pkg:golang/github.com/opencontainers/runc@1.1.11", "github.com/opencontainers/runc", "1.1.11", "go").added(21),
+					// The RHEL base image came in a week ago (ADR-038 distro rating).
+					component("pkg:rpm/redhat/openssl@3.0.7-6.el9_2?distro=redhat-9.2&epoch=1", "openssl", "1:3.0.7-6.el9_2", "rpm").added(7),
 				},
 				findings: []seededFinding{
 					finding("gosec", "use-of-weak-hash-md5", store.SeverityLevelLow, "open", "pkg/cache/checksum.go", 23, 26, "Image layer checksum fallback uses MD5 for performance reasons.", map[string]any{"component": "cache"}),
@@ -276,7 +325,8 @@ var seedOrgs = []seededOrg{
 					component("pkg:npm/express@4.18.2", "express", "4.18.2", "npm"),
 					component("pkg:npm/axios@1.6.0", "axios", "1.6.0", "npm"),
 					component("pkg:golang/golang.org/x/crypto@0.14.0", "golang.org/x/crypto", "0.14.0", "go"),
-					component("pkg:npm/node-ipc@10.1.0", "node-ipc", "10.1.0", "npm"),
+					// Arrived 10 days ago: the current release ships it, v0.9.0 does not.
+					component("pkg:npm/getcookies@1.0.0", "getcookies", "1.0.0", "npm").added(10),
 					component("pkg:golang/golang.org/x/net@0.16.0", "golang.org/x/net", "0.16.0", "go"),
 					component("pkg:maven/org.yaml/snakeyaml@2.2", "org.yaml:snakeyaml", "2.2", "maven"),
 				},
@@ -345,56 +395,65 @@ var seedOrgs = []seededOrg{
 }
 
 var seedAdvisories = []seededAdvisory{
+	// Malware: real OSSF malicious-packages records as OSV serves them. An
+	// invented MAL id is resolved by the first advisory scan pass, which only
+	// keeps ranges a provider re-reports (scanner.matchComponentRanges): the
+	// seed must use ids OSV actually returns for these packages.
 	{
-		canonicalID: "MAL-2018-3553",
-		title:       "event-stream malicious dependency",
-		description: "Malicious event-stream release carried a backdoored flatmap-stream payload intended to steal cryptocurrency wallets.",
-		severity:    store.SeverityLevelCritical,
-		isMalware:   true,
-		malwareType: "backdoor",
-		publishedAt: time.Date(2018, time.November, 26, 0, 0, 0, 0, time.UTC),
-		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "event-stream", introduced: "3.3.6", lastAffected: "3.3.6", source: "seed"}},
-		targets:     []seededMatchTarget{{repoKey: repoSeedKey("acme", "web-dashboard"), componentPURL: "pkg:npm/event-stream@3.3.6"}},
-	},
-	{
-		canonicalID: "MAL-2021-1024",
-		title:       "ua-parser-js supply chain attack",
-		description: "Compromised ua-parser-js packages shipped credential harvesting and cryptomining payloads.",
-		severity:    store.SeverityLevelCritical,
-		isMalware:   true,
-		malwareType: "cryptominer",
-		publishedAt: time.Date(2021, time.October, 23, 0, 0, 0, 0, time.UTC),
-		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "ua-parser-js", introduced: "0.7.29", lastAffected: "0.7.29", source: "seed"}},
-		targets:     []seededMatchTarget{{repoKey: repoSeedKey("acme", "mobile-app"), componentPURL: "pkg:npm/ua-parser-js@0.7.29"}},
-	},
-	{
-		canonicalID: "MAL-2022-0001",
-		title:       "colourama typosquat package",
-		description: "A typosquatted colourama package was used to capture environment data and exfiltrate credentials from developer machines.",
-		severity:    store.SeverityLevelHigh,
+		// The payload behind the 2018 event-stream compromise.
+		canonicalID: "MAL-2025-20690",
+		title:       "Malicious code in flatmap-stream (npm)",
+		description: "The package flatmap-stream was found to contain malicious code. It was the payload pulled in by the compromised event-stream 3.3.6, targeting cryptocurrency wallets.",
 		isMalware:   true,
 		malwareType: "data_exfiltration",
-		publishedAt: time.Date(2022, time.January, 11, 0, 0, 0, 0, time.UTC),
-		ranges:      []seededAffectedRange{{ecosystem: "pypi", packageName: "colourama", introduced: "0.4.6", lastAffected: "0.4.6", source: "seed"}},
-		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "code-analyzer"), componentPURL: "pkg:pypi/colourama@0.4.6"}},
+		publishedAt: time.Date(2025, time.August, 14, 0, 0, 0, 0, time.UTC),
+		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "flatmap-stream", introduced: "0", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("acme", "web-dashboard"), componentPURL: "pkg:npm/flatmap-stream@0.1.1"}},
+		sources: []seededSource{
+			{provider: "osv", providerID: "MAL-2025-20690", raw: `{"id":"MAL-2025-20690","summary":"Malicious code in flatmap-stream (npm)"}`},
+		},
 	},
 	{
-		canonicalID: "MAL-2022-0856",
-		title:       "node-ipc protestware",
-		description: "Malicious node-ipc release overwrote files on selected systems and behaved as a backdoored protestware package.",
-		severity:    store.SeverityLevelCritical,
+		canonicalID: "MAL-2025-21368",
+		title:       "Malicious code in getcookies (npm)",
+		description: "The package getcookies was found to contain malicious code: a backdoor that let an attacker run code on servers using it.",
 		isMalware:   true,
 		malwareType: "backdoor",
-		publishedAt: time.Date(2022, time.March, 15, 0, 0, 0, 0, time.UTC),
-		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "node-ipc", introduced: "10.1.0", lastAffected: "10.1.0", source: "seed"}},
-		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "ci-pipeline"), componentPURL: "pkg:npm/node-ipc@10.1.0"}},
+		publishedAt: time.Date(2025, time.August, 14, 0, 0, 0, 0, time.UTC),
+		ranges:      []seededAffectedRange{{ecosystem: "npm", packageName: "getcookies", introduced: "0", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "ci-pipeline"), componentPURL: "pkg:npm/getcookies@1.0.0"}},
+		sources: []seededSource{
+			{provider: "osv", providerID: "MAL-2025-21368", raw: `{"id":"MAL-2025-21368","summary":"Malicious code in getcookies (npm)"}`},
+		},
+	},
+	{
+		// Fixed by an upgrade 10 days ago on api-gateway, still open on
+		// container-runtime: resolved in one repo's trend, open in another's.
+		canonicalID: "CVE-2023-48795",
+		cwes:        []int{345, 354},
+		title:       "Prefix Truncation Attack against ChaCha20-Poly1305 and Encrypt-then-MAC aka Terrapin",
+		description: "The SSH transport protocol with certain OpenSSH extensions lets a man-in-the-middle drop messages at the start of the secure channel (Terrapin), downgrading connection security.",
+		publishedAt: time.Date(2023, time.December, 18, 0, 0, 0, 0, time.UTC),
+		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/crypto", introduced: "0.1.0", fixed: "0.17.0", source: "seed"}},
+		targets: []seededMatchTarget{
+			{repoKey: repoSeedKey("acme", "api-gateway"), componentPURL: "pkg:golang/golang.org/x/crypto@0.14.0"},
+			{repoKey: repoSeedKey("cloudnative", "container-runtime"), componentPURL: "pkg:golang/golang.org/x/crypto@0.14.0"},
+		},
+		sources: []seededSource{
+			{provider: "osv", providerID: "GHSA-45x7-px36-x8w8", raw: `{"id":"GHSA-45x7-px36-x8w8","aliases":["CVE-2023-48795","GO-2023-2402"],"severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"}],"database_specific":{"severity":"MODERATE"}}`},
+		},
 	},
 	{
 		canonicalID: "CVE-2023-44487",
 		cwes:        []int{400},
 		title:       "HTTP/2 Rapid Reset",
+		// GitHub rates it moderate (A:L, 5.3) where NVD says high (A:H, 7.5):
+		// the list marks the disagreement.
+		sources: []seededSource{
+			{provider: "osv", providerID: "GHSA-qppj-fm5r-hxr3", raw: `{"id":"GHSA-qppj-fm5r-hxr3","aliases":["CVE-2023-44487"],"severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L/E:H"},{"type":"CVSS_V4","score":"CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N/E:A"}],"database_specific":{"severity":"MODERATE"}}`},
+			{provider: "trivy", providerID: "CVE-2023-44487", raw: `{"vulnerability_id":"CVE-2023-44487","cvss":{"nvd":{"v3_vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H","v3_score":7.5}}}`},
+		},
 		description: "golang.org/x/net HTTP/2 server implementations may be vulnerable to the Rapid Reset attack leading to denial of service.",
-		severity:    store.SeverityLevelHigh,
 		publishedAt: time.Date(2023, time.October, 10, 0, 0, 0, 0, time.UTC),
 		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/net", introduced: "0", fixed: "0.17.0", source: "seed"}},
 		targets: []seededMatchTarget{
@@ -409,8 +468,10 @@ var seedAdvisories = []seededAdvisory{
 		canonicalID: "CVE-2023-39325",
 		cwes:        []int{770},
 		title:       "golang.org/x/net HTTP/2 resource consumption",
+		sources: []seededSource{
+			{provider: "trivy", providerID: "CVE-2023-39325", raw: `{"vulnerability_id":"CVE-2023-39325","cvss":{"nvd":{"v3_vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H","v3_score":7.5}}}`},
+		},
 		description: "Certain HTTP/2 requests can consume excessive resources in affected golang.org/x/net versions.",
-		severity:    store.SeverityLevelHigh,
 		publishedAt: time.Date(2023, time.September, 6, 0, 0, 0, 0, time.UTC),
 		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "golang.org/x/net", introduced: "0", fixed: "0.17.0", source: "seed"}},
 		targets: []seededMatchTarget{
@@ -424,8 +485,11 @@ var seedAdvisories = []seededAdvisory{
 		canonicalID: "CVE-2024-21626",
 		cwes:        []int{403},
 		title:       "runc container escape",
+		sources: []seededSource{
+			{provider: "osv", providerID: "GHSA-xr7r-f8xq-vfvv", raw: `{"id":"GHSA-xr7r-f8xq-vfvv","aliases":["CVE-2024-21626","GO-2024-2491"],"severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:H"}],"database_specific":{"severity":"HIGH"}}`},
+			{provider: "trivy", providerID: "CVE-2024-21626", raw: `{"vulnerability_id":"CVE-2024-21626","cvss":{"nvd":{"v3_vector":"CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:H","v3_score":8.6}}}`},
+		},
 		description: "Affected runc versions may permit a crafted image or container to escape intended filesystem boundaries.",
-		severity:    store.SeverityLevelCritical,
 		publishedAt: time.Date(2024, time.January, 31, 0, 0, 0, 0, time.UTC),
 		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "github.com/opencontainers/runc", introduced: "0", fixed: "1.1.12", source: "seed"}},
 		targets: []seededMatchTarget{
@@ -437,11 +501,44 @@ var seedAdvisories = []seededAdvisory{
 		canonicalID: "CVE-2023-45853",
 		cwes:        []int{190},
 		title:       "zlib buffer overflow",
+		sources: []seededSource{
+			{provider: "trivy", providerID: "CVE-2023-45853", raw: `{"vulnerability_id":"CVE-2023-45853","cvss":{"nvd":{"v3_vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H","v3_score":9.8}}}`},
+		},
 		description: "Affected Zlib.Portable packages bundle a vulnerable zlib version that may permit buffer overflow conditions during decompression.",
-		severity:    store.SeverityLevelMedium,
 		publishedAt: time.Date(2023, time.December, 1, 0, 0, 0, 0, time.UTC),
 		ranges:      []seededAffectedRange{{ecosystem: "nuget", packageName: "Zlib.Portable", introduced: "0", fixed: "1.12.0", source: "seed"}},
 		targets:     []seededMatchTarget{{repoKey: repoSeedKey("devtools", "package-registry"), componentPURL: "pkg:nuget/Zlib.Portable@1.11.0"}},
+	},
+	{
+		// What the Trivy server reports on RHEL 9.2: Red Hat labels it Low
+		// although its own CVSS is 4.7, and other vendors say medium. The RHEL
+		// finding takes Red Hat's rating (ADR-038 §2).
+		canonicalID: "CVE-2024-13176",
+		cwes:        []int{385},
+		title:       "openssl: Timing side-channel in ECDSA signature computation",
+		description: "A timing side-channel in OpenSSL's ECDSA signature computation may let an attacker with local measurement access recover the private key.",
+		publishedAt: time.Date(2025, time.January, 20, 0, 0, 0, 0, time.UTC),
+		ranges:      []seededAffectedRange{{ecosystem: "rpm", packageName: "openssl", introduced: "0", lastAffected: "1:3.0.7-6.el9_2", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("cloudnative", "container-runtime"), componentPURL: "pkg:rpm/redhat/openssl@3.0.7-6.el9_2?distro=redhat-9.2&epoch=1"}},
+		sources: []seededSource{
+			{provider: "trivy", providerID: "CVE-2024-13176", raw: `{"vulnerability_id":"CVE-2024-13176","severity":"LOW","severity_source":"redhat","vendor_severity":{"alma":"MEDIUM","amazon":"MEDIUM","azure":"MEDIUM","cbl-mariner":"MEDIUM","julia":"MEDIUM","oracle-oval":"MEDIUM","photon":"MEDIUM","redhat":"LOW","rocky":"MEDIUM","ubuntu":"LOW"},"cvss":{"julia":{"v3_vector":"CVSS:3.1/AV:P/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L","v3_score":4.1},"redhat":{"v3_vector":"CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N","v3_score":4.7}}}`},
+		},
+	},
+	{
+		// CurveBall in the Go standard library. The Go vulnerability database
+		// publishes no severity (GO-2022-0535), so without the CVE feed it is
+		// unknown — not info (ADR-038 §3). With the feed loaded, the CNA's
+		// rating reaches it through the CVE alias.
+		canonicalID: "CVE-2020-0601",
+		cwes:        []int{295},
+		title:       "Certificate validation bypass on Windows in crypto/x509",
+		description: "On Windows, crypto/x509 delegated certificate validation to the system API, which accepted spoofed ECC certificates (CurveBall).",
+		publishedAt: time.Date(2020, time.January, 14, 0, 0, 0, 0, time.UTC),
+		ranges:      []seededAffectedRange{{ecosystem: "go", packageName: "stdlib", introduced: "1.13.0-0", fixed: "1.13.7", source: "seed"}},
+		targets:     []seededMatchTarget{{repoKey: repoSeedKey("acme", "api-gateway"), componentPURL: "pkg:golang/stdlib@1.13.6"}},
+		sources: []seededSource{
+			{provider: "osv", providerID: "GO-2022-0535", raw: `{"id":"GO-2022-0535","aliases":["BIT-golang-2020-0601","CVE-2020-0601"]}`},
+		},
 	},
 }
 
@@ -453,8 +550,8 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 		return fmt.Errorf("checking existing seed data: %w", err)
 	}
 	if existingOrg != nil {
-		log.Info().Str("org_slug", "acme").Msg("seed data already present, skipping")
-		return nil
+		log.Info().Str("org_slug", "acme").Msg("seed data already present, skipping; refreshing seeded advisory ratings")
+		return refreshSeedRatings(ctx, db, queries)
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -523,7 +620,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 				return fmt.Errorf("creating snapshot for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
 
-			componentIDs, err := seedComponentsForSnapshot(ctx, tx, snapshot.ID, repoSeed.components)
+			componentIDs, err := seedComponentsForSnapshot(ctx, tx, snapshot.ID, repoSeed.components, 0)
 			if err != nil {
 				return fmt.Errorf("seeding components for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
@@ -531,7 +628,13 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 			if err := seedFindings(ctx, queries, snapshot.ID, repoSeed.findings); err != nil {
 				return fmt.Errorf("seeding findings for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
+			if repoIndex == 0 && len(repoSeed.components) > 0 {
+				if err := seedManualFinding(ctx, queries, snapshot.ID, repo.ID, devUser.ID); err != nil {
+					return fmt.Errorf("seeding manual finding for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
+				}
+			}
 
+			var history []datedSnapshot
 			if err := seedRepoHistory(ctx, tx, queries, historyParams{
 				repoID:           repo.ID,
 				branchRefID:      branchRef.ID,
@@ -541,6 +644,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 				orgIndex:         orgIndex,
 				repoIndex:        repoIndex,
 				clientIDs:        clientIDs,
+				history:          &history,
 			}); err != nil {
 				return fmt.Errorf("seeding history for %s/%s: %w", orgSeed.slug, repoSeed.slug, err)
 			}
@@ -548,6 +652,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 			seededSnapshots[repoSeedKey(orgSeed.slug, repoSeed.slug)] = seededSnapshotState{
 				snapshotID:   snapshot.ID,
 				componentIDs: componentIDs,
+				history:      history,
 			}
 		}
 	}
@@ -564,7 +669,7 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 	return nil
 }
 
-func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, components []seededComponent) (map[string]uuid.UUID, error) {
+func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, components []seededComponent, daysAgo int) (map[string]uuid.UUID, error) {
 	const insertComponent = `
 		INSERT INTO components (purl, name, version, ecosystem)
 		VALUES ($1, $2, $3, $4)
@@ -580,6 +685,9 @@ func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.
 	componentIDs := make(map[string]uuid.UUID, len(components))
 
 	for _, seededComponent := range components {
+		if !seededComponent.presentAt(daysAgo) {
+			continue
+		}
 		var componentID uuid.UUID
 		if err := tx.QueryRowContext(ctx, insertComponent, seededComponent.purl, seededComponent.name, seededComponent.version, seededComponent.ecosystem).Scan(&componentID); err != nil {
 			return nil, err
@@ -595,8 +703,8 @@ func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.
 
 func seedAdvisoryData(ctx context.Context, queries *store.Queries, tx *sql.Tx, snapshots map[string]seededSnapshotState) error {
 	const insertAdvisory = `
-		INSERT INTO advisories (canonical_id, title, description, severity, is_malware, malware_type, published_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO advisories (canonical_id, title, description, is_malware, malware_type, published_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
 	`
 	const insertAffectedRange = `
@@ -614,7 +722,6 @@ func seedAdvisoryData(ctx context.Context, queries *store.Queries, tx *sql.Tx, s
 			advisory.canonicalID,
 			advisory.title,
 			advisory.description,
-			advisory.severity,
 			advisory.isMalware,
 			advisory.malwareType,
 			advisory.publishedAt,
@@ -654,45 +761,145 @@ func seedAdvisoryData(ctx context.Context, queries *store.Queries, tx *sql.Tx, s
 			if !ok {
 				return fmt.Errorf("missing seeded snapshot for %s", target.repoKey)
 			}
-			componentID, ok := snapshotState.componentIDs[target.componentPURL]
-			if !ok {
-				return fmt.Errorf("missing component %s for %s", target.componentPURL, target.repoKey)
+			// Every snapshot that carried the component gets the finding, so
+			// history, releases and trends show when it arrived and left.
+			dated := append([]datedSnapshot{{snapshotID: snapshotState.snapshotID, componentIDs: snapshotState.componentIDs}}, snapshotState.history...)
+			matched := 0
+			for _, snapshot := range dated {
+				componentID, ok := snapshot.componentIDs[target.componentPURL]
+				if !ok {
+					continue
+				}
+				matched++
+				if err := seedMatchedFinding(ctx, qtx, tx, snapshot.snapshotID, componentID, advisoryID, affectedRangeID, advisory); err != nil {
+					return err
+				}
 			}
-			componentName, componentVersion, componentPURL, ecosystem, err := loadSeedComponent(ctx, tx, componentID)
-			if err != nil {
-				return err
+			if matched == 0 {
+				return fmt.Errorf("component %s is in no snapshot of %s", target.componentPURL, target.repoKey)
 			}
-			vulnType := "dependency"
-			if advisory.isMalware {
-				vulnType = "malware"
-			}
-			_, err = qtx.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
-				Type:                   vulnType,
-				SnapshotID:             snapshotState.snapshotID,
-				Title:                  advisory.title,
-				Description:            advisory.description,
-				PrimaryIdentifierKind:  "advisory",
-				PrimaryIdentifierValue: advisory.canonicalID,
-				OriginalSeverity:       advisory.severity,
-				Severity:               advisory.severity,
-				Status:                 "detected",
-				ScannerName:            "seed",
-				Fingerprint:            dependencySeedFingerprint(advisoryID, componentID),
-				ComponentID:            uuid.NullUUID{UUID: componentID, Valid: true},
-				ComponentName:          nullSeedString(componentName),
-				ComponentVersion:       nullSeedString(componentVersion),
-				ComponentPurl:          nullSeedString(componentPURL),
-				Ecosystem:              nullSeedString(ecosystem),
-				AdvisoryID:             uuid.NullUUID{UUID: advisoryID, Valid: true},
-				AffectedRangeID:        nullSeedUUID(affectedRangeID),
-			})
-			if err != nil {
-				return err
-			}
+		}
+		if err := seedAdvisoryRatings(ctx, qtx, advisoryID, advisory); err != nil {
+			return fmt.Errorf("rate %s: %w", advisory.canonicalID, err)
 		}
 	}
 
 	return nil
+}
+
+// seedMatchedFinding creates the dependency or malware finding a scan would
+// create for a component matching the advisory. Severity is a placeholder:
+// seedAdvisoryRatings derives it afterwards, for every snapshot at once.
+func seedMatchedFinding(ctx context.Context, qtx *store.Queries, tx *sql.Tx, snapshotID, componentID, advisoryID uuid.UUID, affectedRangeID any, seeded seededAdvisory) error {
+	componentName, componentVersion, componentPURL, ecosystem, err := loadSeedComponent(ctx, tx, componentID)
+	if err != nil {
+		return err
+	}
+	vulnType := "dependency"
+	if seeded.isMalware {
+		vulnType = "malware"
+	}
+	_, err = qtx.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+		Type:                   vulnType,
+		SnapshotID:             snapshotID,
+		Title:                  seeded.title,
+		Description:            seeded.description,
+		PrimaryIdentifierKind:  "advisory",
+		PrimaryIdentifierValue: seeded.canonicalID,
+		OriginalSeverity:       store.SeverityLevelUnknown,
+		Severity:               store.SeverityLevelUnknown,
+		Status:                 "detected",
+		ScannerName:            "seed",
+		Fingerprint:            dependencySeedFingerprint(advisoryID, componentID),
+		ComponentID:            uuid.NullUUID{UUID: componentID, Valid: true},
+		ComponentName:          nullSeedString(componentName),
+		ComponentVersion:       nullSeedString(componentVersion),
+		ComponentPurl:          nullSeedString(componentPURL),
+		Ecosystem:              nullSeedString(ecosystem),
+		AdvisoryID:             uuid.NullUUID{UUID: advisoryID, Valid: true},
+		AffectedRangeID:        nullSeedUUID(affectedRangeID),
+	})
+	return err
+}
+
+// refreshSeedRatings brings advisories an older seed created up to the
+// current rating model (ADR-038 §8): their aliases, provider records and the
+// severity derived from them. It touches only the seed's own canonical IDs.
+func refreshSeedRatings(ctx context.Context, db *sql.DB, queries *store.Queries) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	qtx := queries.WithTx(tx)
+	for _, seeded := range seedAdvisories {
+		existing, err := qtx.GetAdvisoryByCanonicalID(ctx, seeded.canonicalID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		// A real scan may have stored a provider's record since: it wins over
+		// the seed's trimmed copy.
+		stored, err := qtx.ListSourcesByAdvisory(ctx, existing.ID)
+		if err != nil {
+			return err
+		}
+		have := make(map[string]bool, len(stored))
+		for _, source := range stored {
+			have[source.Provider] = true
+		}
+		missing := seeded
+		missing.sources = nil
+		for _, source := range seeded.sources {
+			if !have[source.provider] {
+				missing.sources = append(missing.sources, source)
+			}
+		}
+		if err := seedAdvisoryRatings(ctx, qtx, existing.ID, missing); err != nil {
+			return fmt.Errorf("rate %s: %w", seeded.canonicalID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// seedAdvisoryRatings stores the advisory's provider records and derives its
+// severity, and its findings', exactly as ingest does.
+func seedAdvisoryRatings(ctx context.Context, qtx *store.Queries, advisoryID uuid.UUID, seeded seededAdvisory) error {
+	// Ingest records every identifier as an alias; the CVE-feed rating and
+	// EPSS reach an advisory through them.
+	aliases := []string{seeded.canonicalID}
+	for _, source := range seeded.sources {
+		aliases = append(aliases, source.providerID)
+	}
+	for _, alias := range aliases {
+		if err := qtx.UpsertAdvisoryAlias(ctx, dbgen.UpsertAdvisoryAliasParams{AdvisoryID: advisoryID, Alias: alias}); err != nil {
+			return err
+		}
+	}
+	for _, source := range seeded.sources {
+		sourceID, err := qtx.UpsertAdvisorySource(ctx, dbgen.UpsertAdvisorySourceParams{
+			AdvisoryID:     advisoryID,
+			Provider:       source.provider,
+			ProviderID:     source.providerID,
+			RawData:        json.RawMessage(source.raw),
+			FetchedAt:      time.Now().UTC(),
+			RatingsVersion: advisory.RatingsVersion,
+		})
+		if err != nil {
+			return err
+		}
+		ratings, err := rawratings.FromRaw(source.provider, json.RawMessage(source.raw))
+		if err != nil {
+			return err
+		}
+		if err := advisory.SyncSourceRatings(ctx, qtx, sourceID, ratings); err != nil {
+			return err
+		}
+	}
+	_, err := advisory.Rerate(ctx, qtx, advisoryID)
+	return err
 }
 
 // seedRuleCWEs gives seeded rules the CWEs those scanners report in their
@@ -774,6 +981,39 @@ func seedFindings(ctx context.Context, queries *store.Queries, snapshotID uuid.U
 	return nil
 }
 
+// seedManualFinding files a finding by hand, as a reviewer would after a
+// code review, with the CWEs they declared (ADR-037): the one source of CWEs
+// no scanner provides.
+func seedManualFinding(ctx context.Context, queries *store.Queries, snapshotID, repoID, userID uuid.UUID) error {
+	const fingerprint = "manual:review-2026-q3-tenant-isolation"
+	finding, err := queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
+		Type:                   string(store.VulnerabilityTypeManual),
+		SnapshotID:             snapshotID,
+		Title:                  "Tenant id taken from the URL without an ownership check",
+		Description:            "Found in the Q3 security review: the handler loads the tenant named in the path and never checks that the caller belongs to it, so any authenticated user can read another tenant's records.",
+		PrimaryIdentifierKind:  "rule",
+		PrimaryIdentifierValue: "review-tenant-isolation",
+		OriginalSeverity:       store.SeverityLevelHigh,
+		Severity:               store.SeverityLevelHigh,
+		Status:                 string(store.VulnerabilityStatusDetected),
+		FilePath:               nullSeedString("internal/handler/tenants.go"),
+		StartLine:              sql.NullInt32{Int32: 42, Valid: true},
+		EndLine:                sql.NullInt32{Int32: 58, Valid: true},
+		LocationHash:           nullSeedString(fingerprint),
+		Fingerprint:            fingerprint,
+		Solution:               nullSeedString("Resolve the tenant from the caller's membership, not from the path."),
+		Metadata:               json.RawMessage(`{}`),
+		Origin:                 dbgen.FindingOriginHuman,
+		CreatedBy:              uuid.NullUUID{UUID: userID, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	// CWE-639 (authorization bypass through a user-controlled key) and
+	// CWE-862 (missing authorization).
+	return queries.ReplaceDeclaredFindingCWEs(ctx, repoID, finding.Fingerprint, []int{639, 862}, store.FindingCWEDeclarer{UserID: uuid.NullUUID{UUID: userID, Valid: true}})
+}
+
 func repoSeedKey(orgSlug, repoSlug string) string {
 	return orgSlug + "/" + repoSlug
 }
@@ -809,6 +1049,21 @@ type historyParams struct {
 	orgIndex         int
 	repoIndex        int
 	clientIDs        []uuid.UUID
+	// history collects the snapshots created here for advisory matching.
+	history *[]datedSnapshot
+}
+
+// recordComponents links the components the repo carried daysAgo to a
+// history snapshot and remembers it for advisory matching.
+func (p historyParams) recordComponents(ctx context.Context, tx *sql.Tx, snapshotID uuid.UUID, daysAgo int) error {
+	componentIDs, err := seedComponentsForSnapshot(ctx, tx, snapshotID, p.repoSeed.components, daysAgo)
+	if err != nil {
+		return err
+	}
+	if p.history != nil {
+		*p.history = append(*p.history, datedSnapshot{snapshotID: snapshotID, componentIDs: componentIDs})
+	}
+	return nil
 }
 
 var historySteps = []struct {
@@ -868,7 +1123,7 @@ func seedCompareBranch(ctx context.Context, tx *sql.Tx, queries *store.Queries, 
 	if err != nil {
 		return "", err
 	}
-	if _, err := seedComponentsForSnapshot(ctx, tx, branchSnapshotID, p.repoSeed.components); err != nil {
+	if err := p.recordComponents(ctx, tx, branchSnapshotID, 0); err != nil {
 		return "", err
 	}
 	if err := seedFindings(ctx, queries, branchSnapshotID, compareBranchFindings(p.repoSeed, branchName)); err != nil {
@@ -897,7 +1152,7 @@ func seedMainBranchHistory(ctx context.Context, tx *sql.Tx, queries *store.Queri
 		if step.status == store.SnapshotStatusFailed {
 			continue // failed build ingested nothing
 		}
-		if _, err := seedComponentsForSnapshot(ctx, tx, snapshotID, p.repoSeed.components); err != nil {
+		if err := p.recordComponents(ctx, tx, snapshotID, step.daysAgo); err != nil {
 			return err
 		}
 		if err := seedFindings(ctx, queries, snapshotID, subsetFindings(p.repoSeed.findings, i+2)); err != nil {
@@ -931,7 +1186,7 @@ func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p hi
 	if err != nil {
 		return err
 	}
-	if _, err := seedComponentsForSnapshot(ctx, tx, tagSnapshotID, p.repoSeed.components); err != nil {
+	if err := p.recordComponents(ctx, tx, tagSnapshotID, 3); err != nil {
 		return err
 	}
 	if err := seedCoverage(ctx, tx, tagSnapshotID, tagCreatedAt, coverageSpecForRepo(p.repoSeed, 0.74)); err != nil {
@@ -964,7 +1219,7 @@ func seedExtraRefs(ctx context.Context, tx *sql.Tx, queries *store.Queries, p hi
 	if err != nil {
 		return err
 	}
-	if _, err := seedComponentsForSnapshot(ctx, tx, prSnapshotID, p.repoSeed.components); err != nil {
+	if err := p.recordComponents(ctx, tx, prSnapshotID, 0); err != nil {
 		return err
 	}
 
@@ -1405,7 +1660,7 @@ func seedReleases(ctx context.Context, queries *store.Queries, p historyParams, 
 	if err != nil {
 		return err
 	}
-	if _, err := seedComponentsForSnapshot(ctx, tx, oldSnapshotID, p.repoSeed.components); err != nil {
+	if err := p.recordComponents(ctx, tx, oldSnapshotID, 30); err != nil {
 		return err
 	}
 	if err := seedFindings(ctx, queries, oldSnapshotID, p.repoSeed.findings); err != nil {

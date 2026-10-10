@@ -259,6 +259,7 @@ func effectiveDependencyVulnerabilitySection(matched *repoconfig.QualityGate, ga
 			"Max new critical (file)": thresholds.MaxCritical,
 			"Max new high (file)":     thresholds.MaxHigh,
 			"Max new medium (file)":   thresholds.MaxMedium,
+			"Max new unknown (file)":  thresholds.MaxUnknown,
 			"Max new total (file)":    thresholds.MaxNewTotal,
 		})...)
 	}

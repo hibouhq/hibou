@@ -69,6 +69,57 @@ definitions:
       status:
         type: string
     type: object
+  sbom.ComponentDelta:
+    properties:
+      base_version:
+        type: string
+      ecosystem:
+        type: string
+      head_version:
+        type: string
+      name:
+        type: string
+      purl:
+        type: string
+      version:
+        type: string
+    type: object
+  sbom.SBOMDiff:
+    properties:
+      added:
+        items:
+          $ref: '#/definitions/sbom.ComponentDelta'
+        type: array
+      removed:
+        items:
+          $ref: '#/definitions/sbom.ComponentDelta'
+        type: array
+      summary:
+        $ref: '#/definitions/sbom.SBOMDiffSummary'
+      unchanged:
+        items:
+          $ref: '#/definitions/sbom.ComponentDelta'
+        type: array
+      version_changed:
+        items:
+          $ref: '#/definitions/sbom.ComponentDelta'
+        type: array
+    type: object
+  sbom.SBOMDiffSummary:
+    properties:
+      added:
+        type: integer
+      removed:
+        type: integer
+      total_base:
+        type: integer
+      total_head:
+        type: integer
+      unchanged:
+        type: integer
+      version_changed:
+        type: integer
+    type: object
   server.addReleaseClientRequest:
     properties:
       client_slug:
@@ -238,6 +289,21 @@ definitions:
       slug:
         type: string
       updated_at:
+        type: string
+    type: object
+  server.compareSBOMsRequest:
+    properties:
+      base_artifact_id:
+        type: string
+      base_content:
+        type: string
+      base_format:
+        type: string
+      head_artifact_id:
+        type: string
+      head_content:
+        type: string
+      head_format:
         type: string
     type: object
   server.coverageSourceLine:
@@ -467,6 +533,13 @@ definitions:
     properties:
       abstraction:
         type: string
+      ancestors:
+        description: |-
+          Ancestors are the View 1000 parents, nearest first: what a cwe-tree:
+          query would have to name to include this CWE.
+        items:
+          type: integer
+        type: array
       category:
         $ref: '#/definitions/cwe.SetRef'
       deprecated:
@@ -655,10 +728,8 @@ definitions:
         type: array
       canonical_id:
         type: string
-      cvss_score:
-        type: string
-      cvss_vector:
-        type: string
+      cvss:
+        $ref: '#/definitions/store.CVSSScore'
       description:
         type: string
       fixed_versions:
@@ -680,11 +751,16 @@ definitions:
           reading — the gap between them is how long the flaw was public before
           this instance matched it.
         type: string
+      rated_by:
+        type: string
       references:
         items:
           type: string
         type: array
       severity:
+        description: |-
+          Severity and CVSS are the advisory's headline (NVD first, else the
+          strongest rater); the finding's own rating can differ (a distro's).
         type: string
       title:
         type: string
@@ -1718,6 +1794,15 @@ definitions:
       message:
         type: string
     type: object
+  store.CVSSScore:
+    properties:
+      score:
+        type: number
+      vector:
+        type: string
+      version:
+        type: string
+    type: object
   store.CWEUsage:
     properties:
       abstraction:
@@ -1730,6 +1815,10 @@ definitions:
         $ref: '#/definitions/cwe.SetRef'
       deprecated:
         type: boolean
+      descendants:
+        description: 'Descendants counts the View 1000 sub-types a cwe-tree: query
+          adds.'
+        type: integer
       id:
         type: integer
       max_severity:
@@ -1823,6 +1912,17 @@ definitions:
     - DeploymentStatusActive
     - DeploymentStatusRolledBack
     - DeploymentStatusSuperseded
+  store.EPSSScore:
+    properties:
+      cve_id:
+        type: string
+      date:
+        type: string
+      percentile:
+        type: number
+      score:
+        type: number
+    type: object
   store.FindingAcceptance:
     properties:
       accepted_by:
@@ -1913,6 +2013,26 @@ definitions:
       snapshot_at:
         type: string
       status:
+        type: string
+    type: object
+  store.FindingRating:
+    properties:
+      label:
+        type: string
+      provider:
+        type: string
+      rater:
+        type: string
+      score:
+        type: number
+      severity:
+        type: string
+      used:
+        description: Used marks the rating the finding's severity comes from.
+        type: boolean
+      vector:
+        type: string
+      version:
         type: string
     type: object
   store.FixingPullRequest:
@@ -2248,6 +2368,8 @@ definitions:
         type: string
       low_count:
         type: integer
+      malware_open:
+        type: integer
       medium_count:
         type: integer
       open_finding_count:
@@ -2312,11 +2434,13 @@ definitions:
     - critical
     - high
     - medium
+    - unknown
     - low
     - info
     - critical
     - high
     - medium
+    - unknown
     - low
     - info
     type: string
@@ -2324,6 +2448,7 @@ definitions:
     - SeverityLevelCritical
     - SeverityLevelHigh
     - SeverityLevelMedium
+    - SeverityLevelUnknown
     - SeverityLevelLow
     - SeverityLevelInfo
   store.Team:
@@ -2409,6 +2534,12 @@ definitions:
         type: string
       created_by:
         type: string
+      cvss:
+        allOf:
+        - $ref: '#/definitions/store.CVSSScore'
+        description: |-
+          CVSS is the rating the finding uses and RatedBy who gave it (ADR-038
+          §2): for an OS package, its distro's own rating. Copied like severity.
       cwes:
         description: |-
           CWEs every source attributes to the finding (ADR-037): rule, advisory,
@@ -2434,6 +2565,13 @@ definitions:
         type: string
       end_line:
         type: integer
+      epss:
+        allOf:
+        - $ref: '#/definitions/store.EPSSScore'
+        description: |-
+          EPSS, RatingsDisagree and Ratings are attached per page (ADR-038 §6).
+          Ratings lists every rater; list rows carry it only when they disagree,
+          the hover behind the list's marker.
       file_path:
         type: string
       fingerprint:
@@ -2486,6 +2624,14 @@ definitions:
         type: string
       primary_identifier_value:
         type: string
+      rated_by:
+        type: string
+      ratings:
+        items:
+          $ref: '#/definitions/store.FindingRating'
+        type: array
+      ratings_disagree:
+        type: boolean
       reachability:
         type: string
       remediation_link:
@@ -2699,6 +2845,10 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: 'Without q/ids: list entries of these abstractions (pillar,class)'
+        in: query
+        name: abstraction
+        type: string
       produces:
       - application/json
       responses:
@@ -7168,6 +7318,40 @@ paths:
       summary: Readiness check
       tags:
       - system
+  /tools/sbom/compare:
+    post:
+      consumes:
+      - application/json
+      description: 'The Tools SBOM comparator without a repository: both sides are
+        inline documents (base64 CycloneDX or SPDX JSON) the caller sends, so nothing
+        stored is read and no repository access is needed. Repository snapshot artifacts
+        are compared through the repository''s own endpoint.'
+      parameters:
+      - description: Inline base and head documents
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.compareSBOMsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/sbom.SBOMDiff'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Compare two SBOM files
+      tags:
+      - tools
   /upload:
     post:
       consumes:

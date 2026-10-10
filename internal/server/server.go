@@ -443,6 +443,8 @@ func (s *Server) routes(siteFS fs.FS) {
 			// ADR-037: embedded MITRE catalog (reference data, no tenant data).
 			r.Get("/cwe", s.handleSearchCWECatalog)
 			r.Get("/cwe/sets", s.handleListCWESets)
+			// Tools: compare two SBOM files no repository holds.
+			r.Post("/tools/sbom/compare", s.handleCompareLocalSBOMs)
 			r.Get("/instance/settings/banners", s.handleGetBannerSettings)
 			r.Put("/instance/settings/banners", s.handleUpdateBannerSettings)
 			r.Get("/instance/settings/admins", s.handleListInstanceAdmins)
@@ -757,6 +759,14 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 		}
 		if s.cfg.KEV.Enabled && s.cfg.KEV.EUVD.Enabled {
 			sources = append(sources, kev.NewEUVD(s.cfg.KEV.EUVD.URL, s.log))
+		}
+		// Risk metrics (ADR-038): ratings backfill and CVE-feed reconcile
+		// always; the EPSS mirror unless switched off.
+		loops = append(loops, "ratings")
+		go s.runRatingsLoop(runtimeCtx)
+		if s.cfg.EPSS.Enabled {
+			loops = append(loops, "epss_sync")
+			go s.runEPSSSyncLoop(runtimeCtx, s.cfg.EPSS.URL, s.cfg.EPSS.Interval)
 		}
 		if len(sources) > 0 {
 			loops = append(loops, "kev_sync")

@@ -117,6 +117,18 @@ kev:
     # Defaults to https://euvdservices.enisa.europa.eu/api
     url: ""
 
+# EPSS mirror (ADR-038): FIRST's daily exploit-prediction scores, shown beside
+# CVSS and used by the Risk sort and epss: filters. A ~3 MB download a day.
+epss:
+  enabled: true
+  # A new file is published daily; checking more often only re-reads it.
+  interval: 24h
+  # Defaults to https://epss.empiricalsecurity.com/epss_scores-current.csv.gz;
+  # point it at a mirror serving the same gzipped CSV for an instance with no
+  # outbound internet.
+  url: ""
+
+
 
 # Delayed background loops.
 # Leave enabled for a single combined deployment. Disable on API-only pods and

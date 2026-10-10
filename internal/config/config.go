@@ -69,6 +69,7 @@ type Config struct {
 	AdvisoryScan                 AdvisoryScanConfig
 	CVEFeed                      CVEFeedConfig
 	KEV                          KEVConfig
+	EPSS                         EPSSConfig
 	Worker                       WorkerConfig
 	SecretScan                   SecretScanConfig
 
@@ -119,6 +120,15 @@ type KEVConfig struct {
 	Interval time.Duration
 	CISA     KEVSourceConfig
 	EUVD     KEVSourceConfig
+}
+
+// EPSSConfig configures the daily EPSS mirror (ADR-038 §4). On by default,
+// like the KEV catalogs; URL points an air-gapped instance at an internal
+// copy of FIRST's daily file.
+type EPSSConfig struct {
+	Enabled  bool
+	URL      string
+	Interval time.Duration
 }
 
 // KEVSourceConfig is one catalog's switch and mirror override.
@@ -304,6 +314,9 @@ func Load() (Config, error) {
 	v.SetDefault("kev.cisa.url", "")
 	v.SetDefault("kev.euvd.enabled", true)
 	v.SetDefault("kev.euvd.url", "")
+	v.SetDefault("epss.enabled", true)
+	v.SetDefault("epss.url", "")
+	v.SetDefault("epss.interval", "24h")
 	v.SetDefault("worker.lease.duration", "5m")
 	v.SetDefault("worker.heartbeat.interval", "100s")
 	v.SetDefault("retention.preset", "envelope")
@@ -371,6 +384,11 @@ func Load() (Config, error) {
 	if cveFeedInterval <= 0 {
 		return Config{}, errors.New("parsing cve_feed.interval: duration must be greater than zero")
 	}
+	epssInterval, err := time.ParseDuration(v.GetString("epss.interval"))
+	if err != nil || epssInterval <= 0 {
+		return Config{}, errors.New("parsing epss.interval: must be a positive duration")
+	}
+
 	kevInterval, err := time.ParseDuration(v.GetString("kev.interval"))
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing kev.interval: %w", err)
@@ -470,6 +488,11 @@ func Load() (Config, error) {
 				Enabled: v.GetBool("kev.euvd.enabled"),
 				URL:     strings.TrimSpace(v.GetString("kev.euvd.url")),
 			},
+		},
+		EPSS: EPSSConfig{
+			Enabled:  v.GetBool("epss.enabled"),
+			URL:      strings.TrimSpace(v.GetString("epss.url")),
+			Interval: epssInterval,
 		},
 		AdvisoryScan: AdvisoryScanConfig{
 			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),

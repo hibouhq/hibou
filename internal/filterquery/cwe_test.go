@@ -143,3 +143,47 @@ func TestNegatedQualifier(t *testing.T) {
 		}
 	}
 }
+
+func TestRiskQualifiers(t *testing.T) {
+	cases := []struct {
+		query, where string
+		param        interface{}
+	}{
+		{"cvss:>=7", "v.cvss_score >= $1::numeric", 7.0},
+		{"cvss:9.8", "v.cvss_score >= $1::numeric", 9.8},
+		{"cvss:none", "v.cvss_score IS NULL", nil},
+		{"epss:>=10%", "SELECT e.score FROM epss_scores", 0.1},
+		{"epss-percentile:>0.95", "SELECT e.percentile FROM epss_scores", 0.95},
+	}
+	for _, tc := range cases {
+		node, err := Parse(tc.query)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.query, err)
+		}
+		result, err := ToSQL(node, 1)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.query, err)
+		}
+		if !strings.Contains(result.Where, tc.where) {
+			t.Errorf("%s: %s", tc.query, result.Where)
+		}
+		if tc.param != nil && (len(result.Params) != 1 || result.Params[0] != tc.param) {
+			t.Errorf("%s: params %v", tc.query, result.Params)
+		}
+	}
+	for _, bad := range []string{"cvss:>=11", "epss:2", "cvss:high", "cvss:1,2"} {
+		node, err := Parse(bad)
+		if err == nil {
+			_, err = ToSQL(node, 1)
+		}
+		if err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	// Negation composes like any qualifier: -cvss:>=7 is everything not rated
+	// 7 or more, unscored findings included.
+	node, _ := Parse("-cvss:>=7")
+	if result, _ := ToSQL(node, 1); !strings.Contains(result.Where, "NOT COALESCE((v.cvss_score >= $1::numeric), FALSE)") {
+		t.Errorf("negated: %s", result.Where)
+	}
+}

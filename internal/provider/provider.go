@@ -24,10 +24,7 @@ type AdvisoryResult struct {
 	Aliases        []string
 	Title          string
 	Description    string
-	Severity       *advisory.Severity
-	CVSSScore      *float64
-	CVSSVersion    *advisory.CVSSVersion
-	CVSSVector     string
+	Ratings        []advisory.Rating
 	CWEIDs         []string
 	IsMalware      bool
 	MalwareType    *string
@@ -43,10 +40,7 @@ func (r AdvisoryResult) ToIngestResult() advisory.IngestResult {
 		Aliases:        append([]string(nil), r.Aliases...),
 		Title:          r.Title,
 		Description:    r.Description,
-		Severity:       r.Severity,
-		CVSSScore:      r.CVSSScore,
-		CVSSVersion:    r.CVSSVersion,
-		CVSSVector:     r.CVSSVector,
+		Ratings:        append([]advisory.Rating(nil), r.Ratings...),
 		CWEIDs:         append([]string(nil), r.CWEIDs...),
 		IsMalware:      r.IsMalware,
 		MalwareType:    r.MalwareType,

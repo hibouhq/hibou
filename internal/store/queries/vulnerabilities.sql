@@ -43,19 +43,27 @@ INSERT INTO vulnerabilities (
     origin_api_key_id,
     origin_token_name,
     origin_owner_type,
-    origin_owner_id
+    origin_owner_id,
+    cvss_score,
+    cvss_version,
+    cvss_vector,
+    rated_by
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
     $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
     $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-    $41, $42, $43, $44
+    $41, $42, $43, $44, $45, $46, $47, $48
 )
 ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET
     last_seen_at = NOW(),
-    severity = EXCLUDED.severity,
+    severity = CASE WHEN vulnerabilities.severity_override_by IS NULL THEN EXCLUDED.severity ELSE vulnerabilities.severity END,
     original_severity = EXCLUDED.original_severity,
+    cvss_score = EXCLUDED.cvss_score,
+    cvss_version = EXCLUDED.cvss_version,
+    cvss_vector = EXCLUDED.cvss_vector,
+    rated_by = EXCLUDED.rated_by,
     status = CASE WHEN vulnerabilities.status = 'resolved' THEN vulnerabilities.status ELSE EXCLUDED.status END,
     metadata = EXCLUDED.metadata,
     rule_ref_id = EXCLUDED.rule_ref_id
@@ -115,7 +123,14 @@ WHERE v.snapshot_id = $1
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 ORDER BY
-  CASE WHEN @sort::text IN ('', 'detected_desc', 'severity_desc')
+  -- Open malware first, whatever the sort: a malicious package must be the
+  -- first row anyone sees. "Open" is openMalwareCount's definition: detected,
+  -- or suppressed with a dispute; a false-positive acceptance clears it.
+  CASE WHEN v.type = 'malware'
+        AND (v.status = 'detected' OR (v.status = 'suppressed' AND fd.fingerprint IS NOT NULL))
+        AND COALESCE(fa.reason_kind::text, '') <> 'false_positive'
+    THEN 0 ELSE 1 END ASC,
+  CASE WHEN @sort::text IN ('', 'detected_desc', 'severity_desc', 'risk_desc')
        AND v.type::text IN ('dependency', 'container', 'malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
@@ -123,6 +138,13 @@ ORDER BY
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id))
     THEN 0 ELSE 1 END ASC,
+  -- ADR-038 §5: Risk is KEV (above), then EPSS, then CVSS; unscored last.
+  CASE WHEN @sort::text IN ('risk_desc', 'epss_desc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id)) END DESC NULLS LAST,
+  CASE WHEN @sort::text IN ('risk_desc', 'cvss_desc') THEN v.cvss_score END DESC NULLS LAST,
+  CASE WHEN @sort::text = 'risk_desc' THEN v.severity_rank END DESC,
+  CASE WHEN @sort::text IN ('risk_asc', 'epss_asc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id)) END ASC NULLS FIRST,
+  CASE WHEN @sort::text IN ('risk_asc', 'cvss_asc') THEN v.cvss_score END ASC NULLS FIRST,
+  CASE WHEN @sort::text = 'risk_asc' THEN v.severity_rank END ASC,
   CASE WHEN @sort::text = 'severity_asc' THEN v.severity_rank END ASC,
   CASE WHEN @sort::text = 'severity_desc' THEN v.severity_rank END DESC,
   CASE WHEN @sort::text = 'status_asc' THEN v.status END ASC,

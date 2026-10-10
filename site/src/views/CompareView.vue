@@ -587,9 +587,16 @@
                   v-for="vuln in group.rows"
                   :key="`${vuln.change}-${vuln.id}`"
                   class="transition hover:bg-white/5"
+                  :class="vuln.type === 'malware' && vuln.change !== 'resolved' ? 'border-l-2 border-malware bg-malware/5' : ''"
                 >
-                  <td class="w-24 px-4 py-3">
-                    <span :class="severityBadgeClass(vuln.severity)">{{ vuln.severity }}</span>
+                  <td class="w-28 px-4 py-3">
+                    <span class="inline-flex items-center gap-1.5">
+                      <MalwareIcon
+                        v-if="vuln.type === 'malware'"
+                        size="sm"
+                      />
+                      <span :class="severityBadgeClass(vuln.severity)">{{ vuln.severity }}</span>
+                    </span>
                   </td>
                   <td class="px-4 py-3 font-mono text-xs text-accent">
                     {{ vuln.primary_identifier_value || vuln.scanner_name || 'n/a' }}
@@ -1377,6 +1384,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { api, type AcceptanceReasonKind, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
@@ -1651,7 +1659,7 @@ interface SecurityGroup {
   fingerprints: string[]
 }
 
-const SEVERITY_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 }
+const SEVERITY_RANK: Record<string, number> = { critical: 6, high: 5, medium: 4, unknown: 3, low: 2, info: 1 }
 const securitySeverityFilter = ref('')
 
 const securityGroups = computed<SecurityGroup[]>(() => {
@@ -1693,6 +1701,9 @@ const securityGroups = computed<SecurityGroup[]>(() => {
 
   return [...groups.values()].sort((a, b) => {
     if ((a.kind === 'resolved') !== (b.kind === 'resolved')) return a.kind === 'resolved' ? 1 : -1
+    // A group carrying malware outranks every other open group.
+    const malware = Number(b.rows.some(row => row.type === 'malware')) - Number(a.rows.some(row => row.type === 'malware'))
+    if (malware !== 0) return malware
     if (a.worst !== b.worst) return b.worst - a.worst
     return b.rows.length - a.rows.length
   })

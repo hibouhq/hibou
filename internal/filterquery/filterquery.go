@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/lib/pq"
@@ -92,6 +93,12 @@ var AllowedColumns = map[string]string{
 	cwe.KindSet:   "",
 	// View 1400 categories (ADR-037): cwe-category:injection.
 	cwe.KindCategory: "",
+	// Risk metrics (ADR-038 §6): cvss:>=7, epss:>=10%, epss-percentile:>=0.95,
+	// and :none for unscored. CVSS is the rating the finding uses; EPSS is
+	// resolved against the daily mirror — see riskQualifierToSQL.
+	"cvss":            "v.cvss_score",
+	"epss":            "",
+	"epss-percentile": "",
 }
 
 const maxDepth = 16
@@ -370,6 +377,8 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 		}
 		where, params, next := CWESQL("v", selector, param)
 		return where, params, next, nil
+	case "cvss", "epss", "epss-percentile":
+		return riskQualifierToSQL(node.Key, values, param)
 	case "exploited":
 		return exploitedQualifierToSQL(values, param)
 	case "acceptance":
@@ -471,6 +480,70 @@ const exploitedSQL = `(v.type IN ('dependency','container','malware') AND (` +
 	` OR EXISTS (SELECT 1 FROM advisories adv LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id` +
 	` JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))` +
 	` WHERE adv.id = v.advisory_id)))`
+
+// epssSQL is a finding's EPSS score or percentile: the highest among its
+// identifier and its advisory's aliases (ADR-038 §4).
+//
+// Two primary-key lookups under GREATEST (which skips NULLs), not one lookup
+// under OR: an OR across the identifier and the aliases defeats the index and
+// scans the whole ~300k-row mirror per finding.
+func epssSQL(column string) string {
+	return `GREATEST((SELECT e.` + column + ` FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)),` +
+		` (SELECT max(e.` + column + `) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id))`
+}
+
+// riskQualifierToSQL compiles cvss:, epss: and epss-percentile:. The value is
+// a comparison (">=7", "<0.1", "=9.8"; a bare number means >=), "none" or
+// "any". EPSS values may be written as percentages ("10%").
+func riskQualifierToSQL(key string, values []string, param int) (string, []interface{}, int, error) {
+	if len(values) != 1 {
+		return "", nil, param, fmt.Errorf("%s takes a single comparison such as %s:>=7", key, key)
+	}
+	expression, ceiling := "v.cvss_score", 10.0
+	switch key {
+	case "epss":
+		expression, ceiling = epssSQL("score"), 1
+	case "epss-percentile":
+		expression, ceiling = epssSQL("percentile"), 1
+	}
+	switch values[0] {
+	case "none":
+		return expression + " IS NULL", nil, param, nil
+	case "any":
+		return expression + " IS NOT NULL", nil, param, nil
+	}
+	operator, number, err := ParseComparison(values[0], ceiling < 10)
+	if err != nil {
+		return "", nil, param, fmt.Errorf("%s: %w", key, err)
+	}
+	if number < 0 || number > ceiling {
+		return "", nil, param, fmt.Errorf("%s must be between 0 and %g", key, ceiling)
+	}
+	return fmt.Sprintf("%s %s $%d::numeric", expression, operator, param), []interface{}{number}, param + 1, nil
+}
+
+// ParseComparison reads ">=7", ">0.5", "<=10%", "=9.8" or a bare number
+// (meaning >=). percent allows a "%" suffix, divided by 100.
+func ParseComparison(raw string, percent bool) (string, float64, error) {
+	operator := ">="
+	for _, candidate := range []string{">=", "<=", ">", "<", "="} {
+		if rest, ok := strings.CutPrefix(raw, candidate); ok {
+			operator, raw = candidate, rest
+			break
+		}
+	}
+	scale := 1.0
+	if percent {
+		if rest, ok := strings.CutSuffix(raw, "%"); ok {
+			raw, scale = rest, 100
+		}
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("%q is not a number", raw)
+	}
+	return operator, number / scale, nil
+}
 
 func exploitedQualifierToSQL(values []string, param int) (string, []interface{}, int, error) {
 	if len(values) != 1 {

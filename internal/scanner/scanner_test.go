@@ -94,6 +94,21 @@ func (m *mockScannerStore) ListAffectedRangesByPackage(_ context.Context, arg db
 	return append([]dbgen.AffectedRange(nil), m.affectedRanges[packageKey(arg.Ecosystem, arg.PackageName)]...), nil
 }
 
+// ListAdvisoryRatings serves each mock advisory's headline as one rating, so
+// matched findings take the advisory's severity as before ADR-038.
+func (m *mockScannerStore) ListAdvisoryRatings(_ context.Context, ids []uuid.UUID) ([]dbgen.ListAdvisoryRatingsRow, error) {
+	rows := []dbgen.ListAdvisoryRatingsRow{}
+	for _, id := range ids {
+		if advisory, ok := m.advisories[id]; ok && advisory.Severity != "" {
+			rows = append(rows, dbgen.ListAdvisoryRatingsRow{
+				AdvisoryID: id, Provider: "osv", Rater: "nvd",
+				Label: dbgen.NullSeverityLevel{SeverityLevel: advisory.Severity, Valid: true},
+			})
+		}
+	}
+	return rows, nil
+}
+
 func (m *mockScannerStore) GetAdvisoryByID(_ context.Context, id uuid.UUID) (dbgen.Advisory, error) {
 	if advisory, ok := m.advisories[id]; ok {
 		return advisory, nil

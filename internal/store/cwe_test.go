@@ -69,7 +69,7 @@ func newCWEFixture(t *testing.T) cweFixture {
 	if err := queries.SyncScanRuleCWEs(ctx, map[uuid.UUID][]int{f.ruleID: {89}}); err != nil {
 		t.Fatalf("SyncScanRuleCWEs: %v", err)
 	}
-	advisory, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{CanonicalID: "CVE-2099-" + uuid.NewString()[:8], Title: "xss", Severity: dbgen.SeverityLevelHigh})
+	advisory, err := upsertRatedAdvisory(ctx, queries, dbgen.UpsertAdvisoryParams{CanonicalID: "CVE-2099-" + uuid.NewString()[:8], Title: "xss"}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestCWEFilterWithExclusion(t *testing.T) {
 		"cwe:89 -type:dependency,container,malware": 2, // both SAST rows
 		"cwe:79 -type:dependency,container,malware": 0, // only the dependency carries 79
 		"cwe:79 type:dependency,container,malware":  1,
-		"-cwe:none":                                 5, // same as cwe:any
+		"-cwe:none": 5, // same as cwe:any
 	} {
 		if got := count(query); got != want {
 			t.Errorf("%s: %d findings, want %d", query, got, want)

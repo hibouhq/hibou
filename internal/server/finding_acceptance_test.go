@@ -417,11 +417,10 @@ func TestReachabilityVEXStatements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
 	}
-	advisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
+	advisory, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
 		CanonicalID: "GO-2099-9999",
 		Title:       "unreachable fixture advisory",
-		Severity:    dbgen.SeverityLevelHigh,
-	})
+	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh})
 	if err != nil {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}
@@ -486,9 +485,9 @@ func TestApplyReachabilityGoSafeMonotonic(t *testing.T) {
 	}
 
 	goAdvisory := func(canonical string, symbols []string) uuid.UUID {
-		advisory, err := srv.queries.UpsertAdvisory(context.Background(), dbgen.UpsertAdvisoryParams{
-			CanonicalID: canonical, Title: canonical, Severity: dbgen.SeverityLevelHigh,
-		})
+		advisory, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
+			CanonicalID: canonical, Title: canonical,
+		}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh})
 		if err != nil {
 			t.Fatalf("UpsertAdvisory(%s): %v", canonical, err)
 		}

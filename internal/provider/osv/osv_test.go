@@ -149,14 +149,17 @@ func assertBasicMappingAdvisory(t *testing.T, result provider.AdvisoryResult) {
 	if !reflect.DeepEqual(result.Aliases, []string{"CVE-2021-12345"}) {
 		t.Fatalf("aliases mismatch: %#v", result.Aliases)
 	}
-	if result.CVSSVersion == nil || *result.CVSSVersion != advisory.CVSSVersionV31 {
-		t.Fatalf("expected CVSS v3.1, got %#v", result.CVSSVersion)
+	// Every statement is kept (ADR-038 §2): the v2 number, the v3.1 vector
+	// scored by hibou, and GitHub's own label.
+	v31 := findRating(t, result.Ratings, "ghsa", advisory.CVSSVersionV31)
+	if v31.Vector != "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" || v31.Score == nil || *v31.Score != 9.8 {
+		t.Fatalf("v3.1 rating: %+v", v31)
 	}
-	if result.CVSSVector != "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" {
-		t.Fatalf("expected CVSS vector to be preserved, got %s", result.CVSSVector)
+	if v2 := findRating(t, result.Ratings, "ghsa", advisory.CVSSVersionV2); *v2.Score != 4.3 {
+		t.Fatalf("v2 rating: %+v", v2)
 	}
-	if result.Severity == nil || *result.Severity != advisory.SeverityHigh {
-		t.Fatalf("expected high severity, got %#v", result.Severity)
+	if choice := advisory.Headline(result.Ratings); choice.Severity != advisory.SeverityHigh {
+		t.Fatalf("GitHub's label wins over the band of its score: %+v", choice)
 	}
 	if !reflect.DeepEqual(result.CWEIDs, []string{"CWE-79", "CWE-89"}) {
 		t.Fatalf("cwe mismatch: %#v", result.CWEIDs)
@@ -406,11 +409,8 @@ func TestQueryPackagesCVSSFallbackAndRanges(t *testing.T) {
 		t.Fatalf("expected one result, got %d", len(results))
 	}
 	result := results[0]
-	if result.CVSSScore == nil || *result.CVSSScore != 5.0 {
-		t.Fatalf("expected CVSS score 5.0, got %#v", result.CVSSScore)
-	}
-	if result.CVSSVersion == nil || *result.CVSSVersion != advisory.CVSSVersionV2 {
-		t.Fatalf("expected CVSS v2, got %#v", result.CVSSVersion)
+	if v2 := findRating(t, result.Ratings, "ghsa", advisory.CVSSVersionV2); v2.Score == nil || *v2.Score != 5.0 {
+		t.Fatalf("expected CVSS v2 score 5.0, got %+v", v2)
 	}
 	if len(result.AffectedRanges) != 2 {
 		t.Fatalf("expected 2 ranges, got %d", len(result.AffectedRanges))
@@ -466,8 +466,8 @@ func TestQueryPackagesHydratesVulnDetails(t *testing.T) {
 	if len(results[0].AffectedRanges) != 1 || results[0].AffectedRanges[0].Fixed != "2.0.0" {
 		t.Fatalf("expected hydrated affected range, got %#v", results[0].AffectedRanges)
 	}
-	if results[0].Severity == nil || *results[0].Severity != advisory.SeverityCritical {
-		t.Fatalf("expected hydrated severity, got %#v", results[0].Severity)
+	if choice := advisory.Headline(results[0].Ratings); choice.Severity != advisory.SeverityCritical {
+		t.Fatalf("expected hydrated severity, got %+v", choice)
 	}
 }
 
@@ -548,5 +548,34 @@ func TestMapAffectedPackageRangesAcceptsSemver(t *testing.T) {
 	}
 	if ranges[0].Fixed != "4.17.21" || ranges[0].Ecosystem != "npm" {
 		t.Fatalf("unexpected range: %+v", ranges[0])
+	}
+}
+
+func findRating(t *testing.T, ratings []advisory.Rating, rater string, version advisory.CVSSVersion) advisory.Rating {
+	t.Helper()
+	for _, rating := range ratings {
+		if rating.Rater == rater && rating.Version != nil && *rating.Version == version {
+			return rating
+		}
+	}
+	t.Fatalf("no %s %s rating in %+v", rater, version, ratings)
+	return advisory.Rating{}
+}
+
+// The live Log4Shell record (GHSA-jfh8-c2jp-5v3q) ships a v3.1 vector with a
+// temporal metric and no number: it used to be stored unscored (ADR-038,
+// defect 1).
+func TestRatingsScoreOSVVectors(t *testing.T) {
+	ratings := ratingsFor(vulnerability{
+		ID:               "GHSA-jfh8-c2jp-5v3q",
+		Severity:         []severityEntry{{Type: "CVSS_V3", Score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H/E:H"}},
+		DatabaseSpecific: vulnerabilityDBSpecific{Severity: "CRITICAL"},
+	})
+	v31 := findRating(t, ratings, "ghsa", advisory.CVSSVersionV31)
+	if v31.Score == nil || *v31.Score != 10.0 {
+		t.Fatalf("Log4Shell scores 10.0: %+v", v31)
+	}
+	if raterFor("PYSEC-2021-1") != "pypa" || raterFor("GO-2022-0535") != "go" || raterFor("CVE-2020-0601") != "nvd" {
+		t.Fatal("raters from id prefixes")
 	}
 }

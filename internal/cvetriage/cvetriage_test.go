@@ -79,12 +79,16 @@ func TestBuildIngestResultAuthorsRangesFromTheRecord(t *testing.T) {
 		}
 	}
 
-	// Severity rides along from the record — CISA-ADP's 9.1, not the CNA's "low".
-	if result.Severity == nil || *result.Severity != advisory.SeverityCritical {
-		t.Errorf("severity = %v, want critical", result.Severity)
+	// The authored result carries no rating of its own: the record's rating
+	// reaches the advisory as its CVE-feed source (ADR-038 §2) — CISA-ADP's
+	// 9.1, not the CNA's "low".
+	if len(result.Ratings) != 0 {
+		t.Errorf("authored ratings = %+v, want none", result.Ratings)
 	}
-	if result.CVSSScore == nil || *result.CVSSScore != 9.1 {
-		t.Errorf("score = %v, want 9.1", result.CVSSScore)
+	score := record.Severity.Score
+	choice := advisory.Headline(advisory.CVERatings(record.Severity.Source, record.Severity.Vector, &score, record.Severity.Label))
+	if choice.Severity != advisory.SeverityCritical || choice.Rating == nil || *choice.Rating.Score != 9.1 {
+		t.Errorf("cve-feed rating = %+v, want critical 9.1", choice)
 	}
 }
 

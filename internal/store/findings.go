@@ -8,6 +8,7 @@ const (
 	SeverityLevelCritical = dbgen.SeverityLevelCritical
 	SeverityLevelHigh     = dbgen.SeverityLevelHigh
 	SeverityLevelMedium   = dbgen.SeverityLevelMedium
+	SeverityLevelUnknown  = dbgen.SeverityLevelUnknown
 	SeverityLevelLow      = dbgen.SeverityLevelLow
 	SeverityLevelInfo     = dbgen.SeverityLevelInfo
 )

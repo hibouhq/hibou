@@ -416,6 +416,7 @@ SELECT
     COALESCE(risk.medium_count, 0)::bigint AS medium_count,
     COALESCE(risk.low_count, 0)::bigint AS low_count,
     COALESCE(risk.kev_open, 0)::bigint AS kev_open,
+    COALESCE(risk.malware_open, 0)::bigint AS malware_open,
     COALESCE(risk.total_count, 0)::bigint AS open_finding_count,
     COALESCE(scan.last_scanned_at, '1970-01-01T00:00:00Z'::timestamptz)::timestamptz AS last_scanned_at,
     COALESCE(dep.clients, '[]'::jsonb) AS clients,
@@ -440,6 +441,7 @@ LEFT JOIN LATERAL (
                 WHERE adv.id = v.advisory_id
             )
         )) AS kev_open,
+        COUNT(*) FILTER (WHERE v.type = 'malware') AS malware_open,
         COUNT(*) AS total_count
     FROM vulnerabilities v
     LEFT JOIN finding_acceptances fa
@@ -515,6 +517,7 @@ type ListReleasesWithRiskByRepoRow struct {
 	MediumCount        int64           `json:"medium_count"`
 	LowCount           int64           `json:"low_count"`
 	KevOpen            int64           `json:"kev_open"`
+	MalwareOpen        int64           `json:"malware_open"`
 	OpenFindingCount   int64           `json:"open_finding_count"`
 	LastScannedAt      time.Time       `json:"last_scanned_at"`
 	Clients            json.RawMessage `json:"clients"`
@@ -523,7 +526,7 @@ type ListReleasesWithRiskByRepoRow struct {
 }
 
 // Enriched listing for the Releases tab: per release, the open-risk severity
-// counts of its pinned snapshot (platform-wide semantics: resolved and ordinary
+// counts of its pinned snapshot, open malware apart (platform-wide semantics: resolved and ordinary
 // suppressions out, active false-positive acceptances out — ADR-023), the clients currently
 // on it via active deployments, and the snapshot's last completed scan.
 func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, arg ListReleasesWithRiskByRepoParams) ([]ListReleasesWithRiskByRepoRow, error) {
@@ -566,6 +569,7 @@ func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, arg ListReleas
 			&i.MediumCount,
 			&i.LowCount,
 			&i.KevOpen,
+			&i.MalwareOpen,
 			&i.OpenFindingCount,
 			&i.LastScannedAt,
 			&i.Clients,

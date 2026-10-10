@@ -13,7 +13,12 @@
     </div>
 
     <p class="compare-rise mt-2 max-w-3xl text-sm text-gray-400">
-      Compare repository SBOM artifacts or local SBOM JSON files. Results refresh automatically once both sides are ready.
+      <template v-if="hasRepo">
+        Compare repository SBOM artifacts or local SBOM JSON files. Results refresh automatically once both sides are ready.
+      </template>
+      <template v-else>
+        Compare two SBOM files (CycloneDX or SPDX JSON). Pick a repository on the Tools page to compare its snapshots instead.
+      </template>
     </p>
 
     <div class="compare-rise relative z-20 mt-4 border-b border-surface-border pb-3">
@@ -24,6 +29,7 @@
             Base
           </span>
           <BranchPRSelector
+            v-if="hasRepo"
             :refs="refs"
             :selected-ref-name="baseRef"
             :default-branch="repo?.default_branch"
@@ -34,7 +40,10 @@
             block
             @select="selectBase"
           />
-          <div class="flex gap-1 rounded-lg bg-surface-raised/60 p-0.5">
+          <div
+            v-if="hasRepo"
+            class="flex gap-1 rounded-lg bg-surface-raised/60 p-0.5"
+          >
             <button
               type="button"
               class="flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition"
@@ -180,6 +189,7 @@
             <span class="compare-dot compare-dot-head" />
           </span>
           <BranchPRSelector
+            v-if="hasRepo"
             :refs="refs"
             :selected-ref-name="headRef"
             :default-branch="repo?.default_branch"
@@ -191,7 +201,10 @@
             align="right"
             @select="selectHead"
           />
-          <div class="flex gap-1 rounded-lg bg-surface-raised/60 p-0.5">
+          <div
+            v-if="hasRepo"
+            class="flex gap-1 rounded-lg bg-surface-raised/60 p-0.5"
+          >
             <button
               type="button"
               class="flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition"
@@ -524,6 +537,14 @@ type SectionConfig = {
   iconClass: string
 }
 
+// Without a repository (the Tools page), both sides are local files and the
+// repository-free endpoint compares them.
+const props = defineProps<{
+  provider?: string
+  slug?: string
+  repoSlug?: string
+}>()
+
 const route = useRoute()
 const router = useRouter()
 
@@ -531,9 +552,10 @@ const repo = ref<Repository | null>(null)
 const refs = ref<EnhancedRef[]>([])
 const loadingRefs = ref(true)
 const allSnapshots = ref<Snapshot[]>([])
-const provider = computed(() => route.params.provider as string)
-const slug = computed(() => route.params.slug as string)
-const repoSlug = computed(() => route.params.repoSlug as string)
+const provider = computed(() => props.provider ?? (route.params.provider as string | undefined) ?? '')
+const slug = computed(() => props.slug ?? (route.params.slug as string | undefined) ?? '')
+const repoSlug = computed(() => props.repoSlug ?? (route.params.repoSlug as string | undefined) ?? '')
+const hasRepo = computed(() => Boolean(provider.value && slug.value && repoSlug.value))
 
 const snapshotsLoading = ref(false)
 let pendingSnapshotLoads = 0
@@ -767,6 +789,14 @@ watch(
     snapshotFilesCache.clear()
     snapshotFilesRequests.clear()
     loadedSnapshotRefs.clear()
+
+    if (!hasRepo.value) {
+      baseSource.value = 'local'
+      headSource.value = 'local'
+      loadingRefs.value = false
+      snapshotsLoading.value = false
+      return
+    }
 
     try {
       const [repoResponse, refsResponse] = await Promise.all([
@@ -1042,7 +1072,9 @@ watch(
         payload.head_format = headLocalFormat.value || undefined
       }
 
-      const response = await api.compareSBOMs(nextProvider, nextSlug, nextRepoSlug, payload)
+      const response = hasRepo.value
+        ? await api.compareSBOMs(nextProvider, nextSlug, nextRepoSlug, payload)
+        : await api.compareLocalSBOMs(payload)
       if (cancelled) return
       comparison.value = response.data
     } catch (err) {

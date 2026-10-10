@@ -68,6 +68,7 @@ type VulnerabilityGate struct {
 	MaxCritical *int
 	MaxHigh     *int
 	MaxMedium   *int
+	MaxUnknown  *int
 	MaxNewTotal *int
 }
 
@@ -399,6 +400,7 @@ func evaluateNewVulnerabilityGate(newVulns []store.Vulnerability, gate *Vulnerab
 	check(gate.MaxCritical, counts[store.SeverityLevelCritical], "critical")
 	check(gate.MaxHigh, counts[store.SeverityLevelHigh], "high")
 	check(gate.MaxMedium, counts[store.SeverityLevelMedium], "medium")
+	check(gate.MaxUnknown, counts[store.SeverityLevelUnknown], "unrated")
 	if gate.MaxNewTotal != nil && total > *gate.MaxNewTotal {
 		reasons = append(reasons, fmt.Sprintf("%d new dependency vulnerabilities exceed the maximum %d", total, *gate.MaxNewTotal))
 	}
@@ -873,10 +875,12 @@ func vulnLocation(vuln store.Vulnerability) string {
 func severityRank(severity string) int {
 	switch strings.ToLower(strings.TrimSpace(severity)) {
 	case "critical":
-		return 5
+		return 6
 	case "high":
-		return 4
+		return 5
 	case "medium":
+		return 4
+	case "unknown":
 		return 3
 	case "low":
 		return 2

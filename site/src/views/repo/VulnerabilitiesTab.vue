@@ -1,16 +1,16 @@
 <template>
   <div class="space-y-5">
     <button
-      v-if="openMalwareCount > 0 && activeFilters.type !== 'malware'"
+      v-if="openMalwareCount > 0 && advancedQuery !== OPEN_RISK_MALWARE_QUERY"
       type="button"
-      class="flex w-full items-center gap-2.5 rounded-xl border border-danger/50 bg-danger/10 px-4 py-3 text-left transition hover:border-danger"
+      class="flex w-full items-center gap-2.5 rounded-xl border border-malware/60 bg-malware/10 px-4 py-3 text-left transition hover:border-malware"
       @click="applyMalwareFilter"
     >
-      <Biohazard class="h-5 w-5 shrink-0 text-danger" />
-      <span class="text-sm font-semibold text-red-200">
+      <MalwareIcon />
+      <span class="text-sm font-semibold text-violet-100">
         {{ openMalwareCount }} malware {{ openMalwareCount === 1 ? 'finding' : 'findings' }} — review immediately
       </span>
-      <span class="ml-auto text-xs text-red-300/80">Show only malware →</span>
+      <span class="ml-auto text-xs text-violet-200/80">Show only malware →</span>
     </button>
 
     <FilterBar
@@ -205,6 +205,18 @@
                 <th class="px-3 py-2 font-medium">
                   Severity
                 </th>
+                <th
+                  class="px-3 py-2 font-medium"
+                  title="The CVSS score this finding uses; ◆ when raters disagree"
+                >
+                  CVSS
+                </th>
+                <th
+                  class="px-3 py-2 font-medium"
+                  title="Probability of exploitation in the next 30 days (FIRST EPSS)"
+                >
+                  EPSS
+                </th>
                 <th class="px-3 py-2 font-medium">
                   Type
                 </th>
@@ -248,8 +260,9 @@
                 <td class="px-3 py-2.5">
                   <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
                     <span class="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                      <MalwareIcon v-if="vulnerability.type === 'malware'" />
                       <span
-                        v-if="vulnerability.kev"
+                        v-else-if="vulnerability.kev"
                         class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-danger-muted text-white"
                         role="img"
                         aria-label="Known exploited vulnerability"
@@ -265,6 +278,12 @@
                       {{ vulnerability.severity }}
                     </span>
                   </span>
+                </td>
+                <td class="px-3 py-2.5 text-xs">
+                  <CvssCell :finding="vulnerability" />
+                </td>
+                <td class="px-3 py-2.5 text-xs">
+                  <EpssCell :epss="vulnerability.epss" />
                 </td>
                 <td class="px-3 py-2.5">
                   <span :class="typeBadgeClass(vulnerability.type)">
@@ -423,7 +442,7 @@ import { createExploitedPreset } from '@/lib/exploitedPreset'
 import { computed, reactive, ref, watch } from 'vue'
 import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
 
-import { Biohazard, KeyRound, Flame } from 'lucide-vue-next'
+import { KeyRound, Flame } from 'lucide-vue-next'
 
 import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
@@ -434,11 +453,15 @@ import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import CweChips from '@/components/finding/CweChips.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
+import CvssCell from '@/components/finding/CvssCell.vue'
+import EpssCell from '@/components/finding/EpssCell.vue'
 import { cweFilterDefs } from '@/lib/cweFilters'
+import { riskFilterDefs } from '@/lib/riskFilters'
 import { appendBarToken, withHiddenDefaults } from '@/lib/filterBarQuery'
 import { triageState } from '@/lib/triage'
 import { sameFilterValues, sameListQueryState } from '@/lib/listQueryState'
-import { migrateRiskOnlyQuery } from '@/lib/openRiskPreset'
+import { migrateRiskOnlyQuery, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 import { barQueryText, barStateFromQuery, BUILTIN_FINDINGS_PRESETS } from '@/lib/searchPresets'
 
 const { promptDialog } = useDialog()
@@ -550,7 +573,7 @@ const seenFiles = ref<Set<string>>(new Set())
 const facetCounts = ref<VulnerabilityFacets>({ type: {}, severity: {}, status: {}, tool: {}, file: {}, cwe: {} })
 
 const typeOptions = ['dependency', 'sast', 'secret', 'malware', 'dast', 'container', 'fuzzing', 'manual', 'generic']
-const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
+const severityOptions = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 const statusOptions = ['detected', 'resolved', 'suppressed']
 // Build Sources/File option lists from the facet keys (full result set) merged
 // with what's been seen on loaded pages, so options aren't limited to the
@@ -572,6 +595,8 @@ const filterDefs = computed(() => [
   { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
   // ADR-037: server-side qualifiers; suggestions and hover show CWE titles.
   ...cweFilterDefs(() => facetCounts.value.cwe),
+  // ADR-038 §6: server-side comparisons on the rating and the EPSS mirror.
+  ...riskFilterDefs(),
 ])
 
 // The query the server runs: the bar's advanced text plus the hidden
@@ -593,6 +618,10 @@ function filterByCWE(id: number) {
 const sortOptions = [
   { key: 'detected', label: 'Detected', ascLabel: 'Oldest', descLabel: 'Newest' },
   { key: 'severity', label: 'Severity' },
+  // ADR-038 §5: KEV, then EPSS, then CVSS — an order, not a blended score.
+  { key: 'risk', label: 'Risk' },
+  { key: 'epss', label: 'EPSS' },
+  { key: 'cvss', label: 'CVSS' },
   { key: 'status', label: 'Status' },
 ]
 const sortDirectionOptions = [
@@ -605,12 +634,33 @@ const sortKeys = new Set(sortOptions.map((option) => option.key))
 const sortDirectionKeys = new Set(sortDirectionOptions.map((option) => option.key))
 const syncingFromRoute = ref(false)
 const hasActiveFilters = computed(() => Object.values(activeFilters.value).some(Boolean) || searchQuery.value.trim().length > 0 || advancedQuery.value.trim().length > 0)
-// Facets exclude each dimension's own filter, so with the default
-// status=detected this is the open malware count for the whole snapshot.
-const openMalwareCount = computed(() => facetCounts.value.type?.malware ?? 0)
+// Open malware in the snapshot shown, whatever the bar says, counted the way
+// the dashboards count it (OPEN_RISK_MALWARE_QUERY = openMalwareCount): the
+// banner must never show resolved or false-positive malware.
+const openMalwareCount = ref(0)
+watch(
+  [provider, slug, repoSlug, () => route.query.ref, () => route.query.snapshot],
+  async () => {
+    openMalwareCount.value = 0
+    if (!provider.value || !slug.value || !repoSlug.value) return
+    try {
+      const response = await api.listRefVulnerabilityFacets(provider.value, slug.value, repoSlug.value, {
+        ref: typeof route.query.ref === 'string' ? route.query.ref : undefined,
+        snapshot: typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined,
+        q: OPEN_RISK_MALWARE_QUERY,
+      })
+      openMalwareCount.value = response.data.type?.malware ?? 0
+    } catch {
+      // The banner is a pointer, not the list: its absence must not break the tab.
+    }
+  },
+  { immediate: true },
+)
 
 function applyMalwareFilter() {
-  activeFilters.value = { ...activeFilters.value, type: 'malware' }
+  activeFilters.value = {}
+  searchQuery.value = ''
+  advancedQuery.value = OPEN_RISK_MALWARE_QUERY
 }
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 
@@ -944,6 +994,8 @@ function severityClass(level: string) {
     critical: 'rounded-full bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400',
     high: 'rounded-full bg-orange-500/15 px-2.5 py-1 text-xs font-medium text-orange-400',
     medium: 'rounded-full bg-yellow-500/15 px-2.5 py-1 text-xs font-medium text-yellow-400',
+    // Unknown: no source rates it (ADR-038 §3). Neutral, dashed: not low.
+    unknown: 'rounded-full border border-dashed border-gray-500/50 px-2.5 py-1 text-xs font-medium text-gray-300',
     low: 'rounded-full bg-gray-500/15 px-2.5 py-1 text-xs font-medium text-gray-400',
     info: 'rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-400',
   }
@@ -953,10 +1005,10 @@ function severityClass(level: string) {
 
 function typeBadgeClass(type: string) {
   const classes: Record<string, string> = {
-    malware: 'rounded-full bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400',
+    malware: 'rounded-full bg-malware/15 px-2.5 py-1 text-xs font-medium text-malware',
     secret: 'rounded-full bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-400',
     dependency: 'rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium text-blue-400',
-    sast: 'rounded-full bg-purple-500/15 px-2.5 py-1 text-xs font-medium text-purple-400',
+    sast: 'rounded-full bg-fuchsia-500/15 px-2.5 py-1 text-xs font-medium text-fuchsia-400',
     dast: 'rounded-full bg-cyan-500/15 px-2.5 py-1 text-xs font-medium text-cyan-400',
     fuzzing: 'rounded-full bg-teal-500/15 px-2.5 py-1 text-xs font-medium text-teal-400',
     container: 'rounded-full bg-slate-500/15 px-2.5 py-1 text-xs font-medium text-slate-400',
@@ -1280,7 +1332,7 @@ function triageTitle(vulnerability: Vulnerability): string {
 
 function rowClass(type: string) {
   if (type === 'malware') {
-    return 'border-l-2 border-red-500/60'
+    return 'border-l-2 border-malware bg-malware/5'
   }
 
   if (type === 'secret') {

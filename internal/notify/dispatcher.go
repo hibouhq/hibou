@@ -494,10 +494,12 @@ func matchesStringIDs(condition any, actual string) bool {
 func severityRank(value string) int {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "critical":
-		return 5
+		return 6
 	case "high":
-		return 4
+		return 5
 	case "medium":
+		return 4
+	case "unknown":
 		return 3
 	case "low":
 		return 2
@@ -944,6 +946,8 @@ func severityColorHex(severity string) string {
 		return "#EF6C00"
 	case "medium":
 		return "#F9A825"
+	case "unknown":
+		return "#757575"
 	case "low":
 		return "#2E7D32"
 	default:

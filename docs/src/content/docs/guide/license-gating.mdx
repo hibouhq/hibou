@@ -5,7 +5,7 @@ description: Deny license categories and SPDX ids on the dependencies a pull req
 
 Hibou reads the license of every component in a snapshot's SBOM and can fail a pull
 request that introduces a dependency your policy does not accept. The policy lives in
-the repository's `.hibou.yaml`, next to the weakness and coverage gates.
+the repository's `.hibou.yaml`, next to the code, CWE and coverage gates.
 
 ```yaml
 version: 1

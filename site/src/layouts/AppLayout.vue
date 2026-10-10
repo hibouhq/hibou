@@ -353,9 +353,11 @@
 <script setup lang="ts">
 import {
   Activity,
+  ArrowLeftRight,
   Bell,
   Building2,
   BookOpen,
+  Calculator,
   Container,
   ChevronDown,
   FlaskConical,
@@ -557,6 +559,15 @@ const navSections = computed<NavigationDrawerSection[]>(() => {
       })
     }
   }
+
+  // Standalone utilities that need no organization.
+  sections.push({
+    title: 'Tools',
+    items: [
+      { label: 'CVSS calculator', icon: Calculator, to: '/tools/cvss' },
+      { label: 'SBOM compare', icon: ArrowLeftRight, to: '/tools/sbom-compare' },
+    ],
+  })
 
   // The personal/instance settings area (/settings): API keys, and for
   // instance admins also banners, administrators, audit, jobs. Labeled by the

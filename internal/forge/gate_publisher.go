@@ -668,7 +668,7 @@ func severityChips(newFindings []store.Vulnerability) string {
 		counts[strings.ToLower(string(finding.Severity))]++
 	}
 	order := []struct{ key, dot string }{
-		{"critical", "🔴"}, {"high", "🟠"}, {"medium", "🟡"}, {"low", "🔵"}, {"info", "⚪"},
+		{"critical", "🔴"}, {"high", "🟠"}, {"medium", "🟡"}, {"unknown", "⚫"}, {"low", "🔵"}, {"info", "⚪"},
 	}
 	chips := make([]string, 0, len(order))
 	for _, level := range order {

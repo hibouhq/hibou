@@ -297,6 +297,7 @@ func (q *Queries) saveCVERecordTx(ctx context.Context, record cvefeed.Projection
 		CvssScore:       score,
 		CvssVector:      record.Severity.Vector,
 		Severity:        record.Severity.Label,
+		CvssSource:      record.Severity.Source,
 		Summary:         record.Description,
 		ReferenceUrls:   record.References,
 	}); err != nil {

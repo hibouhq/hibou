@@ -28,8 +28,8 @@ type IngesterStore interface {
 	UpsertAdvisory(ctx context.Context, arg dbgen.UpsertAdvisoryParams) (dbgen.Advisory, error)
 	UpdateAdvisoryCanonicalID(ctx context.Context, arg dbgen.UpdateAdvisoryCanonicalIDParams) error
 	UpsertAdvisoryAlias(ctx context.Context, arg dbgen.UpsertAdvisoryAliasParams) error
-	UpsertAdvisorySource(ctx context.Context, arg dbgen.UpsertAdvisorySourceParams) error
-	ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUID) ([]dbgen.AdvisorySource, error)
+	UpsertAdvisorySource(ctx context.Context, arg dbgen.UpsertAdvisorySourceParams) (uuid.UUID, error)
+	RatingStore
 	CreateAffectedRange(ctx context.Context, arg dbgen.CreateAffectedRangeParams) (dbgen.AffectedRange, error)
 	DeleteAffectedRangesByAdvisoryAndSource(ctx context.Context, arg dbgen.DeleteAffectedRangesByAdvisoryAndSourceParams) error
 	AddAdvisoryCWEs(ctx context.Context, advisoryID uuid.UUID, ids []int) error
@@ -49,14 +49,12 @@ func nonNilSymbols(symbols []string) []string {
 }
 
 type IngestResult struct {
-	ProviderID     string
-	Aliases        []string
-	Title          string
-	Description    string
-	Severity       *Severity
-	CVSSScore      *float64
-	CVSSVersion    *CVSSVersion
-	CVSSVector     string
+	ProviderID  string
+	Aliases     []string
+	Title       string
+	Description string
+	// Ratings are every rating the provider's record carries (ADR-038 §2).
+	Ratings        []Rating
 	CWEIDs         []string
 	IsMalware      bool
 	MalwareType    *string
@@ -189,18 +187,19 @@ func (ing *Ingester) syncAdvisorySources(ctx context.Context, queries IngesterSt
 	if err := ing.upsertAdvisoryAliases(ctx, queries, advisoryID, result); err != nil {
 		return err
 	}
-	if err := queries.UpsertAdvisorySource(ctx, dbgen.UpsertAdvisorySourceParams{
-		AdvisoryID:  advisoryID,
-		Provider:    providerName,
-		ProviderID:  result.ProviderID,
-		Severity:    toNullSeverityLevel(result.Severity),
-		CvssScore:   toNullScore(result.CVSSScore),
-		CvssVersion: toNullCVSSVersion(result.CVSSVersion),
-		CvssVector:  result.CVSSVector,
-		RawData:     result.RawData,
-		FetchedAt:   time.Now().UTC(),
-	}); err != nil {
+	sourceID, err := queries.UpsertAdvisorySource(ctx, dbgen.UpsertAdvisorySourceParams{
+		AdvisoryID:     advisoryID,
+		Provider:       providerName,
+		ProviderID:     result.ProviderID,
+		RawData:        result.RawData,
+		FetchedAt:      time.Now().UTC(),
+		RatingsVersion: RatingsVersion,
+	})
+	if err != nil {
 		return fmt.Errorf("upsert advisory source %s/%s: %w", providerName, result.ProviderID, err)
+	}
+	if err := queries.SyncAdvisorySourceRatings(ctx, ratingsParams(sourceID, result.Ratings)); err != nil {
+		return fmt.Errorf("store ratings for %s/%s: %w", providerName, result.ProviderID, err)
 	}
 	if err := ing.replaceAffectedRanges(ctx, queries, advisoryID, providerName, result.AffectedRanges); err != nil {
 		return err
@@ -248,28 +247,21 @@ func (ing *Ingester) replaceAffectedRanges(ctx context.Context, queries Ingester
 }
 
 func (ing *Ingester) finalizeAdvisoryRecord(ctx context.Context, queries IngesterStore, advisoryRecord dbgen.Advisory, canonicalID string, result IngestResult) (dbgen.Advisory, error) {
-	sources, err := queries.ListSourcesByAdvisory(ctx, advisoryRecord.ID)
-	if err != nil {
-		return dbgen.Advisory{}, fmt.Errorf("list advisory sources for %s: %w", advisoryRecord.ID, err)
-	}
-	mergedSeverity, mergedScore, mergedVector := MergeSeverity(convertSources(sources))
-	mergedVersion := selectCanonicalCVSSVersion(sources)
 	isMalware := advisoryRecord.IsMalware || result.IsMalware
-	finalRecord, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
+	if _, err := queries.UpsertAdvisory(ctx, dbgen.UpsertAdvisoryParams{
 		CanonicalID: canonicalID,
 		Title:       advisoryRecord.Title,
 		Description: advisoryRecord.Description,
-		Severity:    malwareSeverityFloor(toSeverityLevel(mergedSeverity), isMalware),
-		CvssScore:   toNullScore(mergedScore),
-		CvssVersion: toNullCVSSVersion(mergedVersion),
-		CvssVector:  mergedVector,
 		IsMalware:   isMalware,
 		MalwareType: coalesceMalwareType(advisoryRecord.MalwareType, normalizeMalwareType(result.MalwareType)),
 		PublishedAt: advisoryRecord.PublishedAt,
 		WithdrawnAt: advisoryRecord.WithdrawnAt,
-	})
-	if err != nil {
+	}); err != nil {
 		return dbgen.Advisory{}, fmt.Errorf("update canonical advisory %s: %w", canonicalID, err)
+	}
+	finalRecord, err := Rerate(ctx, queries, advisoryRecord.ID)
+	if err != nil {
+		return dbgen.Advisory{}, fmt.Errorf("rate advisory %s: %w", canonicalID, err)
 	}
 	return finalRecord, nil
 }
@@ -314,11 +306,6 @@ func mergedAdvisoryUpsert(existing dbgen.Advisory, found bool, canonicalID strin
 		description = existing.Description
 	}
 
-	severity := severityForResult(result)
-	if found {
-		severity = existing.Severity
-	}
-
 	malwareType := normalizeMalwareType(result.MalwareType)
 	if found {
 		malwareType = coalesceMalwareType(existing.MalwareType, malwareType)
@@ -340,189 +327,11 @@ func mergedAdvisoryUpsert(existing dbgen.Advisory, found bool, canonicalID strin
 		CanonicalID: canonicalID,
 		Title:       title,
 		Description: description,
-		Severity:    malwareSeverityFloor(severity, isMalware),
-		CvssScore:   toNullScore(result.CVSSScore),
-		CvssVersion: toNullCVSSVersion(result.CVSSVersion),
-		CvssVector:  result.CVSSVector,
 		IsMalware:   isMalware,
 		MalwareType: malwareType,
 		PublishedAt: publishedAt,
 		WithdrawnAt: withdrawnAt,
 	}
-}
-
-func convertSources(sources []dbgen.AdvisorySource) []Source {
-	converted := make([]Source, 0, len(sources))
-	for _, source := range sources {
-		converted = append(converted, Source{
-			ID:          source.ID,
-			AdvisoryID:  source.AdvisoryID,
-			Provider:    source.Provider,
-			ProviderID:  source.ProviderID,
-			Severity:    fromNullSeverityLevel(source.Severity),
-			CVSSScore:   fromNullScore(source.CvssScore),
-			CVSSVersion: fromNullCVSSVersion(source.CvssVersion),
-			CVSSVector:  source.CvssVector,
-			RawData:     source.RawData,
-			FetchedAt:   source.FetchedAt,
-		})
-	}
-	return converted
-}
-
-func selectCanonicalCVSSVersion(sources []dbgen.AdvisorySource) *CVSSVersion {
-	best := selectCanonicalSource(sources)
-	if best == nil || !best.CvssVersion.Valid {
-		return nil
-	}
-	version := CVSSVersion(best.CvssVersion.CvssVersion)
-	return &version
-}
-
-func selectCanonicalSource(sources []dbgen.AdvisorySource) *dbgen.AdvisorySource {
-	var best *dbgen.AdvisorySource
-	for i := range sources {
-		source := &sources[i]
-		if !dbSourceHasSignal(source) || shouldSkipCanonicalSource(best, source) {
-			continue
-		}
-		if preferCanonicalNVD(best, source) {
-			best = source
-			continue
-		}
-		if best == nil || compareSourcePriority(*source, *best) > 0 {
-			best = source
-		}
-	}
-	return best
-}
-
-func shouldSkipCanonicalSource(best *dbgen.AdvisorySource, source *dbgen.AdvisorySource) bool {
-	return best != nil && strings.EqualFold(best.Provider, "nvd") && !strings.EqualFold(source.Provider, "nvd")
-}
-
-func preferCanonicalNVD(best *dbgen.AdvisorySource, source *dbgen.AdvisorySource) bool {
-	return strings.EqualFold(source.Provider, "nvd") && (best == nil || !strings.EqualFold(best.Provider, "nvd"))
-}
-
-func dbSourceHasSignal(source *dbgen.AdvisorySource) bool {
-	return source.CvssScore.Valid || source.Severity.Valid
-}
-
-func compareSourcePriority(left, right dbgen.AdvisorySource) int {
-	if cmp := compareScoreStrings(left.CvssScore, right.CvssScore); cmp != 0 {
-		return cmp
-	}
-
-	leftSeverity := severityLevelFromSource(left)
-	rightSeverity := severityLevelFromSource(right)
-	if cmp := compareSeverityLevels(leftSeverity, rightSeverity); cmp != 0 {
-		return cmp
-	}
-
-	if left.CvssVector != "" && right.CvssVector == "" {
-		return 1
-	}
-	if left.CvssVector == "" && right.CvssVector != "" {
-		return -1
-	}
-
-	return strings.Compare(strings.ToLower(right.Provider), strings.ToLower(left.Provider))
-}
-
-func compareScoreStrings(left, right sql.NullString) int {
-	if left.Valid && !right.Valid {
-		return 1
-	}
-	if !left.Valid && right.Valid {
-		return -1
-	}
-	if !left.Valid && !right.Valid {
-		return 0
-	}
-
-	leftValue, leftErr := strconv.ParseFloat(left.String, 64)
-	rightValue, rightErr := strconv.ParseFloat(right.String, 64)
-	if leftErr != nil || rightErr != nil {
-		return strings.Compare(left.String, right.String)
-	}
-	if leftValue > rightValue {
-		return 1
-	}
-	if leftValue < rightValue {
-		return -1
-	}
-	return 0
-}
-
-func severityLevelFromSource(source dbgen.AdvisorySource) dbgen.SeverityLevel {
-	if source.CvssScore.Valid {
-		if score, err := strconv.ParseFloat(source.CvssScore.String, 64); err == nil {
-			return toSeverityLevel(NormalizeSeverity(score))
-		}
-	}
-	if source.Severity.Valid {
-		return source.Severity.SeverityLevel
-	}
-	return dbgen.SeverityLevelInfo
-}
-
-func compareSeverityLevels(left, right dbgen.SeverityLevel) int {
-	if severityLevelRank(left) > severityLevelRank(right) {
-		return 1
-	}
-	if severityLevelRank(left) < severityLevelRank(right) {
-		return -1
-	}
-	return 0
-}
-
-func severityLevelRank(severity dbgen.SeverityLevel) int {
-	switch severity {
-	case dbgen.SeverityLevelCritical:
-		return 5
-	case dbgen.SeverityLevelHigh:
-		return 4
-	case dbgen.SeverityLevelMedium:
-		return 3
-	case dbgen.SeverityLevelLow:
-		return 2
-	default:
-		return 1
-	}
-}
-
-func severityForResult(result IngestResult) dbgen.SeverityLevel {
-	if result.IsMalware {
-		return dbgen.SeverityLevelCritical
-	}
-	if result.Severity != nil {
-		return toSeverityLevel(*result.Severity)
-	}
-	if result.CVSSScore != nil {
-		return toSeverityLevel(NormalizeSeverity(*result.CVSSScore))
-	}
-	return dbgen.SeverityLevelInfo
-}
-
-// malwareSeverityFloor pins malicious-package advisories to critical: MAL-*
-// records carry no CVSS, so severity derivation alone would leave them at info.
-func malwareSeverityFloor(severity dbgen.SeverityLevel, isMalware bool) dbgen.SeverityLevel {
-	if isMalware {
-		return dbgen.SeverityLevelCritical
-	}
-	return severity
-}
-
-func toSeverityLevel(severity Severity) dbgen.SeverityLevel {
-	return dbgen.SeverityLevel(severity)
-}
-
-func toNullSeverityLevel(severity *Severity) dbgen.NullSeverityLevel {
-	if severity == nil {
-		return dbgen.NullSeverityLevel{}
-	}
-	return dbgen.NullSeverityLevel{SeverityLevel: toSeverityLevel(*severity), Valid: true}
 }
 
 func fromNullSeverityLevel(severity dbgen.NullSeverityLevel) *Severity {

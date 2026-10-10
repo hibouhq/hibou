@@ -54,7 +54,7 @@ func TestQueryPackagesMapsVulnerabilities(t *testing.T) {
 					Severity:         "MEDIUM",
 					CweIDs:           []string{"CWE-400"},
 					CVSS: map[string]trivyCVSS{
-						"nvd": {V3Vector: "CVSS:3.1/AV:N", V3Score: 5.3},
+						"nvd": {V3Vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L", V3Score: 5.3},
 					},
 					PublishedDate: "2021-02-15T11:15:00Z",
 				}},
@@ -96,14 +96,42 @@ func TestQueryPackagesMapsVulnerabilities(t *testing.T) {
 	if rng.Ecosystem != "npm" || rng.PackageName != "lodash" || rng.Fixed != "4.17.21" || rng.Introduced != "0" || rng.Source != "trivy" {
 		t.Errorf("unexpected affected range: %+v", rng)
 	}
-	if got.CVSSScore == nil || *got.CVSSScore != 5.3 {
-		t.Errorf("expected cvss score 5.3, got %v", got.CVSSScore)
+	choice := advisory.Headline(got.Ratings)
+	if choice.RatedBy() != "nvd" || *choice.Rating.Score != 5.3 || *choice.Rating.Version != advisory.CVSSVersionV31 || choice.Severity != advisory.SeverityMedium {
+		t.Errorf("expected nvd v3.1 5.3 medium, got %+v", choice)
 	}
-	if got.CVSSVersion == nil || *got.CVSSVersion != advisory.CVSSVersionV31 {
-		t.Errorf("expected cvss v3.1, got %v", got.CVSSVersion)
+}
+
+// What the Trivy server returned for CVE-2024-13176 on RHEL 9.2: every
+// vendor's rating is kept, and Red Hat's label rides on its CVSS rating.
+func TestRatingsKeepEveryVendor(t *testing.T) {
+	ratings := ratingsFor(trivyVulnerability{
+		VulnerabilityID: "CVE-2024-13176",
+		Severity:        "LOW",
+		SeveritySource:  "redhat",
+		VendorSeverity:  map[string]string{"alma": "MEDIUM", "oracle-oval": "MEDIUM", "redhat": "LOW", "ubuntu": "LOW"},
+		CVSS: map[string]trivyCVSS{
+			"julia":  {V3Vector: "CVSS:3.1/AV:P/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L", V3Score: 4.1},
+			"redhat": {V3Vector: "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N", V3Score: 4.7},
+		},
+	})
+	byRater := map[string]advisory.Rating{}
+	for _, rating := range ratings {
+		byRater[rating.Rater] = rating
 	}
-	if got.Severity == nil || *got.Severity != advisory.SeverityMedium {
-		t.Errorf("expected medium severity, got %v", got.Severity)
+	if len(byRater) != 5 {
+		t.Fatalf("raters: %v", byRater)
+	}
+	redhat := byRater["redhat"]
+	if *redhat.Score != 4.7 || redhat.Label == nil || *redhat.Label != advisory.SeverityLow {
+		t.Fatalf("redhat: %+v", redhat)
+	}
+	if oracle := byRater["oracle"]; oracle.Label == nil || *oracle.Label != advisory.SeverityMedium || oracle.Vector != "" {
+		t.Fatalf("oracle-oval folds to oracle, label only: %+v", oracle)
+	}
+	choice := advisory.ForFinding(ratings, "rpm", "pkg:rpm/redhat/openssl@3.0.7-6.el9_2?distro=redhat-9.2")
+	if choice.RatedBy() != "redhat" || choice.Severity != advisory.SeverityLow {
+		t.Fatalf("RHEL finding uses Red Hat's rating: %+v", choice)
 	}
 }
 

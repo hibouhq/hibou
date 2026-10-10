@@ -61,6 +61,41 @@ func (s *Server) handleCompareSBOMs(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, sbom.Compare(baseComponents, headComponents))
 }
 
+// maxToolSBOMCompareBytes caps the two inline documents of a Tools compare
+// (base64 inflates them by a third): generous for real SBOMs, bounded for a
+// session-only endpoint that touches no tenant data.
+const maxToolSBOMCompareBytes = 64 << 20
+
+// @Summary      Compare two SBOM files
+// @Description  The Tools SBOM comparator without a repository: both sides are inline documents (base64 CycloneDX or SPDX JSON) the caller sends, so nothing stored is read and no repository access is needed. Repository snapshot artifacts are compared through the repository's own endpoint.
+// @Tags         tools
+// @Accept       json
+// @Produce      json
+// @Param        request  body  server.compareSBOMsRequest  true  "Inline base and head documents"
+// @Success      200  {object}  api.Response{data=sbom.SBOMDiff}
+// @Failure      400  {object}  api.Response
+// @Router       /tools/sbom/compare [post]
+func (s *Server) handleCompareLocalSBOMs(w http.ResponseWriter, r *http.Request) {
+	var input compareSBOMsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxToolSBOMCompareBytes)).Decode(&input); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(input.BaseArtifactID) != "" || strings.TrimSpace(input.HeadArtifactID) != "" {
+		api.JSONError(w, http.StatusBadRequest, "artifacts belong to a repository; compare them through the repository's sbom/compare endpoint")
+		return
+	}
+	baseComponents, ok := s.loadComparableSBOMComponents(r, w, nil, "base", compareSBOMInput{Content: input.BaseContent, Format: input.BaseFormat})
+	if !ok {
+		return
+	}
+	headComponents, ok := s.loadComparableSBOMComponents(r, w, nil, "head", compareSBOMInput{Content: input.HeadContent, Format: input.HeadFormat})
+	if !ok {
+		return
+	}
+	api.JSON(w, http.StatusOK, sbom.Compare(baseComponents, headComponents))
+}
+
 func (s *Server) loadComparableSBOMComponents(r *http.Request, w http.ResponseWriter, repo *store.Repository, side string, input compareSBOMInput) ([]sbom.ParsedComponent, bool) {
 	artifactID := strings.TrimSpace(input.ArtifactID)
 	content := strings.TrimSpace(input.Content)

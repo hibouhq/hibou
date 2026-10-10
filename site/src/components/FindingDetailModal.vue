@@ -31,6 +31,7 @@
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-1.5">
+                  <MalwareIcon v-if="detail.finding.type === 'malware'" />
                   <span :class="severityBadgeClass(detail.finding.severity)">{{ detail.finding.severity }}</span>
                   <span :class="findingTypeBadgeClass(detail.finding.type)">{{ detail.finding.type }}</span>
                   <span
@@ -137,6 +138,22 @@
           </header>
 
           <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            <!-- A malicious package is not a vulnerability to schedule: say what
+                 to do before anything else. -->
+            <div
+              v-if="detail.finding.type === 'malware'"
+              class="mb-5 flex items-start gap-3 rounded-xl border border-malware/60 bg-malware/10 px-4 py-3"
+            >
+              <MalwareIcon />
+              <div class="text-sm">
+                <p class="font-semibold text-violet-100">
+                  Malicious package{{ detail.advisory?.malware_type ? ` (${detail.advisory.malware_type.replace(/_/g, ' ')})` : '' }}
+                </p>
+                <p class="mt-0.5 text-violet-200/80">
+                  Remove it, do not upgrade: no version of a malicious package is safe. Check the systems that installed it for compromise.
+                </p>
+              </div>
+            </div>
             <FindingKEVDetails
               v-if="detail.kev && (tab === 'overview' || tab === 'details')"
               :kev="detail.kev"
@@ -476,6 +493,7 @@ import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import CodeFindingDetails from '@/components/finding/CodeFindingDetails.vue'
 import DependencyFindingDetails from '@/components/finding/DependencyFindingDetails.vue'
 import FindingKEVDetails from '@/components/finding/FindingKEVDetails.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import FindingSection from '@/components/finding/FindingSection.vue'
 import FindingTimeline from '@/components/finding/FindingTimeline.vue'
 import GenericFindingDetails from '@/components/finding/GenericFindingDetails.vue'

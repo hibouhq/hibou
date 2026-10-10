@@ -45,8 +45,13 @@
               @mouseenter="highlight = index"
               @click="activate(item)"
             >
+              <MalwareIcon
+                v-if="item.metadata?.is_malware === true"
+                size="sm"
+              />
               <component
                 :is="typeIcon(item.type)"
+                v-else
                 class="h-4 w-4 shrink-0 text-gray-500"
               />
               <span class="min-w-0 flex-1">
@@ -101,6 +106,7 @@ import { useRouter } from 'vue-router'
 import { Bug, CornerDownLeft, Package, Search, Users } from 'lucide-vue-next'
 
 import { api, type SearchResult } from '@/api/client'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 
 const props = defineProps<{ open: boolean; provider: string; slug: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()

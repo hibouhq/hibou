@@ -91,8 +91,12 @@
             <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
+                  <MalwareIcon
+                    v-if="result.metadata?.is_malware === true"
+                    size="sm"
+                  />
                   <span class="rounded-full border border-surface-border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-gray-300">
-                    {{ result.type }}
+                    {{ result.metadata?.is_malware === true ? 'malware' : result.type }}
                   </span>
                   <span
                     v-if="result.severity"
@@ -153,6 +157,7 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { api, type SearchResult } from '@/api/client'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -172,7 +177,7 @@ const typeTabs = [
   { label: 'Components', value: 'component' },
   { label: 'Clients', value: 'client' },
 ]
-const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
+const severityOptions = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 const showSeverityFilter = computed(() => selectedType.value === 'vulnerability')
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.value.total / pagination.value.per_page)))
 

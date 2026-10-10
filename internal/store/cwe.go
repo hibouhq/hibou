@@ -59,7 +59,7 @@ type CWEUsageReport struct {
 	TotalFindings int        `json:"total_findings"`
 }
 
-var severityOrder = map[string]int{"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+var severityOrder = map[string]int{"critical": 6, "high": 5, "medium": 4, "unknown": 3, "low": 2, "info": 1}
 
 // ListCWEUsage aggregates the CWEs carried by findings in snapshotIDs. A
 // filter (the bar's q) scopes it exactly like the list; without one, open

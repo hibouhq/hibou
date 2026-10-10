@@ -116,6 +116,10 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 	sort.SliceStable(results, func(i, j int) bool {
 		left := results[i]
 		right := results[j]
+		// Malware advisories first: the one result nobody may miss.
+		if leftMalware, rightMalware := isMalwareResult(left), isMalwareResult(right); leftMalware != rightMalware {
+			return leftMalware
+		}
 		if left.Type == right.Type {
 			return left.Title < right.Title
 		}
@@ -123,6 +127,11 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 	})
 
 	return paginateSlice(results, pagination.Offset, pagination.PerPage), advisoryTotal + componentTotal + vulnerabilityTotal + clientTotal, nil
+}
+
+func isMalwareResult(result searchResultResponse) bool {
+	malware, _ := result.Metadata["is_malware"].(bool)
+	return malware
 }
 
 func (s *Server) searchAdvisories(r *http.Request, orgID uuid.UUID, query, severity string, limit, offset int) ([]searchResultResponse, int, error) {

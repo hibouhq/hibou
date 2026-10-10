@@ -434,10 +434,12 @@ func (w *Worker) rollupSeverity(ctx context.Context, snapshotID uuid.UUID) (int,
 func severityScore(level string) int {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "critical":
-		return 5
+		return 6
 	case "high":
-		return 4
+		return 5
 	case "medium":
+		return 4
+	case "unknown":
 		return 3
 	case "low":
 		return 2

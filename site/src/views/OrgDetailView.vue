@@ -119,7 +119,7 @@ const moreMenuOpen = ref(false)
 provide('org', org)
 provide('orgDashboard', dashboard)
 
-const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'low', 'info']
+const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 const vulnTotal = computed(() => {
   const counts = dashboard.value?.totals.vulnerabilities
   return counts ? severityOrder.reduce((total, key) => total + (counts[key] ?? 0), 0) : null

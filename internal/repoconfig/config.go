@@ -76,6 +76,9 @@ type VulnerabilityThresholds struct {
 	MaxCritical *int `yaml:"max_critical,omitempty" json:"max_critical,omitempty"`
 	MaxHigh     *int `yaml:"max_high,omitempty" json:"max_high,omitempty"`
 	MaxMedium   *int `yaml:"max_medium,omitempty" json:"max_medium,omitempty"`
+	// MaxUnknown caps new vulnerabilities no source rates yet (ADR-038 §3).
+	// Severity thresholds ignore them; KEV still blocks exploited ones.
+	MaxUnknown *int `yaml:"max_unknown,omitempty" json:"max_unknown,omitempty"`
 	// MaxNewTotal caps new vulnerabilities of any severity.
 	MaxNewTotal *int `yaml:"max_new_total,omitempty" json:"max_new_total,omitempty"`
 }
@@ -386,6 +389,7 @@ func validateVulnerabilityThresholds(thresholds *VulnerabilityThresholds, index 
 		"max_critical":  thresholds.MaxCritical,
 		"max_high":      thresholds.MaxHigh,
 		"max_medium":    thresholds.MaxMedium,
+		"max_unknown":   thresholds.MaxUnknown,
 		"max_new_total": thresholds.MaxNewTotal,
 	} {
 		if value != nil && *value < 0 {
@@ -555,7 +559,7 @@ var cweGateTypes = map[string]struct{}{
 	"dependency": {}, "container": {}, "malware": {}, "secret": {},
 }
 
-var cweGateSeverities = map[string]struct{}{"critical": {}, "high": {}, "medium": {}, "low": {}, "info": {}}
+var cweGateSeverities = map[string]struct{}{"critical": {}, "high": {}, "medium": {}, "unknown": {}, "low": {}, "info": {}}
 
 // validateCWEPolicy rejects anything that would make the gate silently
 // inert: a malformed id, an id or set the catalog does not know (a typo must

@@ -21,8 +21,8 @@ export function normalizeTrendPoints(points: TrendPoint[]): InsightPoint[] {
       ...point,
       timestamp: Date.parse(point.date),
       components_total: count(point.components_total),
-      vulnerabilities_total: count(point.vulns_critical) + count(point.vulns_high) + count(point.vulns_medium) + count(point.vulns_low) + count(point.vulns_info),
-      findings_total: count(point.findings_critical) + count(point.findings_high) + count(point.findings_medium) + count(point.findings_low) + count(point.findings_info),
+      vulnerabilities_total: count(point.vulns_critical) + count(point.vulns_high) + count(point.vulns_medium) + count(point.vulns_unknown) + count(point.vulns_low) + count(point.vulns_info),
+      findings_total: count(point.findings_critical) + count(point.findings_high) + count(point.findings_medium) + count(point.findings_unknown) + count(point.findings_low) + count(point.findings_info),
     }))
     .filter((point) => Number.isFinite(point.timestamp))
     .sort((left, right) => left.timestamp - right.timestamp)

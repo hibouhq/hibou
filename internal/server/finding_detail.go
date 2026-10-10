@@ -38,11 +38,13 @@ type findingAdvisoryResponse struct {
 	CanonicalID string `json:"canonical_id"`
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
-	Severity    string `json:"severity,omitempty"`
-	CVSSScore   string `json:"cvss_score,omitempty"`
-	CVSSVector  string `json:"cvss_vector,omitempty"`
-	IsMalware   bool   `json:"is_malware,omitempty"`
-	MalwareType string `json:"malware_type,omitempty"`
+	// Severity and CVSS are the advisory's headline (NVD first, else the
+	// strongest rater); the finding's own rating can differ (a distro's).
+	Severity    string           `json:"severity,omitempty"`
+	CVSS        *store.CVSSScore `json:"cvss,omitempty"`
+	RatedBy     string           `json:"rated_by,omitempty"`
+	IsMalware   bool             `json:"is_malware,omitempty"`
+	MalwareType string           `json:"malware_type,omitempty"`
 	// The three fields a dependency finding is actually triaged on: what to
 	// upgrade to, where to read the details, and which other identifier the
 	// same advisory travels under. Same enrichment the components view uses.
@@ -182,6 +184,10 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 		findings[0].CWEs[index].Sets = catalog.SetRefs(findings[0].CWEs[index].ID)
 	}
 	finding.CWEs = findings[0].CWEs
+	// Every rating, always: the drawer's Score block lists who rated what
+	// (ADR-038 §7).
+	s.attachRiskMetrics(r.Context(), findings, true)
+	finding.EPSS, finding.RatingsDisagree, finding.Ratings = findings[0].EPSS, findings[0].RatingsDisagree, findings[0].Ratings
 
 	api.JSON(w, http.StatusOK, response)
 }
@@ -206,11 +212,9 @@ func (s *Server) advisoryDetail(ctx context.Context, advisory dbgen.Advisory) *f
 		Title:       advisory.Title,
 		Description: advisory.Description,
 		Severity:    string(advisory.Severity),
-		CVSSVector:  advisory.CvssVector,
+		CVSS:        store.CVSSFromColumns(advisory.CvssScore, advisory.CvssVersion, advisory.CvssVector),
+		RatedBy:     advisory.RatedBy,
 		IsMalware:   advisory.IsMalware,
-	}
-	if advisory.CvssScore.Valid {
-		detail.CVSSScore = advisory.CvssScore.String
 	}
 	if advisory.MalwareType.Valid {
 		detail.MalwareType = string(advisory.MalwareType.MalwareType)

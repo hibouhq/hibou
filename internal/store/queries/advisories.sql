@@ -1,18 +1,31 @@
 -- name: UpsertAdvisory :one
-INSERT INTO advisories (canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+-- Severity and CVSS are not written here: they are derived from the
+-- advisory's ratings by SetAdvisoryRating once its sources are stored
+-- (ADR-038 §2).
+INSERT INTO advisories (canonical_id, title, description, is_malware, malware_type, published_at, withdrawn_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (canonical_id) DO UPDATE SET
     title = EXCLUDED.title,
     description = EXCLUDED.description,
-    severity = EXCLUDED.severity,
-    cvss_score = EXCLUDED.cvss_score,
-    cvss_version = EXCLUDED.cvss_version,
-    cvss_vector = EXCLUDED.cvss_vector,
     is_malware = EXCLUDED.is_malware,
     malware_type = EXCLUDED.malware_type,
     published_at = EXCLUDED.published_at,
     withdrawn_at = EXCLUDED.withdrawn_at,
     updated_at = NOW()
+RETURNING *;
+
+-- name: SetAdvisoryRating :one
+UPDATE advisories
+SET severity = sqlc.arg(severity),
+    cvss_score = sqlc.narg(cvss_score),
+    cvss_version = sqlc.narg(cvss_version),
+    cvss_vector = sqlc.arg(cvss_vector),
+    rated_by = sqlc.arg(rated_by),
+    updated_at = CASE
+        WHEN (severity, cvss_score, cvss_version, cvss_vector, rated_by)
+             IS DISTINCT FROM (sqlc.arg(severity), sqlc.narg(cvss_score)::numeric, sqlc.narg(cvss_version)::cvss_version, sqlc.arg(cvss_vector)::text, sqlc.arg(rated_by)::text)
+        THEN NOW() ELSE updated_at END
+WHERE id = sqlc.arg(advisory_id)
 RETURNING *;
 
 -- name: UpdateAdvisoryCanonicalID :exec
@@ -60,17 +73,15 @@ SELECT * FROM advisory_aliases WHERE advisory_id = ANY($1::uuid[]);
 -- name: GetAdvisoryIDByAlias :one
 SELECT advisory_id FROM advisory_aliases WHERE alias = $1;
 
--- name: UpsertAdvisorySource :exec
-INSERT INTO advisory_sources (advisory_id, provider, provider_id, severity, cvss_score, cvss_version, cvss_vector, raw_data, fetched_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+-- name: UpsertAdvisorySource :one
+INSERT INTO advisory_sources (advisory_id, provider, provider_id, raw_data, fetched_at, ratings_version)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (advisory_id, provider) DO UPDATE SET
     provider_id = EXCLUDED.provider_id,
-    severity = EXCLUDED.severity,
-    cvss_score = EXCLUDED.cvss_score,
-    cvss_version = EXCLUDED.cvss_version,
-    cvss_vector = EXCLUDED.cvss_vector,
     raw_data = EXCLUDED.raw_data,
-    fetched_at = EXCLUDED.fetched_at;
+    fetched_at = EXCLUDED.fetched_at,
+    ratings_version = EXCLUDED.ratings_version
+RETURNING id;
 
 -- name: ListSourcesByAdvisory :many
 SELECT * FROM advisory_sources WHERE advisory_id = $1;

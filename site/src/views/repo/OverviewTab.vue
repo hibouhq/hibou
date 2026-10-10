@@ -55,13 +55,13 @@
               <RouterLink
                 v-if="malwareOpen > 0"
                 :to="malwareLink()"
-                class="flex items-center gap-2.5 rounded-lg border border-danger/50 bg-danger/10 px-3 py-2.5 transition hover:border-danger"
+                class="flex items-center gap-2.5 rounded-lg border border-malware/60 bg-malware/10 px-3 py-2.5 transition hover:border-malware"
               >
-                <Biohazard class="h-5 w-5 shrink-0 text-danger" />
-                <span class="text-sm font-semibold text-red-200">
+                <MalwareIcon />
+                <span class="text-sm font-semibold text-violet-100">
                   {{ malwareOpen }} malicious {{ malwareOpen === 1 ? 'package' : 'packages' }} detected
                 </span>
-                <span class="ml-auto text-xs text-red-300/80">Review immediately →</span>
+                <span class="ml-auto text-xs text-violet-200/80">Review immediately →</span>
               </RouterLink>
 
               <RouterLink
@@ -308,13 +308,14 @@
 </template>
 
 <script setup lang="ts">
-import { Activity, ArrowLeftRight, ArrowRight, Biohazard, Clock, Download, ExternalLink, FileArchive, FileText, Flame, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
+import { Activity, ArrowLeftRight, ArrowRight, Clock, Download, ExternalLink, FileArchive, FileText, Flame, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type RefSummary, type Repository, type SeverityCounts, type Snapshot, type SnapshotFile } from '@/api/client'
 import { relativeTime } from '@/lib/datetime'
-import { OPEN_RISK_KEV_QUERY } from '@/lib/openRiskPreset'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
+import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 
 type SeverityKey = keyof SeverityCounts
 
@@ -361,6 +362,7 @@ const severityMeta: Array<{ key: SeverityKey; label: string; valueClass: string;
   { key: 'critical', label: 'crit', valueClass: 'text-sev-critical', barClass: 'bg-sev-critical' },
   { key: 'high', label: 'high', valueClass: 'text-sev-high', barClass: 'bg-sev-high' },
   { key: 'medium', label: 'med', valueClass: 'text-sev-medium', barClass: 'bg-sev-medium' },
+  { key: 'unknown', label: 'unrated', valueClass: 'text-sev-unknown', barClass: 'bg-sev-unknown' },
   { key: 'low', label: 'low', valueClass: 'text-sev-low', barClass: 'bg-sev-low' },
   { key: 'info', label: 'info', valueClass: 'text-sev-info', barClass: 'bg-sev-info' },
 ]
@@ -472,7 +474,7 @@ function totalCounts(counts?: SeverityCounts) {
   if (!counts) {
     return 0
   }
-  return counts.critical + counts.high + counts.medium + counts.low + counts.info
+  return counts.critical + counts.high + counts.medium + (counts.unknown ?? 0) + counts.low + counts.info
 }
 
 function buildSeveritySegments(counts?: SeverityCounts): SeveritySegment[] {
@@ -501,11 +503,13 @@ function severityLink(key: SeverityKey) {
   }
 }
 
+// The same set summary.malware_open counts, on the same ref and snapshot.
 function malwareLink() {
+  const { ref, snapshot } = route.query
   return {
     name: 'repo-vulnerabilities',
     params: route.params,
-    query: { ...route.query, type: 'malware' },
+    query: { ...(ref ? { ref } : {}), ...(snapshot ? { snapshot } : {}), q: OPEN_RISK_MALWARE_QUERY },
   }
 }
 

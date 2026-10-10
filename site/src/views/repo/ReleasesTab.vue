@@ -86,7 +86,7 @@
       >
         <!-- Row -->
         <div
-          class="grid w-full grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1.6fr)_auto] items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-overlay/50"
+          class="grid w-full grid-cols-[minmax(16rem,1fr)_minmax(0,2.2fr)_minmax(0,1.2fr)_auto] items-center gap-3 px-4 py-3 text-left transition hover:bg-surface-overlay/50"
           @click="toggleExpanded(release.id)"
         >
           <!-- Version + provenance -->
@@ -125,26 +125,42 @@
           <div class="flex flex-wrap items-center gap-1.5">
             <span
               v-if="!release.snapshot_id"
-              class="rounded-full border border-surface-border px-2 py-0.5 text-[11px] text-gray-500"
+              class="rounded border border-surface-border px-2 py-0.5 text-xs text-gray-500"
               title="No analysis snapshot is attached to this release yet"
             >Not analyzed</span>
             <template v-else-if="release.open_finding_count === 0">
-              <span class="rounded-full border border-ok/40 px-2 py-0.5 text-[11px] font-medium text-ok">No open findings</span>
+              <span class="rounded border border-ok/40 px-2 py-0.5 text-xs font-medium text-ok">No open findings</span>
             </template>
+            <!-- The org overview's labels: malware, exploited, then severities,
+                 each opening this release's matching findings. -->
             <template v-else>
-              <span
-                v-for="chip in riskChips(release)"
-                :key="chip.label"
-                :class="chip.class"
-                :title="chip.title"
+              <RouterLink
+                v-if="release.malware_open > 0"
+                :to="releaseFindings(release, OPEN_RISK_MALWARE_QUERY)"
+                class="inline-flex items-center gap-1 rounded border border-malware/60 bg-malware/10 px-2 py-0.5 text-xs font-semibold text-malware hover:underline"
+                :title="`Open the ${release.malware_open} malicious packages this release ships`"
               >
-                <component
-                  :is="chip.icon"
-                  v-if="chip.icon"
-                  class="h-3 w-3"
-                />
-                {{ chip.count }} {{ chip.text }}
-              </span>
+                <MalwareIcon size="sm" />
+                {{ release.malware_open }} malware
+              </RouterLink>
+              <RouterLink
+                v-if="release.kev_open"
+                :to="releaseFindings(release, OPEN_RISK_KEV_QUERY)"
+                class="inline-flex items-center gap-1 rounded border border-danger/60 bg-danger/10 px-2 py-0.5 text-xs font-semibold text-danger hover:underline"
+                title="Listed on a known-exploited catalog (CISA KEV / ENISA EUVD)"
+              >
+                <Flame class="h-3 w-3" />
+                {{ release.kev_open }} exploited
+              </RouterLink>
+              <RouterLink
+                v-for="item in severityItems(release)"
+                :key="item.key"
+                :to="releaseFindings(release, openRiskSeverityQuery(item.key))"
+                :class="[severityBadgeClass(item.key), 'transition hover:brightness-125']"
+                :title="`Open the ${item.value} open ${item.key} findings`"
+              >
+                {{ item.value }} {{ item.key }}
+              </RouterLink>
             </template>
           </div>
 
@@ -454,7 +470,9 @@ import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { severityBadgeClass } from '@/lib/findingDisplay'
+import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY, openRiskSeverityQuery } from '@/lib/openRiskPreset'
 
 const { confirmDialog } = useDialog()
 const route = useRoute()
@@ -499,15 +517,18 @@ function isStale(release: ReleaseWithRisk) {
   return Date.now() - new Date(release.last_scanned_at).getTime() > STALE_AFTER_MS
 }
 
-function riskChips(release: ReleaseWithRisk) {
-  const chips = [
-    { label: 'Known exploited', text: 'exploited', title: 'Known exploited', count: release.kev_open, class: 'inline-flex items-center gap-1 rounded-full bg-danger-muted px-2 py-0.5 text-[11px] font-medium text-white', icon: Flame },
-    { label: 'critical', text: 'critical', count: release.critical_count, class: severityBadgeClass('critical') },
-    { label: 'high', text: 'high', count: release.high_count, class: severityBadgeClass('high') },
-    { label: 'medium', text: 'medium', count: release.medium_count, class: severityBadgeClass('medium') },
-    { label: 'low', text: 'low', count: release.low_count, class: severityBadgeClass('low') },
-  ]
-  return chips.filter((chip) => (chip.count ?? 0) > 0)
+function severityItems(release: ReleaseWithRisk) {
+  return [
+    { key: 'critical', value: release.critical_count },
+    { key: 'high', value: release.high_count },
+    { key: 'medium', value: release.medium_count },
+    { key: 'low', value: release.low_count },
+  ].filter((item) => item.value > 0)
+}
+
+// This release's findings, narrowed like the org overview's labels.
+function releaseFindings(release: ReleaseWithRisk, q: string) {
+  return { name: 'repo-vulnerabilities', params: route.params, query: { ref: release.ref_name, snapshot: release.snapshot_id, q } }
 }
 
 function assignableClients(release: ReleaseWithRisk) {

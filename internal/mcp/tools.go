@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -505,8 +506,21 @@ func buildVulnerabilityResponse(vulnerabilities []store.Vulnerability, advisorie
 		})
 	}
 
+	// Malware first, then by severity: an agent reading the top of the list
+	// must see a malicious package before any CVE, as the UI shows it.
+	rank := map[string]int{"critical": 0, "high": 1, "medium": 2, "unknown": 3, "low": 4, "info": 5}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].IsMalware != items[j].IsMalware {
+			return items[i].IsMalware
+		}
+		if rank[items[i].Severity] != rank[items[j].Severity] {
+			return rank[items[i].Severity] < rank[items[j].Severity]
+		}
+		return items[i].CanonicalID < items[j].CanonicalID
+	})
+
 	summaries := make([]vulnerabilitySummary, 0, len(summaryCounts))
-	for _, severity := range []string{"critical", "high", "medium", "low", "info"} {
+	for _, severity := range []string{"critical", "high", "medium", "unknown", "low", "info"} {
 		if count := summaryCounts[severity]; count > 0 {
 			summaries = append(summaries, vulnerabilitySummary{Severity: severity, Count: count})
 		}
@@ -557,12 +571,12 @@ func normalizedSeverityArg(request mcp.CallToolRequest, name string) (string, er
 	if value == "" {
 		return "", nil
 	}
-	for _, allowed := range []string{"critical", "high", "medium", "low", "info"} {
+	for _, allowed := range []string{"critical", "high", "medium", "unknown", "low", "info"} {
 		if value == allowed {
 			return value, nil
 		}
 	}
-	return "", errors.New("severity_filter must be one of critical, high, medium, low, info")
+	return "", errors.New("severity_filter must be one of critical, high, medium, unknown, low, info")
 }
 
 func toolJSON(value any) (*mcp.CallToolResult, error) {

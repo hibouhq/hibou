@@ -33,6 +33,8 @@ func normalizeSeverity(level string) (SeverityLevel, bool) {
 		return SeverityLevelHigh, true
 	case string(SeverityLevelMedium):
 		return SeverityLevelMedium, true
+	case string(SeverityLevelUnknown):
+		return SeverityLevelUnknown, true
 	case string(SeverityLevelLow):
 		return SeverityLevelLow, true
 	case string(SeverityLevelInfo):

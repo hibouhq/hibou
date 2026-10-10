@@ -156,6 +156,11 @@
           "minimum": 0,
           "description": "Maximum number of new medium-severity dependency vulnerabilities allowed. Omit for no limit."
         },
+        "max_unknown": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of new dependency vulnerabilities no source rates yet (severity unknown). The other thresholds ignore them; known-exploited ones are blocked regardless. Omit for no limit."
+        },
         "max_new_total": {
           "type": "integer",
           "minimum": 0,
@@ -330,10 +335,11 @@
             "critical",
             "high",
             "medium",
+            "unknown",
             "low",
             "info"
           ],
-          "description": "Ignore findings below this severity. Default: any severity."
+          "description": "Ignore findings below this severity (unknown ranks between medium and low). Default: any severity."
         }
       },
       "description": "Deny new findings by CWE (ADR-037). Every list uses the same compiler as the cwe:, cwe-tree:, cwe-set: and cwe-category: filter qualifiers."

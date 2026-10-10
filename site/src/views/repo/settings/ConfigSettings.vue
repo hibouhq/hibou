@@ -440,6 +440,7 @@ function gateRules(gate: RepoConfigGate): GateRule[] {
       limit(vulnerabilities.max_critical) !== null ? `critical ≤ ${vulnerabilities.max_critical}` : '',
       limit(vulnerabilities.max_high) !== null ? `high ≤ ${vulnerabilities.max_high}` : '',
       limit(vulnerabilities.max_medium) !== null ? `medium ≤ ${vulnerabilities.max_medium}` : '',
+      limit(vulnerabilities.max_unknown) !== null ? `unrated ≤ ${vulnerabilities.max_unknown}` : '',
       limit(vulnerabilities.max_new_total) !== null ? `new ≤ ${vulnerabilities.max_new_total}` : '',
     ].filter(Boolean)
     if (parts.length > 0) {

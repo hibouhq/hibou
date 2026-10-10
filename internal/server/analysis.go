@@ -28,8 +28,10 @@ type severityCounts struct {
 	Critical int `json:"critical"`
 	High     int `json:"high"`
 	Medium   int `json:"medium"`
-	Low      int `json:"low"`
-	Info     int `json:"info"`
+	// Unknown counts findings no source rates (ADR-038 §3).
+	Unknown int `json:"unknown"`
+	Low     int `json:"low"`
+	Info    int `json:"info"`
 	// AcceptedRisk flags how many of the counted findings carry a
 	// risk_accepted decision (ADR-023): still risk, but owned.
 	AcceptedRisk int `json:"accepted_risk"`
@@ -324,6 +326,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		s.attachFixingPullRequests(r.Context(), repo.ID, vulnerabilities)
 		s.attachKEV(r.Context(), vulnerabilities)
 		s.attachCWEs(r.Context(), vulnerabilities)
+		s.attachRiskMetrics(r.Context(), vulnerabilities, false)
 		api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 		return
 	}
@@ -339,6 +342,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	// branch and was missing the exploited badges.
 	s.attachKEV(r.Context(), vulnerabilities)
 	s.attachCWEs(r.Context(), vulnerabilities)
+	s.attachRiskMetrics(r.Context(), vulnerabilities, false)
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 }
 
@@ -2042,6 +2046,7 @@ func addSeverityCounts(dst *severityCounts, src severityCounts) {
 	dst.Critical += src.Critical
 	dst.High += src.High
 	dst.Medium += src.Medium
+	dst.Unknown += src.Unknown
 	dst.Low += src.Low
 	dst.Info += src.Info
 	dst.AcceptedRisk += src.AcceptedRisk
@@ -2068,6 +2073,8 @@ func incrementSeverity(counts *severityCounts, severity string) {
 		counts.High++
 	case "medium":
 		counts.Medium++
+	case "unknown":
+		counts.Unknown++
 	case "low":
 		counts.Low++
 	default:
@@ -2078,10 +2085,12 @@ func incrementSeverity(counts *severityCounts, severity string) {
 func severityRank(severity string) int {
 	switch strings.ToLower(severity) {
 	case "critical":
-		return 4
+		return 5
 	case "high":
-		return 3
+		return 4
 	case "medium":
+		return 3
+	case "unknown":
 		return 2
 	case "low":
 		return 1

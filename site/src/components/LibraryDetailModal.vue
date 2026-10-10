@@ -95,10 +95,16 @@
                   :key="advisory.id"
                 >
                   <td class="px-3 py-2">
-                    <span
-                      class="rounded-full px-2 py-0.5 text-xs font-medium"
-                      :class="`sev-${sevKey(advisory.severity)}`"
-                    >{{ advisory.severity }}</span>
+                    <span class="inline-flex items-center gap-1.5">
+                      <MalwareIcon
+                        v-if="advisory.is_malware"
+                        size="sm"
+                      />
+                      <span
+                        class="rounded-full px-2 py-0.5 text-xs font-medium"
+                        :class="`sev-${sevKey(advisory.severity)}`"
+                      >{{ advisory.severity }}</span>
+                    </span>
                   </td>
                   <td class="px-3 py-2 text-center font-mono text-xs text-gray-300">
                     {{ advisory.cvss_score ?? '—' }}
@@ -227,6 +233,7 @@ import { computed, onMounted, onUnmounted } from 'vue'
 
 import type { ComponentWithVulns } from '@/api/client'
 import CweChips from '@/components/finding/CweChips.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { advisoryUrl } from '@/lib/findingDisplay'
 import { ecosystemKey, sourceKey } from '@/lib/purl'
 
@@ -239,7 +246,8 @@ const emit = defineEmits<{
 }>()
 
 const ecoKey = computed(() => ecosystemKey(props.component.ecosystem))
-const advisories = computed(() => props.component.advisories ?? [])
+// Malware advisories first: a malicious package outranks any CVE on it.
+const advisories = computed(() => [...(props.component.advisories ?? [])].sort((a, b) => Number(b.is_malware) - Number(a.is_malware)))
 const sources = computed(() => props.component.sources ?? [])
 const usagePaths = computed(() => props.component.usage_paths ?? [])
 const advisoriesEnriched = computed(() => advisories.value.some((advisory) => advisory.cwes?.length || advisory.summary || advisory.fixed_versions?.length))
@@ -253,6 +261,7 @@ function sevKey(severity: string): string {
   if (value === 'critical' || value === 'veryhigh') return 'critical'
   if (value === 'high') return 'high'
   if (value === 'medium' || value === 'moderate') return 'medium'
+  if (value === 'unknown') return 'unknown'
   if (value === 'info' || value === 'informational' || value === 'none') return 'info'
   return 'low'
 }

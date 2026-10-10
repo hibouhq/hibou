@@ -228,15 +228,21 @@
                   >{{ isScannableEcosystem(component.ecosystem) ? component.vuln_count : '—' }}</span>
                 </td>
                 <td class="px-3 py-2.5">
-                  <span
-                    v-if="component.highest_severity"
-                    class="rounded-full px-2 py-0.5 text-xs font-medium"
-                    :class="`sev-${sevKey(component.highest_severity)}`"
-                  >{{ component.highest_severity }}</span>
-                  <span
-                    v-else
-                    class="text-gray-600"
-                  >—</span>
+                  <span class="inline-flex items-center gap-1.5">
+                    <MalwareIcon
+                      v-if="isMalwareComponent(component)"
+                      size="sm"
+                    />
+                    <span
+                      v-if="component.highest_severity"
+                      class="rounded-full px-2 py-0.5 text-xs font-medium"
+                      :class="`sev-${sevKey(component.highest_severity)}`"
+                    >{{ component.highest_severity }}</span>
+                    <span
+                      v-else
+                      class="text-gray-600"
+                    >—</span>
+                  </span>
                 </td>
               </tr>
             </tbody>
@@ -259,7 +265,9 @@ import { useRoute } from 'vue-router'
 import { RefreshCw } from 'lucide-vue-next'
 
 import { api, type OrgComponent } from '@/api/client'
+import { isMalwareComponent } from '@/lib/findingDisplay'
 import EcosystemSunburst from '@/components/EcosystemSunburst.vue'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import LibraryDetailModal from '@/components/LibraryDetailModal.vue'
 import { ecosystemKey, isScannableEcosystem } from '@/lib/purl'
@@ -280,7 +288,7 @@ const searchQuery = ref('')
 const currentSort = ref('vulns')
 const currentSortDirection = ref('desc')
 
-const SEVERITY_RANK: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 }
+const SEVERITY_RANK: Record<string, number> = { critical: 6, high: 5, medium: 4, unknown: 3, low: 2, info: 1 }
 
 const ecosystemOptions = computed(() => Array.from(new Set(components.value.map((c) => ecosystemKey(c.ecosystem)))).sort())
 const repoOptions = computed(() => Array.from(new Set(components.value.flatMap((c) => c.repos))).sort())
@@ -289,7 +297,7 @@ const repoOptions = computed(() => Array.from(new Set(components.value.flatMap((
 const licenseOptions = computed(() =>
   Array.from(new Set(components.value.map((c) => (c.licenses?.length ? c.licenses : ['unknown'])).flat())).sort(),
 )
-const severityOptions = ['critical', 'high', 'medium', 'low', 'info']
+const severityOptions = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 
 const filterDefs = computed(() => [
   { key: 'ecosystem', label: 'Ecosystem', options: ecosystemOptions.value, multi: true },
@@ -326,6 +334,9 @@ const filteredComponents = computed(() => {
   const list = components.value.filter(matchesFilters)
   const direction = currentSortDirection.value === 'asc' ? 1 : -1
   return [...list].sort((a, b) => {
+    // Malicious packages first, whatever the sort and direction.
+    const malware = Number(isMalwareComponent(b)) - Number(isMalwareComponent(a))
+    if (malware !== 0) return malware
     let result = 0
     if (currentSort.value === 'name') {
       result = a.name.localeCompare(b.name)
@@ -429,6 +440,7 @@ function sevKey(severity: string): string {
   if (value === 'critical' || value === 'veryhigh') return 'critical'
   if (value === 'high') return 'high'
   if (value === 'medium' || value === 'moderate') return 'medium'
+  if (value === 'unknown') return 'unknown'
   if (value === 'info' || value === 'informational' || value === 'none') return 'info'
   if (!value) return ''
   return 'low'

@@ -198,22 +198,35 @@
               </td>
               <td class="px-4 py-2.5">
                 <div class="flex flex-wrap justify-end gap-1.5">
+                  <!-- Malware first, as on the Overview: the list is sorted by it. -->
+                  <RouterLink
+                    v-if="entry.malware_open > 0"
+                    :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { q: OPEN_RISK_MALWARE_QUERY } }"
+                    class="inline-flex items-center gap-1 rounded border border-malware/60 bg-malware/10 px-2 py-0.5 text-xs font-semibold text-malware hover:underline"
+                  >
+                    <MalwareIcon size="sm" />
+                    {{ entry.malware_open }} malware
+                  </RouterLink>
                   <RouterLink
                     v-if="entry.kev_open != null"
                     :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { q: OPEN_RISK_KEV_QUERY } }"
-                    class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs hover:underline"
-                    :class="entry.kev_open > 0 ? 'bg-danger/10 font-semibold text-danger' : 'text-gray-500'"
+                    class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs hover:underline"
+                    :class="entry.kev_open > 0 ? 'border-danger/60 bg-danger/10 font-semibold text-danger' : 'border-transparent text-gray-500'"
                   >
                     <Flame class="h-3 w-3" />
                     {{ entry.kev_open }} exploited
                   </RouterLink>
-                  <span
+                  <RouterLink
                     v-for="sev in severityOrder"
                     v-show="entry.vulnerabilities[sev] > 0"
                     :key="sev"
-                    class="rounded-full px-2 py-0.5 text-xs font-medium"
+                    :to="{ name: 'repo-vulnerabilities', params: { provider, slug, repoSlug: entry.repo_slug }, query: { q: openRiskSeverityQuery(sev) } }"
+                    class="rounded-full px-2 py-0.5 text-xs font-medium transition hover:brightness-125"
                     :class="`sev-${sev}`"
-                  >{{ entry.vulnerabilities[sev] }} {{ sev }}</span>
+                    :title="`Open the ${entry.vulnerabilities[sev]} open ${sev} findings`"
+                  >
+                    {{ entry.vulnerabilities[sev] }} {{ sev }}
+                  </RouterLink>
                 </div>
               </td>
             </tr>
@@ -232,7 +245,8 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import type { OrgDashboard, SeverityCounts } from '@/api/client'
 import { relativeTime } from '@/lib/datetime'
-import { OPEN_RISK_KEV_QUERY } from '@/lib/openRiskPreset'
+import MalwareIcon from '@/components/finding/MalwareIcon.vue'
+import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY, openRiskSeverityQuery } from '@/lib/openRiskPreset'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
@@ -243,11 +257,12 @@ const kevOpen = computed(() => dashboard.value?.totals.kev_open ?? null)
 const knownKEVOpen = computed(() => (dashboard.value?.repos ?? []).reduce((total, entry) => total + (entry.kev_open ?? 0), 0))
 const kevUnavailableRepos = computed(() => (dashboard.value?.repos ?? []).filter(entry => entry.enrolled && entry.kev_open == null).length)
 
-const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'low', 'info']
+const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 const severityColors: Record<keyof SeverityCounts, string> = {
   critical: '#f85149',
   high: '#e6550d',
   medium: '#d29922',
+  unknown: '#a3a3a3',
   low: '#8b949e',
   info: '#58a6ff',
 }
@@ -294,7 +309,7 @@ const outdatedRepos = computed(() => (dashboard.value?.repos ?? [])
   .slice(0, 6))
 
 function riskScore(counts: SeverityCounts) {
-  return counts.critical * 1000 + counts.high * 100 + counts.medium * 10 + counts.low + counts.info
+  return counts.critical * 1000 + counts.high * 100 + counts.medium * 10 + (counts.unknown ?? 0) * 5 + counts.low + counts.info
 }
 
 const riskiestRepos = computed(() => (dashboard.value?.repos ?? [])

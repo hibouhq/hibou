@@ -269,7 +269,7 @@ func (q *Queries) GetAutoApplyMapping(ctx context.Context, subscriptionID uuid.U
 }
 
 const getCVERecord = `-- name: GetCVERecord :one
-SELECT cve_id, state, assigner, published_at, record_updated_at, first_seen_at, cvss_score, cvss_vector, severity, summary, reference_urls FROM cve_records WHERE cve_id = $1
+SELECT cve_id, state, assigner, published_at, record_updated_at, first_seen_at, cvss_score, cvss_vector, severity, summary, reference_urls, cvss_source FROM cve_records WHERE cve_id = $1
 `
 
 func (q *Queries) GetCVERecord(ctx context.Context, cveID string) (CveRecord, error) {
@@ -287,6 +287,7 @@ func (q *Queries) GetCVERecord(ctx context.Context, cveID string) (CveRecord, er
 		&i.Severity,
 		&i.Summary,
 		pq.Array(&i.ReferenceUrls),
+		&i.CvssSource,
 	)
 	return i, err
 }
@@ -1361,8 +1362,8 @@ func (q *Queries) TouchSubscriptionMatched(ctx context.Context, id uuid.UUID) er
 const upsertCVERecord = `-- name: UpsertCVERecord :exec
 INSERT INTO cve_records (
     cve_id, state, assigner, published_at, record_updated_at,
-    cvss_score, cvss_vector, severity, summary, reference_urls
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    cvss_score, cvss_vector, severity, summary, reference_urls, cvss_source
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (cve_id) DO UPDATE SET
     state = EXCLUDED.state,
     assigner = EXCLUDED.assigner,
@@ -1372,7 +1373,8 @@ ON CONFLICT (cve_id) DO UPDATE SET
     cvss_vector = EXCLUDED.cvss_vector,
     severity = EXCLUDED.severity,
     summary = EXCLUDED.summary,
-    reference_urls = EXCLUDED.reference_urls
+    reference_urls = EXCLUDED.reference_urls,
+    cvss_source = EXCLUDED.cvss_source
 `
 
 type UpsertCVERecordParams struct {
@@ -1386,6 +1388,7 @@ type UpsertCVERecordParams struct {
 	Severity        string         `json:"severity"`
 	Summary         string         `json:"summary"`
 	ReferenceUrls   []string       `json:"reference_urls"`
+	CvssSource      string         `json:"cvss_source"`
 }
 
 // first_seen_at is set once and never moved: it is when THIS instance learned
@@ -1403,6 +1406,7 @@ func (q *Queries) UpsertCVERecord(ctx context.Context, arg UpsertCVERecordParams
 		arg.Severity,
 		arg.Summary,
 		pq.Array(arg.ReferenceUrls),
+		arg.CvssSource,
 	)
 	return err
 }

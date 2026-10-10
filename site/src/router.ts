@@ -15,6 +15,10 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/orgs' },
         { path: 'orgs', name: 'orgs', component: () => import('@/views/OrgsView.vue') },
+        // Tools: standalone utilities, no organization needed.
+        { path: 'tools', name: 'tools', component: () => import('@/views/tools/ToolsView.vue') },
+        { path: 'tools/cvss', name: 'tool-cvss', component: () => import('@/views/tools/CvssToolView.vue') },
+        { path: 'tools/sbom-compare', name: 'tool-sbom-compare', component: () => import('@/views/tools/SbomCompareToolView.vue') },
         {
           path: 'orgs/:provider/:slug',
           component: () => import('@/views/OrgDetailView.vue'),

@@ -26,6 +26,9 @@ export HIBOU_ARTIFACT_PATH=tmp/artifacts
 frontend_host=0.0.0.0
 if [[ "$local_login" == true ]]; then
   export HIBOU_FORGE_0_TYPE=''
+  # Dev Login signs in as admin@localhost (internal/auth DevLoginHandler);
+  # make it an instance admin so the Instance settings are reachable.
+  export HIBOU_INSTANCE_ADMINS="${HIBOU_INSTANCE_ADMINS:+$HIBOU_INSTANCE_ADMINS,}admin@localhost"
   frontend_host=127.0.0.1
   printf 'Local Dev Login enabled. Keep this instance private.\n'
   docker compose up -d --wait --wait-timeout 600 postgres trivy

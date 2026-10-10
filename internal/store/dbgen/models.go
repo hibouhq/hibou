@@ -632,6 +632,7 @@ const (
 	SeverityLevelCritical SeverityLevel = "critical"
 	SeverityLevelHigh     SeverityLevel = "high"
 	SeverityLevelMedium   SeverityLevel = "medium"
+	SeverityLevelUnknown  SeverityLevel = "unknown"
 	SeverityLevelLow      SeverityLevel = "low"
 	SeverityLevelInfo     SeverityLevel = "info"
 )
@@ -958,6 +959,7 @@ type Advisory struct {
 	WithdrawnAt sql.NullTime    `json:"withdrawn_at"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+	RatedBy     string          `json:"rated_by"`
 }
 
 type AdvisoryAlias struct {
@@ -1005,18 +1007,24 @@ type AdvisoryEventsDefault struct {
 	Detail     json.RawMessage `json:"detail"`
 }
 
+type AdvisoryRating struct {
+	AdvisorySourceID uuid.UUID         `json:"advisory_source_id"`
+	Rater            string            `json:"rater"`
+	CvssVersion      NullCvssVersion   `json:"cvss_version"`
+	CvssVector       string            `json:"cvss_vector"`
+	CvssScore        sql.NullString    `json:"cvss_score"`
+	Label            NullSeverityLevel `json:"label"`
+}
+
 type AdvisorySource struct {
-	ID          uuid.UUID         `json:"id"`
-	AdvisoryID  uuid.UUID         `json:"advisory_id"`
-	Provider    string            `json:"provider"`
-	ProviderID  string            `json:"provider_id"`
-	Severity    NullSeverityLevel `json:"severity"`
-	CvssScore   sql.NullString    `json:"cvss_score"`
-	CvssVersion NullCvssVersion   `json:"cvss_version"`
-	CvssVector  string            `json:"cvss_vector"`
-	RawData     json.RawMessage   `json:"raw_data"`
-	FetchedAt   time.Time         `json:"fetched_at"`
-	CreatedAt   time.Time         `json:"created_at"`
+	ID             uuid.UUID       `json:"id"`
+	AdvisoryID     uuid.UUID       `json:"advisory_id"`
+	Provider       string          `json:"provider"`
+	ProviderID     string          `json:"provider_id"`
+	RawData        json.RawMessage `json:"raw_data"`
+	FetchedAt      time.Time       `json:"fetched_at"`
+	CreatedAt      time.Time       `json:"created_at"`
+	RatingsVersion int16           `json:"ratings_version"`
 }
 
 type AffectedRange struct {
@@ -1189,6 +1197,7 @@ type CveRecord struct {
 	Severity        string         `json:"severity"`
 	Summary         string         `json:"summary"`
 	ReferenceUrls   []string       `json:"reference_urls"`
+	CvssSource      string         `json:"cvss_source"`
 }
 
 type CveRecordCwe struct {
@@ -1228,6 +1237,20 @@ type Deployment struct {
 	RollbackTargetID uuid.NullUUID    `json:"rollback_target_id"`
 	Notes            sql.NullString   `json:"notes"`
 	CreatedAt        time.Time        `json:"created_at"`
+}
+
+type EpssCatalog struct {
+	ID           bool      `json:"id"`
+	ModelVersion string    `json:"model_version"`
+	ScoreDate    time.Time `json:"score_date"`
+	RowCount     int32     `json:"row_count"`
+	SyncedAt     time.Time `json:"synced_at"`
+}
+
+type EpssScore struct {
+	CveID      string `json:"cve_id"`
+	Score      string `json:"score"`
+	Percentile string `json:"percentile"`
 }
 
 type FindingAcceptance struct {
@@ -1827,6 +1850,10 @@ type Vulnerability struct {
 	OriginTokenName         string           `json:"origin_token_name"`
 	OriginOwnerType         string           `json:"origin_owner_type"`
 	OriginOwnerID           uuid.NullUUID    `json:"origin_owner_id"`
+	CvssScore               sql.NullString   `json:"cvss_score"`
+	CvssVersion             NullCvssVersion  `json:"cvss_version"`
+	CvssVector              string           `json:"cvss_vector"`
+	RatedBy                 string           `json:"rated_by"`
 }
 
 type VulnerabilityExternalIssue struct {

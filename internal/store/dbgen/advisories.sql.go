@@ -77,7 +77,7 @@ func (q *Queries) DeleteAffectedRangesByAdvisoryAndSource(ctx context.Context, a
 }
 
 const getAdvisoriesByIDs = `-- name: GetAdvisoriesByIDs :many
-SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE id = ANY($1::uuid[])
+SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at, rated_by FROM advisories WHERE id = ANY($1::uuid[])
 `
 
 func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]Advisory, error) {
@@ -104,6 +104,7 @@ func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 			&i.WithdrawnAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -119,7 +120,7 @@ func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 }
 
 const getAdvisoryByAlias = `-- name: GetAdvisoryByAlias :one
-SELECT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at FROM advisories a
+SELECT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at, a.rated_by FROM advisories a
 JOIN advisory_aliases aa ON aa.advisory_id = a.id
 WHERE aa.alias = $1
 `
@@ -142,12 +143,13 @@ func (q *Queries) GetAdvisoryByAlias(ctx context.Context, alias string) (Advisor
 		&i.WithdrawnAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RatedBy,
 	)
 	return i, err
 }
 
 const getAdvisoryByCanonicalID = `-- name: GetAdvisoryByCanonicalID :one
-SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE canonical_id = $1
+SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at, rated_by FROM advisories WHERE canonical_id = $1
 `
 
 func (q *Queries) GetAdvisoryByCanonicalID(ctx context.Context, canonicalID string) (Advisory, error) {
@@ -168,12 +170,13 @@ func (q *Queries) GetAdvisoryByCanonicalID(ctx context.Context, canonicalID stri
 		&i.WithdrawnAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RatedBy,
 	)
 	return i, err
 }
 
 const getAdvisoryByID = `-- name: GetAdvisoryByID :one
-SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at FROM advisories WHERE id = $1
+SELECT id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at, rated_by FROM advisories WHERE id = $1
 `
 
 func (q *Queries) GetAdvisoryByID(ctx context.Context, id uuid.UUID) (Advisory, error) {
@@ -194,6 +197,7 @@ func (q *Queries) GetAdvisoryByID(ctx context.Context, id uuid.UUID) (Advisory, 
 		&i.WithdrawnAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RatedBy,
 	)
 	return i, err
 }
@@ -264,7 +268,7 @@ func (q *Queries) GetComponentsByIDs(ctx context.Context, dollar_1 []uuid.UUID) 
 }
 
 const listAdvisoriesByPackage = `-- name: ListAdvisoriesByPackage :many
-SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at FROM advisories a
+SELECT DISTINCT a.id, a.canonical_id, a.title, a.description, a.severity, a.cvss_score, a.cvss_version, a.cvss_vector, a.is_malware, a.malware_type, a.published_at, a.withdrawn_at, a.created_at, a.updated_at, a.rated_by FROM advisories a
 JOIN affected_ranges ar ON ar.advisory_id = a.id
 WHERE ar.ecosystem = $1 AND ar.package_name = $2
 ORDER BY a.severity, a.created_at DESC
@@ -299,6 +303,7 @@ func (q *Queries) ListAdvisoriesByPackage(ctx context.Context, arg ListAdvisorie
 			&i.WithdrawnAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -500,7 +505,7 @@ func (q *Queries) ListAliasesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.
 }
 
 const listSourcesByAdvisory = `-- name: ListSourcesByAdvisory :many
-SELECT id, advisory_id, provider, provider_id, severity, cvss_score, cvss_version, cvss_vector, raw_data, fetched_at, created_at FROM advisory_sources WHERE advisory_id = $1
+SELECT id, advisory_id, provider, provider_id, raw_data, fetched_at, created_at, ratings_version FROM advisory_sources WHERE advisory_id = $1
 `
 
 func (q *Queries) ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUID) ([]AdvisorySource, error) {
@@ -517,13 +522,10 @@ func (q *Queries) ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUI
 			&i.AdvisoryID,
 			&i.Provider,
 			&i.ProviderID,
-			&i.Severity,
-			&i.CvssScore,
-			&i.CvssVersion,
-			&i.CvssVector,
 			&i.RawData,
 			&i.FetchedAt,
 			&i.CreatedAt,
+			&i.RatingsVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -539,7 +541,7 @@ func (q *Queries) ListSourcesByAdvisory(ctx context.Context, advisoryID uuid.UUI
 }
 
 const listSourcesByAdvisoryIDs = `-- name: ListSourcesByAdvisoryIDs :many
-SELECT id, advisory_id, provider, provider_id, severity, cvss_score, cvss_version, cvss_vector, raw_data, fetched_at, created_at FROM advisory_sources WHERE advisory_id = ANY($1::uuid[])
+SELECT id, advisory_id, provider, provider_id, raw_data, fetched_at, created_at, ratings_version FROM advisory_sources WHERE advisory_id = ANY($1::uuid[])
 `
 
 func (q *Queries) ListSourcesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]AdvisorySource, error) {
@@ -556,13 +558,10 @@ func (q *Queries) ListSourcesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.
 			&i.AdvisoryID,
 			&i.Provider,
 			&i.ProviderID,
-			&i.Severity,
-			&i.CvssScore,
-			&i.CvssVersion,
-			&i.CvssVector,
 			&i.RawData,
 			&i.FetchedAt,
 			&i.CreatedAt,
+			&i.RatingsVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -575,6 +574,60 @@ func (q *Queries) ListSourcesByAdvisoryIDs(ctx context.Context, dollar_1 []uuid.
 		return nil, err
 	}
 	return items, nil
+}
+
+const setAdvisoryRating = `-- name: SetAdvisoryRating :one
+UPDATE advisories
+SET severity = $1,
+    cvss_score = $2,
+    cvss_version = $3,
+    cvss_vector = $4,
+    rated_by = $5,
+    updated_at = CASE
+        WHEN (severity, cvss_score, cvss_version, cvss_vector, rated_by)
+             IS DISTINCT FROM ($1, $2::numeric, $3::cvss_version, $4::text, $5::text)
+        THEN NOW() ELSE updated_at END
+WHERE id = $6
+RETURNING id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at, rated_by
+`
+
+type SetAdvisoryRatingParams struct {
+	Severity    SeverityLevel   `json:"severity"`
+	CvssScore   sql.NullString  `json:"cvss_score"`
+	CvssVersion NullCvssVersion `json:"cvss_version"`
+	CvssVector  string          `json:"cvss_vector"`
+	RatedBy     string          `json:"rated_by"`
+	AdvisoryID  uuid.UUID       `json:"advisory_id"`
+}
+
+func (q *Queries) SetAdvisoryRating(ctx context.Context, arg SetAdvisoryRatingParams) (Advisory, error) {
+	row := q.db.QueryRowContext(ctx, setAdvisoryRating,
+		arg.Severity,
+		arg.CvssScore,
+		arg.CvssVersion,
+		arg.CvssVector,
+		arg.RatedBy,
+		arg.AdvisoryID,
+	)
+	var i Advisory
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalID,
+		&i.Title,
+		&i.Description,
+		&i.Severity,
+		&i.CvssScore,
+		&i.CvssVersion,
+		&i.CvssVector,
+		&i.IsMalware,
+		&i.MalwareType,
+		&i.PublishedAt,
+		&i.WithdrawnAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RatedBy,
+	)
+	return i, err
 }
 
 const updateAdvisoryCanonicalID = `-- name: UpdateAdvisoryCanonicalID :exec
@@ -594,46 +647,37 @@ func (q *Queries) UpdateAdvisoryCanonicalID(ctx context.Context, arg UpdateAdvis
 }
 
 const upsertAdvisory = `-- name: UpsertAdvisory :one
-INSERT INTO advisories (canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO advisories (canonical_id, title, description, is_malware, malware_type, published_at, withdrawn_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (canonical_id) DO UPDATE SET
     title = EXCLUDED.title,
     description = EXCLUDED.description,
-    severity = EXCLUDED.severity,
-    cvss_score = EXCLUDED.cvss_score,
-    cvss_version = EXCLUDED.cvss_version,
-    cvss_vector = EXCLUDED.cvss_vector,
     is_malware = EXCLUDED.is_malware,
     malware_type = EXCLUDED.malware_type,
     published_at = EXCLUDED.published_at,
     withdrawn_at = EXCLUDED.withdrawn_at,
     updated_at = NOW()
-RETURNING id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at
+RETURNING id, canonical_id, title, description, severity, cvss_score, cvss_version, cvss_vector, is_malware, malware_type, published_at, withdrawn_at, created_at, updated_at, rated_by
 `
 
 type UpsertAdvisoryParams struct {
 	CanonicalID string          `json:"canonical_id"`
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
-	Severity    SeverityLevel   `json:"severity"`
-	CvssScore   sql.NullString  `json:"cvss_score"`
-	CvssVersion NullCvssVersion `json:"cvss_version"`
-	CvssVector  string          `json:"cvss_vector"`
 	IsMalware   bool            `json:"is_malware"`
 	MalwareType NullMalwareType `json:"malware_type"`
 	PublishedAt sql.NullTime    `json:"published_at"`
 	WithdrawnAt sql.NullTime    `json:"withdrawn_at"`
 }
 
+// Severity and CVSS are not written here: they are derived from the
+// advisory's ratings by SetAdvisoryRating once its sources are stored
+// (ADR-038 §2).
 func (q *Queries) UpsertAdvisory(ctx context.Context, arg UpsertAdvisoryParams) (Advisory, error) {
 	row := q.db.QueryRowContext(ctx, upsertAdvisory,
 		arg.CanonicalID,
 		arg.Title,
 		arg.Description,
-		arg.Severity,
-		arg.CvssScore,
-		arg.CvssVersion,
-		arg.CvssVector,
 		arg.IsMalware,
 		arg.MalwareType,
 		arg.PublishedAt,
@@ -655,6 +699,7 @@ func (q *Queries) UpsertAdvisory(ctx context.Context, arg UpsertAdvisoryParams) 
 		&i.WithdrawnAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RatedBy,
 	)
 	return i, err
 }
@@ -675,42 +720,36 @@ func (q *Queries) UpsertAdvisoryAlias(ctx context.Context, arg UpsertAdvisoryAli
 	return err
 }
 
-const upsertAdvisorySource = `-- name: UpsertAdvisorySource :exec
-INSERT INTO advisory_sources (advisory_id, provider, provider_id, severity, cvss_score, cvss_version, cvss_vector, raw_data, fetched_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+const upsertAdvisorySource = `-- name: UpsertAdvisorySource :one
+INSERT INTO advisory_sources (advisory_id, provider, provider_id, raw_data, fetched_at, ratings_version)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (advisory_id, provider) DO UPDATE SET
     provider_id = EXCLUDED.provider_id,
-    severity = EXCLUDED.severity,
-    cvss_score = EXCLUDED.cvss_score,
-    cvss_version = EXCLUDED.cvss_version,
-    cvss_vector = EXCLUDED.cvss_vector,
     raw_data = EXCLUDED.raw_data,
-    fetched_at = EXCLUDED.fetched_at
+    fetched_at = EXCLUDED.fetched_at,
+    ratings_version = EXCLUDED.ratings_version
+RETURNING id
 `
 
 type UpsertAdvisorySourceParams struct {
-	AdvisoryID  uuid.UUID         `json:"advisory_id"`
-	Provider    string            `json:"provider"`
-	ProviderID  string            `json:"provider_id"`
-	Severity    NullSeverityLevel `json:"severity"`
-	CvssScore   sql.NullString    `json:"cvss_score"`
-	CvssVersion NullCvssVersion   `json:"cvss_version"`
-	CvssVector  string            `json:"cvss_vector"`
-	RawData     json.RawMessage   `json:"raw_data"`
-	FetchedAt   time.Time         `json:"fetched_at"`
+	AdvisoryID     uuid.UUID       `json:"advisory_id"`
+	Provider       string          `json:"provider"`
+	ProviderID     string          `json:"provider_id"`
+	RawData        json.RawMessage `json:"raw_data"`
+	FetchedAt      time.Time       `json:"fetched_at"`
+	RatingsVersion int16           `json:"ratings_version"`
 }
 
-func (q *Queries) UpsertAdvisorySource(ctx context.Context, arg UpsertAdvisorySourceParams) error {
-	_, err := q.db.ExecContext(ctx, upsertAdvisorySource,
+func (q *Queries) UpsertAdvisorySource(ctx context.Context, arg UpsertAdvisorySourceParams) (uuid.UUID, error) {
+	row := q.db.QueryRowContext(ctx, upsertAdvisorySource,
 		arg.AdvisoryID,
 		arg.Provider,
 		arg.ProviderID,
-		arg.Severity,
-		arg.CvssScore,
-		arg.CvssVersion,
-		arg.CvssVector,
 		arg.RawData,
 		arg.FetchedAt,
+		arg.RatingsVersion,
 	)
-	return err
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }

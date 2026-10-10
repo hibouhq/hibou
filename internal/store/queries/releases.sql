@@ -30,7 +30,7 @@ SELECT COUNT(*)::bigint FROM releases WHERE repo_id = $1;
 
 -- name: ListReleasesWithRiskByRepo :many
 -- Enriched listing for the Releases tab: per release, the open-risk severity
--- counts of its pinned snapshot (platform-wide semantics: resolved and ordinary
+-- counts of its pinned snapshot, open malware apart (platform-wide semantics: resolved and ordinary
 -- suppressions out, active false-positive acceptances out — ADR-023), the clients currently
 -- on it via active deployments, and the snapshot's last completed scan.
 SELECT
@@ -41,6 +41,7 @@ SELECT
     COALESCE(risk.medium_count, 0)::bigint AS medium_count,
     COALESCE(risk.low_count, 0)::bigint AS low_count,
     COALESCE(risk.kev_open, 0)::bigint AS kev_open,
+    COALESCE(risk.malware_open, 0)::bigint AS malware_open,
     COALESCE(risk.total_count, 0)::bigint AS open_finding_count,
     COALESCE(scan.last_scanned_at, '1970-01-01T00:00:00Z'::timestamptz)::timestamptz AS last_scanned_at,
     COALESCE(dep.clients, '[]'::jsonb) AS clients,
@@ -65,6 +66,7 @@ LEFT JOIN LATERAL (
                 WHERE adv.id = v.advisory_id
             )
         )) AS kev_open,
+        COUNT(*) FILTER (WHERE v.type = 'malware') AS malware_open,
         COUNT(*) AS total_count
     FROM vulnerabilities v
     LEFT JOIN finding_acceptances fa

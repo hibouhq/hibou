@@ -64,6 +64,7 @@ type ReleaseWithRisk struct {
 	MediumCount      int64           `json:"medium_count"`
 	LowCount         int64           `json:"low_count"`
 	KEVOpen          *int64          `json:"kev_open"`
+	MalwareOpen      int64           `json:"malware_open"`
 	OpenFindingCount int64           `json:"open_finding_count"`
 	LastScannedAt    *time.Time      `json:"last_scanned_at,omitempty"`
 	Clients          []ReleaseClient `json:"clients"`
@@ -203,6 +204,7 @@ func (q *Queries) ListReleasesWithRiskByRepo(ctx context.Context, repoID uuid.UU
 			MediumCount:      row.MediumCount,
 			LowCount:         row.LowCount,
 			KEVOpen:          &kevOpen,
+			MalwareOpen:      row.MalwareOpen,
 			OpenFindingCount: row.OpenFindingCount,
 			Clients:          []ReleaseClient{},
 		}

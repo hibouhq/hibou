@@ -35,6 +35,7 @@ type queryStore interface {
 	UpdateScanProvider(ctx context.Context, arg dbgen.UpdateScanProviderParams) (dbgen.ScanProvider, error)
 	ListAffectedRangesByPackage(ctx context.Context, arg dbgen.ListAffectedRangesByPackageParams) ([]dbgen.AffectedRange, error)
 	GetAdvisoryByID(ctx context.Context, id uuid.UUID) (dbgen.Advisory, error)
+	ListAdvisoryRatings(ctx context.Context, advisoryIDs []uuid.UUID) ([]dbgen.ListAdvisoryRatingsRow, error)
 	CreateVulnerability(ctx context.Context, params dbgen.CreateVulnerabilityParams) (*store.Vulnerability, error)
 	MarkStaleVulnerabilities(ctx context.Context, snapshotID uuid.UUID, vulnType string, freshIDs []uuid.UUID) ([]string, error)
 	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
@@ -240,6 +241,7 @@ type componentMatchState struct {
 	advisorySet   map[uuid.UUID]struct{}
 	rangeCache    map[string][]dbgen.AffectedRange
 	advisoryCache map[uuid.UUID]dbgen.Advisory
+	ratingsCache  map[uuid.UUID][]advisory.Rating
 }
 
 func (s *Service) startScan(ctx context.Context, snapshotID uuid.UUID, resolvedProviders []string, triggeredBy string) (dbgen.Scan, time.Time, error) {
@@ -476,6 +478,7 @@ func newComponentMatchState(advisoryMap map[string]uuid.UUID) *componentMatchSta
 		advisorySet:   advisorySet,
 		rangeCache:    make(map[string][]dbgen.AffectedRange),
 		advisoryCache: make(map[uuid.UUID]dbgen.Advisory, len(advisorySet)),
+		ratingsCache:  make(map[uuid.UUID][]advisory.Rating, len(advisorySet)),
 	}
 }
 
@@ -555,6 +558,17 @@ func (s *Service) createMatchedVulnerability(ctx context.Context, snapshotID uui
 	if err != nil {
 		return nil, "", err
 	}
+	ratings, err := s.loadMatchedRatings(ctx, affectedRange.AdvisoryID, state)
+	if err != nil {
+		return nil, "", err
+	}
+	// The finding's own choice (ADR-038 §2): for an OS package, its distro's
+	// rating; otherwise the advisory's headline.
+	choice := advisory.FindingRating(ratings, advisoryRecord.IsMalware, component.Ecosystem, component.Purl)
+	rating := choice.Rating
+	if rating == nil {
+		rating = &advisory.Rating{}
+	}
 	vulnType := matchedVulnerabilityType(advisoryRecord)
 	vulnerability, err := s.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
 		Type:                   vulnType,
@@ -563,8 +577,12 @@ func (s *Service) createMatchedVulnerability(ctx context.Context, snapshotID uui
 		Description:            strings.TrimSpace(advisoryRecord.Description),
 		PrimaryIdentifierKind:  "advisory",
 		PrimaryIdentifierValue: strings.TrimSpace(advisoryRecord.CanonicalID),
-		OriginalSeverity:       advisoryRecord.Severity,
-		Severity:               advisoryRecord.Severity,
+		OriginalSeverity:       dbgen.SeverityLevel(choice.Severity),
+		Severity:               dbgen.SeverityLevel(choice.Severity),
+		CvssScore:              advisory.NullScore(rating.Score),
+		CvssVersion:            advisory.NullCVSSVersion(rating.Version),
+		CvssVector:             rating.Vector,
+		RatedBy:                rating.Rater,
 		Status:                 "detected",
 		// Attribute the finding to whatever produced the RANGE that matched,
 		// not to whichever provider's pass happened to notice it. A range a
@@ -597,6 +615,19 @@ func (s *Service) loadMatchedAdvisory(ctx context.Context, advisoryID uuid.UUID,
 	}
 	state.advisoryCache[advisoryID] = loaded
 	return loaded, nil
+}
+
+func (s *Service) loadMatchedRatings(ctx context.Context, advisoryID uuid.UUID, state *componentMatchState) ([]advisory.Rating, error) {
+	if ratings, ok := state.ratingsCache[advisoryID]; ok {
+		return ratings, nil
+	}
+	rows, err := s.queries.ListAdvisoryRatings(ctx, []uuid.UUID{advisoryID})
+	if err != nil {
+		return nil, fmt.Errorf("load ratings for advisory %s: %w", advisoryID, err)
+	}
+	ratings := advisory.RatingsFromRows(rows)
+	state.ratingsCache[advisoryID] = ratings
+	return ratings, nil
 }
 
 func matchedVulnerabilityType(advisoryRecord dbgen.Advisory) string {
@@ -793,10 +824,7 @@ func toIngestResults(results []provider.AdvisoryResult) []advisory.IngestResult 
 			Aliases:        append([]string(nil), result.Aliases...),
 			Title:          result.Title,
 			Description:    result.Description,
-			Severity:       result.Severity,
-			CVSSScore:      result.CVSSScore,
-			CVSSVersion:    result.CVSSVersion,
-			CVSSVector:     result.CVSSVector,
+			Ratings:        append([]advisory.Rating(nil), result.Ratings...),
 			CWEIDs:         append([]string(nil), result.CWEIDs...),
 			IsMalware:      result.IsMalware,
 			MalwareType:    result.MalwareType,

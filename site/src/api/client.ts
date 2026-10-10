@@ -232,6 +232,7 @@ export interface ReleaseWithRisk extends Release {
   medium_count: number
   low_count: number
   kev_open: number | null
+  malware_open: number
   open_finding_count: number
   last_scanned_at?: string
   clients: ReleaseClient[]
@@ -365,8 +366,39 @@ export interface SeverityCounts {
   critical: number
   high: number
   medium: number
+  /** No source rates it yet (ADR-038 §3); between medium and low. */
+  unknown: number
   low: number
   info: number
+}
+
+/** One CVSS rating (ADR-038). Score is absent for an unscored v4.0 vector. */
+export interface CVSSRating {
+  score?: number
+  version?: string
+  vector?: string
+}
+
+/** Exploitation probability in the next 30 days, from FIRST's daily file. */
+export interface EPSSScore {
+  cve_id: string
+  score: number
+  percentile: number
+  date?: string
+}
+
+/** One rater's statement about a finding's advisory (ADR-038 §2). */
+export interface FindingRating {
+  rater: string
+  provider: string
+  version?: string
+  vector?: string
+  score?: number
+  /** The rater's own severity word, when it publishes one. */
+  label?: string
+  severity: string
+  /** The rating the finding's severity comes from. */
+  used?: boolean
 }
 
 export interface AuditLogEntry {
@@ -495,7 +527,7 @@ export interface RepoConfigGate {
   code?: { enabled?: boolean | null; max_critical?: number | null; max_high?: number | null; max_medium?: number | null }
   // ADR-037 §7: deny NEW findings of any type by CWE.
   cwe?: { deny?: string[]; deny_tree?: string[]; deny_sets?: string[]; deny_categories?: string[]; types?: string[]; min_severity?: string }
-  vulnerabilities?: { enabled?: boolean | null; max_critical?: number | null; max_high?: number | null; max_medium?: number | null; max_new_total?: number | null }
+  vulnerabilities?: { enabled?: boolean | null; max_critical?: number | null; max_high?: number | null; max_medium?: number | null; max_unknown?: number | null; max_new_total?: number | null }
   licenses?: { deny_categories?: string[]; deny?: string[]; allow?: string[]; deny_unknown?: boolean | null }
   secrets?: { max_new?: number | null }
   coverage?: { min_coverage?: number | null; grace?: number | null; diff_minimum?: number | null }
@@ -565,6 +597,7 @@ export interface Vulnerability {
   primary_identifier_value?: string
   severity: string
   original_severity?: string
+  severity_override_reason?: string
   status: string
   state_comment?: string
   detected_at: string
@@ -581,6 +614,15 @@ export interface Vulnerability {
   advisory_id?: string
   language?: string
   confidence?: string
+  // The rating the finding uses and who gave it (ADR-038 §2): for an OS
+  // package, its distro's own rating.
+  cvss?: CVSSRating
+  rated_by?: string
+  epss?: EPSSScore
+  /** Raters fall in different severity bands: the list marks it. */
+  ratings_disagree?: boolean
+  /** Every rating; on list rows only when raters disagree. */
+  ratings?: FindingRating[]
   // Every CWE the finding carries, with its title (ADR-037): from the
   // scanner rule, the advisory, SARIF result taxa, a manual declaration, or
   // the finding type (secrets are CWE-798).
@@ -763,9 +805,10 @@ export interface FindingAdvisory {
   canonical_id: string
   title?: string
   description?: string
+  /** The advisory's headline: NVD first, else the strongest rater. */
   severity?: string
-  cvss_score?: string
-  cvss_vector?: string
+  cvss?: CVSSRating
+  rated_by?: string
   is_malware?: boolean
   malware_type?: string
   fixed_versions?: string[]
@@ -1344,11 +1387,13 @@ export interface TrendPoint {
   findings_critical: number
   findings_high: number
   findings_medium: number
+  findings_unknown: number
   findings_low: number
   findings_info: number
   vulns_critical: number
   vulns_high: number
   vulns_medium: number
+  vulns_unknown: number
   vulns_low: number
   vulns_info: number
   components_total: number
@@ -2447,6 +2492,11 @@ class ApiClient {
     )
   }
 
+
+  /** Tools: compare two local SBOM files, no repository involved. */
+  compareLocalSBOMs(body: CompareSBOMsRequest) {
+    return this.request<ApiResponse<SBOMDiff>>('/tools/sbom/compare', { method: 'POST', body: JSON.stringify(body) })
+  }
 
   compareSBOMs(provider: string, slug: string, repoSlug: string, body: CompareSBOMsRequest) {
     return this.request<ApiResponse<SBOMDiff>>(

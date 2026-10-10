@@ -41,6 +41,42 @@
 }
 
 @layer components {
+  /* Global tooltip for every `title` attribute (src/lib/tooltip.ts),
+    Dark style. Outside the stacking of dialogs (z-[90] max). */
+  .hibou-tooltip {
+    position: fixed;
+    z-index: 100;
+    max-width: 22rem;
+    padding: 0.375rem 0.625rem;
+    border-radius: 6px;
+    background-color: #3d444d;
+    color: #ffffff;
+    font-size: 0.75rem;
+    font-weight: 400;
+    line-height: 1.5;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    box-shadow: 0 6px 12px -3px rgb(1 4 9 / 0.4);
+    animation: hibou-tooltip-in 120ms ease-out;
+  }
+
+  .hibou-tooltip[hidden] {
+    display: none;
+  }
+
+  @keyframes hibou-tooltip-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hibou-tooltip {
+      animation: none;
+    }
+  }
+
   .sev-critical {
     @apply bg-sev-critical/15 text-sev-critical;
   }
@@ -51,6 +87,10 @@
 
   .sev-medium {
     @apply bg-sev-medium/15 text-sev-medium;
+  }
+
+  .sev-unknown {
+    @apply border border-dashed border-sev-unknown/50 text-sev-unknown;
   }
 
   .sev-low {

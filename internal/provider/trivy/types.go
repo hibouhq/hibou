@@ -80,13 +80,17 @@ type scanResult struct {
 }
 
 type trivyVulnerability struct {
-	VulnerabilityID  string               `json:"vulnerability_id"`
-	PkgName          string               `json:"pkg_name"`
-	InstalledVersion string               `json:"installed_version"`
-	FixedVersion     string               `json:"fixed_version"`
-	Title            string               `json:"title"`
-	Description      string               `json:"description"`
-	Severity         string               `json:"severity"`
+	VulnerabilityID  string `json:"vulnerability_id"`
+	PkgName          string `json:"pkg_name"`
+	InstalledVersion string `json:"installed_version"`
+	FixedVersion     string `json:"fixed_version"`
+	Title            string `json:"title"`
+	Description      string `json:"description"`
+	Severity         string `json:"severity"`
+	// SeveritySource names whose rating Severity is (the distro vendor for an
+	// OS package); VendorSeverity is every vendor's own label.
+	SeveritySource   string               `json:"severity_source,omitempty"`
+	VendorSeverity   map[string]string    `json:"vendor_severity,omitempty"`
 	References       []string             `json:"references"`
 	CweIDs           []string             `json:"cwe_ids"`
 	PrimaryURL       string               `json:"primary_url"`

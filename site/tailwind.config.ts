@@ -2,7 +2,7 @@ import type { Config } from 'tailwindcss'
 
 export default {
   content: ['./index.html', './src/**/*.{vue,ts,tsx}'],
-  safelist: ['sev-critical', 'sev-high', 'sev-medium', 'sev-low', 'sev-info'],
+  safelist: ['sev-critical', 'sev-high', 'sev-medium', 'sev-unknown', 'sev-low', 'sev-info'],
   darkMode: 'class',
   theme: {
     extend: {
@@ -23,8 +23,16 @@ export default {
           critical: '#f85149',
           high: '#e6550d',
           medium: '#d29922',
+          // No source rates it (ADR-038 §3): neutral, distinct from low.
+          unknown: '#a3a3a3',
           low: '#8b949e',
           info: '#58a6ff',
+        },
+        // Malware has one colour everywhere: violet, so a malicious package
+        // never reads as "just another critical" (red) or KEV (red flame).
+        malware: {
+          DEFAULT: '#a371f7',
+          muted: '#a371f726',
         },
         ok: {
           DEFAULT: '#3fb950',

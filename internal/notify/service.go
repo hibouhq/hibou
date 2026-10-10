@@ -229,7 +229,7 @@ func (s *Service) handleMalwareDetected(ctx context.Context, payload any) {
 // for the first-time identifiers only, and returns the batch's max severity.
 func summarizeFreshFindings(data map[string]any, fresh map[string]struct{}) (string, dbgen.SeverityLevel) {
 	const maxListed = 5
-	rank := map[string]int{"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+	rank := map[string]int{"critical": 6, "high": 5, "medium": 4, "unknown": 3, "low": 2, "info": 1}
 	maxSeverity := "info"
 	parts := []string{}
 	total := 0
@@ -286,6 +286,8 @@ func summarizeFreshFindings(data map[string]any, fresh map[string]struct{}) (str
 		level = dbgen.SeverityLevelHigh
 	case "medium":
 		level = dbgen.SeverityLevelMedium
+	case "unknown":
+		level = dbgen.SeverityLevelUnknown
 	case "low":
 		level = dbgen.SeverityLevelLow
 	}

@@ -210,6 +210,12 @@ const docTemplate = `{
                         "description": "Maximum results for q (default 20, max 100)",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Without q/ids: list entries of these abstractions (pillar,class)",
+                        "name": "abstraction",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -7243,6 +7249,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/tools/sbom/compare": {
+            "post": {
+                "description": "The Tools SBOM comparator without a repository: both sides are inline documents (base64 CycloneDX or SPDX JSON) the caller sends, so nothing stored is read and no repository access is needed. Repository snapshot artifacts are compared through the repository's own endpoint.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tools"
+                ],
+                "summary": "Compare two SBOM files",
+                "parameters": [
+                    {
+                        "description": "Inline base and head documents",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.compareSBOMsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/sbom.SBOMDiff"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/upload": {
             "post": {
                 "security": [
@@ -8196,6 +8254,84 @@ const docTemplate = `{
                 }
             }
         },
+        "sbom.ComponentDelta": {
+            "type": "object",
+            "properties": {
+                "base_version": {
+                    "type": "string"
+                },
+                "ecosystem": {
+                    "type": "string"
+                },
+                "head_version": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "purl": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "sbom.SBOMDiff": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/sbom.ComponentDelta"
+                    }
+                },
+                "removed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/sbom.ComponentDelta"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/sbom.SBOMDiffSummary"
+                },
+                "unchanged": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/sbom.ComponentDelta"
+                    }
+                },
+                "version_changed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/sbom.ComponentDelta"
+                    }
+                }
+            }
+        },
+        "sbom.SBOMDiffSummary": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "type": "integer"
+                },
+                "removed": {
+                    "type": "integer"
+                },
+                "total_base": {
+                    "type": "integer"
+                },
+                "total_head": {
+                    "type": "integer"
+                },
+                "unchanged": {
+                    "type": "integer"
+                },
+                "version_changed": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.addReleaseClientRequest": {
             "type": "object",
             "properties": {
@@ -8440,6 +8576,29 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.compareSBOMsRequest": {
+            "type": "object",
+            "properties": {
+                "base_artifact_id": {
+                    "type": "string"
+                },
+                "base_content": {
+                    "type": "string"
+                },
+                "base_format": {
+                    "type": "string"
+                },
+                "head_artifact_id": {
+                    "type": "string"
+                },
+                "head_content": {
+                    "type": "string"
+                },
+                "head_format": {
                     "type": "string"
                 }
             }
@@ -8774,6 +8933,13 @@ const docTemplate = `{
                 "abstraction": {
                     "type": "string"
                 },
+                "ancestors": {
+                    "description": "Ancestors are the View 1000 parents, nearest first: what a cwe-tree:\nquery would have to name to include this CWE.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "category": {
                     "$ref": "#/definitions/cwe.SetRef"
                 },
@@ -9034,11 +9200,8 @@ const docTemplate = `{
                 "canonical_id": {
                     "type": "string"
                 },
-                "cvss_score": {
-                    "type": "string"
-                },
-                "cvss_vector": {
-                    "type": "string"
+                "cvss": {
+                    "$ref": "#/definitions/store.CVSSScore"
                 },
                 "description": {
                     "type": "string"
@@ -9060,6 +9223,9 @@ const docTemplate = `{
                     "description": "When the advisory became public, on UPSTREAM's clock. The finding's own\nfirst_seen_at is ours, and the two beside each other invite the wrong\nreading — the gap between them is how long the flaw was public before\nthis instance matched it.",
                     "type": "string"
                 },
+                "rated_by": {
+                    "type": "string"
+                },
                 "references": {
                     "type": "array",
                     "items": {
@@ -9067,6 +9233,7 @@ const docTemplate = `{
                     }
                 },
                 "severity": {
+                    "description": "Severity and CVSS are the advisory's headline (NVD first, else the\nstrongest rater); the finding's own rating can differ (a distro's).",
                     "type": "string"
                 },
                 "title": {
@@ -10535,6 +10702,20 @@ const docTemplate = `{
                 }
             }
         },
+        "store.CVSSScore": {
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "number"
+                },
+                "vector": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
         "store.CWEUsage": {
             "type": "object",
             "properties": {
@@ -10552,6 +10733,10 @@ const docTemplate = `{
                 },
                 "deprecated": {
                     "type": "boolean"
+                },
+                "descendants": {
+                    "description": "Descendants counts the View 1000 sub-types a cwe-tree: query adds.",
+                    "type": "integer"
                 },
                 "id": {
                     "type": "integer"
@@ -10691,6 +10876,23 @@ const docTemplate = `{
                 "DeploymentStatusSuperseded"
             ]
         },
+        "store.EPSSScore": {
+            "type": "object",
+            "properties": {
+                "cve_id": {
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "percentile": {
+                    "type": "number"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
         "store.FindingAcceptance": {
             "type": "object",
             "properties": {
@@ -10820,6 +11022,36 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.FindingRating": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "rater": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "used": {
+                    "description": "Used marks the rating the finding's severity comes from.",
+                    "type": "boolean"
+                },
+                "vector": {
+                    "type": "string"
+                },
+                "version": {
                     "type": "string"
                 }
             }
@@ -11319,6 +11551,9 @@ const docTemplate = `{
                 "low_count": {
                     "type": "integer"
                 },
+                "malware_open": {
+                    "type": "integer"
+                },
                 "medium_count": {
                     "type": "integer"
                 },
@@ -11411,11 +11646,13 @@ const docTemplate = `{
                 "critical",
                 "high",
                 "medium",
+                "unknown",
                 "low",
                 "info",
                 "critical",
                 "high",
                 "medium",
+                "unknown",
                 "low",
                 "info"
             ],
@@ -11423,6 +11660,7 @@ const docTemplate = `{
                 "SeverityLevelCritical",
                 "SeverityLevelHigh",
                 "SeverityLevelMedium",
+                "SeverityLevelUnknown",
                 "SeverityLevelLow",
                 "SeverityLevelInfo"
             ]
@@ -11552,6 +11790,14 @@ const docTemplate = `{
                 "created_by": {
                     "type": "string"
                 },
+                "cvss": {
+                    "description": "CVSS is the rating the finding uses and RatedBy who gave it (ADR-038\n§2): for an OS package, its distro's own rating. Copied like severity.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.CVSSScore"
+                        }
+                    ]
+                },
                 "cwes": {
                     "description": "CWEs every source attributes to the finding (ADR-037): rule, advisory,\nSARIF result taxa, a manual declaration, or the finding type. Attached\nper page through the finding_cwes view — never a column.",
                     "type": "array",
@@ -11581,6 +11827,14 @@ const docTemplate = `{
                 },
                 "end_line": {
                     "type": "integer"
+                },
+                "epss": {
+                    "description": "EPSS, RatingsDisagree and Ratings are attached per page (ADR-038 §6).\nRatings lists every rater; list rows carry it only when they disagree,\nthe hover behind the list's marker.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.EPSSScore"
+                        }
+                    ]
                 },
                 "file_path": {
                     "type": "string"
@@ -11649,6 +11903,18 @@ const docTemplate = `{
                 },
                 "primary_identifier_value": {
                     "type": "string"
+                },
+                "rated_by": {
+                    "type": "string"
+                },
+                "ratings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.FindingRating"
+                    }
+                },
+                "ratings_disagree": {
+                    "type": "boolean"
                 },
                 "reachability": {
                     "type": "string"
