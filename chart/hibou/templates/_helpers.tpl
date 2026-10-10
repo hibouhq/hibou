@@ -273,3 +273,9 @@ where the scheduler can place the pod, so the operator has to see the number.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Dedicated metrics port, or "0" when metrics are disabled or served on the
+application port. */}}
+{{- define "hibou.metricsPort" -}}
+{{- if .Values.hibou.metrics.enabled -}}{{ .Values.hibou.metrics.port | int }}{{- else -}}0{{- end -}}
+{{- end -}}

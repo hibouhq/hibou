@@ -41,6 +41,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            {{- if ne (include "hibou.metricsPort" .) "0" }}
+            - name: metrics
+              containerPort: {{ include "hibou.metricsPort" . }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "hibou.fullname" . }}
@@ -56,6 +61,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "hibou.postgresqlSecretName" . }}
                   key: {{ include "hibou.postgresqlSecretKey" . }}
+            {{- if and .Values.hibou.metrics.enabled .Values.hibou.metrics.auth.existingSecret }}
+            - name: HIBOU_METRICS_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.hibou.metrics.auth.existingSecret }}
+                  key: {{ .Values.hibou.metrics.auth.existingSecretKey }}
+            {{- end }}
             {{- if eq (include "hibou.artifactBackend" .) "s3" }}
             - name: HIBOU_ARTIFACT_S3_ACCESS_KEY_ID
               valueFrom:

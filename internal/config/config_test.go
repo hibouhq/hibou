@@ -684,3 +684,67 @@ port: 7777
 		t.Errorf("expected env to override file, got %d", cfg.Port)
 	}
 }
+
+func TestLoadMetricsAndStorageUsage(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HIBOU_METRICS_PORT", "9090")
+	t.Setenv("HIBOU_METRICS_BEARER_TOKEN", "from-env")
+	t.Setenv("HIBOU_METRICS_BEARER_TOKEN_FILE", tokenFile)
+	t.Setenv("HIBOU_STORAGE_USAGE_INTERVAL", "5m")
+	t.Setenv("HIBOU_STORAGE_USAGE_INVENTORY_ENABLED", "true")
+	t.Setenv("HIBOU_STORAGE_USAGE_INVENTORY_MAX_OBJECTS", "500")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Metrics.Enabled || cfg.Metrics.Port != 9090 || cfg.Metrics.BearerToken != "from-file" {
+		t.Fatalf("metrics = %+v, want port 9090 and the file token", cfg.Metrics)
+	}
+	su := cfg.StorageUsage
+	if !su.Enabled || su.Interval != 5*time.Minute || !su.Inventory.Enabled || su.Inventory.Interval != 24*time.Hour || su.Inventory.MaxObjects != 500 {
+		t.Fatalf("storage usage = %+v", su)
+	}
+}
+
+func TestLoadMetricsRejectsInvalid(t *testing.T) {
+	for name, env := range map[string][2]string{
+		"port clash":         {"HIBOU_METRICS_PORT", "8585"},
+		"empty token file":   {"HIBOU_METRICS_BEARER_TOKEN_FILE", "EMPTY"},
+		"missing token file": {"HIBOU_METRICS_BEARER_TOKEN_FILE", "/nonexistent/token"},
+		"interval too short": {"HIBOU_STORAGE_USAGE_INTERVAL", "10s"},
+		"inventory too fast": {"HIBOU_STORAGE_USAGE_INVENTORY_INTERVAL", "5m"},
+		"no objects":         {"HIBOU_STORAGE_USAGE_INVENTORY_MAX_OBJECTS", "0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := env[1]
+			if value == "EMPTY" {
+				value = filepath.Join(t.TempDir(), "empty")
+				if err := os.WriteFile(value, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv(env[0], value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted %s=%s", env[0], value)
+			}
+		})
+	}
+}
+
+// Disabled metrics never clash: the port is unused, so it is not validated
+// against the application ports.
+func TestLoadMetricsDisabledSkipsPortCheck(t *testing.T) {
+	t.Setenv("HIBOU_METRICS_ENABLED", "false")
+	t.Setenv("HIBOU_METRICS_PORT", "8585")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Metrics.Enabled {
+		t.Fatal("metrics.enabled = true, want false")
+	}
+}

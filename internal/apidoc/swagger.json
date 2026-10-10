@@ -786,6 +786,61 @@
                 }
             }
         },
+        "/instance/storage": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The latest storage usage sample (Postgres, artifact ledger, optional backend inventory) and the sampler settings. Usage only, no prices. Instance admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "instance"
+                ],
+                "summary": "Instance storage usage",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.instanceStorageResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/metrics": {
             "get": {
                 "description": "Returns basic server metrics",
@@ -9606,6 +9661,38 @@
                 }
             }
         },
+        "server.instanceStorageResponse": {
+            "type": "object",
+            "properties": {
+                "artifact_backend": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "interval_seconds": {
+                    "type": "number"
+                },
+                "inventory_enabled": {
+                    "type": "boolean"
+                },
+                "inventory_interval_seconds": {
+                    "type": "number"
+                },
+                "metrics_exposure": {
+                    "description": "MetricsExposure says how /metrics is reachable: \"disabled\",\n\"dedicated_port\", \"token\" or \"public\" (application port, no token).",
+                    "type": "string"
+                },
+                "sample": {
+                    "description": "Sample is null until the sampler's first pass has completed.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/storageusage.Sample"
+                        }
+                    ]
+                }
+            }
+        },
         "server.meResponse": {
             "type": "object",
             "properties": {
@@ -10617,6 +10704,143 @@
                 "valid": {
                     "description": "Valid is true if Time is not NULL",
                     "type": "boolean"
+                }
+            }
+        },
+        "storageusage.Backend": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "collected_at": {
+                    "type": "string"
+                },
+                "duration_seconds": {
+                    "type": "number"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "objects": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "volume_capacity_bytes": {
+                    "description": "Volume fields are set for the filesystem backend only.",
+                    "type": "integer"
+                },
+                "volume_free_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "storageusage.KindUsage": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "objects": {
+                    "type": "integer"
+                }
+            }
+        },
+        "storageusage.Ledger": {
+            "type": "object",
+            "properties": {
+                "collected_at": {
+                    "type": "string"
+                },
+                "duration_seconds": {
+                    "type": "number"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "kinds": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/storageusage.KindUsage"
+                    }
+                }
+            }
+        },
+        "storageusage.Postgres": {
+            "type": "object",
+            "properties": {
+                "cache_hit_ratio": {
+                    "type": "number"
+                },
+                "collected_at": {
+                    "type": "string"
+                },
+                "connections_max": {
+                    "type": "integer"
+                },
+                "connections_used": {
+                    "type": "integer"
+                },
+                "database_bytes": {
+                    "type": "integer"
+                },
+                "duration_seconds": {
+                    "type": "number"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "oldest_transaction_seconds": {
+                    "description": "OldestTransactionSeconds and CacheHitRatio are nil when the role cannot\nsee them or there is nothing to report; absent beats a faked zero.",
+                    "type": "number"
+                },
+                "tables": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/storageusage.TableUsage"
+                    }
+                },
+                "xid_age": {
+                    "type": "integer"
+                }
+            }
+        },
+        "storageusage.Sample": {
+            "type": "object",
+            "properties": {
+                "backend": {
+                    "$ref": "#/definitions/storageusage.Backend"
+                },
+                "ledger": {
+                    "$ref": "#/definitions/storageusage.Ledger"
+                },
+                "postgres": {
+                    "$ref": "#/definitions/storageusage.Postgres"
+                }
+            }
+        },
+        "storageusage.TableUsage": {
+            "type": "object",
+            "properties": {
+                "dead_rows": {
+                    "type": "integer"
+                },
+                "index_bytes": {
+                    "type": "integer"
+                },
+                "live_rows": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "table_bytes": {
+                    "type": "integer"
                 }
             }
         },

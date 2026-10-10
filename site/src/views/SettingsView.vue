@@ -57,7 +57,7 @@
 
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { Activity, History, KeyRound, Megaphone, Radar, ScrollText, ShieldCheck, User, UsersRound } from 'lucide-vue-next'
+import { Activity, HardDrive, History, KeyRound, Megaphone, Radar, ScrollText, ShieldCheck, User, UsersRound } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
@@ -92,6 +92,7 @@ const nav = computed<{ title: string; items: NavItem[] }[]>(() => {
         { label: 'Administrators', icon: ShieldCheck, name: 'settings-instance-admins' },
         { label: 'Audit log', icon: ScrollText, name: 'settings-instance-audit' },
         { label: 'Jobs & workers', icon: Activity, name: 'settings-instance-jobs' },
+        { label: 'Storage', icon: HardDrive, name: 'settings-instance-storage' },
         { label: 'People', icon: UsersRound, name: 'settings-instance-people' },
         { label: 'Advisories', icon: History, name: 'settings-instance-advisories' },
         { label: 'Watches', icon: Radar, name: 'settings-instance-watches' },

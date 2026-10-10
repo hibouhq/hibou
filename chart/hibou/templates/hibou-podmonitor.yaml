@@ -1,0 +1,34 @@
+{{- if .Values.hibou.metrics.podMonitor.enabled }}
+{{- if eq (include "hibou.metricsPort" .) "0" }}
+{{- fail "hibou.metrics.podMonitor needs hibou.metrics.enabled=true and a dedicated hibou.metrics.port" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "hibou.fullname" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    {{- with .Values.hibou.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [server, worker]
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.hibou.metrics.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.hibou.metrics.podMonitor.scrapeTimeout }}
+      {{- with .Values.hibou.metrics.auth.existingSecret }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ . }}
+          key: {{ $.Values.hibou.metrics.auth.existingSecretKey }}
+      {{- end }}
+{{- end }}

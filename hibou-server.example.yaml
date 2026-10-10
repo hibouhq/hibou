@@ -128,6 +128,26 @@ epss:
   # outbound internet.
   url: ""
 
+# Prometheus /metrics (ADR-039). With port 0 it is served on the application
+# port, so anything that can reach hibou can read it. Give it its own port (not
+# forwarded by your ingress), a bearer token, or both.
+metrics:
+  enabled: true  # false serves /metrics nowhere
+  port: 0
+  # bearer_token: ""
+  # bearer_token_file: /run/secrets/hibou-metrics-token  # wins over bearer_token
+
+# Storage usage sampler (ADR-039): Postgres sizes/health and the artifact
+# ledger, exported on /metrics. Usage only, no prices: join cost outside hibou.
+storage_usage:
+  enabled: true
+  interval: 15m
+  # Lists the artifact backend to find what it actually holds (orphans).
+  # On S3 each 1,000 keys is a billed LIST request, hence opt-in.
+  inventory:
+    enabled: false
+    interval: 24h
+    max_objects: 1000000
 
 
 # Delayed background loops.

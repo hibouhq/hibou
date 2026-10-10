@@ -1,0 +1,34 @@
+{{- if .Values.hibou.metrics.networkPolicy.enabled }}
+{{- if not .Values.hibou.metrics.networkPolicy.from }}
+{{- fail "hibou.metrics.networkPolicy.from is required: without it nothing could scrape /metrics" }}
+{{- end }}
+{{- if eq (include "hibou.metricsPort" .) "0" }}
+{{- fail "hibou.metrics.networkPolicy needs hibou.metrics.enabled=true and a dedicated hibou.metrics.port" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.fullname" . }}-metrics
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [server, worker]
+  policyTypes: [Ingress]
+  ingress:
+    # Application traffic is unchanged: open, as without a policy.
+    - ports:
+        - port: http
+          protocol: TCP
+    # /metrics only from the configured scrapers.
+    - ports:
+        - port: metrics
+          protocol: TCP
+      from:
+        {{- toYaml .Values.hibou.metrics.networkPolicy.from | nindent 8 }}
+{{- end }}

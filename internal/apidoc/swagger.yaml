@@ -1035,6 +1035,28 @@ definitions:
       version:
         type: string
     type: object
+  server.instanceStorageResponse:
+    properties:
+      artifact_backend:
+        type: string
+      enabled:
+        type: boolean
+      interval_seconds:
+        type: number
+      inventory_enabled:
+        type: boolean
+      inventory_interval_seconds:
+        type: number
+      metrics_exposure:
+        description: |-
+          MetricsExposure says how /metrics is reachable: "disabled",
+          "dedicated_port", "token" or "public" (application port, no token).
+        type: string
+      sample:
+        allOf:
+        - $ref: '#/definitions/storageusage.Sample'
+        description: Sample is null until the sampler's first pass has completed.
+    type: object
   server.meResponse:
     properties:
       avatar_url:
@@ -1736,6 +1758,98 @@ definitions:
       valid:
         description: Valid is true if Time is not NULL
         type: boolean
+    type: object
+  storageusage.Backend:
+    properties:
+      bytes:
+        type: integer
+      collected_at:
+        type: string
+      duration_seconds:
+        type: number
+      error:
+        type: string
+      objects:
+        type: integer
+      truncated:
+        type: boolean
+      volume_capacity_bytes:
+        description: Volume fields are set for the filesystem backend only.
+        type: integer
+      volume_free_bytes:
+        type: integer
+    type: object
+  storageusage.KindUsage:
+    properties:
+      bytes:
+        type: integer
+      kind:
+        type: string
+      objects:
+        type: integer
+    type: object
+  storageusage.Ledger:
+    properties:
+      collected_at:
+        type: string
+      duration_seconds:
+        type: number
+      error:
+        type: string
+      kinds:
+        items:
+          $ref: '#/definitions/storageusage.KindUsage'
+        type: array
+    type: object
+  storageusage.Postgres:
+    properties:
+      cache_hit_ratio:
+        type: number
+      collected_at:
+        type: string
+      connections_max:
+        type: integer
+      connections_used:
+        type: integer
+      database_bytes:
+        type: integer
+      duration_seconds:
+        type: number
+      error:
+        type: string
+      oldest_transaction_seconds:
+        description: |-
+          OldestTransactionSeconds and CacheHitRatio are nil when the role cannot
+          see them or there is nothing to report; absent beats a faked zero.
+        type: number
+      tables:
+        items:
+          $ref: '#/definitions/storageusage.TableUsage'
+        type: array
+      xid_age:
+        type: integer
+    type: object
+  storageusage.Sample:
+    properties:
+      backend:
+        $ref: '#/definitions/storageusage.Backend'
+      ledger:
+        $ref: '#/definitions/storageusage.Ledger'
+      postgres:
+        $ref: '#/definitions/storageusage.Postgres'
+    type: object
+  storageusage.TableUsage:
+    properties:
+      dead_rows:
+        type: integer
+      index_bytes:
+        type: integer
+      live_rows:
+        type: integer
+      name:
+        type: string
+      table_bytes:
+        type: integer
     type: object
   store.APIKey:
     properties:
@@ -3194,6 +3308,40 @@ paths:
       security:
       - BearerAuth: []
       summary: Update announcement banners
+      tags:
+      - instance
+  /instance/storage:
+    get:
+      description: The latest storage usage sample (Postgres, artifact ledger, optional
+        backend inventory) and the sampler settings. Usage only, no prices. Instance
+        admins only.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.instanceStorageResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Instance storage usage
       tags:
       - instance
   /metrics:

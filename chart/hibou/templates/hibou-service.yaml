@@ -14,3 +14,10 @@ spec:
       port: 8080
       targetPort: http
       protocol: TCP
+    {{- if ne (include "hibou.metricsPort" .) "0" }}
+    # Cluster-internal scrape target; the ingress only forwards port 8080.
+    - name: metrics
+      port: {{ include "hibou.metricsPort" . }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}

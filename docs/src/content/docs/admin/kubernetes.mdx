@@ -150,6 +150,35 @@ For TLS with an existing secret:
   --set ingress.tls.existingSecret=my-tls-secret
 ```
 
+### Metrics
+
+Hibou serves Prometheus metrics, including storage usage (database, tables,
+artifacts), on a dedicated port, `9090` by default. The ingress never forwards
+that port, so `/metrics` is reachable only inside the cluster. Admins can see
+the same storage numbers without a metrics stack under **Settings → Storage**.
+
+```yaml
+hibou:
+  metrics:
+    # Scrape with the Prometheus Operator (the VictoriaMetrics operator converts it too)
+    podMonitor:
+      enabled: true
+      labels:
+        release: kube-prometheus-stack
+    # Require a bearer token (Secret key "token"); the PodMonitor sends it
+    auth:
+      existingSecret: hibou-metrics-token
+    # Only the monitoring namespace may reach the metrics port
+    networkPolicy:
+      enabled: true
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+```
+
+Set `hibou.metrics.enabled=false` to turn `/metrics` off entirely.
+
 ## Upgrading
 
 ```bash

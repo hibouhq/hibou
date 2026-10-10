@@ -72,8 +72,41 @@ type Config struct {
 	EPSS                         EPSSConfig
 	Worker                       WorkerConfig
 	SecretScan                   SecretScanConfig
+	Metrics                      MetricsConfig
+	StorageUsage                 StorageUsageConfig
 
 	Forges []ForgeConfig
+}
+
+// MetricsConfig secures the Prometheus /metrics endpoint (ADR-039 §5).
+type MetricsConfig struct {
+	// Enabled, default true, serves /metrics at all. False removes it from
+	// every listener.
+	Enabled bool
+	// Port, when non-zero, serves /metrics on its own listener and removes it
+	// from the application router, so an ingress forwarding the application
+	// port no longer exposes it.
+	Port int
+	// BearerToken, when set, is required as "Authorization: Bearer <token>".
+	// Loaded from metrics.bearer_token_file when that is set.
+	BearerToken string
+}
+
+// StorageUsageConfig drives the leader-locked storage sampler (ADR-039 §2).
+type StorageUsageConfig struct {
+	// Enabled defaults to true: Postgres and ledger stats cost two catalog
+	// queries per interval.
+	Enabled  bool
+	Interval time.Duration
+	// Inventory lists the artifact backend itself. Off by default: on S3
+	// every 1,000 keys is a billed LIST request.
+	Inventory StorageInventoryConfig
+}
+
+type StorageInventoryConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	MaxObjects int64
 }
 
 type BackgroundConfig struct {
@@ -221,6 +254,10 @@ func (c Config) MCPListenAddr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.MCPPort)
 }
 
+func (c Config) MetricsListenAddr() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.Metrics.Port)
+}
+
 // CookieDomain returns the domain for session cookies.
 // Derived from HIBOU_BASE_URL hostname. Empty in dev (host-only cookie).
 func (c Config) CookieDomain() string {
@@ -317,6 +354,15 @@ func Load() (Config, error) {
 	v.SetDefault("epss.enabled", true)
 	v.SetDefault("epss.url", "")
 	v.SetDefault("epss.interval", "24h")
+	v.SetDefault("metrics.enabled", true)
+	v.SetDefault("metrics.port", 0)
+	v.SetDefault("metrics.bearer_token", "")
+	v.SetDefault("metrics.bearer_token_file", "")
+	v.SetDefault("storage_usage.enabled", true)
+	v.SetDefault("storage_usage.interval", "15m")
+	v.SetDefault("storage_usage.inventory.enabled", false)
+	v.SetDefault("storage_usage.inventory.interval", "24h")
+	v.SetDefault("storage_usage.inventory.max_objects", int64(1000000))
 	v.SetDefault("worker.lease.duration", "5m")
 	v.SetDefault("worker.heartbeat.interval", "100s")
 	v.SetDefault("retention.preset", "envelope")
@@ -430,6 +476,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing retention policy: %w", err)
 	}
+	metricsCfg, err := loadMetricsConfig(v)
+	if err != nil {
+		return Config{}, err
+	}
+	storageUsage, err := loadStorageUsageConfig(v)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Host:            v.GetString("host"),
@@ -513,6 +567,8 @@ func Load() (Config, error) {
 			MaxAttempts:    secretScanMaxAttempts,
 			PollInterval:   secretScanPollInterval,
 		},
+		Metrics:      metricsCfg,
+		StorageUsage: storageUsage,
 	}
 
 	cfg.Forges = loadForgeConfigs()
@@ -554,6 +610,55 @@ func (c Config) ValidateStartup(log zerolog.Logger) error {
 	}
 
 	return errors.New("invalid session.secret: set HIBOU_SESSION_SECRET/session.secret to a stable random value shared by every replica; empty values and the shipped development default are rejected unless HIBOU_DEVELOPMENT/development is explicitly set for local development")
+}
+
+func loadMetricsConfig(v *viper.Viper) (MetricsConfig, error) {
+	cfg := MetricsConfig{
+		Enabled:     v.GetBool("metrics.enabled"),
+		Port:        v.GetInt("metrics.port"),
+		BearerToken: strings.TrimSpace(v.GetString("metrics.bearer_token")),
+	}
+	if cfg.Port < 0 || cfg.Port > 65535 {
+		return MetricsConfig{}, errors.New("parsing metrics.port: must be between 0 and 65535")
+	}
+	if cfg.Enabled && cfg.Port != 0 && (cfg.Port == v.GetInt("port") || (v.GetBool("mcp.enabled") && cfg.Port == v.GetInt("mcp.port"))) {
+		return MetricsConfig{}, errors.New("parsing metrics.port: must differ from port and mcp.port")
+	}
+	if path := strings.TrimSpace(v.GetString("metrics.bearer_token_file")); path != "" {
+		raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied config path
+		if err != nil {
+			return MetricsConfig{}, fmt.Errorf("reading metrics.bearer_token_file: %w", err)
+		}
+		cfg.BearerToken = strings.TrimSpace(string(raw))
+		if cfg.BearerToken == "" {
+			return MetricsConfig{}, errors.New("reading metrics.bearer_token_file: file is empty")
+		}
+	}
+	return cfg, nil
+}
+
+func loadStorageUsageConfig(v *viper.Viper) (StorageUsageConfig, error) {
+	interval, err := time.ParseDuration(v.GetString("storage_usage.interval"))
+	if err != nil || interval < time.Minute {
+		return StorageUsageConfig{}, errors.New("parsing storage_usage.interval: must be a duration of at least 1m")
+	}
+	inventoryInterval, err := time.ParseDuration(v.GetString("storage_usage.inventory.interval"))
+	if err != nil || inventoryInterval < time.Hour {
+		return StorageUsageConfig{}, errors.New("parsing storage_usage.inventory.interval: must be a duration of at least 1h")
+	}
+	maxObjects := v.GetInt64("storage_usage.inventory.max_objects")
+	if maxObjects < 1 {
+		return StorageUsageConfig{}, errors.New("parsing storage_usage.inventory.max_objects: must be at least 1")
+	}
+	return StorageUsageConfig{
+		Enabled:  v.GetBool("storage_usage.enabled"),
+		Interval: interval,
+		Inventory: StorageInventoryConfig{
+			Enabled:    v.GetBool("storage_usage.inventory.enabled"),
+			Interval:   inventoryInterval,
+			MaxObjects: maxObjects,
+		},
+	}, nil
 }
 
 func loadRetentionPolicy(v *viper.Viper) (retention.RetentionPolicy, error) {

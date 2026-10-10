@@ -18,6 +18,7 @@ const (
 	LockKEVSync          = "hibou:kev-sync"
 	LockRatingsPass      = "hibou:ratings-pass"
 	LockEPSSSync         = "hibou:epss-sync"
+	LockStorageUsage     = "hibou:storage-usage"
 )
 
 // WithLeaderLock runs fn only if this connection wins a Postgres session-level

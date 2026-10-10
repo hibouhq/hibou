@@ -9,6 +9,13 @@ data:
   HIBOU_PORT: "8080"
   HIBOU_LOG_LEVEL: {{ .Values.hibou.logging.level | quote }}
   HIBOU_LOG_FORMAT: {{ .Values.hibou.logging.format | quote }}
+  HIBOU_METRICS_ENABLED: {{ .Values.hibou.metrics.enabled | quote }}
+  HIBOU_METRICS_PORT: {{ include "hibou.metricsPort" . | quote }}
+  HIBOU_STORAGE_USAGE_ENABLED: {{ .Values.hibou.storageUsage.enabled | quote }}
+  HIBOU_STORAGE_USAGE_INTERVAL: {{ .Values.hibou.storageUsage.interval | quote }}
+  HIBOU_STORAGE_USAGE_INVENTORY_ENABLED: {{ .Values.hibou.storageUsage.inventory.enabled | quote }}
+  HIBOU_STORAGE_USAGE_INVENTORY_INTERVAL: {{ .Values.hibou.storageUsage.inventory.interval | quote }}
+  HIBOU_STORAGE_USAGE_INVENTORY_MAX_OBJECTS: {{ .Values.hibou.storageUsage.inventory.maxObjects | int64 | quote }}
   HIBOU_ARTIFACT_BACKEND: {{ include "hibou.artifactBackend" . | quote }}
   {{- if eq (include "hibou.artifactBackend" .) "filesystem" }}
   HIBOU_ARTIFACT_PATH: {{ include "hibou.artifactFilesystemPath" . | quote }}

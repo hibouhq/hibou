@@ -19,6 +19,20 @@ All Hibou configuration is done via environment variables. Variables use the `HI
 | `HIBOU_OSV_URL` | `https://api.osv.dev` | OSV advisory API base URL |
 | `HIBOU_CACHE_TTL` | `6h` | Advisory cache TTL (`6h`, `24h`, `30m`, etc.) |
 
+## Metrics and storage usage
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HIBOU_METRICS_ENABLED` | `true` | Serve Prometheus `/metrics`. `false` removes it from every port. |
+| `HIBOU_METRICS_PORT` | `0` | Serve Prometheus `/metrics` on this port only. `0` serves it on `HIBOU_PORT`. |
+| `HIBOU_METRICS_BEARER_TOKEN` | (empty) | When set, `/metrics` requires `Authorization: Bearer <token>`. |
+| `HIBOU_METRICS_BEARER_TOKEN_FILE` | (empty) | Read the bearer token from this file. Takes precedence over `HIBOU_METRICS_BEARER_TOKEN`. |
+| `HIBOU_STORAGE_USAGE_ENABLED` | `true` | Sample Postgres and artifact-ledger storage usage. |
+| `HIBOU_STORAGE_USAGE_INTERVAL` | `15m` | Sampling interval (minimum `1m`). |
+| `HIBOU_STORAGE_USAGE_INVENTORY_ENABLED` | `false` | Also list the artifact backend to measure what it actually holds. On S3, each 1,000 keys is a billed LIST request. |
+| `HIBOU_STORAGE_USAGE_INVENTORY_INTERVAL` | `24h` | Minimum time between backend inventories (minimum `1h`). |
+| `HIBOU_STORAGE_USAGE_INVENTORY_MAX_OBJECTS` | `1000000` | Stop the inventory after this many objects and report it as truncated. |
+
 ## Forge Providers (Indexed)
 
 Forges are configured using a zero-indexed pattern. Replace `N` with `0`, `1`, `2`, etc.

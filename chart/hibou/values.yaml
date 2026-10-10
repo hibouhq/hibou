@@ -52,6 +52,41 @@ hibou:
   logging:
     level: info
     format: json
+  # -- Prometheus /metrics endpoint (ADR-039).
+  metrics:
+    # -- Serve /metrics at all. false removes it from every port.
+    enabled: true
+    # -- Dedicated port, never forwarded by the ingress, so /metrics stays cluster-internal. Exposed as the `metrics` port of the Service and of every hibou pod (workers included).
+    port: 9090
+    # -- Optional bearer token scrapers must send, on top of the dedicated port.
+    auth:
+      # -- Existing Secret holding the token. Empty disables token auth.
+      existingSecret: ""
+      existingSecretKey: token
+    # -- Prometheus Operator PodMonitor (also converted by the VictoriaMetrics operator). A PodMonitor rather than a ServiceMonitor because worker pods have no Service but export their own job counters. Requires the monitoring.coreos.com CRDs.
+    podMonitor:
+      enabled: false
+      interval: 60s
+      scrapeTimeout: 10s
+      # -- Extra labels, e.g. the release label your Prometheus selects on.
+      labels: {}
+    # -- NetworkPolicy for hibou pods: the application port stays open to all, the metrics port only to `from`. Needs a CNI that enforces NetworkPolicy.
+    networkPolicy:
+      enabled: false
+      # -- Peers allowed to scrape, as NetworkPolicy `from` entries. Required when enabled.
+      from: []
+      #  - namespaceSelector:
+      #      matchLabels:
+      #        kubernetes.io/metadata.name: monitoring
+  # -- Storage usage sampler (ADR-039): Postgres and artifact-ledger stats every interval, exported on /metrics.
+  storageUsage:
+    enabled: true
+    interval: 15m
+    # -- Lists the artifact backend to measure what it actually holds (orphan detection). Off by default: on S3 each 1,000 keys is a billed LIST request.
+    inventory:
+      enabled: false
+      interval: 24h
+      maxObjects: 1000000
   database:
     url: ""
   trivy:

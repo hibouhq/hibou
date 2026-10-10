@@ -116,13 +116,28 @@ var serveCmd = &cobra.Command{
 			errCh <- srv.ListenAndServe(ctx)
 		}()
 
+		switch {
+		case !cfg.Metrics.Enabled:
+			// metrics.enabled=false: /metrics is served on no listener.
+		case cfg.Metrics.Port != 0:
+			metricsMux := http.NewServeMux()
+			metricsMux.Handle("/metrics", srv.MetricsHandler())
+			metricsHTTP := &metricsServer{&http.Server{Handler: metricsMux, ReadHeaderTimeout: 10 * time.Second}}
+			services++
+			go func() {
+				errCh <- runAuxServer(ctx, "metrics", metricsHTTP, cfg.MetricsListenAddr(), cfg.ShutdownTimeout, log)
+			}()
+		case cfg.Metrics.BearerToken == "":
+			log.Warn().Msg("/metrics is served unauthenticated on the application port; set metrics.port or metrics.bearer_token (ADR-039)")
+		}
+
 		if cfg.MCPEnabled {
 			mcpDelta := delta.NewService(delta.NewStoreAdapter(queries), log)
 			mcpSrv := hiboumcp.New(queries, mcpDelta, log, version.Version)
 			mcpHTTP := hiboumcp.NewHTTPServer(mcpSrv, queries, cfg.MCPPort, log)
 			services++
 			go func() {
-				errCh <- runMCPServer(ctx, mcpHTTP, cfg.MCPListenAddr(), cfg.ShutdownTimeout, log)
+				errCh <- runAuxServer(ctx, "MCP", mcpHTTP, cfg.MCPListenAddr(), cfg.ShutdownTimeout, log)
 			}()
 		}
 
@@ -137,14 +152,23 @@ var serveCmd = &cobra.Command{
 	},
 }
 
-func runMCPServer(ctx context.Context, srv interface {
+// metricsServer adapts http.Server to runAuxServer's Start/Shutdown shape.
+type metricsServer struct{ *http.Server }
+
+func (m *metricsServer) Start(addr string) error {
+	m.Addr = addr
+	return m.ListenAndServe()
+}
+
+// runAuxServer runs a secondary listener (MCP, metrics) until ctx ends.
+func runAuxServer(ctx context.Context, name string, srv interface {
 	Start(addr string) error
 	Shutdown(ctx context.Context) error
 }, addr string, shutdownTimeout time.Duration, log zerolog.Logger) error {
 	errCh := make(chan error, 1)
 
 	go func() {
-		log.Info().Str("addr", addr).Msg("MCP server starting")
+		log.Info().Str("addr", addr).Msg(name + " server starting")
 		if err := srv.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return

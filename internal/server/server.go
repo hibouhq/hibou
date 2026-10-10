@@ -21,7 +21,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"golang.org/x/oauth2"
@@ -411,7 +410,11 @@ func forgeDefaultCIDRs(fc config.ForgeConfig, log zerolog.Logger) []string {
 }
 
 func (s *Server) routes(siteFS fs.FS) {
-	s.router.Handle("/metrics", promhttp.Handler())
+	// With metrics.port set, /metrics lives on its own listener only
+	// (cmd/serve.go) and must not leak through the application port.
+	if s.cfg.Metrics.Enabled && s.cfg.Metrics.Port == 0 {
+		s.router.Handle("/metrics", s.MetricsHandler())
+	}
 	s.router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", s.handleHealth)
 		r.Get("/ready", s.handleReady)
@@ -451,6 +454,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/instance/jobs/overview", s.handleInstanceJobsOverview)
 			r.Get("/instance/jobs/timeline", s.handleInstanceJobsTimeline)
 			r.Get("/instance/jobs/stats", s.handleInstanceJobsStats)
+			r.Get("/instance/storage", s.handleInstanceStorage)
 			r.Get("/instance/audit-logs", s.handleListInstanceAuditLogs)
 			// ADR-028. `advisories` not `cves`: the namespace has to hold
 			// `HSA-*` once an advisory exists that no CVE covers (§10).
@@ -778,6 +782,12 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 			// synced.
 			go s.purgeKEVWhenDisabled(runtimeCtx)
 		}
+	}
+	// Storage usage sampler (ADR-039): every replica exports the persisted
+	// sample; the leader-locked tick refreshes it.
+	if s.db != nil && s.queries != nil && s.cfg.StorageUsage.Enabled {
+		loops = append(loops, "storage_usage")
+		go s.runStorageUsageLoop(runtimeCtx)
 	}
 	if s.tokenExpiryChecker != nil && s.cfg.Background.StaleScanEnabled {
 		loops = append(loops, "token_expiry")

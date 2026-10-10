@@ -424,6 +424,61 @@ export interface InstanceAuditLogEntry extends AuditLogEntry {
 // ADR-025 instance jobs observability. Kinds: secret_scan,
 // artifact_processing, advisory_scan. Statuses: queued, running, complete,
 // failed, cancelled.
+// ADR-039: the persisted storage usage sample. Usage only, never prices.
+export interface StorageSection {
+  collected_at: string
+  duration_seconds: number
+  error?: string
+}
+
+export interface StorageTableUsage {
+  name: string
+  table_bytes: number
+  index_bytes: number
+  live_rows: number
+  dead_rows: number
+}
+
+export interface StoragePostgres extends StorageSection {
+  database_bytes: number
+  tables: StorageTableUsage[]
+  connections_used: number
+  connections_max: number
+  xid_age: number
+  oldest_transaction_seconds?: number
+  cache_hit_ratio?: number
+}
+
+export interface StorageLedger extends StorageSection {
+  kinds: { kind: string; objects: number; bytes: number }[]
+}
+
+export interface StorageBackend extends StorageSection {
+  objects: number
+  bytes: number
+  truncated: boolean
+  volume_capacity_bytes?: number
+  volume_free_bytes?: number
+}
+
+export interface StorageSample {
+  postgres?: StoragePostgres
+  ledger?: StorageLedger
+  backend?: StorageBackend
+}
+
+export type MetricsExposure = 'disabled' | 'dedicated_port' | 'token' | 'public'
+
+export interface InstanceStorage {
+  sample: StorageSample | null
+  enabled: boolean
+  interval_seconds: number
+  inventory_enabled: boolean
+  inventory_interval_seconds: number
+  artifact_backend: string
+  metrics_exposure: MetricsExposure
+}
+
 export interface InstanceJobKindCounts {
   kind: string
   queued: number
@@ -3077,6 +3132,11 @@ class ApiClient {
   }
 
   // Instance admin only: queue counters per job kind plus the worker fleet.
+  // Instance admin only: latest storage usage sample (ADR-039).
+  getInstanceStorage() {
+    return this.request<ApiResponse<InstanceStorage>>('/instance/storage')
+  }
+
   getInstanceJobsOverview() {
     return this.request<ApiResponse<InstanceJobsOverview>>('/instance/jobs/overview')
   }
