@@ -14,6 +14,21 @@ import (
 	"github.com/google/uuid"
 )
 
+const countAPIKeysCreatedByUser = `-- name: CountAPIKeysCreatedByUser :one
+SELECT count(*)
+FROM api_keys
+WHERE user_id = $1
+`
+
+// Every key the user minted, personal or requested for an org: the per-user
+// cap counts what one account can create, whoever ends up owning it.
+func (q *Queries) CountAPIKeysCreatedByUser(ctx context.Context, userID uuid.NullUUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAPIKeysCreatedByUser, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAPIKey = `-- name: CreateAPIKey :one
 INSERT INTO api_keys (user_id, name, key_hash, scopes, expires_at, owner_type, owner_id, description, approval_status)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

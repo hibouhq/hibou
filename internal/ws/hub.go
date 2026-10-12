@@ -51,6 +51,14 @@ func NewHub(log zerolog.Logger) *Hub {
 }
 
 func (h *Hub) Register(conn *websocket.Conn, userID uuid.UUID) *client {
+	c, _ := h.registerLimited(conn, userID, 0)
+	return c
+}
+
+// registerLimited registers a connection unless the user already holds limit
+// of them (limit <= 0 means unlimited). The check and the insert share the
+// lock, so concurrent upgrades cannot overshoot.
+func (h *Hub) registerLimited(conn *websocket.Conn, userID uuid.UUID, limit int) (*client, bool) {
 	c := &client{
 		conn:   conn,
 		userID: userID,
@@ -59,6 +67,10 @@ func (h *Hub) Register(conn *websocket.Conn, userID uuid.UUID) *client {
 	}
 
 	h.mu.Lock()
+	if limit > 0 && len(h.byUser[userID]) >= limit {
+		h.mu.Unlock()
+		return nil, false
+	}
 	if len(h.clients) == 0 {
 		h.idleCh = make(chan struct{})
 	}
@@ -71,7 +83,14 @@ func (h *Hub) Register(conn *websocket.Conn, userID uuid.UUID) *client {
 	metrics.WebSocketConnections.Inc()
 
 	go h.writePump(c)
-	return c
+	return c, true
+}
+
+// userConnectionCount reports how many connections a user holds open.
+func (h *Hub) userConnectionCount(userID uuid.UUID) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.byUser[userID])
 }
 
 func (h *Hub) BeginDrain() {

@@ -77,3 +77,22 @@ SELECT id, provider, installation_id, provider_repo_id, account_login, owner, na
 FROM forge_repositories
 WHERE provider = $1 AND provider_key = $2 AND removed_at IS NULL
 LIMIT 1;
+
+-- name: GetForgeRepositoryByAccountAndRepoID :one
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+FROM forge_repositories
+WHERE provider = sqlc.arg(provider)
+  AND lower(account_login) = lower(sqlc.arg(account_login))
+  AND provider_repo_id = sqlc.arg(provider_repo_id)
+  AND removed_at IS NULL
+ORDER BY updated_at DESC
+LIMIT 1;
+
+-- name: GetForgeRepositoryByAccountAndKey :one
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+FROM forge_repositories
+WHERE provider = sqlc.arg(provider)
+  AND lower(account_login) = lower(sqlc.arg(account_login))
+  AND provider_key = sqlc.arg(provider_key)
+  AND removed_at IS NULL
+LIMIT 1;

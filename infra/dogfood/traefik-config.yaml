@@ -1,0 +1,26 @@
+# k3s-bundled Traefik overrides. Not applied automatically: see
+# RUNBOOK-SCALEWAY.md, "Cluster Hardening". k3s merges this into its packaged
+# Traefik chart and redeploys Traefik.
+#
+# - readTimeout 300s: large artifact uploads (SBOMs, SARIF) can take minutes
+#   on a slow CI link; longer than that is a stuck or slowloris client.
+# - idleTimeout 180s: frees keep-alive connections held open by idle clients.
+# - externalTrafficPolicy Local: keeps the real client IP (no SNAT through
+#   kube-proxy), so per-IP rate limits and audit logs see the client, not the
+#   node. Safe on a single node; on multi-node clusters only nodes running a
+#   Traefik pod receive traffic.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    additionalArguments:
+      - "--entryPoints.web.transport.respondingTimeouts.readTimeout=300s"
+      - "--entryPoints.web.transport.respondingTimeouts.idleTimeout=180s"
+      - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=300s"
+      - "--entryPoints.websecure.transport.respondingTimeouts.idleTimeout=180s"
+    service:
+      spec:
+        externalTrafficPolicy: Local

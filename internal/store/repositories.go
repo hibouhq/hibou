@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -72,36 +73,108 @@ func (q *Queries) CreateRepository(ctx context.Context, orgID uuid.UUID, teamID 
 	), nil
 }
 
+// GetRepositoryByProvider routes a forge event to the enrolled repository it
+// concerns. Several orgs may hold a row for the same provider_id (legacy data
+// predating the enrolment ownership check), so the row is chosen
+// deterministically and only from an org bound to the repository's owner: a
+// tenant that enrolled someone else's repository must never receive its
+// pushes and pull requests (security audit §3.1, M4). When the owner cannot
+// be derived (opaque ids without an inventory row) the oldest row wins.
 func (q *Queries) GetRepositoryByProvider(ctx context.Context, provider, providerID string) (*Repository, error) {
 	const query = `
-		SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
-		FROM repositories
-		WHERE provider = $1 AND provider_id = $2
-		LIMIT 1
+		SELECT r.id, r.org_id, r.team_id, r.name, r.slug, r.provider, r.provider_id, r.default_branch, r.sync_state, r.retention_artifact_bytes, r.created_at, r.updated_at,
+			o.slug, COALESCE(o.forge_account_login, '')
+		FROM repositories r
+		JOIN organizations o ON o.id = r.org_id
+		WHERE r.provider = $1 AND r.provider_id = $2
+		ORDER BY r.created_at ASC, r.id ASC
 	`
 
-	row := q.sqlDB.QueryRowContext(ctx, query, provider, providerID)
-	var repository dbgen.Repository
-	if err := row.Scan(
-		&repository.ID,
-		&repository.OrgID,
-		&repository.TeamID,
-		&repository.Name,
-		&repository.Slug,
-		&repository.Provider,
-		&repository.ProviderID,
-		&repository.DefaultBranch,
-		&repository.SyncState,
-		&repository.RetentionArtifactBytes,
-		&repository.CreatedAt,
-		&repository.UpdatedAt,
-	); errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	} else if err != nil {
+	rows, err := q.sqlDB.QueryContext(ctx, query, provider, providerID)
+	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 
-	return repositoryFromRow(repository), nil
+	type candidate struct {
+		repo dbgen.Repository
+		org  Organization
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(
+			&c.repo.ID,
+			&c.repo.OrgID,
+			&c.repo.TeamID,
+			&c.repo.Name,
+			&c.repo.Slug,
+			&c.repo.Provider,
+			&c.repo.ProviderID,
+			&c.repo.DefaultBranch,
+			&c.repo.SyncState,
+			&c.repo.RetentionArtifactBytes,
+			&c.repo.CreatedAt,
+			&c.repo.UpdatedAt,
+			&c.org.Slug,
+			&c.org.ForgeAccountLogin,
+		); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	owner, err := q.RepositoryForgeOwner(ctx, provider, providerID)
+	if err != nil {
+		return nil, err
+	}
+	if owner == "" {
+		return repositoryFromRow(candidates[0].repo), nil
+	}
+	for i := range candidates {
+		if candidates[i].org.OwnsForgeOwner(owner) {
+			return repositoryFromRow(candidates[i].repo), nil
+		}
+	}
+	return nil, nil
+}
+
+// RepositoryForgeOwner derives the forge namespace a repository lives under:
+// the owner part of an owner/name provider id, or the mirrored inventory row
+// for opaque ids. Empty when neither is known.
+func (q *Queries) RepositoryForgeOwner(ctx context.Context, provider, providerID string) (string, error) {
+	providerID = strings.Trim(strings.TrimSpace(providerID), "/")
+	if i := strings.LastIndex(providerID, "/"); i > 0 {
+		return providerID[:i], nil
+	}
+	if providerID == "" {
+		return "", nil
+	}
+	inv, err := q.GetForgeRepositoryByProviderRepoID(ctx, provider, providerID)
+	if err != nil || inv == nil {
+		return "", err
+	}
+	if owner := strings.TrimSpace(inv.Owner); owner != "" {
+		return owner, nil
+	}
+	return strings.TrimSpace(inv.AccountLogin), nil
+}
+
+// ForgeOwnerBoundToOrg reports whether owner belongs to the forge account the
+// org is bound to. Callers check it before any forge call that mints an
+// installation token by owner on the org's behalf.
+func (q *Queries) ForgeOwnerBoundToOrg(ctx context.Context, orgID uuid.UUID, owner string) (bool, error) {
+	org, err := q.GetOrganizationByID(ctx, orgID)
+	if err != nil || org == nil {
+		return false, err
+	}
+	return org.OwnsForgeOwner(owner), nil
 }
 
 func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (*Repository, error) {

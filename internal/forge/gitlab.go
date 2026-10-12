@@ -263,21 +263,20 @@ func (g *GitLab) CreateCommitStatus(ctx context.Context, owner, repo, sha string
 	return g.doJSON(ctx, http.MethodPost, path, payload, nil)
 }
 
-func (g *GitLab) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
-	payload, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read gitlab webhook payload: %w", err)
-	}
-	r.Body = io.NopCloser(bytes.NewReader(payload))
+// HasWebhookSecret reports whether webhook payloads can be verified.
+func (g *GitLab) HasWebhookSecret() bool { return g.webhookSecret != "" }
 
+func (g *GitLab) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
 	activeSecret := secret
 	if activeSecret == "" {
 		activeSecret = g.webhookSecret
 	}
 	if activeSecret == "" {
-		return payload, nil
+		return nil, fmt.Errorf("gitlab: %w", ErrWebhookSecretNotConfigured)
 	}
 
+	// GitLab sends the secret verbatim rather than an HMAC of the body, so the
+	// token is checked before the body is read.
 	provided := r.Header.Get("X-Gitlab-Token")
 	if provided == "" {
 		return nil, errors.New("gitlab webhook token missing")
@@ -286,7 +285,7 @@ func (g *GitLab) ValidateWebhookPayload(r *http.Request, secret string) ([]byte,
 		return nil, errors.New("gitlab webhook token mismatch")
 	}
 
-	return payload, nil
+	return ReadWebhookPayload(r, "gitlab")
 }
 
 func (g *GitLab) ParseWebhookEvent(eventType string, payload []byte) (WebhookEvent, error) {
@@ -400,6 +399,24 @@ func (g *GitLab) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 
 	user := payload.toUserInfo()
 	return &user, nil
+}
+
+// AccountLogin returns the GitLab username of the token's user, the name a
+// sign-in allowlist matches against.
+func (g *GitLab) AccountLogin(ctx context.Context, token *oauth2.Token) (string, error) {
+	if token == nil || token.AccessToken == "" {
+		return "", errors.New("gitlab account login requires access token")
+	}
+	request, err := g.newRequest(ctx, http.MethodGet, "/api/v4/user", nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	var payload gitlabUser
+	if err := g.do(request, &payload); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(payload.Username), nil
 }
 
 type gitlabCompareResponse struct {

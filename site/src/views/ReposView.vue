@@ -162,6 +162,7 @@
 </template>
 
 <script setup lang="ts">
+import { isSafeUrl } from '@/lib/safeUrl'
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
@@ -328,7 +329,4 @@ function formatSyncOutcome(outcome: SyncReposResponse['outcome']) {
   }
 }
 
-function isSafeUrl(url: string) {
-  return /^(https?:)?\/\//i.test(url.trim())
-}
 </script>

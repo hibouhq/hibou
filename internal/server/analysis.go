@@ -855,33 +855,28 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 	return entry, nil
 }
 
+// loadAuthorizedOrg authorizes an org-wide route: the principal is a member,
+// is not limited to specific repositories (§4.3), and holds a writing role when
+// the request changes state (§4.4).
 func (s *Server) loadAuthorizedOrg(r *http.Request, w http.ResponseWriter) (*store.Organization, bool) {
-	if !s.hasPrincipal(r) {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+	org, role, ok := s.loadOrgMembership(r, w)
+	if !ok {
 		return nil, false
 	}
-
-	org, err := s.resolveOrg(r)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+	if !s.requireOrgWideAccess(w, r, org.ID, role) {
 		return nil, false
 	}
-	if org == nil {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
+	if !requireWriteRole(w, r, role) {
 		return nil, false
 	}
-
-	role, err := s.principalOrgRole(r, org.ID)
-	if err != nil || role == "" {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
-		return nil, false
-	}
-
 	return org, true
 }
 
+// loadAuthorizedRepo authorizes a repository route: org membership, visibility
+// of this repository to a repository-scoped principal, and a writing role on it
+// when the request changes state.
 func (s *Server) loadAuthorizedRepo(r *http.Request, w http.ResponseWriter) (*store.Organization, *store.Repository, bool) {
-	org, ok := s.loadAuthorizedOrg(r, w)
+	org, role, ok := s.loadOrgMembership(r, w)
 	if !ok {
 		return nil, nil, false
 	}
@@ -893,6 +888,9 @@ func (s *Server) loadAuthorizedRepo(r *http.Request, w http.ResponseWriter) (*st
 	}
 	if repo == nil {
 		api.JSONError(w, http.StatusNotFound, "repository not found")
+		return nil, nil, false
+	}
+	if !s.authorizeRepoRequest(w, r, org.ID, role, repo) {
 		return nil, nil, false
 	}
 

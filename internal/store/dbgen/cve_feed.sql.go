@@ -982,6 +982,69 @@ func (q *Queries) ListTriageCandidateComponents(ctx context.Context, arg ListTri
 	return items, nil
 }
 
+const listTriageCandidateComponentsForOrg = `-- name: ListTriageCandidateComponentsForOrg :many
+SELECT c.id, c.name, c.version, c.ecosystem, c.purl,
+       COUNT(DISTINCT repo.id)::bigint AS repo_count
+FROM components c
+JOIN snapshot_components sc ON sc.component_id = c.id
+JOIN snapshots snap ON snap.id = sc.snapshot_id
+JOIN refs r ON r.id = snap.ref_id
+JOIN repositories repo ON repo.id = r.repo_id
+WHERE c.name ILIKE $1 ESCAPE '\'
+  AND repo.org_id = $2
+GROUP BY c.id, c.name, c.version, c.ecosystem, c.purl
+ORDER BY repo_count DESC, c.name
+LIMIT $3
+`
+
+type ListTriageCandidateComponentsForOrgParams struct {
+	Pattern  []byte    `json:"pattern"`
+	OrgID    uuid.UUID `json:"org_id"`
+	RowLimit int32     `json:"row_limit"`
+}
+
+type ListTriageCandidateComponentsForOrgRow struct {
+	ID        uuid.UUID `json:"id"`
+	Name      string    `json:"name"`
+	Version   string    `json:"version"`
+	Ecosystem string    `json:"ecosystem"`
+	Purl      string    `json:"purl"`
+	RepoCount int64     `json:"repo_count"`
+}
+
+// ListTriageCandidateComponents limited to one org's repositories. A triager
+// working from an org sees what that org runs; the instance-wide ranking names
+// other tenants' internal packages and is reserved for instance triagers.
+func (q *Queries) ListTriageCandidateComponentsForOrg(ctx context.Context, arg ListTriageCandidateComponentsForOrgParams) ([]ListTriageCandidateComponentsForOrgRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTriageCandidateComponentsForOrg, arg.Pattern, arg.OrgID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTriageCandidateComponentsForOrgRow{}
+	for rows.Next() {
+		var i ListTriageCandidateComponentsForOrgRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Version,
+			&i.Ecosystem,
+			&i.Purl,
+			&i.RepoCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTriageItemsNeedingReview = `-- name: ListTriageItemsNeedingReview :many
 SELECT t.id, t.subscription_id, t.cve_id, t.triaged_record_updated_at, t.state, t.decided_by, t.decided_at, t.created_at, r.record_updated_at, s.label
 FROM cve_triage_items t

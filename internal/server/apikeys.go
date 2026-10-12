@@ -77,6 +77,10 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.checkAPIKeyQuota(w, r, user.ID) {
+		return
+	}
+
 	rawKey, err := apitoken.Generate()
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to generate API key")
@@ -106,6 +110,25 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 // so it is a 400 rather than a working-looking key. The owner block is always
 // rewritten to the creating user; org-owned tokens are an org-admin action
 // (ADR-020), not something a request body can ask for here.
+// maxAPIKeysPerUser caps the keys one account can mint, personal and
+// org-requested together.
+const maxAPIKeysPerUser = 50
+
+// checkAPIKeyQuota answers 422 and returns false once the user holds
+// maxAPIKeysPerUser keys.
+func (s *Server) checkAPIKeyQuota(w http.ResponseWriter, r *http.Request, userID uuid.UUID) bool {
+	count, err := s.queries.CountAPIKeysCreatedByUser(r.Context(), userID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create API key")
+		return false
+	}
+	if count >= maxAPIKeysPerUser {
+		api.JSONError(w, http.StatusUnprocessableEntity, "API key limit reached: delete an unused key before creating another")
+		return false
+	}
+	return true
+}
+
 func normalizeCreateScope(raw json.RawMessage, userID uuid.UUID) (json.RawMessage, error) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {

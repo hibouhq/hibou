@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/events"
@@ -113,6 +111,9 @@ func NewDispatcher(store DispatcherStore, bus *events.Bus, baseURL string, log z
 			continue
 		}
 		registry[strings.ToLower(strings.TrimSpace(sender.Type()))] = sender
+	}
+	if allowPrivateNotificationURLs() {
+		log.Warn().Msg("HIBOU_ALLOW_PRIVATE_NOTIFICATION_URLS=true: notification webhooks and SMTP may reach private, loopback and link-local addresses (SSRF guard disabled)")
 	}
 	return &Dispatcher{
 		store:   store,
@@ -989,7 +990,7 @@ func httpClientWithDefault(client *http.Client) *http.Client {
 		transport = http.DefaultTransport.(*http.Transport).Clone()
 	}
 	transport.Proxy = nil
-	transport.DialContext = notificationDialContext((&net.Dialer{Timeout: 10 * time.Second}).DialContext)
+	transport.DialContext = guardedNotificationDialContext(&net.Dialer{Timeout: 10 * time.Second})
 	transport.TLSHandshakeTimeout = 10 * time.Second
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	if client == nil {
@@ -1009,82 +1010,6 @@ func cloneNotificationTransport(client *http.Client) *http.Transport {
 		return nil
 	}
 	return transport.Clone()
-}
-
-func notificationDialContext(dialContext func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		if err := validateNotificationAddress(ctx, address); err != nil {
-			return nil, err
-		}
-		return dialContext(ctx, network, address)
-	}
-}
-
-func validateNotificationAddress(ctx context.Context, address string) error {
-	if allowPrivateNotificationURLs() {
-		return nil
-	}
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		host = address
-	}
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return errors.New("notification destination host is empty")
-	}
-	ips, err := resolveNotificationIPs(ctx, host)
-	if err != nil {
-		return err
-	}
-	blocked := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		if isBlockedNotificationIP(ip) {
-			blocked = append(blocked, ip.String())
-		}
-	}
-	if len(blocked) == 0 {
-		return nil
-	}
-	log.Warn().Str("address", address).Strs("blocked_ips", blocked).Msg("blocked private notification destination")
-	return fmt.Errorf("notification destination %q resolves to a blocked address", address)
-}
-
-func resolveNotificationIPs(ctx context.Context, host string) ([]net.IP, error) {
-	if ip := net.ParseIP(host); ip != nil {
-		return []net.IP{ip}, nil
-	}
-	resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	ips := make([]net.IP, 0, len(resolved))
-	for _, item := range resolved {
-		if item.IP != nil {
-			ips = append(ips, item.IP)
-		}
-	}
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("notification destination %q did not resolve to an IP", host)
-	}
-	return ips, nil
-}
-
-func isBlockedNotificationIP(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-	metadataIPv4 := net.ParseIP("169.254.169.254")
-	if metadataIPv4 != nil && ip.Equal(metadataIPv4) {
-		return true
-	}
-	return false
-}
-
-func allowPrivateNotificationURLs() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("HIBOU_ALLOW_PRIVATE_NOTIFICATION_URLS")), "true")
 }
 
 func sqlNullTime(value time.Time) sql.NullTime {

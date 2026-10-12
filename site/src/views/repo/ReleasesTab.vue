@@ -103,8 +103,8 @@
                 Tag moved
               </span>
               <a
-                v-if="release.html_url"
-                :href="release.html_url"
+                v-if="safeHref(release.html_url)"
+                :href="safeHref(release.html_url)"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="inline-flex shrink-0 items-center gap-1 rounded-full border border-surface-border px-1.5 py-0.5 text-[11px] text-gray-400 transition hover:border-accent/50 hover:text-accent"
@@ -449,6 +449,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import {
   ChevronDown,
   ExternalLink,

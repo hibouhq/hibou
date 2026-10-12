@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -15,6 +17,25 @@ type subscriptionPayload struct {
 	Topics []string `json:"topics"`
 }
 
+// Limits on what one browser, and one user, may hold open (§6 D9). The SPA
+// opens one socket per tab and subscribes to three topics; these leave room for
+// that many times over while bounding what a hostile client can pin in memory.
+const (
+	maxTopicsPerClient    = 64
+	maxTopicLength        = 128
+	maxConnectionsPerUser = 10
+	// pingInterval keeps idle connections alive through proxies and detects
+	// dead peers; a peer that does not answer within pongTimeout is dropped.
+	pingInterval = 30 * time.Second
+	pongTimeout  = 10 * time.Second
+)
+
+// HTTPHandler serves the websocket endpoint.
+//
+// Session cookies only. A bearer token is refused: an org-owned key is a
+// service principal with no user behind it, and accepting it ran the socket as
+// the key's creator with the token's scope ignored (A7). Live updates are a
+// browser feature; machine clients poll the REST API under their token scope.
 func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.IsDraining() {
@@ -27,9 +48,19 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 			return
 		}
 
-		user, err := authMgr.AuthenticateRequest(r, queries)
+		if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+			http.Error(w, "websocket requires a browser session; API tokens are not accepted", http.StatusUnauthorized)
+			return
+		}
+		user, err := authMgr.GetSessionUser(r, queries)
 		if err != nil || user == nil {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		// Checked again atomically on registration; this one answers with a
+		// plain HTTP status before the upgrade in the common case.
+		if h.userConnectionCount(user.ID) >= maxConnectionsPerUser {
+			http.Error(w, "too many websocket connections", http.StatusTooManyRequests)
 			return
 		}
 
@@ -39,10 +70,17 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 		}
 		conn.SetReadLimit(4096)
 
-		client := h.Register(conn, user.ID)
+		client, ok := h.registerLimited(conn, user.ID, maxConnectionsPerUser)
+		if !ok {
+			_ = conn.Close(websocket.StatusPolicyViolation, "too many websocket connections")
+			return
+		}
 		defer h.Unregister(client)
 
-		ctx := r.Context()
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go keepAlive(ctx, conn, pingInterval, pongTimeout)
+
 		for {
 			_, data, err := conn.Read(ctx)
 			if err != nil {
@@ -59,6 +97,36 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 	}
 }
 
+// pinger is the part of *websocket.Conn keepAlive uses.
+type pinger interface {
+	Ping(ctx context.Context) error
+	Close(code websocket.StatusCode, reason string) error
+}
+
+// keepAlive pings the peer every interval and closes the connection when a
+// pong does not arrive within timeout. Closing unblocks the handler's Read, so
+// a dead peer releases its slot instead of holding it until TCP gives up.
+func keepAlive(ctx context.Context, conn pinger, interval, timeout time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				if ctx.Err() == nil {
+					_ = conn.Close(websocket.StatusPolicyViolation, "ping timeout")
+				}
+				return
+			}
+		}
+	}
+}
+
 func (h *Hub) handleClientMessage(_ context.Context, c *client, msg Message) {
 	var payload subscriptionPayload
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -69,9 +137,13 @@ func (h *Hub) handleClientMessage(_ context.Context, c *client, msg Message) {
 	case "topic.subscribe":
 		c.topicsMu.Lock()
 		for _, topic := range payload.Topics {
-			if topic != "" {
-				c.topics[topic] = true
+			if topic == "" || len(topic) > maxTopicLength {
+				continue
 			}
+			if !c.topics[topic] && len(c.topics) >= maxTopicsPerClient {
+				break
+			}
+			c.topics[topic] = true
 		}
 		c.topicsMu.Unlock()
 	case "topic.unsubscribe":

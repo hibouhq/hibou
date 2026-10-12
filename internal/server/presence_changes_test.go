@@ -32,6 +32,7 @@ func TestPresenceComparisonCachesPathsOnly(t *testing.T) {
 	fake := &compareCountingForge{discoveryTestForgeProvider: &discoveryTestForgeProvider{id: "github"}}
 	srv.forges = map[string]forge.Provider{"github": fake}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo.ProviderID = "acme/app"
 	ctx := context.Background()
 
@@ -63,6 +64,7 @@ func TestPresenceComparisonBacksOffOnFailure(t *testing.T) {
 	fake := &compareCountingForge{discoveryTestForgeProvider: &discoveryTestForgeProvider{id: "github"}, fail: true}
 	srv.forges = map[string]forge.Provider{"github": fake}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo.ProviderID = "acme/app"
 	for i := 0; i < 5; i++ {
 		if _, err := srv.presenceComparison(context.Background(), repo, "b1", "h1", true); err == nil {
@@ -145,6 +147,7 @@ func TestPathsOnlyForgeIsAskedOnce(t *testing.T) {
 	fake := &pathsOnlyForge{compareCountingForge{discoveryTestForgeProvider: &discoveryTestForgeProvider{id: "github"}}}
 	srv.forges = map[string]forge.Provider{"github": fake}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo.ProviderID = "acme/app"
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {

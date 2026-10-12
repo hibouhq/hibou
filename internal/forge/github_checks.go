@@ -176,6 +176,9 @@ func (g *GitHub) cachedInstallationToken(ctx context.Context, owner string) (str
 	if key == "" {
 		return "", errors.New("owner is required for an installation token")
 	}
+	if err := checkInstallationOwner(ctx, key); err != nil {
+		return "", err
+	}
 
 	g.tokenMu.Lock()
 	cached, ok := g.ownerTokens[key]
@@ -225,4 +228,35 @@ func (g *GitHub) installationTokenForOwner(ctx context.Context, owner string) (s
 		}
 	}
 	return "", fmt.Errorf("no GitHub App installation found for owner %q", owner)
+}
+
+// ErrInstallationOwnerMismatch is returned when a caller bound its context to
+// one forge account and then asked for another account's installation token.
+var ErrInstallationOwnerMismatch = errors.New("installation token requested for an account other than the bound one")
+
+type installationOwnerKey struct{}
+
+// WithInstallationOwner binds ctx to one forge account: installation tokens
+// minted under it are refused for any other owner. Installation tokens are
+// looked up by owner string and cover the whole installation, so a caller
+// acting for one tenant sets this to that tenant's account as defense in
+// depth against an owner taken from tenant-controlled data (security audit
+// §3.1). An empty account leaves ctx unbound.
+func WithInstallationOwner(ctx context.Context, account string) context.Context {
+	account = strings.ToLower(strings.TrimSpace(account))
+	if account == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, installationOwnerKey{}, account)
+}
+
+func checkInstallationOwner(ctx context.Context, owner string) error {
+	bound, ok := ctx.Value(installationOwnerKey{}).(string)
+	if !ok || bound == "" {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(owner), bound) {
+		return nil
+	}
+	return fmt.Errorf("%w: %q is not %q", ErrInstallationOwnerMismatch, owner, bound)
 }

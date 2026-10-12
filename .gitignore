@@ -68,3 +68,22 @@ infra/hetzner/.terraform.lock.hcl
 infra/scaleway/.terraform.lock.hcl
 *.pem
 example_old_project/
+
+# Secrets and infra state, anywhere in the tree (not only under infra/)
+*.tfstate*
+*.tfvars
+!*.tfvars.example
+kubeconfig*
+.env*
+!.env.example
+id_rsa*
+id_ed25519*
+id_ecdsa*
+
+# Local notes and nested checkouts (would be committed as gitlinks)
+/agents-conv.txt
+/backlog.md
+/castor/
+/opengrep/
+/hibou-sample-project/
+/hibou-upload-action/

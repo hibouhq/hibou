@@ -122,3 +122,20 @@ func forgeOrgAdminFromRow(row dbgen.ForgeOrgAdmin) *ForgeOrgAdmin {
 func normalizeForgeOrgAdminAccount(account string) string {
 	return strings.ToLower(strings.TrimSpace(account))
 }
+
+// DeleteForgeOrgAdminsByAccount drops every admin binding recorded for a forge
+// account, returning what was removed.
+func (q *Queries) DeleteForgeOrgAdminsByAccount(ctx context.Context, provider, account string) ([]ForgeOrgAdmin, error) {
+	rows, err := q.db.DeleteForgeOrgAdminsByAccount(ctx, dbgen.DeleteForgeOrgAdminsByAccountParams{
+		Provider: strings.TrimSpace(provider),
+		Account:  normalizeForgeOrgAdminAccount(account),
+	})
+	if err != nil {
+		return nil, err
+	}
+	admins := make([]ForgeOrgAdmin, len(rows))
+	for i, row := range rows {
+		admins[i] = *forgeOrgAdminFromRow(row)
+	}
+	return admins, nil
+}

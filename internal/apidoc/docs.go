@@ -66,7 +66,7 @@ const docTemplate = `{
         },
         "/auth/dev-login": {
             "post": {
-                "description": "Creates or fetches a local admin user for development. Only available when no forge providers are configured.",
+                "description": "Creates or fetches a local admin user for development. Only available in development mode with no forge providers configured.",
                 "produces": [
                     "application/json"
                 ],
@@ -130,7 +130,7 @@ const docTemplate = `{
         },
         "/auth/logout": {
             "post": {
-                "description": "Clears the current session cookie",
+                "description": "Revokes every session of the current user and clears the session cookie",
                 "tags": [
                     "auth"
                 ],
@@ -999,6 +999,18 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }

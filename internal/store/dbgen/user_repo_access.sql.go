@@ -12,6 +12,99 @@ import (
 	"github.com/lib/pq"
 )
 
+const isRepoScopedOrgMember = `-- name: IsRepoScopedOrgMember :one
+WITH access AS (
+    SELECT ura.repo_id, COALESCE(ura.synced_at, ura.updated_at) AS seen_at
+    FROM user_repo_access ura
+    JOIN repositories r ON r.id = ura.repo_id
+    WHERE ura.user_id = $2
+      AND r.org_id = $1
+)
+SELECT (
+    EXISTS (
+        SELECT 1
+        FROM org_members om
+        WHERE om.org_id = $1
+          AND om.user_id = $2
+          AND om.source = 'forge'
+          AND om.role IN ('viewer', 'developer')
+    )
+    AND EXISTS (
+        SELECT 1
+        FROM repositories r
+        WHERE r.org_id = $1
+          AND r.created_at <= (SELECT MAX(seen_at) FROM access)
+          AND NOT EXISTS (SELECT 1 FROM access a WHERE a.repo_id = r.id)
+    )
+)::boolean AS repo_scoped
+`
+
+type IsRepoScopedOrgMemberParams struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// A forge-synced non-admin membership is repo-scoped when the last sync gave
+// the user access to some of the org's repositories but not to one that was
+// already enrolled at that time: that is the forge saying "these repositories,
+// not the organization". Members whose sync covered every repository (the
+// forge's own org-wide read), invited members and admins are never scoped.
+func (q *Queries) IsRepoScopedOrgMember(ctx context.Context, arg IsRepoScopedOrgMemberParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isRepoScopedOrgMember, arg.OrgID, arg.UserID)
+	var repo_scoped bool
+	err := row.Scan(&repo_scoped)
+	return repo_scoped, err
+}
+
+const listRepoAudienceUserIDs = `-- name: ListRepoAudienceUserIDs :many
+SELECT om.user_id
+FROM org_members om
+JOIN repositories repo ON repo.org_id = om.org_id
+WHERE repo.id = $1
+  AND (
+      om.source <> 'forge'
+      OR om.role NOT IN ('viewer', 'developer')
+      OR EXISTS (
+          SELECT 1 FROM user_repo_access ura
+          WHERE ura.user_id = om.user_id AND ura.repo_id = repo.id
+      )
+      OR NOT EXISTS (
+          SELECT 1
+          FROM user_repo_access ura
+          JOIN repositories other ON other.id = ura.repo_id
+          WHERE ura.user_id = om.user_id AND other.org_id = om.org_id
+      )
+  )
+`
+
+// Org members who may see a repository, for targeting live events. Repository
+// collaborators (forge viewer/developer memberships that carry per-repository
+// grants in this org) are included only with a grant on this repository. A
+// member whose sync predates the repository may be left out; live events are
+// best-effort and the page still polls, so erring narrow is the safe side.
+func (q *Queries) ListRepoAudienceUserIDs(ctx context.Context, repoID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.QueryContext(ctx, listRepoAudienceUserIDs, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserRepoAccess = `-- name: ListUserRepoAccess :many
 SELECT user_id, repo_id, role, source, synced_at, created_at, updated_at
 FROM user_repo_access
@@ -36,6 +129,47 @@ func (q *Queries) ListUserRepoAccess(ctx context.Context, userID uuid.UUID) ([]U
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserRepoAccessInOrg = `-- name: ListUserRepoAccessInOrg :many
+SELECT ura.repo_id, ura.role
+FROM user_repo_access ura
+JOIN repositories r ON r.id = ura.repo_id
+WHERE ura.user_id = $1
+  AND r.org_id = $2
+`
+
+type ListUserRepoAccessInOrgParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	OrgID  uuid.UUID `json:"org_id"`
+}
+
+type ListUserRepoAccessInOrgRow struct {
+	RepoID uuid.UUID `json:"repo_id"`
+	Role   string    `json:"role"`
+}
+
+func (q *Queries) ListUserRepoAccessInOrg(ctx context.Context, arg ListUserRepoAccessInOrgParams) ([]ListUserRepoAccessInOrgRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUserRepoAccessInOrg, arg.UserID, arg.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserRepoAccessInOrgRow{}
+	for rows.Next() {
+		var i ListUserRepoAccessInOrgRow
+		if err := rows.Scan(&i.RepoID, &i.Role); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -4,7 +4,18 @@
 
 // Providers come from the API as free-form strings; the literals are for
 // autocomplete, `string & {}` keeps them from collapsing into plain string.
+import { isSafeUrl } from './safeUrl'
+
 export type ForgeProvider = 'github' | 'gitlab' | 'gitea' | 'forgejo' | (string & {})
+
+/**
+ * The repository URL without trailing slashes, or '' when it is not an
+ * absolute http(s) URL — every link below is built on it and bound to href.
+ */
+function forgeBase(htmlUrl: string | undefined | null): string {
+  if (!isSafeUrl(htmlUrl)) return ''
+  return (htmlUrl ?? '').trim().replace(/\/+$/, '')
+}
 
 /** Strips the internal ref prefixes so only the branch/tag/PR part is left. */
 function refBasename(refName: string): string {
@@ -31,7 +42,7 @@ function encodeRef(ref: string): string {
  * callers render no link rather than a broken one.
  */
 export function forgeRefUrl(htmlUrl: string | undefined | null, provider: ForgeProvider, refName: string, refType?: string): string | null {
-  const base = (htmlUrl ?? '').trim().replace(/\/+$/, '')
+  const base = forgeBase(htmlUrl)
   const ref = refBasename(refName ?? '')
   if (!base || !ref) return null
 
@@ -79,7 +90,7 @@ export function forgeBlobAtCommitUrl(
   filePath: string,
   lines?: { startLine?: number, endLine?: number },
 ): string | null {
-  const base = (htmlUrl ?? '').trim().replace(/\/+$/, '')
+  const base = forgeBase(htmlUrl)
   const commit = (sha ?? '').trim()
   const path = (filePath ?? '').trim().replace(/^\/+/, '')
   if (!base || !commit || !path) return null
@@ -100,7 +111,7 @@ export function forgeBlobAtCommitUrl(
 
 /** Link to a specific commit. */
 export function forgeCommitUrl(htmlUrl: string | undefined | null, provider: ForgeProvider, sha: string): string | null {
-  const base = (htmlUrl ?? '').trim().replace(/\/+$/, '')
+  const base = forgeBase(htmlUrl)
   const commit = (sha ?? '').trim()
   if (!base || !commit) return null
   switch (provider) {
@@ -120,7 +131,7 @@ export function forgeCommitUrl(htmlUrl: string | undefined | null, provider: For
  * commit a PR snapshot records can be garbage-collected after a rebase.
  */
 export function forgeFileUrl(htmlUrl: string | undefined | null, provider: ForgeProvider, refName: string, filePath: string): string | null {
-  const base = (htmlUrl ?? '').trim().replace(/\/+$/, '')
+  const base = forgeBase(htmlUrl)
   const ref = refBasename(refName ?? '')
   const path = (filePath ?? '').trim().replace(/^\/+/, '')
   if (!base || !ref) return null
@@ -149,7 +160,7 @@ export function forgeFileUrl(htmlUrl: string | undefined | null, provider: Forge
 
 /** Link to the forge's own base↔head comparison. */
 export function forgeCompareUrl(htmlUrl: string | undefined | null, provider: ForgeProvider, base: string, head: string): string | null {
-  const repo = (htmlUrl ?? '').trim().replace(/\/+$/, '')
+  const repo = forgeBase(htmlUrl)
   const from = refBasename(base ?? '')
   const to = refBasename(head ?? '')
   if (!repo || !from || !to) return null

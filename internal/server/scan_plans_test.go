@@ -34,6 +34,7 @@ func TestScanPlanAndBoundUpload(t *testing.T) {
 	}}
 	srv.forges = map[string]forge.Provider{"github": fake}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	if _, err := srv.db.ExecContext(context.Background(), `UPDATE repositories SET provider_id = 'acme/app' WHERE id = $1`, repo.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +147,7 @@ func TestScanPlanFollowsOrgRequirements(t *testing.T) {
 	}}}
 	repo := createUploadTestRepository(t, srv, org)
 	ctx := context.Background()
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	if _, err := srv.db.ExecContext(ctx, `UPDATE repositories SET provider_id = 'acme/app' WHERE id = $1`, repo.ID); err != nil {
 		t.Fatal(err)
 	}

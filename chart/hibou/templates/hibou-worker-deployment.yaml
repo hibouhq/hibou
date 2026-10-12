@@ -23,6 +23,7 @@ spec:
         app.kubernetes.io/component: worker
     spec:
       terminationGracePeriodSeconds: {{ .Values.hibou.shutdown.terminationGracePeriodSeconds }}
+      automountServiceAccountToken: {{ .Values.hibou.automountServiceAccountToken }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -56,6 +57,10 @@ spec:
                 name: {{ $forge.existingSecret | default (printf "%s-forge-%d" (include "hibou.fullname" $) $i) }}
             {{- end }}
           env:
+            {{- with (include "hibou.goMemLimit" (dict "resources" .Values.hibou.worker.resources "percent" .Values.hibou.goMemLimitPercent)) }}
+            - name: GOMEMLIMIT
+              value: {{ . | quote }}
+            {{- end }}
             - name: HIBOU_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -104,6 +109,8 @@ spec:
               port: http
             initialDelaySeconds: {{ .Values.hibou.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.hibou.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.hibou.probes.liveness.timeoutSeconds | default 1 }}
+            failureThreshold: {{ .Values.hibou.probes.liveness.failureThreshold | default 3 }}
           readinessProbe:
             httpGet:
               path: {{ .Values.hibou.probes.readiness.path | quote }}

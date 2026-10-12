@@ -28,12 +28,12 @@
           </dt>
           <dd class="text-gray-200 sm:mt-0.5">
             <a
-              v-if="org?.forge_url"
-              :href="org.forge_url"
+              v-if="safeHref(org?.forge_url)"
+              :href="safeHref(org?.forge_url)"
               target="_blank"
               rel="noopener noreferrer"
               class="text-accent hover:underline"
-            >{{ org.provider }}</a>
+            >{{ org?.provider }}</a>
             <template v-else>
               {{ org?.provider || '—' }}
             </template>
@@ -201,6 +201,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import type { Ref } from 'vue'
 import { computed, inject, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

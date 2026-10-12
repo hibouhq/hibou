@@ -52,8 +52,8 @@
         {{ finding.solution }}
       </p>
       <a
-        v-if="finding.remediation_link"
-        :href="finding.remediation_link"
+        v-if="safeHref(finding.remediation_link)"
+        :href="safeHref(finding.remediation_link)"
         target="_blank"
         rel="noopener noreferrer"
         class="mt-2 inline-block text-xs text-accent underline underline-offset-2"
@@ -149,7 +149,7 @@
           :key="reference"
         >
           <a
-            :href="reference"
+            :href="safeHref(reference)"
             target="_blank"
             rel="noopener noreferrer"
             class="break-all text-xs text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent"
@@ -197,6 +197,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import { computed, ref, watch } from 'vue'
 
 import { api, type AdvisoryActivityEvent, type FindingDetail } from '@/api/client'

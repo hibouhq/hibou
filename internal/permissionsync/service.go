@@ -98,6 +98,8 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 	}
 
 	orgsByAccount := make(map[string]*store.Organization)
+	ids := &accountIDLookup{}
+	ids.resolver, _ = provider.(AccountIDResolver)
 	desiredOrgRoles := make(map[uuid.UUID]string, len(access.Orgs))
 	desiredOrgOrder := make([]uuid.UUID, 0, len(access.Orgs))
 	for _, orgAccess := range access.Orgs {
@@ -106,7 +108,7 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 			continue
 		}
 
-		org, ok, err := s.resolveOrganization(ctx, providerID, orgAccess.AccountLogin, orgsByAccount)
+		org, ok, err := s.resolveOrganization(ctx, providerID, orgAccess.AccountLogin, orgsByAccount, ids)
 		if err != nil {
 			return err
 		}
@@ -166,7 +168,7 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 		// (outside collaborator) has no entry in access.Orgs, so the cache is
 		// cold and the bare map read dropped their entire repo access at login
 		// — which the prune below then deleted.
-		org, ok, err := s.resolveOrganization(ctx, providerID, repoAccess.AccountLogin, orgsByAccount)
+		org, ok, err := s.resolveOrganization(ctx, providerID, repoAccess.AccountLogin, orgsByAccount, ids)
 		if err != nil {
 			return err
 		}
@@ -246,7 +248,13 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 	return s.store.PruneForgeUserRepoAccess(ctx, user.ID, keptRepoIDs)
 }
 
-func (s *Service) resolveOrganization(ctx context.Context, providerID, accountLogin string, cache map[string]*store.Organization) (*store.Organization, bool, error) {
+// resolveOrganization maps a forge account login to its Hibou org. The slug is
+// only the lookup key: an org bound to a forge account is returned only when
+// the login still denotes that account — the same immutable id when the forge
+// can tell, else the same exact login. Otherwise a renamed-then-re-registered
+// login, or a login that merely slugifies alike, would inherit the org and its
+// admin role (security audit §3.3).
+func (s *Service) resolveOrganization(ctx context.Context, providerID, accountLogin string, cache map[string]*store.Organization, ids *accountIDLookup) (*store.Organization, bool, error) {
 	accountKey := normalizeAccessKey(accountLogin)
 	if accountKey == "" {
 		return nil, false, nil
@@ -259,8 +267,66 @@ func (s *Service) resolveOrganization(ctx context.Context, providerID, accountLo
 	if err != nil {
 		return nil, false, err
 	}
+	if org != nil {
+		bound, err := orgBoundToLogin(ctx, org, accountLogin, ids)
+		if err != nil {
+			return nil, false, err
+		}
+		if !bound {
+			s.log.Warn().Str("provider", providerID).Str("account", accountLogin).Str("org_id", org.ID.String()).
+				Msg("forge account does not match the account the org is bound to; not mirroring its permissions")
+			org = nil
+		}
+	}
 	cache[accountKey] = org
 	return org, org != nil, nil
+}
+
+func orgBoundToLogin(ctx context.Context, org *store.Organization, accountLogin string, ids *accountIDLookup) (bool, error) {
+	if org.ForgeAccountID != "" && ids != nil && ids.resolver != nil {
+		id, known, err := ids.get(ctx, accountLogin)
+		if err != nil {
+			return false, err
+		}
+		if known {
+			return id == org.ForgeAccountID, nil
+		}
+	}
+	if login := strings.TrimSpace(org.ForgeAccountLogin); login != "" {
+		return strings.EqualFold(login, strings.TrimSpace(accountLogin)), nil
+	}
+	return true, nil
+}
+
+// AccountIDResolver maps installed accounts' lowercased logins to their
+// immutable forge account ids (GitHub App installations).
+type AccountIDResolver interface {
+	InstallationAccountIDs(ctx context.Context) (map[string]string, error)
+}
+
+// accountIDLookup loads the login→id map at most once per sync. A failure
+// aborts the sync rather than treating orgs as unbound, which would prune
+// every membership on a transient API error.
+type accountIDLookup struct {
+	resolver AccountIDResolver
+	ids      map[string]string
+	loaded   bool
+}
+
+// get returns the login's account id; known is false when the forge cannot
+// list ids at all (not in App mode), so the caller falls back to the login.
+func (l *accountIDLookup) get(ctx context.Context, login string) (string, bool, error) {
+	if !l.loaded {
+		ids, err := l.resolver.InstallationAccountIDs(ctx)
+		if err != nil {
+			return "", false, fmt.Errorf("resolve forge account ids: %w", err)
+		}
+		l.ids, l.loaded = ids, true
+	}
+	if l.ids == nil {
+		return "", false, nil
+	}
+	return l.ids[normalizeAccessKey(login)], true, nil
 }
 
 func (s *Service) addOrgRole(userID uuid.UUID, role string, orgID uuid.UUID) bool {
@@ -288,32 +354,7 @@ func normalizeAccessKey(value string) string {
 }
 
 func slugifyAccount(login string) string {
-	normalized := strings.ToLower(strings.TrimSpace(login))
-	if normalized == "" {
-		return ""
-	}
-
-	var builder strings.Builder
-	builder.Grow(len(normalized))
-	lastWasHyphen := false
-	for _, r := range normalized {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			builder.WriteRune(r)
-			lastWasHyphen = false
-			continue
-		}
-		if lastWasHyphen {
-			continue
-		}
-		builder.WriteByte('-')
-		lastWasHyphen = true
-	}
-
-	slug := strings.Trim(builder.String(), "-")
-	if len(slug) > 63 {
-		slug = strings.TrimRight(slug[:63], "-")
-	}
-	return slug
+	return store.SlugifyForgeAccount(login)
 }
 
 func strongerRole(left, right string) string {

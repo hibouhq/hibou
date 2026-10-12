@@ -66,7 +66,12 @@ Use a GitHub App for org-wide repo access, webhook delivery, and commit status u
 | Repository → Metadata | Read-only | Discover repos |
 | Repository → Pull requests | Read & write | Post PR check results |
 | Repository → Commit statuses | Read & write | Set CI status |
-| Organization → Members | Read-only | Org membership info |
+| Organization → Members | Read-only | Org membership info; also answers the `auth.allowed_orgs` sign-in allowlist |
+
+Login asks the user only for `read:user user:email`. Hibou never requests the
+`repo` scope: repositories are read with the App installation token, and when
+the Client ID is the GitHub App's own (recommended), GitHub ignores OAuth scopes
+and applies the App permissions above.
 
 ### Generate a private key
 
@@ -180,13 +185,72 @@ https://hibou.example.com/api/v1/webhooks/github
 | Secret | Required Keys |
 |--------|---------------|
 | Session | `HIBOU_SESSION_SECRET` |
-| Forge (index N) | `HIBOU_FORGE_N_CLIENT_ID`, `HIBOU_FORGE_N_CLIENT_SECRET`, optional `HIBOU_FORGE_N_WEBHOOK_SECRET`, `HIBOU_FORGE_N_APP_ID`, `HIBOU_FORGE_N_PRIVATE_KEY` |
+| Forge (index N) | `HIBOU_FORGE_N_CLIENT_ID`, `HIBOU_FORGE_N_CLIENT_SECRET`, `HIBOU_FORGE_N_WEBHOOK_SECRET`, `HIBOU_FORGE_N_APP_ID`, `HIBOU_FORGE_N_PRIVATE_KEY` |
 | Database (external) | `url` (full `postgres://` connection string) |
 
 The forge key index (0, 1, ...) must match the forge's position in the `forges[]` array.
 
 Use one stable `HIBOU_SESSION_SECRET` value across every Hibou replica. Rotating that secret invalidates all existing `hibou_session` and `hibou_oauth_state` cookies, so active browser sessions are logged out and in-flight OAuth logins must restart.
-Production is strict by default: if `HIBOU_SESSION_SECRET` / `session.secret` is empty or left at the shipped `change-me-in-production` default, Hibou exits during startup unless you explicitly opt into local development with `HIBOU_DEVELOPMENT=true` or `development: true`. Do not set that flag in production.
+Production is strict by default: if `HIBOU_SESSION_SECRET` / `session.secret` is empty, shorter than 32 bytes, or left at the shipped `change-me-in-production` default, Hibou exits during startup unless you explicitly opt into local development with `HIBOU_DEVELOPMENT=true` or `development: true`. Do not set that flag in production.
+
+Outside development Hibou also refuses to start when a declared forge has no
+`HIBOU_FORGE_N_CLIENT_ID` or no `HIBOU_FORGE_N_WEBHOOK_SECRET`: webhooks are
+accepted only with a valid signature (GitHub, Forgejo) or token (GitLab).
+Bodies over 25 MB are refused, and a delivery replayed within an hour (same
+delivery id or identical body) is acknowledged without being processed again.
+The replay window is per replica. In development a secret-less forge is
+accepted with a warning on every delivery, and `/api/v1/auth/dev-login` exists
+only in development with no forge configured.
+
+### Sessions
+
+Sessions are host-only cookies (no `Domain` attribute). Over HTTPS the cookies
+are named `__Host-hibou_session` / `__Host-hibou_oauth_state`; over plain HTTP
+(local development) they keep the bare names. Logging out revokes every session
+of that user on every device (a per-user session epoch is signed into the
+cookie). Sessions issued before this change are invalid: users sign in once
+more after the upgrade. Login uses PKCE (S256).
+
+State-changing requests authenticated by the session cookie are refused when
+the browser marks them cross-site (`Sec-Fetch-Site`) or their `Origin` differs
+from `HIBOU_BASE_URL`. Bearer-token requests and webhooks are not affected.
+
+### Restricting sign-in
+
+By default any account of a configured forge can sign in. To restrict it:
+
+| Setting | Env | Meaning |
+|---------|-----|---------|
+| `auth.allowed_orgs` | `HIBOU_AUTH_ALLOWED_ORGS` (comma-separated) | Members of these forge orgs may sign in |
+| `auth.allowed_users` | `HIBOU_AUTH_ALLOWED_USERS` (comma-separated) | These forge logins may sign in |
+
+With either set, anyone else is refused in the OAuth callback (HTTP 403)
+before a user row is created. Matching is case-insensitive.
+
+- `allowed_orgs` works on GitHub only. In App mode membership is checked with
+  the App's installation token on that org
+  (`GET /orgs/{org}/members/{login}`), using the **Organization → Members:
+  read** permission listed above, so the App must be installed on every
+  allowed org and users grant nothing extra. Without App credentials (plain
+  OAuth App), login additionally requests `read:org` and checks the user's own
+  membership (state must be `active`). If the check fails, sign-in is refused.
+- GitLab and Forgejo: only `allowed_users` applies; their users must be
+  listed by login.
+- A login can be renamed and then re-registered by someone else. Prefer
+  `allowed_orgs` where you can.
+
+Per-account caps: 10 organizations created, 50 API keys (personal and
+org-requested together), 100 saved search presets per surface (HTTP 422, or
+400 for presets). Organizations can only be created for a forge configured on
+the instance (HTTP 400 otherwise).
+
+### Instance administrators
+
+`HIBOU_INSTANCE_ADMINS` / `HIBOU_INSTANCE_ADMINS_FILE` entries are either
+`provider:provider_id` (recommended; for GitHub the numeric account id, e.g.
+`github:1234567` from `https://api.github.com/users/<login>`) or emails. An
+email entry only matches GitHub accounts: GitLab and Forgejo report a profile
+email Hibou cannot treat as verified.
 
 ## Step 3: Deploy Hibou
 

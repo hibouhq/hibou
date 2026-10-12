@@ -217,8 +217,8 @@
           </dl>
 
           <a
-            v-if="repo?.html_url"
-            :href="repo.html_url"
+            v-if="safeHref(repo?.html_url)"
+            :href="safeHref(repo?.html_url)"
             target="_blank"
             rel="noopener"
             class="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-accent transition hover:text-accent-hover"
@@ -316,6 +316,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import { Activity, ArrowLeftRight, ArrowRight, Clock, Download, ExternalLink, FileArchive, FileText, Flame, GitBranch, Globe, Lock, Package, ShieldAlert } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'

@@ -180,7 +180,7 @@
               <GitPullRequest class="h-4 w-4 shrink-0 text-ok" />
               Onboarding pull request
               <a
-                :href="openPR.html_url"
+                :href="safeHref(openPR.html_url)"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="font-medium text-accent hover:underline"
@@ -280,6 +280,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import { FileCog, GitBranch, GitPullRequest } from 'lucide-vue-next'
 import type { Ref } from 'vue'
 import { computed, inject, ref, watch } from 'vue'

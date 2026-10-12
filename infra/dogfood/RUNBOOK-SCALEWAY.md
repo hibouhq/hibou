@@ -367,6 +367,57 @@ git push origin main
 3. Confirm repository pages show imported findings and associated repo metadata.
 4. Confirm HTTPS works without browser warnings and the ingress presents a Let's Encrypt certificate.
 
+## Cluster Hardening
+
+New servers get these from `cloud-init.yaml.tpl`. Servers provisioned before
+the change need them once, by hand. Take a backup first (Phase 4 database
+backup, and `k3s etcd-snapshot save` or a copy of `/var/lib/rancher/k3s/server/db`).
+
+> Changing `cloud-init.yaml.tpl` changes the instance user data: check
+> `terraform plan` before any apply, it may want to replace the server.
+
+1. Kubeconfig readable by root only (it is cluster-admin):
+
+   ```bash
+   ssh root@<server-ip>
+   chmod 600 /etc/rancher/k3s/k3s.yaml
+   # Persist across k3s restarts: the installer flag is in the unit file.
+   sed -i 's/--write-kubeconfig-mode[ =]644/--write-kubeconfig-mode 600/' /etc/systemd/system/k3s.service
+   ```
+
+2. Encrypt Secrets at rest:
+
+   ```bash
+   # still on the server
+   k3s secrets-encrypt enable
+   # add --secrets-encryption to ExecStart in /etc/systemd/system/k3s.service, then:
+   systemctl daemon-reload && systemctl restart k3s
+   k3s secrets-encrypt reencrypt
+   k3s secrets-encrypt status   # expect "Encryption Status: Enabled"
+   ```
+
+3. Traefik timeouts and client IP preservation
+   ([`traefik-config.yaml`](traefik-config.yaml)):
+
+   ```bash
+   kubectl apply -f infra/dogfood/traefik-config.yaml
+   kubectl -n kube-system rollout status deploy/traefik
+   kubectl -n kube-system get svc traefik -o jsonpath='{.spec.externalTrafficPolicy}'   # Local
+   ```
+
+4. Hibou pods run with a default-deny NetworkPolicy on dogfood
+   (`hibou.networkPolicy.enabled` in `values-dogfood.yaml`). After a deploy,
+   check the app still reaches its dependencies:
+
+   ```bash
+   kubectl -n hibou get networkpolicy
+   kubectl -n hibou logs deploy/hibou --since=10m | grep -iE 'timeout|refused|no such host' || true
+   ```
+
+   Email notification integrations need their SMTP port added to
+   `hibou.networkPolicy.externalPorts`; a Prometheus scraper needs
+   `hibou.metrics.networkPolicy`.
+
 ## Operational Notes
 
 - Release image tag for this deployment: `ghcr.io/hibouhq/hibou:0.1.0`

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -27,7 +28,7 @@ func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(r.Context(), repo)
 	if !ok {
 		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository coordinates")
 		return
@@ -92,13 +93,17 @@ func (s *Server) handleOnboardRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(r.Context(), repo)
 	if !ok {
 		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository coordinates")
 		return
 	}
 
-	pr, err := s.onboardingSvc.CreateOnboardingPR(r.Context(), repo.Provider, owner, name, repo.DefaultBranch)
+	pr, err := s.onboardingSvc.CreateOnboardingPRForOrg(r.Context(), org, repo.Provider, owner, name, repo.DefaultBranch)
+	if errors.Is(err, repoconfig.ErrForeignRepository) {
+		api.JSONError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("create onboarding pull request")
 		api.JSONError(w, http.StatusBadGateway, "failed to create onboarding pull request")
@@ -121,27 +126,11 @@ func (s *Server) handleGetConfigSchema(w http.ResponseWriter, r *http.Request) {
 // returned user is attribution, not authorization (ADR-022): it is nil for an
 // org service principal, and callers must tolerate that.
 func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Request, requireAdmin bool) (*store.Organization, *store.Repository, *store.User, bool) {
-	if !s.hasPrincipal(r) {
-		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+	org, role, ok := s.loadOrgMembership(r, w)
+	if !ok {
 		return nil, nil, nil, false
 	}
 	user := UserFromContext(r.Context())
-
-	org, err := s.resolveOrg(r)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
-		return nil, nil, nil, false
-	}
-	if org == nil {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
-		return nil, nil, nil, false
-	}
-
-	role, err := s.principalOrgRole(r, org.ID)
-	if err != nil || role == "" {
-		api.JSONError(w, http.StatusNotFound, "organization not found")
-		return nil, nil, nil, false
-	}
 	if requireAdmin && role != "admin" {
 		api.JSONError(w, http.StatusForbidden, "admin access required")
 		return nil, nil, nil, false
@@ -154,6 +143,11 @@ func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Reque
 	}
 	if repo == nil {
 		api.JSONError(w, http.StatusNotFound, "repository not found")
+		return nil, nil, nil, false
+	}
+	// Repository visibility (§4.3) and the read-only roles (§4.4), shared with
+	// loadAuthorizedRepo.
+	if !s.authorizeRepoRequest(w, r, org.ID, role, repo) {
 		return nil, nil, nil, false
 	}
 
@@ -296,6 +290,26 @@ func (s *Server) dbBackedRepoConfig(ctx context.Context, repoID, orgID uuid.UUID
 		}
 	}
 	return &repoconfig.RepoConfig{Version: repoconfig.CurrentVersion}, nil
+}
+
+// boundRepoCoordinates is repoCoordinates for a stored repository, refusing
+// coordinates whose owner is not the forge account the repository's org is
+// bound to. Every forge call made on a repository's behalf mints the owner's
+// installation token, so a row naming another tenant's repository must not
+// reach the forge (security audit §3.1) — enrolment refuses such rows, this
+// covers rows that predate that check.
+func (s *Server) boundRepoCoordinates(ctx context.Context, repo *store.Repository) (string, string, bool) {
+	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	if !ok {
+		return "", "", false
+	}
+	bound, err := s.queries.ForgeOwnerBoundToOrg(ctx, repo.OrgID, owner)
+	if err != nil || !bound {
+		s.log.Warn().Err(err).Str("repo_id", repo.ID.String()).Str("owner", owner).
+			Msg("repository owner is not the organization's forge account; skipping forge call")
+		return "", "", false
+	}
+	return owner, name, true
 }
 
 func repoCoordinates(candidates ...string) (string, string, bool) {

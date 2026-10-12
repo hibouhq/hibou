@@ -21,9 +21,23 @@ RETURNING *;
 -- Same shape as ClaimNextArtifactProcessingSnapshot: skip rows another worker
 -- holds, reclaim leases that expired with the pod that owned them, and stop
 -- retrying past max_attempts instead of looping forever.
-WITH candidate AS (
+--
+-- Fair across organizations: the queue is shared by every tenant, so a strict
+-- FIFO lets one org that enqueues a thousand repositories starve all others.
+-- Candidates are ordered by when their org was last served (round-robin;
+-- never-served orgs first), then by age within the org.
+WITH org_last_served AS (
+	SELECT r.org_id, MAX(served.started_at) AS last_started_at
+	FROM secret_scan_jobs served
+	JOIN repositories r ON r.id = served.repo_id
+	WHERE served.started_at > NOW() - INTERVAL '1 day'
+	GROUP BY r.org_id
+),
+candidate AS (
 	SELECT j.id
 	FROM secret_scan_jobs j
+	JOIN repositories repo ON repo.id = j.repo_id
+	LEFT JOIN org_last_served ols ON ols.org_id = repo.org_id
 	WHERE (
 			j.status IN ('pending', 'processing')
 			-- Failed-retry arm (mirrors ClaimNextArtifactProcessingSnapshot):
@@ -52,8 +66,8 @@ WITH candidate AS (
 			j.claim_expires_at IS NULL
 			OR j.claim_expires_at < NOW()
 		)
-	ORDER BY j.created_at ASC, j.id ASC
-	FOR UPDATE SKIP LOCKED
+	ORDER BY ols.last_started_at ASC NULLS FIRST, j.created_at ASC, j.id ASC
+	FOR UPDATE OF j SKIP LOCKED
 	LIMIT 1
 )
 UPDATE secret_scan_jobs j

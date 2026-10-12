@@ -39,7 +39,7 @@ func (s *Server) resolveConfiguredScopes(ctx context.Context, snapshot *store.Sn
 	if err != nil || repo == nil {
 		return &configuredScopes{unknown: true}
 	}
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
 	if !ok {
 		return nil
 	}

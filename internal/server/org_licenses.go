@@ -742,7 +742,7 @@ func (s *Server) repoLicensePolicyStatus(r *http.Request, repo *store.Repository
 		status.Unreadable = true
 		return status
 	}
-	owner, name, resolved := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, resolved := s.boundRepoCoordinates(r.Context(), repo)
 	if !resolved {
 		status.Unreadable = true
 		return status

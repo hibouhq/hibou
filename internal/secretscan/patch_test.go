@@ -1,6 +1,8 @@
 package secretscan
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,12 +64,12 @@ func TestAddedLinesByFileRejectsTraversalPaths(t *testing.T) {
 	}
 }
 
-func TestMaterializePatchFilesPlacesLinesAtRealNumbers(t *testing.T) {
+func TestMaterializePatchFilesMapsLinesToRealNumbers(t *testing.T) {
 	files, err := addedLinesByFile([]byte(sampleDiff))
 	if err != nil {
 		t.Fatalf("addedLinesByFile: %v", err)
 	}
-	dir, cleanup, err := materializePatchFiles(t.TempDir(), files)
+	dir, lineMaps, cleanup, err := materializePatchFiles(t.TempDir(), files)
 	if err != nil {
 		t.Fatalf("materializePatchFiles: %v", err)
 	}
@@ -77,16 +79,67 @@ func TestMaterializePatchFilesPlacesLinesAtRealNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read materialized file: %v", err)
 	}
-	lines := strings.Split(string(content), "\n")
-	// 1-indexed line 2 is index 1: the scanner must report the same line the
-	// pushed file actually has.
-	if lines[1] != "AWS_KEY=AKIAIOSFODNN7EXAMPLE" {
-		t.Fatalf("line 2 = %q, want the added secret line", lines[1])
+	// Only added lines are written; non-adjacent runs get one blank separator.
+	want := "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n\nDEBUG=true\n\nLAST=value\n"
+	if string(content) != want {
+		t.Fatalf("materialized = %q, want %q", content, want)
 	}
-	if lines[3] != "DEBUG=true" || lines[12] != "LAST=value" {
-		t.Fatalf("padding wrong: line4=%q line13=%q", lines[3], lines[12])
+	lineMap := lineMaps["config/prod.env"]
+	// The scanner reports materialized lines; the map must give back the line
+	// the pushed file actually has.
+	for materialized, real := range map[int32]int32{1: 2, 3: 4, 5: 13} {
+		if got := lineMap.real(materialized); got != real {
+			t.Fatalf("real(%d) = %d, want %d", materialized, got, real)
+		}
 	}
-	if lines[0] != "" || lines[2] != "" {
-		t.Fatal("unpatched lines must be blank padding, never invented content")
+}
+
+func TestMaterializePatchFilesHugeHunkStartDoesNotPad(t *testing.T) {
+	hostile := "--- a/x\n+++ b/x\n@@ -1 +2000000000 @@\n+AWS_KEY=AKIAIOSFODNN7EXAMPLE\n"
+	files, err := addedLinesByFile([]byte(hostile))
+	if err != nil {
+		t.Fatalf("addedLinesByFile: %v", err)
+	}
+	dir, lineMaps, cleanup, err := materializePatchFiles(t.TempDir(), files)
+	if err != nil {
+		t.Fatalf("materializePatchFiles: %v", err)
+	}
+	defer cleanup()
+	info, err := os.Stat(filepath.Join(dir, "x"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Size() > 64 {
+		t.Fatalf("materialized %d bytes, want only the added line", info.Size())
+	}
+	if got := lineMaps["x"].real(1); got != 2000000000 {
+		t.Fatalf("real(1) = %d, want 2000000000", got)
+	}
+}
+
+func TestParseHunkNewStartRejectsOutOfRange(t *testing.T) {
+	if _, err := parseHunkNewStart("@@ -1 +99999999999 @@"); err == nil {
+		t.Fatal("want an error for a start line beyond int32")
+	}
+}
+
+func TestMaterializePatchFilesCapsFileCount(t *testing.T) {
+	files := make(map[string][]addedLine, maxPatchFiles+1)
+	for i := 0; i <= maxPatchFiles; i++ {
+		files[fmt.Sprintf("f%d", i)] = []addedLine{{number: 1, text: "x"}}
+	}
+	if _, _, _, err := materializePatchFiles(t.TempDir(), files); !errors.Is(err, ErrPatchTooLarge) {
+		t.Fatalf("err = %v, want ErrPatchTooLarge", err)
+	}
+}
+
+func TestMaterializePatchFilesCapsBytes(t *testing.T) {
+	line := strings.Repeat("a", 1<<20)
+	files := map[string][]addedLine{}
+	for i := 0; i < 5; i++ {
+		files[fmt.Sprintf("f%d", i)] = []addedLine{{number: 1, text: line}}
+	}
+	if _, _, _, err := materializePatchFiles(t.TempDir(), files); !errors.Is(err, ErrPatchTooLarge) {
+		t.Fatalf("err = %v, want ErrPatchTooLarge", err)
 	}
 }

@@ -32,7 +32,7 @@ func (s *Server) changedLinesForComparison(ctx context.Context, repo *store.Repo
 		return patchDiffFromCache(cached)
 	}
 
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
 	if !ok {
 		return nil
 	}

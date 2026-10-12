@@ -283,8 +283,8 @@
               >
                 <div class="flex items-center justify-between gap-2 text-xs">
                   <a
-                    v-if="serverVersion.current_url"
-                    :href="serverVersion.current_url"
+                    v-if="safeHref(serverVersion.current_url)"
+                    :href="safeHref(serverVersion.current_url)"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="font-mono text-gray-500 transition hover:text-gray-300 hover:underline"
@@ -297,7 +297,7 @@
                   >{{ serverVersion.current }}</span>
                   <a
                     v-if="serverVersion.update_available"
-                    :href="serverVersion.release_url"
+                    :href="safeHref(serverVersion.release_url)"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="inline-flex items-center gap-1 rounded-full bg-accent-muted px-2 py-0.5 font-medium text-accent transition hover:text-white"
@@ -351,6 +351,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import {
   Activity,
   ArrowLeftRight,

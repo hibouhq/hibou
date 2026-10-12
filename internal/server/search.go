@@ -91,8 +91,18 @@ func (s *Server) handleGlobalSearch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxSearchAllWindow caps the rows fetched per result type by the merged
+// "all" search (four queries, sorted in memory).
+const maxSearchAllWindow = 1000
+
 func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, pagination api.PaginationParams) ([]searchResultResponse, int, error) {
+	// Each type is fetched from offset 0 and merged in memory, so the window
+	// is bounded: pages past it come back empty, with the totals intact.
 	fetchLimit := pagination.Page * pagination.PerPage
+	beyondWindow := fetchLimit > maxSearchAllWindow
+	if beyondWindow {
+		fetchLimit = 1
+	}
 	advisories, advisoryTotal, err := s.searchAdvisories(r, orgID, query, "", fetchLimit, 0)
 	if err != nil {
 		return nil, 0, err
@@ -110,6 +120,10 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 		return nil, 0, err
 	}
 
+	total := advisoryTotal + componentTotal + vulnerabilityTotal + clientTotal
+	if beyondWindow {
+		return []searchResultResponse{}, total, nil
+	}
 	results := append(advisories, components...)
 	results = append(results, vulnerabilities...)
 	results = append(results, clients...)
@@ -126,7 +140,7 @@ func (s *Server) searchAllTypes(r *http.Request, orgID uuid.UUID, query string, 
 		return left.Type < right.Type
 	})
 
-	return paginateSlice(results, pagination.Offset, pagination.PerPage), advisoryTotal + componentTotal + vulnerabilityTotal + clientTotal, nil
+	return paginateSlice(results, pagination.Offset, pagination.PerPage), total, nil
 }
 
 func isMalwareResult(result searchResultResponse) bool {

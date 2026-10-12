@@ -59,6 +59,9 @@ func (s *Server) handleGetDelta(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusNotFound, "repository not found")
 		return
 	}
+	if !s.authorizeRepoRequest(w, r, org.ID, role, repo) {
+		return
+	}
 
 	prSnapshotID, err := uuid.Parse(r.URL.Query().Get("pr_snapshot_id"))
 	if err != nil {

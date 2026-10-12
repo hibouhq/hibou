@@ -11,6 +11,51 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteForgeOrgAdminsByAccount = `-- name: DeleteForgeOrgAdminsByAccount :many
+DELETE FROM forge_org_admins
+WHERE provider = $1 AND account = $2
+RETURNING id, provider, account, provider_user_id, org_id, granted, created_at, updated_at
+`
+
+type DeleteForgeOrgAdminsByAccountParams struct {
+	Provider string `json:"provider"`
+	Account  string `json:"account"`
+}
+
+// An uninstalled or suspended App no longer proves anyone administers the
+// account: drop the bindings so pending claims cannot be redeemed later.
+func (q *Queries) DeleteForgeOrgAdminsByAccount(ctx context.Context, arg DeleteForgeOrgAdminsByAccountParams) ([]ForgeOrgAdmin, error) {
+	rows, err := q.db.QueryContext(ctx, deleteForgeOrgAdminsByAccount, arg.Provider, arg.Account)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ForgeOrgAdmin{}
+	for rows.Next() {
+		var i ForgeOrgAdmin
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.Account,
+			&i.ProviderUserID,
+			&i.OrgID,
+			&i.Granted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const forgeOrgAdminBindingExists = `-- name: ForgeOrgAdminBindingExists :one
 SELECT EXISTS(
     SELECT 1

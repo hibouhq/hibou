@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 
 	"github.com/google/uuid"
@@ -30,7 +31,7 @@ func (q *Queries) CountOrganizationsByUser(ctx context.Context, userID uuid.UUID
 const createOrganization = `-- name: CreateOrganization :one
 INSERT INTO organizations (name, slug, display_name, provider)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at
+RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
 `
 
 type CreateOrganizationParams struct {
@@ -57,6 +58,8 @@ func (q *Queries) CreateOrganization(ctx context.Context, arg CreateOrganization
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ForgeAccountID,
+		&i.ForgeAccountLogin,
 	)
 	return i, err
 }
@@ -70,8 +73,37 @@ func (q *Queries) DeleteOrganization(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const getOrganizationByForgeAccountID = `-- name: GetOrganizationByForgeAccountID :one
+SELECT id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
+FROM organizations
+WHERE provider = $1 AND forge_account_id = $2
+`
+
+type GetOrganizationByForgeAccountIDParams struct {
+	Provider       string         `json:"provider"`
+	ForgeAccountID sql.NullString `json:"forge_account_id"`
+}
+
+func (q *Queries) GetOrganizationByForgeAccountID(ctx context.Context, arg GetOrganizationByForgeAccountIDParams) (Organization, error) {
+	row := q.db.QueryRowContext(ctx, getOrganizationByForgeAccountID, arg.Provider, arg.ForgeAccountID)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.DisplayName,
+		&i.Provider,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ForgeAccountID,
+		&i.ForgeAccountLogin,
+	)
+	return i, err
+}
+
 const getOrganizationByID = `-- name: GetOrganizationByID :one
-SELECT id, name, slug, display_name, provider, settings, created_at, updated_at
+SELECT id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
 FROM organizations
 WHERE id = $1
 `
@@ -88,12 +120,14 @@ func (q *Queries) GetOrganizationByID(ctx context.Context, id uuid.UUID) (Organi
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ForgeAccountID,
+		&i.ForgeAccountLogin,
 	)
 	return i, err
 }
 
 const getOrganizationByProviderAndSlug = `-- name: GetOrganizationByProviderAndSlug :one
-SELECT id, name, slug, display_name, provider, settings, created_at, updated_at
+SELECT id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
 FROM organizations
 WHERE provider = $1 AND slug = $2
 `
@@ -115,12 +149,14 @@ func (q *Queries) GetOrganizationByProviderAndSlug(ctx context.Context, arg GetO
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ForgeAccountID,
+		&i.ForgeAccountLogin,
 	)
 	return i, err
 }
 
 const listOrganizations = `-- name: ListOrganizations :many
-SELECT id, name, slug, display_name, provider, settings, created_at, updated_at
+SELECT id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
 FROM organizations
 ORDER BY name ASC
 `
@@ -143,6 +179,8 @@ func (q *Queries) ListOrganizations(ctx context.Context) ([]Organization, error)
 			&i.Settings,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ForgeAccountID,
+			&i.ForgeAccountLogin,
 		); err != nil {
 			return nil, err
 		}
@@ -158,7 +196,7 @@ func (q *Queries) ListOrganizations(ctx context.Context) ([]Organization, error)
 }
 
 const listOrganizationsByUser = `-- name: ListOrganizationsByUser :many
-SELECT o.id, o.name, o.slug, o.display_name, o.provider, o.settings, o.created_at, o.updated_at
+SELECT o.id, o.name, o.slug, o.display_name, o.provider, o.settings, o.created_at, o.updated_at, o.forge_account_id, o.forge_account_login
 FROM organizations o
 WHERE o.id IN (
     SELECT org_id FROM org_members WHERE user_id = $1
@@ -191,6 +229,8 @@ func (q *Queries) ListOrganizationsByUser(ctx context.Context, arg ListOrganizat
 			&i.Settings,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ForgeAccountID,
+			&i.ForgeAccountLogin,
 		); err != nil {
 			return nil, err
 		}
@@ -205,11 +245,33 @@ func (q *Queries) ListOrganizationsByUser(ctx context.Context, arg ListOrganizat
 	return items, nil
 }
 
+const setOrganizationForgeAccount = `-- name: SetOrganizationForgeAccount :exec
+UPDATE organizations
+SET forge_account_id = COALESCE($1, forge_account_id),
+    forge_account_login = $2,
+    updated_at = NOW()
+WHERE id = $3
+  AND (forge_account_id IS NULL OR $1::text IS NULL OR forge_account_id = $1)
+`
+
+type SetOrganizationForgeAccountParams struct {
+	AccountID    sql.NullString `json:"account_id"`
+	AccountLogin sql.NullString `json:"account_login"`
+	ID           uuid.UUID      `json:"id"`
+}
+
+// Binds the org to its forge account. The id is write-once: an org already
+// bound to a different account id is never rebound (the WHERE guard).
+func (q *Queries) SetOrganizationForgeAccount(ctx context.Context, arg SetOrganizationForgeAccountParams) error {
+	_, err := q.db.ExecContext(ctx, setOrganizationForgeAccount, arg.AccountID, arg.AccountLogin, arg.ID)
+	return err
+}
+
 const updateOrganization = `-- name: UpdateOrganization :one
 UPDATE organizations
 SET name = $2, display_name = $3, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at
+RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
 `
 
 type UpdateOrganizationParams struct {
@@ -230,6 +292,8 @@ func (q *Queries) UpdateOrganization(ctx context.Context, arg UpdateOrganization
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ForgeAccountID,
+		&i.ForgeAccountLogin,
 	)
 	return i, err
 }
@@ -238,7 +302,7 @@ const updateOrganizationSettings = `-- name: UpdateOrganizationSettings :one
 UPDATE organizations
 SET settings = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at
+RETURNING id, name, slug, display_name, provider, settings, created_at, updated_at, forge_account_id, forge_account_login
 `
 
 type UpdateOrganizationSettingsParams struct {
@@ -258,6 +322,8 @@ func (q *Queries) UpdateOrganizationSettings(ctx context.Context, arg UpdateOrga
 		&i.Settings,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ForgeAccountID,
+		&i.ForgeAccountLogin,
 	)
 	return i, err
 }

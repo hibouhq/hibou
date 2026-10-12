@@ -73,6 +73,8 @@ var serveCmd = &cobra.Command{
 		forges := make(map[string]forge.Provider)
 		for _, fc := range cfg.Forges {
 			if fc.ClientID == "" {
+				// ValidateStartup refuses this outside development.
+				log.Warn().Str("id", fc.ID).Msg("forge has no OAuth client id, skipping (development only)")
 				continue
 			}
 			switch fc.Type {
@@ -80,6 +82,12 @@ var serveCmd = &cobra.Command{
 				var opts []forge.GitHubOption
 				if fc.AppID > 0 && fc.PrivateKey != "" {
 					opts = append(opts, forge.WithAppCredentials(fc.AppID, []byte(fc.PrivateKey)))
+				}
+				if len(cfg.Auth.AllowedOrgs) > 0 {
+					// Only takes effect without App credentials (OAuth App
+					// login): App mode checks membership with the
+					// installation token instead.
+					opts = append(opts, forge.WithOrgMembershipScope())
 				}
 				forges[fc.ID] = forge.NewGitHub(fc.ClientID, fc.ClientSecret, fc.WebhookSecret, opts...)
 			case "forgejo", "gitea":
@@ -96,10 +104,16 @@ var serveCmd = &cobra.Command{
 		authMgr := auth.New(auth.Config{
 			SessionSecret: cfg.SessionSecret,
 			BaseURL:       cfg.BaseURL,
-			CookieDomain:  cfg.CookieDomain(),
 			CookieSecure:  cfg.CookieSecure(),
 			Providers:     forges,
+			Development:   cfg.IsDevelopment(),
+			AllowedOrgs:   cfg.Auth.AllowedOrgs,
+			AllowedUsers:  cfg.Auth.AllowedUsers,
+			Log:           log,
 		}, queries)
+		if cfg.Auth.Restricted() {
+			log.Info().Strs("allowed_orgs", cfg.Auth.AllowedOrgs).Int("allowed_users", len(cfg.Auth.AllowedUsers)).Msg("sign-in restricted by allowlist")
+		}
 
 		srv, err := server.New(cfg, log, db, enforcer, authMgr, forges, siteFS)
 		if err != nil {

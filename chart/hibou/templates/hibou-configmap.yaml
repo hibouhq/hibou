@@ -31,6 +31,10 @@ data:
   HIBOU_OSV_URL: {{ .Values.hibou.advisory.osv.url | quote }}
   HIBOU_CACHE_TTL: {{ .Values.hibou.advisory.cache.ttl | quote }}
   HIBOU_MAX_UPLOAD_SIZE: {{ .Values.hibou.maxUploadSize | quote }}
+  HIBOU_MCP_ENABLED: {{ if hasKey .Values.hibou "mcp" }}{{ .Values.hibou.mcp.enabled | quote }}{{ else }}"true"{{ end }}
+  {{- if and .Values.hibou.retention (toString .Values.hibou.retention.autoPurge) }}
+  HIBOU_RETENTION_AUTO_PURGE: {{ .Values.hibou.retention.autoPurge | toString | quote }}
+  {{- end }}
   HIBOU_SHUTDOWN_TIMEOUT: {{ printf "%ds" (int .Values.hibou.shutdown.timeoutSeconds) | quote }}
   HIBOU_BACKGROUND_ARTIFACT_PROCESSING_ENABLED: {{ .Values.hibou.background.artifactProcessing | quote }}
   HIBOU_BACKGROUND_RETENTION_ENABLED: {{ .Values.hibou.background.retention | quote }}
@@ -59,6 +63,14 @@ data:
          is not optional, so a pod with nowhere to write would fail every sweep. */}}
   TMPDIR: {{ .Values.hibou.scratch.mountPath | quote }}
   HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"true"{{ end }}
+  {{- with .Values.hibou.auth }}
+  {{- if .allowedOrgs }}
+  HIBOU_AUTH_ALLOWED_ORGS: {{ join "," .allowedOrgs | quote }}
+  {{- end }}
+  {{- if .allowedUsers }}
+  HIBOU_AUTH_ALLOWED_USERS: {{ join "," .allowedUsers | quote }}
+  {{- end }}
+  {{- end }}
   {{- if .Values.hibou.instanceAdminsExistingSecret }}
   HIBOU_INSTANCE_ADMINS_FILE: "/etc/hibou/instance-admins/emails"
   {{- end }}

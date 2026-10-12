@@ -12,8 +12,8 @@
           </dt>
           <dd class="text-gray-200 sm:mt-0.5">
             <a
-              v-if="repo?.html_url"
-              :href="repo.html_url"
+              v-if="safeHref(repo?.html_url)"
+              :href="safeHref(repo?.html_url)"
               target="_blank"
               rel="noopener noreferrer"
               class="text-accent hover:underline"
@@ -148,6 +148,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import type { Ref } from 'vue'
 import { computed, inject, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

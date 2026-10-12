@@ -96,6 +96,7 @@ func TestResolveConfiguredScopesChangedFilesOnPR(t *testing.T) {
 	srv.repoConfigLoader = repoconfig.NewLoader(srv.forges, srv.log)
 	repo := createUploadTestRepository(t, srv, org)
 	// repoCoordinates needs owner/name; the test repository has none.
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	if _, err := srv.db.Exec(`UPDATE repositories SET provider_id = 'acme/app' WHERE id = $1`, repo.ID); err != nil {
 		t.Fatal(err)
 	}

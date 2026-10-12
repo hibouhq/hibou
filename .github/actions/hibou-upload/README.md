@@ -1,6 +1,6 @@
 # hibou-upload
 
-Composite action for **GitHub Actions** and **Forgejo Actions** that downloads the `hibou` CLI from the target Hibou server, then uploads artifact files through the unified `hibou upload` command with server-side content detection.
+Composite action for **GitHub Actions** and **Forgejo Actions** that runs a `hibou` CLI you supply (or a checksum-pinned download), then uploads artifact files through the unified `hibou upload` command with server-side content detection.
 
 For **GitLab CI**, see [`templates/upload/`](../../../templates/upload/) — a [CI/CD Component](https://gitlab.com/explore/catalog) with the same capabilities.
 
@@ -14,6 +14,8 @@ For **GitLab CI**, see [`templates/upload/`](../../../templates/upload/) — a [
 - `tool`: Optional tool name override. Only needed for findings uploads or SARIF files that lack `runs[0].tool.driver.name`.
 - `ref`: Optional git ref. Auto-detected from CI environment.
 - `sha`: Optional commit SHA. Auto-detected from CI environment.
+- `cli-path`: Recommended. Absolute path to a `hibou` binary you built or verified (e.g. a cosign-verified release asset). Nothing is downloaded when set.
+- `cli-sha256`: Expected SHA-256 of the CLI for the runner's OS/arch. Required to download the CLI from the server; a mismatch fails the step.
 
 ## Auto-detection
 
@@ -30,11 +32,20 @@ Artifact type detection happens on the server from file content.
 
 ## Behavior
 
-The action queries the target server for its current CLI version, reuses an already-installed `hibou` binary when versions match, and otherwise downloads the matching CLI directly from `${server}/api/v1/bin/{runner-os}/{runner-arch}` for the current runner platform.
+The CLI runs with your API token, so the action never executes an unverified binary:
+
+1. `cli-path` set: that binary is used as-is.
+2. Otherwise, `cli-sha256` set: the CLI is downloaded from `${server}/api/v1/bin/{runner-os}/{runner-arch}` into a fresh temp directory and used only if its SHA-256 matches.
+3. Otherwise, a `hibou` already on `PATH` (installed by your workflow) is used.
+4. Otherwise the step fails.
+
+The binary is invoked by absolute path. The action does not modify `GITHUB_PATH`.
+
+Run the upload in its own job with minimal permissions (`contents: read`) and only the Hibou token, separate from jobs that hold release, registry or signing credentials.
 
 ## Example
 
-Minimal — only `server`, `token`, and `file` are required:
+Minimal — `server`, `token`, `file`, plus `cli-path` or `cli-sha256`:
 
 ```yaml
 jobs:
@@ -46,6 +57,8 @@ jobs:
         with:
           server: ${{ secrets.HIBOU_SERVER }}
           token: ${{ secrets.HIBOU_TOKEN }}
+          # SHA-256 of the CLI for this runner (linux/amd64), from the release checksums.
+          cli-sha256: ${{ vars.HIBOU_CLI_SHA256 }}
           file: results.sarif
 ```
 

@@ -168,7 +168,16 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := chi.URLParam(r, "provider")
-	input.ProviderID = s.canonicalEnrollProviderID(r.Context(), provider, org.Slug, input.ProviderID)
+	providerID, err := s.canonicalEnrollProviderID(r.Context(), provider, org, input.ProviderID)
+	if errors.Is(err, errEnrollForeignRepository) {
+		api.JSONError(w, http.StatusForbidden, "repository is not owned by the forge account bound to this organization")
+		return
+	}
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository")
+		return
+	}
+	input.ProviderID = providerID
 
 	repo, err := s.queries.CreateRepository(
 		r.Context(),
@@ -196,28 +205,53 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusCreated, repo)
 }
 
-func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider, account, providerID string) string {
+// errEnrollForeignRepository rejects enrolling a repository whose owner is not
+// the forge account bound to the org. Installation tokens are minted by owner,
+// so accepting it would let this org act with another tenant's installation
+// (clone, read source, post checks, open PRs). Security audit §3.1.
+var errEnrollForeignRepository = errors.New("repository owner is not the organization's forge account")
+
+// canonicalEnrollProviderID resolves the provider id to the inventory's
+// canonical key, preferring the org's own forge account inventory, then
+// refuses any id whose owner is not that account. A global inventory match is
+// only used to canonicalise (numeric ids, spelling); the owner check that
+// follows still decides, so another tenant's repository cannot be enrolled by
+// its id or its key.
+func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider string, org *store.Organization, providerID string) (string, error) {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" {
-		return providerID
+		return providerID, nil
 	}
 
-	inv, err := s.queries.GetForgeRepositoryByProviderRepoID(ctx, provider, providerID)
-	if err == nil && inv != nil && strings.TrimSpace(inv.ProviderKey) != "" {
-		return inv.ProviderKey
+	canonical, err := s.resolveEnrollInventoryKey(ctx, provider, org.BoundForgeAccount(), providerID)
+	if err != nil {
+		return "", err
+	}
+	owner, err := s.queries.RepositoryForgeOwner(ctx, provider, canonical)
+	if err != nil {
+		return "", err
+	}
+	if owner != "" && !org.OwnsForgeOwner(owner) {
+		return "", errEnrollForeignRepository
+	}
+	return canonical, nil
+}
+
+func (s *Server) resolveEnrollInventoryKey(ctx context.Context, provider, account, providerID string) (string, error) {
+	inv, err := s.queries.GetForgeRepositoryForAccount(ctx, provider, account, providerID)
+	if err != nil {
+		return "", err
+	}
+	if inv != nil && strings.TrimSpace(inv.ProviderKey) != "" {
+		return inv.ProviderKey, nil
 	}
 
-	// Account-independent canonical key match handles owner/name inputs even
-	// when the org slug differs from the forge account login.
-	if inv, err := s.queries.GetForgeRepositoryByProviderKey(ctx, provider, providerID); err == nil && inv != nil && strings.TrimSpace(inv.ProviderKey) != "" {
-		return inv.ProviderKey
-	}
-
+	// Owner/name spellings (case, full_name vs provider key) within the
+	// org's own account inventory.
 	inventory, err := s.queries.ListForgeRepositoriesByAccount(ctx, provider, account)
 	if err != nil {
-		return providerID
+		return "", err
 	}
-
 	target := normalizeInventoryRepoKey(providerID)
 	for i := range inventory {
 		inv := inventory[i]
@@ -225,11 +259,26 @@ func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider, accoun
 			continue
 		}
 		if normalizeInventoryRepoKey(inv.ProviderKey) == target || normalizeInventoryRepoKey(inv.FullName) == target {
-			return inv.ProviderKey
+			return inv.ProviderKey, nil
 		}
 	}
 
-	return providerID
+	// Account-independent match: covers inventory rows mirrored under a login
+	// that differs from the org's bound account (GitLab subgroups, legacy
+	// orgs). The caller's owner check rejects anything foreign.
+	inv, err = s.queries.GetForgeRepositoryByProviderRepoID(ctx, provider, providerID)
+	if err != nil {
+		return "", err
+	}
+	if inv == nil {
+		if inv, err = s.queries.GetForgeRepositoryByProviderKey(ctx, provider, providerID); err != nil {
+			return "", err
+		}
+	}
+	if inv != nil && strings.TrimSpace(inv.ProviderKey) != "" {
+		return inv.ProviderKey, nil
+	}
+	return providerID, nil
 }
 
 func (s *Server) loadAdminOrgForEnrollment(w http.ResponseWriter, r *http.Request) (*store.User, *store.Organization, bool) {
@@ -353,6 +402,13 @@ func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list repositories")
 		return
 	}
+	// A repository collaborator lists only what the forge granted them (§4.3).
+	access, err := s.principalRepoAccess(r, org.ID, role)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to list repositories")
+		return
+	}
+	repos = access.visibleInventory(repos)
 
 	api.JSONList(w, paginateSlice(repos, pagination.Offset, pagination.PerPage), pagination.Page, pagination.PerPage, len(repos))
 }
@@ -399,6 +455,10 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	if repo == nil {
 		api.JSONError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	if !s.authorizeRepoRequest(w, r, org.ID, role, repo) {
 		return
 	}
 
@@ -625,6 +685,10 @@ func (s *Server) handleListRefs(w http.ResponseWriter, r *http.Request) {
 	}
 	if repo == nil {
 		api.JSONError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+
+	if !s.authorizeRepoRequest(w, r, org.ID, role, repo) {
 		return
 	}
 

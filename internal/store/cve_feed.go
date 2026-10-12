@@ -190,6 +190,14 @@ func (q *Queries) ListTriageCandidates(ctx context.Context, pattern string, limi
 	})
 }
 
+// ListTriageCandidatesForOrg is ListTriageCandidates limited to one org's
+// repositories.
+func (q *Queries) ListTriageCandidatesForOrg(ctx context.Context, orgID uuid.UUID, pattern string, limit int32) ([]dbgen.ListTriageCandidateComponentsForOrgRow, error) {
+	return q.db.ListTriageCandidateComponentsForOrg(ctx, dbgen.ListTriageCandidateComponentsForOrgParams{
+		Pattern: []byte(pattern), OrgID: orgID, RowLimit: limit,
+	})
+}
+
 // DecideTriageItem records the outcome and stamps the record revision it was
 // decided against, so a later CNA revision re-opens it instead of leaving a
 // stale mapping standing.

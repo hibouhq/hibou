@@ -295,7 +295,7 @@ func (s *Server) handleGetOrgScanCoverage(w http.ResponseWriter, r *http.Request
 			if cell.LastRunAt != nil {
 				lastRun = cell.LastRunAt.UTC().Format(time.RFC3339)
 			}
-			_ = writer.Write([]string{csvSafe(cell.RepoSlug), cell.ScannerID, cell.State, cell.Configured, strconv.FormatBool(cell.Required), cell.Enforcement, lastRun, cell.LastCommit, csvSafe(cell.Reason)})
+			_ = writer.Write([]string{csvSafe(cell.RepoSlug), csvSafe(cell.ScannerID), csvSafe(cell.State), csvSafe(cell.Configured), strconv.FormatBool(cell.Required), csvSafe(cell.Enforcement), lastRun, csvSafe(cell.LastCommit), csvSafe(cell.Reason)})
 		}
 		writer.Flush()
 		return
@@ -346,7 +346,9 @@ func (s *Server) refreshOrgScanCoverageAsync(orgID uuid.UUID) {
 	if base == nil {
 		base = context.Background()
 	}
-	go func() {
+	// One walk per org at a time: repeated refreshes while one runs collapse
+	// into a single follow-up pass instead of a goroutine each.
+	s.coverageRefreshRunner.run(orgID, func() {
 		const pageSize = 200
 		for offset := 0; ; offset += pageSize {
 			repos, _, err := s.queries.ListRepositoriesByOrg(base, orgID, pageSize, offset)
@@ -365,5 +367,5 @@ func (s *Server) refreshOrgScanCoverageAsync(orgID uuid.UUID) {
 				return
 			}
 		}
-	}()
+	})
 }

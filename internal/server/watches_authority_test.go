@@ -21,7 +21,7 @@ func watchRequest(t *testing.T, email string) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/instance/advisories/watches",
 		strings.NewReader(`{"label":"Apache Tomcat","product_keys":["apachetomcat"]}`))
 	return request.WithContext(auth.WithUser(request.Context(),
-		&store.User{ID: uuid.New(), Email: email}))
+		&store.User{ID: uuid.New(), Email: email, Provider: "github", ProviderID: "1"}))
 }
 
 // The instance-admin list has to be able to change watches, because it is the

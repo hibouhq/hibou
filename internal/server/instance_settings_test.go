@@ -27,15 +27,47 @@ func TestIsInstanceAdmin(t *testing.T) {
 	}
 
 	// Listed email matches case-insensitively.
-	admin := anonymous.WithContext(auth.WithUser(anonymous.Context(), &store.User{Email: "Admin@Example.com"}))
+	admin := anonymous.WithContext(auth.WithUser(anonymous.Context(), &store.User{Email: "Admin@Example.com", Provider: "github", ProviderID: "1"}))
 	if !srv.isInstanceAdmin(admin) {
 		t.Fatal("listed email must be instance admin (case-insensitive)")
 	}
 
 	// Org membership is irrelevant: an unlisted user is not an instance admin.
-	member := anonymous.WithContext(auth.WithUser(anonymous.Context(), &store.User{Email: "dev@example.com"}))
+	member := anonymous.WithContext(auth.WithUser(anonymous.Context(), &store.User{Email: "dev@example.com", Provider: "github", ProviderID: "2"}))
 	if srv.isInstanceAdmin(member) {
 		t.Fatal("unlisted email must not be instance admin")
+	}
+}
+
+// A2: email entries are honored only for providers that verify the email;
+// provider:provider_id entries bind the immutable forge account.
+func TestInstanceAdminBindsProviderIdentity(t *testing.T) {
+	srv := &Server{
+		cfg: config.Config{InstanceAdmins: config.ParseEmailList("boss@example.com, gitlab:42")},
+		log: zerolog.Nop(),
+	}
+	requestAs := func(user *store.User) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/settings/banners", nil)
+		return req.WithContext(auth.WithUser(req.Context(), user))
+	}
+
+	if srv.isInstanceAdmin(requestAs(&store.User{Email: "boss@example.com", Provider: "gitlab", ProviderID: "7"})) {
+		t.Fatal("an unverified (GitLab) email must not grant instance admin")
+	}
+	if srv.isInstanceAdmin(requestAs(&store.User{Email: "boss@example.com", Provider: "forgejo", ProviderID: "42"})) {
+		t.Fatal("an unverified (Forgejo) email must not grant instance admin")
+	}
+	if !srv.isInstanceAdmin(requestAs(&store.User{Email: "boss@example.com", Provider: "github", ProviderID: "9"})) {
+		t.Fatal("a GitHub (verified) email must grant instance admin")
+	}
+	if !srv.isInstanceAdmin(requestAs(&store.User{Email: "other@example.com", Provider: "gitlab", ProviderID: "42"})) {
+		t.Fatal("a provider:provider_id entry must grant instance admin")
+	}
+	if srv.isInstanceAdmin(requestAs(&store.User{Email: "other@example.com", Provider: "github", ProviderID: "42"})) {
+		t.Fatal("provider:provider_id must match the provider too")
+	}
+	if srv.isInstanceAdmin(requestAs(&store.User{Email: "admin@localhost", Provider: "local", ProviderID: "dev-admin"})) {
+		t.Fatal("the local dev account's email must not count outside development")
 	}
 }
 
@@ -55,7 +87,7 @@ func TestInstanceAdminsFileHotReload(t *testing.T) {
 
 	requestFor := func(email string) *http.Request {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/settings/banners", nil)
-		return req.WithContext(auth.WithUser(req.Context(), &store.User{Email: email}))
+		return req.WithContext(auth.WithUser(req.Context(), &store.User{Email: email, Provider: "github", ProviderID: "1"}))
 	}
 
 	if !srv.isInstanceAdmin(requestFor("first@example.com")) {

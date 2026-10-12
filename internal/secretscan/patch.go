@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,7 +32,7 @@ func (s *Scanner) CheckPatch(ctx context.Context, patch []byte) ([]SecretFinding
 		return []SecretFinding{}, nil
 	}
 
-	dir, cleanup, err := materializePatchFiles(s.tempDir, files)
+	dir, lineMaps, cleanup, err := materializePatchFiles(s.tempDir, files)
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +58,38 @@ func (s *Scanner) CheckPatch(ctx context.Context, patch []byte) ([]SecretFinding
 	}
 	for index := range findings {
 		findings[index].FilePath = filepath.ToSlash(strings.TrimPrefix(findings[index].FilePath, dir+string(os.PathSeparator)))
+		lineMap := lineMaps[findings[index].FilePath]
+		findings[index].StartLine = lineMap.real(findings[index].StartLine)
+		findings[index].EndLine = lineMap.real(findings[index].EndLine)
 	}
 	return findings, nil
+}
+
+// Limits on what a patch may materialize. The request body is already capped,
+// but a diff can name many tiny files; each one costs a file create.
+const (
+	maxPatchFiles             = 1000
+	maxPatchMaterializedBytes = 4 << 20
+)
+
+// ErrPatchTooLarge reports a patch over the materialization limits.
+var ErrPatchTooLarge = errors.New("patch exceeds the secret check limits")
+
+// patchLineMap maps a materialized file's 1-based line to the pushed file's
+// new-file line number; 0 marks a separator between non-adjacent runs.
+type patchLineMap []int
+
+func (m patchLineMap) real(line int32) int32 {
+	if line < 1 || int(line) > len(m) {
+		return line
+	}
+	if real := m[line-1]; real > 0 {
+		if real > math.MaxInt32 {
+			return math.MaxInt32
+		}
+		return int32(real) // #nosec G115 -- bounded just above.
+	}
+	return line
 }
 
 type addedLine struct {
@@ -134,23 +165,34 @@ func parseHunkNewStart(header string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("malformed hunk header %q: %w", header, err)
 	}
+	if start < 0 || start > math.MaxInt32 {
+		return 0, fmt.Errorf("hunk start out of range in %q", header)
+	}
 	return start, nil
 }
 
-// materializePatchFiles writes each file's added lines at their real new-file
-// line numbers (blank-padded), so scanner-reported locations match the pushed
-// content exactly.
-func materializePatchFiles(tempDir string, files map[string][]addedLine) (string, func(), error) {
+// materializePatchFiles writes only each file's added lines, compactly, and
+// returns the line map that translates scanner-reported positions back to
+// the pushed file's line numbers. Padding to the real line numbers would let
+// a hunk header like "@@ -1 +2000000000 @@" allocate gigabytes. Non-adjacent
+// runs are separated by one blank line so a multi-line rule cannot join lines
+// that are not neighbours in the pushed file.
+func materializePatchFiles(tempDir string, files map[string][]addedLine) (string, map[string]patchLineMap, func(), error) {
+	if len(files) > maxPatchFiles {
+		return "", nil, nil, fmt.Errorf("%w: %d files (max %d)", ErrPatchTooLarge, len(files), maxPatchFiles)
+	}
 	root := tempDir
 	if root == "" {
 		root = os.TempDir()
 	}
 	dir, err := os.MkdirTemp(root, "hibou-secret-check-*")
 	if err != nil {
-		return "", nil, fmt.Errorf("create patch scan dir: %w", err)
+		return "", nil, nil, fmt.Errorf("create patch scan dir: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 
+	lineMaps := make(map[string]patchLineMap, len(files))
+	total := 0
 	for path, lines := range files {
 		if path == "" || len(lines) == 0 {
 			continue
@@ -158,23 +200,31 @@ func materializePatchFiles(tempDir string, files map[string][]addedLine) (string
 		target := filepath.Join(dir, filepath.FromSlash(path))
 		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			cleanup()
-			return "", nil, fmt.Errorf("create patch scan subdir: %w", err)
+			return "", nil, nil, fmt.Errorf("create patch scan subdir: %w", err)
 		}
 		var builder strings.Builder
-		current := 1
+		lineMap := make(patchLineMap, 0, len(lines))
+		previous := 0
 		for _, line := range lines {
-			for current < line.number {
+			if previous > 0 && line.number != previous+1 {
 				builder.WriteByte('\n')
-				current++
+				lineMap = append(lineMap, 0)
 			}
 			builder.WriteString(line.text)
 			builder.WriteByte('\n')
-			current++
+			lineMap = append(lineMap, line.number)
+			previous = line.number
+		}
+		total += builder.Len()
+		if total > maxPatchMaterializedBytes {
+			cleanup()
+			return "", nil, nil, fmt.Errorf("%w: more than %d bytes of added lines", ErrPatchTooLarge, maxPatchMaterializedBytes)
 		}
 		if err := os.WriteFile(target, []byte(builder.String()), 0o600); err != nil {
 			cleanup()
-			return "", nil, fmt.Errorf("write patch scan file: %w", err)
+			return "", nil, nil, fmt.Errorf("write patch scan file: %w", err)
 		}
+		lineMaps[path] = lineMap
 	}
-	return dir, cleanup, nil
+	return dir, lineMaps, cleanup, nil
 }

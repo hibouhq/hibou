@@ -144,20 +144,48 @@ func (s *Server) runInstanceAdminWatchLoop(ctx context.Context) {
 // administrator. Instance admin is an instance-level role, distinct from org
 // and repo admin membership; service principals never qualify.
 func (s *Server) isInstanceAdmin(r *http.Request) bool {
-	user := UserFromContext(r.Context())
+	return s.userIsInstanceAdmin(UserFromContext(r.Context()), s.instanceAdminEmails(r.Context()))
+}
+
+// userIsInstanceAdmin matches a user against the admin list. A
+// "provider:provider_id" entry (e.g. "github:1234567") binds the immutable
+// forge account and is the recommended form. A bare email entry is honored
+// only for accounts whose provider verifies the email it reports: anyone can
+// set an unverified address on a self-hosted forge profile.
+func (s *Server) userIsInstanceAdmin(user *store.User, entries []string) bool {
 	if user == nil {
 		return false
 	}
+	identity := strings.ToLower(strings.TrimSpace(user.Provider)) + ":" + strings.ToLower(strings.TrimSpace(user.ProviderID))
 	email := strings.ToLower(strings.TrimSpace(user.Email))
-	if email == "" {
-		return false
-	}
-	for _, admin := range s.instanceAdminEmails(r.Context()) {
-		if admin == email {
+	emailTrusted := email != "" && s.providerVerifiesEmail(user.Provider)
+	for _, entry := range entries {
+		if strings.Contains(entry, "@") {
+			if emailTrusted && entry == email {
+				return true
+			}
+			continue
+		}
+		if strings.TrimSpace(user.ProviderID) != "" && entry == identity {
 			return true
 		}
 	}
 	return false
+}
+
+// providerVerifiesEmail reports whether a provider only ever hands hibou a
+// verified email. GitHub does (public email or a verified one from
+// /user/emails); GitLab and Forgejo report the profile email unchecked. The
+// development login's local account counts in development only.
+func (s *Server) providerVerifiesEmail(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "github":
+		return true
+	case "local":
+		return s.cfg.IsDevelopment()
+	default:
+		return false
+	}
 }
 
 // @Summary      Instance administrators

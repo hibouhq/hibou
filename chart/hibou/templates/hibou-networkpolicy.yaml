@@ -21,14 +21,96 @@ spec:
         values: [server, worker]
   policyTypes: [Ingress]
   ingress:
-    # Application traffic is unchanged: open, as without a policy.
+    {{- if not .Values.hibou.networkPolicy.enabled }}
+    # Application traffic is unchanged: open, as without a policy. With
+    # hibou.networkPolicy.enabled the default-deny policy decides instead
+    # (policies are additive, so this rule would reopen the port).
     - ports:
         - port: http
           protocol: TCP
+    {{- end }}
     # /metrics only from the configured scrapers.
     - ports:
         - port: metrics
           protocol: TCP
       from:
         {{- toYaml .Values.hibou.metrics.networkPolicy.from | nindent 8 }}
+{{- end }}
+{{- if .Values.hibou.networkPolicy.enabled }}
+---
+# Default deny for hibou pods: only the ingress controller reaches the
+# application port; egress is limited to DNS, the in-namespace backing
+# services and external TLS. The metrics port is opened by the policy above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.fullname" . }}-default-deny
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [server, worker]
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- with .Values.hibou.networkPolicy.ingressFrom }}
+    - ports:
+        - port: http
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+  egress:
+    # DNS, to the cluster resolver in any namespace.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- with .Values.hibou.networkPolicy.inNamespacePorts }}
+    # Bundled Postgres / SeaweedFS / Trivy in this namespace.
+    - to:
+        - podSelector: {}
+      ports:
+        {{- range . }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with .Values.hibou.networkPolicy.externalPorts }}
+    # Outside the cluster only: private, link-local (cloud metadata) and CGNAT
+    # ranges are excluded.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7
+              - fe80::/10
+      ports:
+        {{- range . }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with .Values.hibou.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

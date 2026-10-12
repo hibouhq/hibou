@@ -129,6 +129,7 @@ func TestBuildPatchCoverageIntegration(t *testing.T) {
 	}
 
 	// Repo with an owner/name providerID so repoCoordinates resolves.
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo, err := srv.queries.CreateRepository(context.Background(), org.ID, nil, uniqueName(t, "patchcov"), uniqueName(t, "patchcov"), "github", "acme/widget", "main", "enrolled")
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)
@@ -190,6 +191,7 @@ func TestBuildPatchCoverageNilWhenForgeHasNoPatch(t *testing.T) {
 	srv.cfg.CoverageStoreLines = true
 	// provider.comparePatchDiff left nil → degrade to nil patch coverage.
 
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo, err := srv.queries.CreateRepository(context.Background(), org.ID, nil, uniqueName(t, "nopatch"), uniqueName(t, "nopatch"), "github", "acme/widget2", "main", "enrolled")
 	if err != nil {
 		t.Fatalf("CreateRepository: %v", err)

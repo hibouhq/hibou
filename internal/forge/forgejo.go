@@ -198,7 +198,11 @@ func (f *Forgejo) ListTree(ctx context.Context, owner, repo, ref string) (*TreeL
 }
 
 func (f *Forgejo) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
-	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	contentPath, err := checkedContentPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), contentPath, url.QueryEscape(ref))
 	request, err := f.newRequest(ctx, http.MethodGet, requestPath, nil)
 	if err != nil {
 		return nil, err
@@ -237,7 +241,11 @@ func (f *Forgejo) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath,
 		payload["sha"] = sha
 	}
 
-	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath))
+	contentPath, err := checkedContentPath(filePath)
+	if err != nil {
+		return err
+	}
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), contentPath)
 	return f.doJSON(ctx, method, requestPath, payload, nil)
 }
 
@@ -281,19 +289,21 @@ func (f *Forgejo) CreateCommitStatus(ctx context.Context, owner, repo, sha strin
 	return f.doJSON(ctx, http.MethodPost, path, payload, nil)
 }
 
-func (f *Forgejo) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
-	payload, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read forgejo webhook payload: %w", err)
-	}
-	r.Body = io.NopCloser(bytes.NewReader(payload))
+// HasWebhookSecret reports whether webhook payloads can be verified.
+func (f *Forgejo) HasWebhookSecret() bool { return f.webhookSecret != "" }
 
+func (f *Forgejo) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
 	activeSecret := secret
 	if activeSecret == "" {
 		activeSecret = f.webhookSecret
 	}
 	if activeSecret == "" {
-		return payload, nil
+		return nil, fmt.Errorf("forgejo: %w", ErrWebhookSecretNotConfigured)
+	}
+
+	payload, err := ReadWebhookPayload(r, "forgejo")
+	if err != nil {
+		return nil, err
 	}
 
 	signature := r.Header.Get("X-Gitea-Signature")
@@ -427,6 +437,24 @@ func (f *Forgejo) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo,
 
 	user := payload.toUserInfo()
 	return &user, nil
+}
+
+// AccountLogin returns the Forgejo login of the token's user, the name a
+// sign-in allowlist matches against.
+func (f *Forgejo) AccountLogin(ctx context.Context, token *oauth2.Token) (string, error) {
+	if token == nil || token.AccessToken == "" {
+		return "", errors.New("forgejo account login requires access token")
+	}
+	request, err := f.newRequest(ctx, http.MethodGet, "/api/v1/user", nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", "token "+token.AccessToken)
+	var payload forgejoUser
+	if err := f.do(request, &payload); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(payload.Login), nil
 }
 
 // ComparesPathsOnly: Forgejo's compare API has no hunks.
@@ -566,7 +594,11 @@ func (f *Forgejo) doWithStatus(request *http.Request, out any) (int, error) {
 }
 
 func (f *Forgejo) lookupContentSHA(ctx context.Context, owner, repo, filePath, ref string) (string, error) {
-	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	contentPath, err := checkedContentPath(filePath)
+	if err != nil {
+		return "", err
+	}
+	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), contentPath, url.QueryEscape(ref))
 	request, err := f.newRequest(ctx, http.MethodGet, requestPath, nil)
 	if err != nil {
 		return "", err

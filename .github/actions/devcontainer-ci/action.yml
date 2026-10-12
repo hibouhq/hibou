@@ -11,16 +11,16 @@ inputs:
     description: 'Command(s) to run inside the devcontainer after build'
     default: 'echo "Devcontainer ready"'
   push-branches:
-    description: 'Branches eligible for push (pipe-separated globs). The repo default branch always pushes regardless.'
+    description: 'Additional branches eligible for push (pipe-separated globs), matched against the exact, unmodified ref name of a `push` event. The repo default branch is always eligible. Pull requests never push.'
     default: 'main|master|release*'
   push-image:
-    description: 'Push the prebuild image for matching branches'
+    description: 'Push the prebuild image when the event is eligible (push event to the default branch or a push-branches match)'
     default: 'true'
   push-cache:
-    description: 'Push BuildKit cache layers for matching branches'
+    description: 'Push BuildKit cache layers when the event is eligible'
     default: 'true'
   push-pr-cache:
-    description: 'Push BuildKit cache for PR branches (even if they don''t match push-branches)'
+    description: 'Deprecated and ignored: pull requests never push images or caches (a same-repo PR branch could otherwise poison them).'
     default: 'false'
   no-cache:
     description: 'Force fresh build with no cache'
@@ -61,13 +61,13 @@ runs:
 
     - name: Set up QEMU
       if: ${{ steps.check.outputs.running == 'false' }}
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       with:
         cache-image: false
 
     - name: Set up Docker Buildx
       if: ${{ steps.check.outputs.running == 'false' }}
-      uses: docker/setup-buildx-action@v4
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
     - name: Compute devcontainer image refs
       if: ${{ steps.check.outputs.running == 'false' }}
@@ -79,7 +79,6 @@ runs:
         INPUT_PUSH_BRANCHES: ${{ inputs.push-branches }}
         INPUT_PUSH_IMAGE: ${{ inputs.push-image }}
         INPUT_PUSH_CACHE: ${{ inputs.push-cache }}
-        INPUT_PUSH_PR_CACHE: ${{ inputs.push-pr-cache }}
       run: |
         set -euo pipefail
 
@@ -118,6 +117,12 @@ runs:
           return 1
         }
 
+        # Push eligibility is decided on the exact, unsanitized ref of a push
+        # event. Sanitized tags are only used to name images and caches, never
+        # to decide trust: a PR branch named "Main" sanitizes to "main".
+        is_push_event='false'
+        [ "${GITHUB_EVENT_NAME}" = 'push' ] && is_push_event='true'
+
         origin_cache=''
         if [ "${GITHUB_REF_TYPE}" = 'tag' ]; then
           # Tags: no push, no cache-to; use default branch image + originating branch cache
@@ -134,19 +139,23 @@ runs:
             origin_tag="$(sanitize_tag "${origin_branch}")"
             origin_cache="type=registry,ref=${image_name}:buildcache-${origin_tag}"
           fi
-        elif [ "${branch_tag}" = "${default_branch_tag}" ]; then
-          should_push='true'
-          cache_to="${default_branch_cache},mode=max"
+        elif [ "${is_push_event}" = 'true' ] && [ -n "${default_branch}" ] && [ "${GITHUB_REF}" = "refs/heads/${default_branch}" ]; then
           image_tag="${default_branch_tag},latest"
-        elif _matches_pattern "${branch}" "${INPUT_PUSH_BRANCHES}"; then
           if [ "${INPUT_PUSH_IMAGE}" != 'false' ]; then
             should_push='true'
           fi
           if [ "${INPUT_PUSH_CACHE}" != 'false' ]; then
-            cache_to="${branch_cache},mode=max"
+            cache_to="${default_branch_cache},mode=max"
           fi
-        else
-          if [ "${INPUT_PUSH_PR_CACHE}" != 'false' ]; then
+        elif [ "${is_push_event}" = 'true' ] && [ "${GITHUB_REF}" = "refs/heads/${GITHUB_REF_NAME}" ] \
+          && [ "${branch_tag}" != "${default_branch_tag}" ] \
+          && _matches_pattern "${GITHUB_REF_NAME}" "${INPUT_PUSH_BRANCHES}"; then
+          # A non-default branch never writes the default branch's tags
+          # (checked on the sanitized name too, since that is what is written).
+          if [ "${INPUT_PUSH_IMAGE}" != 'false' ]; then
+            should_push='true'
+          fi
+          if [ "${INPUT_PUSH_CACHE}" != 'false' ]; then
             cache_to="${branch_cache},mode=max"
           fi
         fi

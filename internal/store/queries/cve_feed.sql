@@ -247,6 +247,23 @@ GROUP BY c.id, c.name, c.version, c.ecosystem, c.purl
 ORDER BY repo_count DESC, c.name
 LIMIT $2;
 
+-- name: ListTriageCandidateComponentsForOrg :many
+-- ListTriageCandidateComponents limited to one org's repositories. A triager
+-- working from an org sees what that org runs; the instance-wide ranking names
+-- other tenants' internal packages and is reserved for instance triagers.
+SELECT c.id, c.name, c.version, c.ecosystem, c.purl,
+       COUNT(DISTINCT repo.id)::bigint AS repo_count
+FROM components c
+JOIN snapshot_components sc ON sc.component_id = c.id
+JOIN snapshots snap ON snap.id = sc.snapshot_id
+JOIN refs r ON r.id = snap.ref_id
+JOIN repositories repo ON repo.id = r.repo_id
+WHERE c.name ILIKE sqlc.arg(pattern) ESCAPE '\'
+  AND repo.org_id = sqlc.arg(org_id)
+GROUP BY c.id, c.name, c.version, c.ecosystem, c.purl
+ORDER BY repo_count DESC, c.name
+LIMIT sqlc.arg(row_limit);
+
 -- name: GetTriageItem :one
 SELECT t.*, r.state, r.severity, r.cvss_score, r.cvss_vector, r.summary,
        r.published_at, r.record_updated_at, r.first_seen_at, r.assigner,

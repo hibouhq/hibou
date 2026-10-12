@@ -10,6 +10,7 @@ import (
 
 func newComparePatchTestRepo(t *testing.T, srv *Server, org *store.Organization) *store.Repository {
 	t.Helper()
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	return createRepository(t, srv, org, repoSeed{
 		name:          uniqueName(t, "cmp"),
 		slug:          uniqueName(t, "cmp"),

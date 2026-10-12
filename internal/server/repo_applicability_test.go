@@ -39,6 +39,7 @@ func TestDetectRepoApplicabilityStoresResult(t *testing.T) {
 	}}
 	srv.forges = map[string]forge.Provider{"github": fake}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo.ProviderID = "acme/app"
 
 	stored, err := srv.detectRepoApplicability(context.Background(), repo, "", "")
@@ -78,6 +79,7 @@ func TestScopeOverridesRespectRequirements(t *testing.T) {
 		Paths: []string{"pom.xml", "src/main/java/App.java", "generated/Gen.java", "samples/bad.py"},
 	}}}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo.ProviderID = "acme/app"
 	ctx := context.Background()
 	requirement, err := srv.queries.UpsertScannerRequirement(ctx, org.ID, store.ScannerRequirement{Language: "java", Capability: "bytecode-security", Enforcement: "blocking"}, &admin.ID)

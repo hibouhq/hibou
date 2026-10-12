@@ -980,3 +980,48 @@ func cloneForgeOrgAdmin(admin *store.ForgeOrgAdmin) *store.ForgeOrgAdmin {
 	}
 	return &clone
 }
+
+func (s *fakeStore) GetOrganizationByForgeAccountID(_ context.Context, provider, accountID string) (*store.Organization, error) {
+	for _, org := range s.organizations {
+		if org.Provider == provider && accountID != "" && org.ForgeAccountID == accountID {
+			clone := *org
+			return &clone, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *fakeStore) SetOrganizationForgeAccount(_ context.Context, orgID uuid.UUID, accountID, accountLogin string) error {
+	for _, org := range s.organizations {
+		if org.ID != orgID {
+			continue
+		}
+		if accountID != "" && org.ForgeAccountID != "" && org.ForgeAccountID != accountID {
+			return nil
+		}
+		if accountID != "" {
+			org.ForgeAccountID = accountID
+		}
+		org.ForgeAccountLogin = accountLogin
+	}
+	return nil
+}
+
+func (s *fakeStore) DeleteForgeOrgAdminsByAccount(_ context.Context, provider, account string) ([]store.ForgeOrgAdmin, error) {
+	removed := make([]store.ForgeOrgAdmin, 0)
+	for key, admin := range s.forgeOrgAdmins {
+		if admin.Provider == provider && admin.Account == slugifyAccount(account) {
+			removed = append(removed, *cloneForgeOrgAdmin(admin))
+			delete(s.forgeOrgAdmins, key)
+		}
+	}
+	return removed, nil
+}
+
+func (s *fakeStore) ListOrganizations(context.Context) ([]store.Organization, error) {
+	orgs := make([]store.Organization, 0, len(s.organizations))
+	for _, org := range s.organizations {
+		orgs = append(orgs, *org)
+	}
+	return orgs, nil
+}

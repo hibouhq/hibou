@@ -112,7 +112,7 @@ func (s *Server) loadCompareRepoConfig(ctx context.Context, repo *store.Reposito
 	if s.repoConfigLoader == nil {
 		return nil
 	}
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
 	if !ok {
 		return nil
 	}

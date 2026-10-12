@@ -98,3 +98,10 @@ SELECT id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at
 FROM api_keys
 WHERE expires_at IS NOT NULL AND expires_at > NOW() AND expires_at <= $1
 ORDER BY expires_at ASC;
+
+-- name: CountAPIKeysCreatedByUser :one
+-- Every key the user minted, personal or requested for an org: the per-user
+-- cap counts what one account can create, whoever ends up owning it.
+SELECT count(*)
+FROM api_keys
+WHERE user_id = $1;

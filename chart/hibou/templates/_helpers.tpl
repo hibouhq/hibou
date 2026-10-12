@@ -279,3 +279,22 @@ application port. */}}
 {{- define "hibou.metricsPort" -}}
 {{- if .Values.hibou.metrics.enabled -}}{{ .Values.hibou.metrics.port | int }}{{- else -}}0{{- end -}}
 {{- end -}}
+
+{{/*
+GOMEMLIMIT in bytes: percent of a container memory limit. Empty when there is
+no limit, the percentage is 0, or the quantity uses an unsupported suffix.
+Usage: include "hibou.goMemLimit" (dict "resources" .Values.hibou.resources "percent" .Values.hibou.goMemLimitPercent)
+*/}}
+{{- define "hibou.goMemLimit" -}}
+{{- $percent := .percent | default 0 | float64 -}}
+{{- $limit := "" -}}
+{{- with .resources }}{{ with .limits }}{{ with .memory }}{{ $limit = toString . }}{{ end }}{{ end }}{{ end -}}
+{{- if and $limit (gt $percent 0.0) -}}
+{{- $number := regexFind "^[0-9]+(\\.[0-9]+)?" $limit -}}
+{{- $unit := trimPrefix $number $limit -}}
+{{- $multipliers := dict "" 1.0 "Ki" 1024.0 "Mi" 1048576.0 "Gi" 1073741824.0 "Ti" 1099511627776.0 "k" 1000.0 "K" 1000.0 "M" 1000000.0 "G" 1000000000.0 "T" 1000000000000.0 -}}
+{{- if and $number (hasKey $multipliers $unit) -}}
+{{- mulf ($number | float64) (index $multipliers $unit) $percent 0.01 | floor | int64 -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

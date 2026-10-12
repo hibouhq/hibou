@@ -100,6 +100,31 @@ hibou:
   baseURL: ""
   # -- Maximum upload size in bytes (default 100 MiB).
   maxUploadSize: "104857600"
+  # -- Mount the Kubernetes service account token into hibou pods. Hibou never calls the Kubernetes API, so the token would only help an attacker who reached code execution in the pod.
+  automountServiceAccountToken: false
+  # -- Set GOMEMLIMIT to this percentage of the container memory limit, so the Go GC works harder before the kernel OOM-kills the pod. 0 disables. Needs a memory limit in resources.limits.memory (Ki/Mi/Gi/Ti or K/M/G/T suffix).
+  goMemLimitPercent: 80
+  # -- MCP listener (plain HTTP on mcp.port, all interfaces). Disable unless an MCP client inside the cluster needs it.
+  mcp:
+    enabled: true
+  # -- Retention overrides passed to the server. Empty keeps the server default.
+  retention:
+    # -- "true" lets the retention worker delete expired data instead of only reporting it.
+    autoPurge: ""
+  # -- Default-deny NetworkPolicy for hibou pods (server and workers). Off by default; needs a CNI that enforces NetworkPolicy. When on, only the listed traffic is allowed, and the metrics policy's open application-port rule is dropped.
+  networkPolicy:
+    enabled: false
+    # -- Peers allowed to reach the application port (8080), as NetworkPolicy `from` entries. Point it at the ingress controller's namespace.
+    ingressFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+    # -- In-namespace ports hibou pods may reach: bundled Postgres, SeaweedFS S3 and Trivy.
+    inNamespacePorts: [5432, 8333, 4954]
+    # -- External TCP ports hibou may reach outside private ranges: forge APIs, OSV, the CVE feed, webhook notifications. Add 465/587 for email integrations.
+    externalPorts: [443]
+    # -- Extra egress rules appended as-is (external database, S3, SMTP relay...).
+    extraEgress: []
   # -- Pod anti-affinity for stateless Hibou and worker replicas. Use soft by default so single-node clusters still schedule.
   podAntiAffinity:
     enabled: true
@@ -116,6 +141,9 @@ hibou:
       path: /api/v1/health
       initialDelaySeconds: 10
       periodSeconds: 10
+      # -- Tolerate a briefly busy process (GC, a large upload) before restarting it: 6 x 10s with a 3s timeout.
+      timeoutSeconds: 3
+      failureThreshold: 6
     readiness:
       path: /api/v1/ready
       initialDelaySeconds: 5
@@ -135,6 +163,13 @@ hibou:
   # Hibou org and grants the installer admin. Set false in multi-tenant deployments where
   # app installs should not automatically create tenants.
   autoProvisionOrgs: true
+  # -- Restrict who may sign in. Empty lists keep sign-in open to every forge
+  # account. A user is admitted when their login is in allowedUsers or they
+  # are a member of one of allowedOrgs (GitHub only; checked with the App's
+  # installation token, so the App needs Members: read).
+  auth:
+    allowedOrgs: []
+    allowedUsers: []
   # -- Existing Secret whose `emails` key holds the instance-admin list
   # (comma- or newline-separated). Mounted as a volume and re-read by the
   # server on every check, so editing the Secret takes effect within the

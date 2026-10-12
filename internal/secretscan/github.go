@@ -161,6 +161,11 @@ func (p *GitHubProvider) loadFirstLocation(ctx context.Context, locationsURL, to
 	if strings.TrimSpace(locationsURL) == "" {
 		return "", 0, "", nil
 	}
+	// locations_url comes from the API response: the bearer token is only
+	// ever sent back to the configured API origin.
+	if !sameOrigin(locationsURL, p.baseURL) {
+		return "", 0, "", errors.New("github secret locations URL is not on the configured API host")
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, locationsURL, nil)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("build github secret locations request: %w", err)
@@ -230,11 +235,16 @@ func githubSeverity(alert gitHubSecretAlert) string {
 	return "high"
 }
 
-func injectTokenIntoCloneURL(cloneURL, token string) string {
-	parsed, err := url.Parse(cloneURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return cloneURL
+// sameOrigin reports whether candidate has the same scheme and host[:port] as
+// base, and carries no userinfo.
+func sameOrigin(candidate, base string) bool {
+	c, err := url.Parse(strings.TrimSpace(candidate))
+	if err != nil || c.User != nil || c.Host == "" {
+		return false
 	}
-	parsed.User = url.UserPassword("x-access-token", token)
-	return parsed.String()
+	b, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || b.Host == "" {
+		return false
+	}
+	return strings.EqualFold(c.Scheme, b.Scheme) && strings.EqualFold(c.Host, b.Host)
 }

@@ -1,9 +1,12 @@
 package server
 
 import (
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -260,6 +263,23 @@ func (s *Server) handleTriggerOrgComponentScan(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Every repository's rescan runs inside this request and invalidates the
+	// shared advisory cache: one at a time per org, then a cooldown, so a
+	// double click or a script cannot stack them.
+	started, wait := s.orgComponentScanGate.tryStart(org.ID, orgComponentScanCooldown, time.Now())
+	if !started {
+		if wait <= 0 {
+			api.JSONError(w, http.StatusConflict, "an organization component scan is already running")
+			return
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		api.JSONError(w, http.StatusTooManyRequests, "an organization component scan ran recently, retry later")
+		return
+	}
+	// The cooldown starts only once scans actually ran.
+	var scannedAt time.Time
+	defer func() { s.orgComponentScanGate.finish(org.ID, scannedAt) }()
+
 	pairs, err := s.currentRepoSnapshots(r, org)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository snapshots")
@@ -292,12 +312,17 @@ func (s *Server) handleTriggerOrgComponentScan(w http.ResponseWriter, r *http.Re
 		}
 		response.Scans = append(response.Scans, orgRepoScanResult{Repo: pair.repo.Slug, ScanID: scanID})
 	}
+	scannedAt = time.Now()
 	if len(response.Scans) == 0 {
 		api.JSONError(w, http.StatusInternalServerError, "component scan failed for every repository")
 		return
 	}
 	api.JSON(w, http.StatusOK, response)
 }
+
+// orgComponentScanCooldown spaces org-wide rescans: advisories change on the
+// scale of hours, and the background advisory scan already runs on its own.
+const orgComponentScanCooldown = 2 * time.Minute
 
 type orgRepoScanResult struct {
 	Repo   string    `json:"repo"`

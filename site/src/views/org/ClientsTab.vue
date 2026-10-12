@@ -335,6 +335,7 @@
 </template>
 
 <script setup lang="ts">
+import { isSafeUrl } from '@/lib/safeUrl'
 import { Plus, Users, X } from 'lucide-vue-next'
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -471,9 +472,6 @@ function changePage(page: number) {
   void router.replace({ query: page > 1 ? { page: String(page) } : {} })
 }
 
-function isSafeUrl(url: string) {
-  return /^https?:\/\//i.test(url.trim())
-}
 
 function clientLabelEntries(client: Client) {
   return Object.entries(client.labels || {})

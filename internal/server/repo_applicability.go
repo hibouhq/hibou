@@ -38,7 +38,7 @@ func (s *Server) detectRepoApplicability(ctx context.Context, repo *store.Reposi
 	var paths []string
 	truncated := false
 	provider := s.forges[repo.Provider]
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
 	if commit == "" {
 		commit = ref
 		if provider != nil && ok {

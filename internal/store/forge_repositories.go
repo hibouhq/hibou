@@ -201,6 +201,41 @@ func (q *Queries) GetForgeRepositoryByProviderKey(ctx context.Context, provider,
 	return forgeRepositoryFromRow(row), nil
 }
 
+// GetForgeRepositoryForAccount resolves an inventory row by provider repo id
+// or canonical key, but only among repositories of one forge account. Org
+// enrolment uses it so a tenant can never resolve another account's repos.
+func (q *Queries) GetForgeRepositoryForAccount(ctx context.Context, provider, accountLogin, providerIDOrKey string) (*ForgeRepository, error) {
+	provider = strings.TrimSpace(provider)
+	accountLogin = strings.TrimSpace(accountLogin)
+	value := strings.TrimSpace(providerIDOrKey)
+	if accountLogin == "" || value == "" {
+		return nil, nil
+	}
+	row, err := q.db.GetForgeRepositoryByAccountAndRepoID(ctx, dbgen.GetForgeRepositoryByAccountAndRepoIDParams{
+		Provider:       provider,
+		AccountLogin:   accountLogin,
+		ProviderRepoID: nullString(value),
+	})
+	if err == nil {
+		return forgeRepositoryFromRow(row), nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	row, err = q.db.GetForgeRepositoryByAccountAndKey(ctx, dbgen.GetForgeRepositoryByAccountAndKeyParams{
+		Provider:     provider,
+		AccountLogin: accountLogin,
+		ProviderKey:  normalizeForgeRepositoryKey(value),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return forgeRepositoryFromRow(row), nil
+}
+
 func forgeRepositoryFromRow(row dbgen.ForgeRepository) *ForgeRepository {
 	return &ForgeRepository{
 		ID:             row.ID,

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"golang.org/x/oauth2"
 
 	"github.com/hibouhq/hibou/internal/forge"
@@ -23,17 +24,44 @@ import (
 const (
 	sessionCookieName    = "hibou_session"
 	oauthStateCookieName = "hibou_oauth_state"
-	sessionMaxAge        = 7 * 24 * time.Hour
-	oauthStateMaxAge     = 10 * time.Minute
+	// secureCookiePrefix pins a cookie to the exact host that set it: the
+	// browser refuses it unless Secure, Path=/ and no Domain, so no sibling
+	// subdomain can read or plant it.
+	secureCookiePrefix = "__Host-"
+	sessionMaxAge      = 7 * 24 * time.Hour
+	oauthStateMaxAge   = 10 * time.Minute
 )
 
-// Config holds authentication settings.
+// ErrSignInNotAllowed is returned by the OAuth callback when the sign-in
+// allowlists are configured and the account matches none of them.
+var ErrSignInNotAllowed = errors.New("this account is not allowed to sign in to this instance")
+
+// Config holds authentication settings. Session cookies are always
+// host-only (no Domain attribute).
 type Config struct {
 	SessionSecret string
 	BaseURL       string
-	CookieDomain  string
 	CookieSecure  bool
 	Providers     map[string]forge.Provider
+	// Development enables /auth/dev-login (only when no provider is
+	// configured either).
+	Development bool
+	// AllowedOrgs and AllowedUsers restrict sign-in; both empty keeps it
+	// open. Entries are compared case-insensitively.
+	AllowedOrgs  []string
+	AllowedUsers []string
+	Log          zerolog.Logger
+}
+
+// accountLoginer is implemented by forges that can name the token's user.
+type accountLoginer interface {
+	AccountLogin(ctx context.Context, token *oauth2.Token) (string, error)
+}
+
+// orgMembershipChecker is implemented by forges that can check org
+// membership for the sign-in org allowlist (GitHub).
+type orgMembershipChecker interface {
+	IsOrgMember(ctx context.Context, token *oauth2.Token, login, org string) (bool, error)
 }
 
 // Manager handles authentication flows.
@@ -64,16 +92,18 @@ func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, provide
 	if err != nil {
 		return fmt.Errorf("generate oauth state: %w", err)
 	}
+	// PKCE (RFC 7636): the verifier rides in the signed, HttpOnly state
+	// cookie, so an intercepted authorization code is useless on its own.
+	verifier := oauth2.GenerateVerifier()
 
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	signature := m.sign(state, providerID, timestamp)
+	signature := m.sign(state, providerID, timestamp, verifier)
 
 	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName,
-		Value:    strings.Join([]string{hex.EncodeToString([]byte(state)), hex.EncodeToString([]byte(providerID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString(signature)}, "|"),
+		Name:     m.cookieName(oauthStateCookieName),
+		Value:    strings.Join([]string{hex.EncodeToString([]byte(state)), hex.EncodeToString([]byte(providerID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString([]byte(verifier)), hex.EncodeToString(signature)}, "|"),
 		Path:     "/",
-		Domain:   m.cfg.CookieDomain,
 		HttpOnly: true,
 		Secure:   m.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -82,7 +112,7 @@ func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, provide
 	})
 
 	callbackURL := m.callbackURL(r, providerID)
-	redirectURL := provider.OAuth2Config(callbackURL).AuthCodeURL(state)
+	redirectURL := provider.OAuth2Config(callbackURL).AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 	return nil
 }
@@ -94,11 +124,12 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 		return nil, err
 	}
 
-	stateCookie, err := r.Cookie(oauthStateCookieName)
+	stateCookie, err := r.Cookie(m.cookieName(oauthStateCookieName))
 	if err != nil {
 		return nil, fmt.Errorf("missing oauth state cookie: %w", err)
 	}
-	if err := m.validateOAuthState(stateCookie.Value, providerID, strings.TrimSpace(r.URL.Query().Get("state"))); err != nil {
+	verifier, err := m.validateOAuthState(stateCookie.Value, providerID, strings.TrimSpace(r.URL.Query().Get("state")))
+	if err != nil {
 		return nil, err
 	}
 	m.clearCookie(w, oauthStateCookieName)
@@ -108,7 +139,7 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 		return nil, errors.New("missing oauth code")
 	}
 
-	token, err := provider.OAuth2Config(m.callbackURL(r, providerID)).Exchange(r.Context(), code)
+	token, err := provider.OAuth2Config(m.callbackURL(r, providerID)).Exchange(r.Context(), code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return nil, fmt.Errorf("exchange oauth code: %w", err)
 	}
@@ -125,6 +156,11 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 	}
 	if strings.TrimSpace(info.Email) == "" {
 		return nil, errors.New("provider user info missing email")
+	}
+
+	// Before any user row exists: a refused account leaves nothing behind.
+	if err := m.checkSignInAllowed(r.Context(), provider, token); err != nil {
+		return nil, err
 	}
 
 	avatarURL := optionalString(info.AvatarURL)
@@ -151,6 +187,47 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 	m.invokeLoginHooks(r.Context(), providerUser, provider.ID(), token)
 
 	return providerUser, nil
+}
+
+// checkSignInAllowed enforces the sign-in allowlists: with either configured,
+// the account must be listed in AllowedUsers or be a member of an AllowedOrgs
+// org. A forge that cannot answer (no login, no membership API) is refused.
+func (m *Manager) checkSignInAllowed(ctx context.Context, provider forge.Provider, token *oauth2.Token) error {
+	if len(m.cfg.AllowedUsers) == 0 && len(m.cfg.AllowedOrgs) == 0 {
+		return nil
+	}
+	loginer, ok := provider.(accountLoginer)
+	if !ok {
+		return ErrSignInNotAllowed
+	}
+	login, err := loginer.AccountLogin(ctx, token)
+	if err != nil {
+		return fmt.Errorf("load provider account login: %w", err)
+	}
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return ErrSignInNotAllowed
+	}
+	for _, allowed := range m.cfg.AllowedUsers {
+		if strings.EqualFold(strings.TrimSpace(allowed), login) {
+			return nil
+		}
+	}
+	checker, ok := provider.(orgMembershipChecker)
+	if !ok {
+		return ErrSignInNotAllowed
+	}
+	for _, org := range m.cfg.AllowedOrgs {
+		member, err := checker.IsOrgMember(ctx, token, login, org)
+		if err != nil {
+			m.cfg.Log.Warn().Err(err).Str("org", org).Str("login", login).Msg("sign-in allowlist: org membership check failed")
+			continue
+		}
+		if member {
+			return nil
+		}
+	}
+	return ErrSignInNotAllowed
 }
 
 func (m *Manager) invokeLoginHooks(ctx context.Context, user *store.User, providerID string, token *oauth2.Token) {
@@ -181,14 +258,14 @@ func (m *Manager) SetSessionCookie(w http.ResponseWriter, user *store.User) {
 
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	userID := user.ID.String()
-	signature := m.sign(userID, timestamp)
+	epoch := strconv.FormatInt(user.SessionEpoch, 10)
+	signature := m.sign(userID, epoch, timestamp)
 
 	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    strings.Join([]string{hex.EncodeToString([]byte(userID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString(signature)}, "|"),
+		Name:     m.cookieName(sessionCookieName),
+		Value:    strings.Join([]string{hex.EncodeToString([]byte(userID)), hex.EncodeToString([]byte(epoch)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString(signature)}, "|"),
 		Path:     "/",
-		Domain:   m.cfg.CookieDomain,
 		HttpOnly: true,
 		Secure:   m.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -198,13 +275,15 @@ func (m *Manager) SetSessionCookie(w http.ResponseWriter, user *store.User) {
 }
 
 func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*store.User, error) {
-	cookie, err := r.Cookie(sessionCookieName)
+	cookie, err := r.Cookie(m.cookieName(sessionCookieName))
 	if err != nil {
 		return nil, err
 	}
 
+	// userID|epoch|timestamp|signature. Cookies signed before session epochs
+	// existed have three parts and are rejected: their users sign in again.
 	parts := strings.Split(cookie.Value, "|")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return nil, errors.New("invalid session cookie format")
 	}
 
@@ -212,19 +291,28 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 	if err != nil {
 		return nil, fmt.Errorf("decode session user id: %w", err)
 	}
-	timestampBytes, err := hex.DecodeString(parts[1])
+	epochBytes, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("decode session epoch: %w", err)
+	}
+	timestampBytes, err := hex.DecodeString(parts[2])
 	if err != nil {
 		return nil, fmt.Errorf("decode session timestamp: %w", err)
 	}
-	providedSig, err := hex.DecodeString(parts[2])
+	providedSig, err := hex.DecodeString(parts[3])
 	if err != nil {
 		return nil, fmt.Errorf("decode session signature: %w", err)
 	}
 
 	userID := string(userIDBytes)
+	epoch := string(epochBytes)
 	timestamp := string(timestampBytes)
-	if !hmac.Equal(providedSig, m.sign(userID, timestamp)) {
+	if !hmac.Equal(providedSig, m.sign(userID, epoch, timestamp)) {
 		return nil, errors.New("invalid session signature")
+	}
+	sessionEpoch, err := strconv.ParseInt(epoch, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse session epoch: %w", err)
 	}
 
 	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)
@@ -255,12 +343,35 @@ func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*stor
 	if user == nil {
 		return nil, errors.New("session user not found")
 	}
+	if user.SessionEpoch != sessionEpoch {
+		return nil, errors.New("session revoked")
+	}
 
 	return user, nil
 }
 
 func (m *Manager) ClearSession(w http.ResponseWriter) {
 	m.clearCookie(w, sessionCookieName)
+}
+
+// RevokeSessions invalidates every session cookie issued to the user so far
+// (logout, or an administrator cutting off access).
+func (m *Manager) RevokeSessions(ctx context.Context, userID uuid.UUID) error {
+	if m == nil || m.queries == nil {
+		return errors.New("queries not configured")
+	}
+	_, err := m.queries.BumpUserSessionEpoch(ctx, userID)
+	return err
+}
+
+// cookieName returns the cookie name in use: "__Host-"-prefixed when cookies
+// are Secure (HTTPS base URL). Plain-HTTP development keeps the bare name,
+// which browsers would otherwise refuse.
+func (m *Manager) cookieName(name string) string {
+	if m.cfg.CookieSecure {
+		return secureCookiePrefix + name
+	}
+	return name
 }
 
 func (m *Manager) provider(providerID string) (forge.Provider, error) {
@@ -297,51 +408,44 @@ func (m *Manager) callbackURL(r *http.Request, providerID string) string {
 	return fmt.Sprintf("%s://%s/api/v1/auth/callback?provider=%s", scheme, host, providerID)
 }
 
-func (m *Manager) validateOAuthState(cookieValue, providerID, state string) error {
+// validateOAuthState checks the signed state cookie against the callback and
+// returns the PKCE verifier it carries.
+func (m *Manager) validateOAuthState(cookieValue, providerID, state string) (string, error) {
 	parts := strings.Split(cookieValue, "|")
-	if len(parts) != 4 {
-		return errors.New("invalid oauth state cookie format")
+	if len(parts) != 5 {
+		return "", errors.New("invalid oauth state cookie format")
 	}
 
-	stateBytes, err := hex.DecodeString(parts[0])
-	if err != nil {
-		return fmt.Errorf("decode oauth state: %w", err)
+	decoded := make([]string, len(parts))
+	for i, part := range parts {
+		value, err := hex.DecodeString(part)
+		if err != nil {
+			return "", fmt.Errorf("decode oauth state cookie: %w", err)
+		}
+		decoded[i] = string(value)
 	}
-	providerBytes, err := hex.DecodeString(parts[1])
-	if err != nil {
-		return fmt.Errorf("decode oauth provider: %w", err)
-	}
-	timestampBytes, err := hex.DecodeString(parts[2])
-	if err != nil {
-		return fmt.Errorf("decode oauth timestamp: %w", err)
-	}
-	providedSig, err := hex.DecodeString(parts[3])
-	if err != nil {
-		return fmt.Errorf("decode oauth signature: %w", err)
-	}
+	storedState, storedProviderID, timestamp, verifier := decoded[0], decoded[1], decoded[2], decoded[3]
+	providedSig := []byte(decoded[4])
 
-	storedState := string(stateBytes)
-	storedProviderID := string(providerBytes)
-	timestamp := string(timestampBytes)
 	if storedProviderID != providerID {
-		return errors.New("oauth provider mismatch")
+		return "", errors.New("oauth provider mismatch")
 	}
 	if storedState != state {
-		return errors.New("oauth state mismatch")
+		return "", errors.New("oauth state mismatch")
 	}
-	if !hmac.Equal(providedSig, m.sign(storedState, storedProviderID, timestamp)) {
-		return errors.New("oauth state signature mismatch")
+	if !hmac.Equal(providedSig, m.sign(storedState, storedProviderID, timestamp, verifier)) {
+		return "", errors.New("oauth state signature mismatch")
 	}
 
 	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
-		return fmt.Errorf("parse oauth timestamp: %w", err)
+		return "", fmt.Errorf("parse oauth timestamp: %w", err)
 	}
 	if time.Since(time.Unix(issuedAt, 0)) > oauthStateMaxAge {
-		return errors.New("oauth state expired")
+		return "", errors.New("oauth state expired")
 	}
 
-	return nil
+	return verifier, nil
 }
 
 func (m *Manager) sign(parts ...string) []byte {
@@ -353,10 +457,9 @@ func (m *Manager) sign(parts ...string) []byte {
 func (m *Manager) clearCookie(w http.ResponseWriter, name string) {
 	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
-		Name:     name,
+		Name:     m.cookieName(name),
 		Value:    "",
 		Path:     "/",
-		Domain:   m.cfg.CookieDomain,
 		HttpOnly: true,
 		Secure:   m.cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,

@@ -3722,7 +3722,7 @@ paths:
   /auth/dev-login:
     post:
       description: Creates or fetches a local admin user for development. Only available
-        when no forge providers are configured.
+        in development mode with no forge providers configured.
       produces:
       - application/json
       responses:
@@ -3764,7 +3764,8 @@ paths:
       - auth
   /auth/logout:
     post:
-      description: Clears the current session cookie
+      description: Revokes every session of the current user and clears the session
+        cookie
       responses:
         "204":
           description: No Content
@@ -4281,6 +4282,14 @@ paths:
             $ref: '#/definitions/api.Response'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "422":
+          description: Unprocessable Entity
           schema:
             $ref: '#/definitions/api.Response'
         "500":

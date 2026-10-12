@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -36,8 +37,7 @@ func (s *Server) handleCompareSBOMs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var input compareSBOMsRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeSBOMCompareRequest(w, r, &input) {
 		return
 	}
 
@@ -61,10 +61,26 @@ func (s *Server) handleCompareSBOMs(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, sbom.Compare(baseComponents, headComponents))
 }
 
-// maxToolSBOMCompareBytes caps the two inline documents of a Tools compare
-// (base64 inflates them by a third): generous for real SBOMs, bounded for a
-// session-only endpoint that touches no tenant data.
-const maxToolSBOMCompareBytes = 64 << 20
+// maxSBOMCompareBytes caps the request body of both compare endpoints, inline
+// documents included (base64 inflates them by a third). Parsing holds several
+// copies of each document, and the Tools variant is open to any logged-in
+// user, so the cap stays small; larger SBOMs are compared as uploaded
+// snapshot artifacts through the repository endpoint.
+const maxSBOMCompareBytes = 8 << 20
+
+func decodeSBOMCompareRequest(w http.ResponseWriter, r *http.Request, input *compareSBOMsRequest) bool {
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSBOMCompareBytes)).Decode(input)
+	if err == nil {
+		return true
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		api.JSONError(w, http.StatusRequestEntityTooLarge, "request body exceeds the 8MB compare limit")
+		return false
+	}
+	api.JSONError(w, http.StatusBadRequest, "invalid request body")
+	return false
+}
 
 // @Summary      Compare two SBOM files
 // @Description  The Tools SBOM comparator without a repository: both sides are inline documents (base64 CycloneDX or SPDX JSON) the caller sends, so nothing stored is read and no repository access is needed. Repository snapshot artifacts are compared through the repository's own endpoint.
@@ -77,8 +93,7 @@ const maxToolSBOMCompareBytes = 64 << 20
 // @Router       /tools/sbom/compare [post]
 func (s *Server) handleCompareLocalSBOMs(w http.ResponseWriter, r *http.Request) {
 	var input compareSBOMsRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxToolSBOMCompareBytes)).Decode(&input); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeSBOMCompareRequest(w, r, &input) {
 		return
 	}
 	if strings.TrimSpace(input.BaseArtifactID) != "" || strings.TrimSpace(input.HeadArtifactID) != "" {

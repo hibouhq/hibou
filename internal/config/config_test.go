@@ -748,3 +748,67 @@ func TestLoadMetricsDisabledSkipsPortCheck(t *testing.T) {
 		t.Fatal("metrics.enabled = true, want false")
 	}
 }
+
+// A12: a short HMAC key is refused outside development.
+func TestValidateStartupRejectsShortSecretOutsideDevelopment(t *testing.T) {
+	cfg := Config{SessionSecret: "too-short-but-not-default"}
+	err := cfg.ValidateStartup(zerolog.Nop())
+	if err == nil || !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Fatalf("expected short-secret rejection, got %v", err)
+	}
+
+	cfg.Development = true
+	if err := cfg.ValidateStartup(zerolog.Nop()); err != nil {
+		t.Fatalf("development accepts a short secret, got %v", err)
+	}
+}
+
+// §3.4 / A3: outside development a forge without a webhook secret or an
+// OAuth client id refuses startup; development only warns.
+func TestValidateStartupForgeSecrets(t *testing.T) {
+	const secret = "0123456789abcdef0123456789abcdef"
+	complete := ForgeConfig{Type: "github", ID: "github", ClientID: "cid", WebhookSecret: "hook"}
+
+	if err := (Config{SessionSecret: secret, Forges: []ForgeConfig{complete}}).ValidateStartup(zerolog.Nop()); err != nil {
+		t.Fatalf("complete forge: %v", err)
+	}
+
+	noHook := complete
+	noHook.WebhookSecret = ""
+	err := (Config{SessionSecret: secret, Forges: []ForgeConfig{noHook}}).ValidateStartup(zerolog.Nop())
+	if err == nil || !strings.Contains(err.Error(), "HIBOU_FORGE_0_WEBHOOK_SECRET") {
+		t.Fatalf("missing webhook secret: got %v", err)
+	}
+
+	noClient := complete
+	noClient.ClientID = ""
+	err = (Config{SessionSecret: secret, Forges: []ForgeConfig{noClient}}).ValidateStartup(zerolog.Nop())
+	if err == nil || !strings.Contains(err.Error(), "HIBOU_FORGE_0_CLIENT_ID") {
+		t.Fatalf("missing client id: got %v", err)
+	}
+
+	var logBuffer bytes.Buffer
+	dev := Config{Development: true, SessionSecret: secret, Forges: []ForgeConfig{noHook}}
+	if err := dev.ValidateStartup(zerolog.New(&logBuffer)); err != nil {
+		t.Fatalf("development must start: %v", err)
+	}
+	if !strings.Contains(logBuffer.String(), "INSECURE") {
+		t.Fatalf("development must warn loudly, got %q", logBuffer.String())
+	}
+}
+
+func TestLoadAuthAllowlists(t *testing.T) {
+	t.Setenv("HIBOU_AUTH_ALLOWED_ORGS", "HibouHQ, other-org")
+	t.Setenv("HIBOU_AUTH_ALLOWED_USERS", "octocat")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := strings.Join(cfg.Auth.AllowedOrgs, ","); got != "hibouhq,other-org" {
+		t.Fatalf("AllowedOrgs = %q", got)
+	}
+	if got := strings.Join(cfg.Auth.AllowedUsers, ","); got != "octocat" || !cfg.Auth.Restricted() {
+		t.Fatalf("AllowedUsers = %q", got)
+	}
+}

@@ -40,10 +40,14 @@ runcmd:
       curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
       test -s /tmp/k3s-install.sh
       chmod +x /tmp/k3s-install.sh
+      # write-kubeconfig-mode 600: the generated kubeconfig is cluster-admin;
+      #   only root may read it (fetch it over ssh as root).
+      # secrets-encryption: Secrets are encrypted at rest in the datastore.
       INSTALL_K3S_VERSION="${k3s_version}" /tmp/k3s-install.sh server \
         --tls-san $(curl -sf http://169.254.169.254/hetzner/v1/metadata/public-ipv4) \
         --node-name "${server_name}" \
-        --write-kubeconfig-mode 644
+        --write-kubeconfig-mode 600 \
+        --secrets-encryption
       k3s --version | grep -F "${k3s_version}"
       rm -f /tmp/k3s-install.sh
   - systemctl enable --now fail2ban

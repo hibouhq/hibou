@@ -13,6 +13,89 @@ import (
 	"github.com/google/uuid"
 )
 
+const getForgeRepositoryByAccountAndKey = `-- name: GetForgeRepositoryByAccountAndKey :one
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+FROM forge_repositories
+WHERE provider = $1
+  AND lower(account_login) = lower($2)
+  AND provider_key = $3
+  AND removed_at IS NULL
+LIMIT 1
+`
+
+type GetForgeRepositoryByAccountAndKeyParams struct {
+	Provider     string `json:"provider"`
+	AccountLogin string `json:"account_login"`
+	ProviderKey  string `json:"provider_key"`
+}
+
+func (q *Queries) GetForgeRepositoryByAccountAndKey(ctx context.Context, arg GetForgeRepositoryByAccountAndKeyParams) (ForgeRepository, error) {
+	row := q.db.QueryRowContext(ctx, getForgeRepositoryByAccountAndKey, arg.Provider, arg.AccountLogin, arg.ProviderKey)
+	var i ForgeRepository
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.InstallationID,
+		&i.ProviderRepoID,
+		&i.AccountLogin,
+		&i.Owner,
+		&i.Name,
+		&i.FullName,
+		&i.ProviderKey,
+		&i.Private,
+		&i.DefaultBranch,
+		&i.HtmlUrl,
+		&i.Archived,
+		&i.LastSeenAt,
+		&i.RemovedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getForgeRepositoryByAccountAndRepoID = `-- name: GetForgeRepositoryByAccountAndRepoID :one
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+FROM forge_repositories
+WHERE provider = $1
+  AND lower(account_login) = lower($2)
+  AND provider_repo_id = $3
+  AND removed_at IS NULL
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+type GetForgeRepositoryByAccountAndRepoIDParams struct {
+	Provider       string         `json:"provider"`
+	AccountLogin   string         `json:"account_login"`
+	ProviderRepoID sql.NullString `json:"provider_repo_id"`
+}
+
+func (q *Queries) GetForgeRepositoryByAccountAndRepoID(ctx context.Context, arg GetForgeRepositoryByAccountAndRepoIDParams) (ForgeRepository, error) {
+	row := q.db.QueryRowContext(ctx, getForgeRepositoryByAccountAndRepoID, arg.Provider, arg.AccountLogin, arg.ProviderRepoID)
+	var i ForgeRepository
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.InstallationID,
+		&i.ProviderRepoID,
+		&i.AccountLogin,
+		&i.Owner,
+		&i.Name,
+		&i.FullName,
+		&i.ProviderKey,
+		&i.Private,
+		&i.DefaultBranch,
+		&i.HtmlUrl,
+		&i.Archived,
+		&i.LastSeenAt,
+		&i.RemovedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getForgeRepositoryByProviderKey = `-- name: GetForgeRepositoryByProviderKey :one
 SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
 FROM forge_repositories

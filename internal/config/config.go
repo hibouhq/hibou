@@ -51,6 +51,9 @@ type Config struct {
 	// then takes effect within the kubelet sync period, no restart and no
 	// email in git or Helm values. Takes precedence over InstanceAdmins.
 	InstanceAdminsFile string
+	// Auth restricts who may sign in (allowlists). Empty lists keep sign-in
+	// open to any account of a configured forge.
+	Auth AuthConfig
 	// CoverageStoreLines controls whether per-line coverage hit data is
 	// persisted on upload (powers line-level patch coverage). Defaults to
 	// true; set HIBOU_COVERAGE_STORE_LINES=false to opt out on very large
@@ -78,8 +81,28 @@ type Config struct {
 	ScannerDistribution scancatalog.DistributionConfig
 	Metrics             MetricsConfig
 	StorageUsage        StorageUsageConfig
+	// Limits bounds request, connection and upload resource use (limits.go).
+	Limits LimitsConfig
 
 	Forges []ForgeConfig
+}
+
+// AuthConfig restricts sign-in. A user may sign in when either list is empty
+// (open sign-up), when their forge login is in AllowedUsers, or when they are
+// a member of an org in AllowedOrgs. Checked in the OAuth callback before the
+// user row is created.
+type AuthConfig struct {
+	// AllowedOrgs (HIBOU_AUTH_ALLOWED_ORGS, comma-separated) are forge org
+	// logins whose members may sign in. GitHub only; see docs/DEPLOYMENT.md.
+	AllowedOrgs []string
+	// AllowedUsers (HIBOU_AUTH_ALLOWED_USERS, comma-separated) are forge
+	// logins that may sign in, matched case-insensitively.
+	AllowedUsers []string
+}
+
+// Restricted reports whether any sign-in allowlist is configured.
+func (a AuthConfig) Restricted() bool {
+	return len(a.AllowedOrgs) > 0 || len(a.AllowedUsers) > 0
 }
 
 // MetricsConfig secures the Prometheus /metrics endpoint (ADR-039 §5).
@@ -262,19 +285,6 @@ func (c Config) MetricsListenAddr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Metrics.Port)
 }
 
-// CookieDomain returns the domain for session cookies.
-// Derived from HIBOU_BASE_URL hostname. Empty in dev (host-only cookie).
-func (c Config) CookieDomain() string {
-	if c.BaseURL == "" {
-		return ""
-	}
-	u, err := url.Parse(c.BaseURL)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
-}
-
 // CookieSecure returns whether cookies require HTTPS.
 // True when HIBOU_BASE_URL uses https scheme.
 func (c Config) CookieSecure() bool {
@@ -340,6 +350,8 @@ func Load() (Config, error) {
 	v.SetDefault("auto.provision.orgs", false)
 	v.SetDefault("instance.admins", "")
 	v.SetDefault("instance.admins_file", "")
+	v.SetDefault("auth.allowed_orgs", "")
+	v.SetDefault("auth.allowed_users", "")
 	v.SetDefault("coverage.store_lines", true)
 	v.SetDefault("background.artifact_processing.enabled", true)
 	v.SetDefault("background.retention.enabled", true)
@@ -481,6 +493,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing retention policy: %w", err)
 	}
+	limits, err := loadLimits(v)
+	if err != nil {
+		return Config{}, err
+	}
 	metricsCfg, err := loadMetricsConfig(v)
 	if err != nil {
 		return Config{}, err
@@ -525,6 +541,11 @@ func Load() (Config, error) {
 		AuditRetentionMonths:         v.GetInt("audit.retention_months"),
 		AdvisoryEventRetentionMonths: v.GetInt("advisories.event_retention_months"),
 		RetentionPolicy:              retentionPolicy,
+		Limits:                       limits,
+		Auth: AuthConfig{
+			AllowedOrgs:  normalizeProviderList(v.GetStringSlice("auth.allowed_orgs")),
+			AllowedUsers: normalizeProviderList(v.GetStringSlice("auth.allowed_users")),
+		},
 		Background: BackgroundConfig{
 			ArtifactProcessingEnabled: v.GetBool("background.artifact_processing.enabled"),
 			RetentionEnabled:          v.GetBool("background.retention.enabled"),
@@ -612,10 +633,24 @@ func (c Config) IsDevelopment() bool {
 	return c.Development
 }
 
+// MinSessionSecretBytes is the shortest session secret accepted outside
+// development: the HMAC key signing sessions must not be guessable offline.
+const MinSessionSecretBytes = 32
+
 func (c Config) ValidateStartup(log zerolog.Logger) error {
+	if err := c.validateSessionSecret(log); err != nil {
+		return err
+	}
+	return c.validateForges(log)
+}
+
+func (c Config) validateSessionSecret(log zerolog.Logger) error {
 	secret := strings.TrimSpace(c.SessionSecret)
 	if secret != "" && secret != DefaultSessionSecret {
-		return nil
+		if len(secret) >= MinSessionSecretBytes || c.IsDevelopment() {
+			return nil
+		}
+		return fmt.Errorf("invalid session.secret: HIBOU_SESSION_SECRET/session.secret must be at least %d bytes (generate one with `openssl rand -hex 32`)", MinSessionSecretBytes)
 	}
 
 	if c.IsDevelopment() {
@@ -624,6 +659,31 @@ func (c Config) ValidateStartup(log zerolog.Logger) error {
 	}
 
 	return errors.New("invalid session.secret: set HIBOU_SESSION_SECRET/session.secret to a stable random value shared by every replica; empty values and the shipped development default are rejected unless HIBOU_DEVELOPMENT/development is explicitly set for local development")
+}
+
+// validateForges refuses, outside development, a forge that would silently
+// be skipped (no OAuth client id) or whose webhooks could not be verified (no
+// webhook secret). Development keeps both permissive, loudly.
+func (c Config) validateForges(log zerolog.Logger) error {
+	var problems []string
+	for i, fc := range c.Forges {
+		if strings.TrimSpace(fc.ClientID) == "" {
+			problems = append(problems, fmt.Sprintf("forge %q (HIBOU_FORGE_%d_CLIENT_ID) has no OAuth client id", fc.ID, i))
+		}
+		if strings.TrimSpace(fc.WebhookSecret) == "" {
+			problems = append(problems, fmt.Sprintf("forge %q (HIBOU_FORGE_%d_WEBHOOK_SECRET) has no webhook secret, so webhook payloads cannot be verified", fc.ID, i))
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	if c.IsDevelopment() {
+		for _, problem := range problems {
+			log.Warn().Msg("INSECURE (development only): " + problem + "; this is refused outside development")
+		}
+		return nil
+	}
+	return errors.New("invalid forge configuration: " + strings.Join(problems, "; "))
 }
 
 func loadMetricsConfig(v *viper.Viper) (MetricsConfig, error) {

@@ -299,7 +299,7 @@ func (s *Server) releaseTagPatternForRepo(ctx context.Context, repoID uuid.UUID)
 	if err != nil || repo == nil {
 		return nil, false
 	}
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
 	if !ok {
 		return defaultReleaseTagPattern, true
 	}

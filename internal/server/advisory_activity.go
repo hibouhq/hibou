@@ -52,6 +52,9 @@ type corpusState struct {
 }
 
 func (s *Server) handleAdvisoryEvents(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuthenticated(w, r) {
+		return
+	}
 	limit := int32(50)
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 200 {
@@ -116,6 +119,9 @@ func (s *Server) handleAdvisoryEvents(w http.ResponseWriter, r *http.Request) {
 // the advisory anywhere, including upstream activity nobody here caused, which
 // is the half that explains why a finding's facts changed underneath it.
 func (s *Server) handleAdvisoryTimeline(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuthenticated(w, r) {
+		return
+	}
 	cveID := chi.URLParam(r, "advisoryID")
 	if !cvefeed.ValidCVEID(cveID) {
 		api.JSONError(w, http.StatusBadRequest, "invalid CVE id")

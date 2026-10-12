@@ -151,18 +151,59 @@ func persistedGateResponse(prNumber int, check *store.PrCheck) prGateResponse {
 }
 
 // wsGateNotifier adapts the WS fanout to forge.LiveGateNotifier so the gate
-// publisher can broadcast live PR-gate refreshes without importing the ws package
+// publisher can push live PR-gate refreshes without importing the ws package
 // (which would form an import cycle). Cross-replica delivery is handled by the
 // fanout's Postgres LISTEN/NOTIFY bridge (ADR-015).
+//
+// The payload names an org, a private repository, a PR, a head SHA and the
+// verdict, so it goes only to the people who may see that repository. A
+// broadcast reached every signed-in user on the instance, and websocket topics
+// are chosen by the client, so subscribing could not have been the boundary.
 type wsGateNotifier struct {
 	live ws.LiveDelivery
+	// audience resolves who may see the repository. Without it nothing is
+	// sent: the PR page still polls, and a leak is worse than a late refresh.
+	audience gateAudience
+}
+
+// gateAudience is the slice of *store.Queries the notifier needs.
+type gateAudience interface {
+	GetOrganizationByProviderAndSlug(ctx context.Context, provider, slug string) (*store.Organization, error)
+	GetRepositoryBySlug(ctx context.Context, orgID uuid.UUID, slug string) (*store.Repository, error)
+	ListRepoAudienceUserIDs(ctx context.Context, repoID uuid.UUID) ([]uuid.UUID, error)
+}
+
+type gateUpdateTarget struct {
+	Provider string `json:"provider"`
+	OrgSlug  string `json:"org_slug"`
+	RepoSlug string `json:"repo_slug"`
 }
 
 func (n wsGateNotifier) PublishGateUpdate(ctx context.Context, topic string, payload []byte) {
-	if n.live == nil {
+	if n.live == nil || n.audience == nil {
 		return
 	}
-	n.live.PublishBroadcast(ctx, ws.Message{Type: topic, Payload: payload})
+	userIDs, err := n.gateAudienceUserIDs(ctx, payload)
+	if err != nil || len(userIDs) == 0 {
+		return
+	}
+	n.live.PublishToUsers(ctx, userIDs, ws.Message{Type: topic, Payload: payload})
+}
+
+func (n wsGateNotifier) gateAudienceUserIDs(ctx context.Context, payload []byte) ([]uuid.UUID, error) {
+	var target gateUpdateTarget
+	if err := json.Unmarshal(payload, &target); err != nil {
+		return nil, err
+	}
+	org, err := n.audience.GetOrganizationByProviderAndSlug(ctx, target.Provider, target.OrgSlug)
+	if err != nil || org == nil {
+		return nil, err
+	}
+	repo, err := n.audience.GetRepositoryBySlug(ctx, org.ID, target.RepoSlug)
+	if err != nil || repo == nil {
+		return nil, err
+	}
+	return n.audience.ListRepoAudienceUserIDs(ctx, repo.ID)
 }
 
 // publishGateRecompute asks the gate publisher to re-evaluate and re-post the PR

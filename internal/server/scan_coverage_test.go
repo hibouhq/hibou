@@ -40,6 +40,7 @@ func TestScanCoverageInventoryAndPRCheck(t *testing.T) {
 		Paths: []string{"pom.xml", "src/main/java/App.java"},
 	}}}
 	repo := createUploadTestRepository(t, srv, org)
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	repo.ProviderID = "acme/app"
 	ctx := context.Background()
 	if _, err := srv.detectRepoApplicability(ctx, repo, "main", "head-sha"); err != nil {
@@ -121,6 +122,7 @@ func TestBulkScannerSetting(t *testing.T) {
 	}}}
 	ctx := context.Background()
 	repos := []*store.Repository{createUploadTestRepository(t, srv, org), createUploadTestRepository(t, srv, org)}
+	bindTestOrgToForgeAccount(t, srv, org, "acme")
 	for _, repo := range repos {
 		repo.ProviderID = "acme/" + repo.Slug
 		if _, err := srv.detectRepoApplicability(ctx, repo, "main", "sha"); err != nil {

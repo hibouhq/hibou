@@ -133,14 +133,34 @@ func (s *Server) handleListNotificationRules(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	isAdmin, err := s.isOrgAdminMember(r, org.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return
+	}
+
 	rules, err := s.queries.ListNotificationRulesByOrg(r.Context(), org.ID)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list notification rules")
 		return
 	}
+	for i := range rules {
+		rules[i] = redactNotificationRule(rules[i], isAdmin)
+	}
 
 	pagination := api.ParsePagination(r)
 	api.JSONList(w, paginateItems(rules, pagination), pagination.Page, pagination.PerPage, len(rules))
+}
+
+// redactNotificationRule hides a rule's destination from non-admins, as
+// redactIntegrationConfig does for integrations: a webhook or Slack URL is a
+// credential, since anyone holding it can post into the destination.
+func redactNotificationRule(rule store.NotificationRule, includeDestination bool) store.NotificationRule {
+	if includeDestination {
+		return rule
+	}
+	rule.DestinationConfig = json.RawMessage("{}")
+	return rule
 }
 
 func (s *Server) handleDryRunNotificationRule(w http.ResponseWriter, r *http.Request) {
@@ -262,12 +282,18 @@ func buildDryRunNotificationMatch(entry dbgen.AuditLog, seen map[string]struct{}
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/notification-rules/{ruleID} [get]
 func (s *Server) handleGetNotificationRule(w http.ResponseWriter, r *http.Request) {
-	_, rule, ok := s.loadAuthorizedNotificationRule(r, w)
+	org, rule, ok := s.loadAuthorizedNotificationRule(r, w)
 	if !ok {
 		return
 	}
 
-	api.JSON(w, http.StatusOK, rule)
+	isAdmin, err := s.isOrgAdminMember(r, org.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return
+	}
+
+	api.JSON(w, http.StatusOK, redactNotificationRule(*rule, isAdmin))
 }
 
 // @Summary      Update notification rule

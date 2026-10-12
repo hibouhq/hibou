@@ -65,14 +65,44 @@ func New(st MCPStore, deltaSvc *delta.Service, log zerolog.Logger, serverVersion
 	return mcpSrv
 }
 
+// Limits for the MCP listener. Stateless mode answers each POST on its own,
+// so nothing here needs a long-lived stream.
+const (
+	mcpEndpointPath      = "/mcp"
+	mcpReadHeaderTimeout = 10 * time.Second
+	mcpReadTimeout       = 30 * time.Second
+	mcpWriteTimeout      = 2 * time.Minute
+	mcpIdleTimeout       = 120 * time.Second
+	mcpMaxHeaderBytes    = 64 << 10
+	mcpMaxBodyBytes      = 1 << 20
+)
+
 func NewHTTPServer(mcpSrv *server.MCPServer, st MCPStore, port int, log zerolog.Logger) *server.StreamableHTTPServer {
 	_ = port
+	streamable, _ := newHTTPServer(mcpSrv, st, log)
+	return streamable
+}
 
-	return server.NewStreamableHTTPServer(mcpSrv,
+func newHTTPServer(mcpSrv *server.MCPServer, st MCPStore, log zerolog.Logger) (*server.StreamableHTTPServer, *http.Server) {
+	// mcp-go's default http.Server has no timeouts; supply our own and route
+	// the endpoint ourselves, as WithStreamableHTTPServer requires.
+	httpSrv := &http.Server{
+		ReadHeaderTimeout: mcpReadHeaderTimeout,
+		ReadTimeout:       mcpReadTimeout,
+		WriteTimeout:      mcpWriteTimeout,
+		IdleTimeout:       mcpIdleTimeout,
+		MaxHeaderBytes:    mcpMaxHeaderBytes,
+	}
+	streamable := server.NewStreamableHTTPServer(mcpSrv,
 		server.WithHTTPContextFunc(authContextFunc(st, log)),
-		server.WithEndpointPath("/mcp"),
+		server.WithEndpointPath(mcpEndpointPath),
 		server.WithStateLess(true),
+		server.WithStreamableHTTPServer(httpSrv),
 	)
+	mux := http.NewServeMux()
+	mux.Handle(mcpEndpointPath, http.MaxBytesHandler(streamable, mcpMaxBodyBytes))
+	httpSrv.Handler = mux
+	return streamable, httpSrv
 }
 
 func authContextFunc(st MCPStore, log zerolog.Logger) server.HTTPContextFunc {

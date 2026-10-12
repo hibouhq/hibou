@@ -35,6 +35,14 @@ inputs:
     description: "Run CI-side reachability analysis after upload. Comma-separated languages: 'java', 'rust', 'java,rust'. Go reachability runs server-side automatically when enabled. Set to 'false' to skip (default)."
     required: false
     default: "false"
+  cli-path:
+    description: "Absolute path to a hibou CLI binary you built or verified yourself (recommended). When set, nothing is downloaded."
+    required: false
+    default: ""
+  cli-sha256:
+    description: "Expected SHA-256 of the CLI binary for this runner's OS/arch. Required to download the CLI from the Hibou server; the download is refused unless it matches. Ignored when cli-path is set."
+    required: false
+    default: ""
   bytecode-path:
     description: "Java bytecode path override for non-standard build layouts (e.g. Ant with custom output dirs). Auto-discovery handles Maven and Gradle projects of any size without configuration."
     required: false
@@ -43,13 +51,49 @@ inputs:
 runs:
   using: composite
   steps:
+    # The CLI runs with the API token, so it must never be whatever the server
+    # hands out. Order: an explicit cli-path; else a server download pinned to
+    # cli-sha256; else a hibou already on PATH (installed by the workflow).
+    # The binary is referenced by absolute path via HIBOU_BIN; nothing is
+    # added to GITHUB_PATH, so later steps' tools cannot be shadowed.
     - name: Install hibou CLI
       shell: bash
       env:
         HIBOU_SERVER: ${{ inputs.server }}
-        HIBOU_TOKEN: ${{ inputs.token }}
+        INPUT_CLI_PATH: ${{ inputs.cli-path }}
+        INPUT_CLI_SHA256: ${{ inputs.cli-sha256 }}
       run: |
         set -euo pipefail
+
+        if [[ -n "$INPUT_CLI_PATH" ]]; then
+          if [[ "$INPUT_CLI_PATH" != /* && ! "$INPUT_CLI_PATH" =~ ^[A-Za-z]:[\\/] ]]; then
+            echo "cli-path must be an absolute path: $INPUT_CLI_PATH" >&2
+            exit 1
+          fi
+          if [[ ! -f "$INPUT_CLI_PATH" ]]; then
+            echo "cli-path does not exist: $INPUT_CLI_PATH" >&2
+            exit 1
+          fi
+          [[ -x "$INPUT_CLI_PATH" ]] || chmod +x "$INPUT_CLI_PATH"
+          printf 'HIBOU_BIN=%s\n' "$INPUT_CLI_PATH" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        if [[ -z "$INPUT_CLI_SHA256" ]]; then
+          if existing="$(command -v hibou 2>/dev/null)"; then
+            echo "Using hibou from PATH: $existing"
+            printf 'HIBOU_BIN=%s\n' "$existing" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "No CLI available: set cli-path to a binary you built, or cli-sha256 to download a pinned CLI from the server." >&2
+          exit 1
+        fi
+
+        expected="$(printf '%s' "$INPUT_CLI_SHA256" | tr '[:upper:]' '[:lower:]')"
+        if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "cli-sha256 must be a 64-character hex SHA-256" >&2
+          exit 1
+        fi
 
         runner_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
         runner_arch="$(uname -m)"
@@ -88,22 +132,24 @@ runs:
           ext=".exe"
         fi
 
-        # Check if existing hibou matches server version
-        server_version="$(curl -fsSL "${HIBOU_SERVER}/api/v1/bin/version" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)"
-        if command -v hibou >/dev/null 2>&1; then
-          local_version="$(hibou version --short 2>/dev/null || echo '')"
-          if [[ "$local_version" == "$server_version" ]]; then
-            echo "hibou ${local_version} already installed and matches server"
-            echo "HIBOU_BIN=hibou" >> "$GITHUB_ENV"
-            exit 0
-          fi
+        dest_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/hibou-cli.XXXXXX")"
+        dest="${dest_dir}/hibou${ext}"
+        echo "Downloading hibou for ${runner_os}/${runner_arch} from server..."
+        curl -fsSL --proto '=https,http' "${HIBOU_SERVER}/api/v1/bin/${runner_os}/${runner_arch}" -o "$dest"
+
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "$dest" | cut -d' ' -f1)"
+        else
+          actual="$(shasum -a 256 "$dest" | cut -d' ' -f1)"
+        fi
+        if [[ "$actual" != "$expected" ]]; then
+          rm -rf "$dest_dir"
+          echo "hibou CLI checksum mismatch: expected ${expected}, got ${actual}" >&2
+          exit 1
         fi
 
-        echo "Downloading hibou ${server_version} from server..."
-        curl -fsSL "${HIBOU_SERVER}/api/v1/bin/${runner_os}/${runner_arch}" -o "$RUNNER_TEMP/hibou${ext}"
-        chmod +x "$RUNNER_TEMP/hibou${ext}"
-        printf 'HIBOU_BIN=%s\n' "$RUNNER_TEMP/hibou${ext}" >> "$GITHUB_ENV"
-        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        chmod +x "$dest"
+        printf 'HIBOU_BIN=%s\n' "$dest" >> "$GITHUB_ENV"
 
     - name: Upload artifact
       shell: bash
@@ -152,7 +198,7 @@ runs:
           upload_flags+=(--expect="$INPUT_EXPECT")
         fi
 
-        hibou upload "${files[@]}" "${upload_flags[@]}"
+        "$HIBOU_BIN" upload "${files[@]}" "${upload_flags[@]}"
 
         # Run CI-side reachability analysis if requested
         if [[ "$INPUT_REACHABILITY" != "false" && -n "$INPUT_REACHABILITY" ]]; then
@@ -170,5 +216,5 @@ runs:
             reachability_args+=(--bytecode "$INPUT_BYTECODE_PATH")
           fi
 
-          hibou analyze reachability "${reachability_args[@]}"
+          "$HIBOU_BIN" analyze reachability "${reachability_args[@]}"
         fi

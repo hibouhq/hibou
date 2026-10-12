@@ -33,8 +33,8 @@
         {{ finding.solution }}
       </p>
       <a
-        v-if="finding.remediation_link"
-        :href="finding.remediation_link"
+        v-if="safeHref(finding.remediation_link)"
+        :href="safeHref(finding.remediation_link)"
         target="_blank"
         rel="noopener noreferrer"
         class="mt-1 inline-block text-xs text-accent underline underline-offset-2"
@@ -44,6 +44,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import { computed } from 'vue'
 
 import type { FindingDetail } from '@/api/client'

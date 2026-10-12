@@ -186,6 +186,10 @@ func (s *Server) handleCreateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.checkAPIKeyQuota(w, r, user.ID) {
+		return
+	}
+
 	rawKey, err := apitoken.Generate()
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to generate API key")
@@ -319,6 +323,11 @@ func (s *Server) handleUpdateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Extending a token's life is a grant like widening its scope: a
+	// non-admin's extension goes back to review.
+	if !isAdmin && approval == store.APIKeyApprovalApproved && expiryExtends(existing.ExpiresAt, expiresAt) {
+		approval = store.APIKeyApprovalPending
+	}
 
 	updated, err := s.queries.UpdateAPIKeyMetaByOrg(r.Context(), existing.ID, org.ID, name, description, scopes, expiresAt, approval)
 	if err != nil {
@@ -337,6 +346,19 @@ func (s *Server) handleUpdateOrgAPIKey(w http.ResponseWriter, r *http.Request) {
 	})
 
 	api.JSON(w, http.StatusOK, updated)
+}
+
+// expiryExtends reports whether next keeps a token alive longer than prev.
+// No expiry is the longest life there is.
+func expiryExtends(prev, next *time.Time) bool {
+	switch {
+	case prev == nil:
+		return false
+	case next == nil:
+		return true
+	default:
+		return next.After(*prev)
+	}
 }
 
 // scopeWidens reports whether the new scope document grants anything the old

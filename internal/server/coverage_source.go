@@ -78,6 +78,17 @@ func (s *Server) handleGetCoverageSource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// The forge call mints a token by owner: refuse repositories whose owner is
+	// not this org's forge account, even if such a row predates enrolment
+	// checks (security audit §3.1).
+	if bound, err := s.queries.ForgeOwnerBoundToOrg(r.Context(), repo.OrgID, owner); err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return
+	} else if !bound {
+		api.JSONError(w, http.StatusForbidden, "repository is not owned by the forge account bound to this organization")
+		return
+	}
+
 	resolved, content, err := s.resolveSourceBlob(r, provider, owner, name, snapshot, requested)
 	if errors.Is(err, forge.ErrFileNotFound) {
 		api.JSONError(w, http.StatusNotFound, "file not found at the snapshot commit")

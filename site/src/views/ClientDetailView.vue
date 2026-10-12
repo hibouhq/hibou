@@ -145,6 +145,7 @@
 </template>
 
 <script setup lang="ts">
+import { isSafeUrl } from '@/lib/safeUrl'
 import { Building2, History, LayoutDashboard, Mail, Plus, UserRound } from 'lucide-vue-next'
 import { computed, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
@@ -246,9 +247,6 @@ async function loadClientDetail() {
   }
 }
 
-function isSafeUrl(url: string) {
-  return /^https?:\/\//i.test(url.trim())
-}
 
 function clientLabelEntries(currentClient: Client) {
   return Object.entries(currentClient.labels || {})

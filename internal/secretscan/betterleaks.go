@@ -44,20 +44,24 @@ func (p *BetterleaksProvider) ScanRepo(ctx context.Context, opts ScanRepoOptions
 	}
 	defer cleanup()
 
-	return p.runBetterleaks(ctx, repoDir, "git", repoDir)
+	return p.runBetterleaks(ctx, scanHome(repoDir), repoDir, "git", repoDir)
 }
 
 func (p *BetterleaksProvider) ScanDiff(ctx context.Context, opts ScanDiffOptions) ([]SecretFinding, error) {
+	// The range is interpolated into --log-opts: only full SHAs get there.
+	if err := validateCommitRange(opts.FromCommit, opts.ToCommit); err != nil {
+		return nil, err
+	}
 	repoDir, cleanup, err := cloneRepository(ctx, opts.TempDir, opts.CloneURL, opts.Branch, opts.AuthToken, incrementalCloneDepth)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	if err := ensureCommitPresent(ctx, repoDir, opts.FromCommit); err != nil {
+	if err := ensureCommitPresent(ctx, repoDir, opts.FromCommit, opts.CloneURL, opts.AuthToken); err != nil {
 		return nil, err
 	}
-	return p.runBetterleaks(ctx, repoDir, "git", repoDir, "--log-opts="+opts.FromCommit+".."+opts.ToCommit)
+	return p.runBetterleaks(ctx, scanHome(repoDir), repoDir, "git", repoDir, "--log-opts="+opts.FromCommit+".."+opts.ToCommit)
 }
 
 // ScanFilesystem scans a plain directory with no git history — the push-check
@@ -69,19 +73,20 @@ func (p *BetterleaksProvider) ScanFilesystem(ctx context.Context, dir string) ([
 	}
 	defer func() { _ = os.RemoveAll(reportDir) }()
 
-	return p.runBetterleaks(ctx, reportDir, "dir", dir)
+	return p.runBetterleaks(ctx, reportDir, reportDir, "dir", dir)
 }
 
 // runBetterleaks executes betterleaks with the shared report flags, writing the
 // report into reportDir. --exit-code=0 matters for the same reason as gitleaks:
 // the default exit 1 on findings would record every detection as a failed scan.
-func (p *BetterleaksProvider) runBetterleaks(ctx context.Context, reportDir string, args ...string) ([]SecretFinding, error) {
+func (p *BetterleaksProvider) runBetterleaks(ctx context.Context, home, reportDir string, args ...string) ([]SecretFinding, error) {
 	reportPath := filepath.Join(reportDir, "betterleaks-report.json")
 	args = append(args, "--report-format=json", "--report-path="+reportPath, "--exit-code=0")
 	// #nosec G204 -- binary path comes from LookPath during provider construction.
 	cmd := exec.CommandContext(ctx, p.bin, args...)
+	cmd.Env = scannerEnv(home)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("run betterleaks %s: %w: %s", args[0], err, string(output))
+		return nil, fmt.Errorf("run betterleaks %s: %w: %s", args[0], err, scrubSecrets(string(output)))
 	}
 
 	content, err := os.ReadFile(reportPath)

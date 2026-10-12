@@ -76,3 +76,19 @@ func (a *StoreAdapter) CreateClient(ctx context.Context, orgID uuid.UUID, name, 
 func (a *StoreAdapter) GetUserByProviderID(ctx context.Context, provider, providerID string) (*store.User, error) {
 	return a.queries.GetUserByProviderID(ctx, provider, providerID)
 }
+
+func (a *StoreAdapter) GetOrganizationByForgeAccountID(ctx context.Context, provider, accountID string) (*store.Organization, error) {
+	return a.queries.GetOrganizationByForgeAccountID(ctx, provider, accountID)
+}
+
+func (a *StoreAdapter) SetOrganizationForgeAccount(ctx context.Context, orgID uuid.UUID, accountID, accountLogin string) error {
+	return a.queries.SetOrganizationForgeAccount(ctx, orgID, accountID, accountLogin)
+}
+
+func (a *StoreAdapter) DeleteForgeOrgAdminsByAccount(ctx context.Context, provider, account string) ([]store.ForgeOrgAdmin, error) {
+	return a.queries.DeleteForgeOrgAdminsByAccount(ctx, provider, account)
+}
+
+func (a *StoreAdapter) ListOrganizations(ctx context.Context) ([]store.Organization, error) {
+	return a.queries.ListOrganizations(ctx)
+}

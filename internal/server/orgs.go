@@ -18,6 +18,10 @@ import (
 	"github.com/hibouhq/hibou/internal/store"
 )
 
+// maxOrgsCreatedPerUser caps POST /orgs per account: each create is a row
+// set and, for GitHub, an App installations call on the shared rate limit.
+const maxOrgsCreatedPerUser = 10
+
 type orgResponse struct {
 	*store.Organization
 	ForgeURL string `json:"forge_url,omitempty"`
@@ -74,6 +78,8 @@ func (s *Server) handleListOnboardableOrgs(w http.ResponseWriter, r *http.Reques
 // @Success      201   {object}  api.Response{data=store.Organization}
 // @Failure      400   {object}  api.Response
 // @Failure      401   {object}  api.Response
+// @Failure      403   {object}  api.Response
+// @Failure      422   {object}  api.Response
 // @Failure      500   {object}  api.Response
 // @Security     BearerAuth
 // @Router       /orgs [post]
@@ -83,9 +89,20 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusForbidden, "organizations can only be created by a user")
+		return
+	}
 
 	input, ok := decodeCreateOrgInput(w, r)
 	if !ok {
+		return
+	}
+	// An org on a forge this instance does not serve would skip the forge
+	// admin check below entirely. Development with no forge at all (dev
+	// login) keeps local orgs possible.
+	if s.forges[input.Provider] == nil && (!s.cfg.IsDevelopment() || len(s.forges) > 0) {
+		api.JSONError(w, http.StatusBadRequest, "provider is not configured on this instance")
 		return
 	}
 	if s.forges[input.Provider] != nil && s.orgProvisionSvc != nil {
@@ -98,6 +115,15 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 			api.JSONError(w, http.StatusInternalServerError, "failed to authorize forge organization creation")
 			return
 		}
+	}
+	created, err := s.queries.CountOrgsCreatedByUser(r.Context(), user.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create organization")
+		return
+	}
+	if created >= maxOrgsCreatedPerUser {
+		api.JSONError(w, http.StatusUnprocessableEntity, "organization limit reached for this account")
+		return
 	}
 
 	tx, err := s.db.BeginTx(r.Context(), nil)

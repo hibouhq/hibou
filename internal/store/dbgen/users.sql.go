@@ -12,10 +12,40 @@ import (
 	"github.com/google/uuid"
 )
 
+const bumpUserSessionEpoch = `-- name: BumpUserSessionEpoch :one
+UPDATE users
+SET session_epoch = session_epoch + 1
+WHERE id = $1
+RETURNING session_epoch
+`
+
+// Invalidates every session cookie issued to the user so far.
+func (q *Queries) BumpUserSessionEpoch(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, bumpUserSessionEpoch, id)
+	var session_epoch int64
+	err := row.Scan(&session_epoch)
+	return session_epoch, err
+}
+
+const countOrgsCreatedByUser = `-- name: CountOrgsCreatedByUser :one
+SELECT count(*)
+FROM org_members
+WHERE user_id = $1 AND role = 'admin' AND source = 'invite'
+`
+
+// Orgs the user holds a non-forge admin membership in: the creator's grant
+// from POST /orgs. Forge-synced memberships do not count against the cap.
+func (q *Queries) CountOrgsCreatedByUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOrgsCreatedByUser, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, display_name, provider, provider_id)
 VALUES ($1, $2, $3, $4)
-RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
+RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
 `
 
 type CreateUserParams struct {
@@ -42,12 +72,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.ProviderID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SessionEpoch,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
+SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
 FROM users
 WHERE id = $1
 `
@@ -64,12 +95,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.ProviderID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SessionEpoch,
 	)
 	return i, err
 }
 
 const getUserByProviderID = `-- name: GetUserByProviderID :one
-SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
+SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
 FROM users
 WHERE provider = $1 AND provider_id = $2
 `
@@ -91,6 +123,7 @@ func (q *Queries) GetUserByProviderID(ctx context.Context, arg GetUserByProvider
 		&i.ProviderID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SessionEpoch,
 	)
 	return i, err
 }
@@ -99,7 +132,7 @@ const updateUser = `-- name: UpdateUser :one
 UPDATE users
 SET email = $2, display_name = $3, avatar_url = $4, updated_at = NOW()
 WHERE id = $1
-RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
+RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
 `
 
 type UpdateUserParams struct {
@@ -126,6 +159,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.ProviderID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SessionEpoch,
 	)
 	return i, err
 }
@@ -138,7 +172,7 @@ ON CONFLICT (provider, provider_id) DO UPDATE SET
 	display_name = EXCLUDED.display_name,
 	avatar_url = EXCLUDED.avatar_url,
 	updated_at = NOW()
-RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at
+RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
 `
 
 type UpsertUserParams struct {
@@ -167,6 +201,7 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, e
 		&i.ProviderID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SessionEpoch,
 	)
 	return i, err
 }

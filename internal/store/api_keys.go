@@ -61,6 +61,12 @@ func HashAPIKey(rawKey string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// CountAPIKeysCreatedByUser counts every key the user minted (personal and
+// org-requested), for the per-user key cap.
+func (q *Queries) CountAPIKeysCreatedByUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+	return q.db.CountAPIKeysCreatedByUser(ctx, uuid.NullUUID{UUID: userID, Valid: true})
+}
+
 // CreateAPIKey expects preHashedKey to already be a SHA-256 hex-encoded API key hash.
 func (q *Queries) CreateAPIKey(ctx context.Context, userID uuid.UUID, name, preHashedKey string, scopes json.RawMessage, expiresAt *time.Time, ownerType string, ownerID *uuid.UUID, description string) (*APIKey, error) {
 	return q.CreateAPIKeyWithApproval(ctx, userID, name, preHashedKey, scopes, expiresAt, ownerType, ownerID, description, APIKeyApprovalApproved)

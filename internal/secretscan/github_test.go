@@ -82,24 +82,6 @@ func TestGithubSeverity(t *testing.T) {
 	}
 }
 
-func TestInjectTokenIntoCloneURL(t *testing.T) {
-	cases := []struct {
-		url   string
-		token string
-		want  string
-	}{
-		{url: "https://github.com/acme/repo.git", token: "ghp_123", want: "https://x-access-token:ghp_123@github.com/acme/repo.git"},
-		{url: "https://github.com/acme/repo.git", token: "", want: "https://x-access-token:@github.com/acme/repo.git"},
-		{url: "not-a-url", token: "token", want: "not-a-url"},
-	}
-
-	for _, tc := range cases {
-		if got := injectTokenIntoCloneURL(tc.url, tc.token); got != tc.want {
-			t.Fatalf("injectTokenIntoCloneURL(%q, %q) = %q, want %q", tc.url, tc.token, got, tc.want)
-		}
-	}
-}
-
 func TestGitHubProviderScanRepo(t *testing.T) {
 	var authHeaders []string
 	var server *httptest.Server

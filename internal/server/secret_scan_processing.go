@@ -303,9 +303,24 @@ type secretScanTarget struct {
 // resolveSecretScanTarget prefers the mirrored forge_repositories row and falls
 // back to a live provider call, which also supplies the size when the forge
 // reports one.
+//
+// The owner decides which installation token clones the repository, so it is
+// checked against the org's bound forge account before any forge call and
+// again after the live refresh: an enrolment row pointing at another tenant's
+// repository must never get a full-history clone (security audit §3.1/§3.2).
 func (s *Server) resolveSecretScanTarget(ctx context.Context, provider forge.Provider, repo *store.Repository) (secretScanTarget, error) {
-	target, err := s.mirroredSecretScanTarget(ctx, repo)
+	org, err := s.queries.GetOrganizationByID(ctx, repo.OrgID)
 	if err != nil {
+		return secretScanTarget{}, fmt.Errorf("load organization: %w", err)
+	}
+	if org == nil {
+		return secretScanTarget{}, fmt.Errorf("%w: organization %s no longer exists", errSecretScanSkipped, repo.OrgID)
+	}
+	target, err := s.mirroredSecretScanTarget(ctx, org, repo)
+	if err != nil {
+		return secretScanTarget{}, err
+	}
+	if err := secretScanOwnerBound(org, repo, target.owner); err != nil {
 		return secretScanTarget{}, err
 	}
 
@@ -324,6 +339,10 @@ func (s *Server) resolveSecretScanTarget(ctx context.Context, provider forge.Pro
 		if err := s.refreshSecretScanTargetFromForge(ctx, provider, repo, &target); err != nil {
 			return secretScanTarget{}, err
 		}
+		// A transferred repository reports its new owner: re-check it.
+		if err := secretScanOwnerBound(org, repo, target.owner); err != nil {
+			return secretScanTarget{}, err
+		}
 	}
 	if target.cloneURL == "" {
 		return secretScanTarget{}, fmt.Errorf("no clone url resolvable for repository %s", repo.Slug)
@@ -331,11 +350,27 @@ func (s *Server) resolveSecretScanTarget(ctx context.Context, provider forge.Pro
 	return target, nil
 }
 
-func (s *Server) mirroredSecretScanTarget(ctx context.Context, repo *store.Repository) (secretScanTarget, error) {
+func secretScanOwnerBound(org *store.Organization, repo *store.Repository, owner string) error {
+	if org.OwnsForgeOwner(owner) {
+		return nil
+	}
+	return fmt.Errorf("%w: repository %s owner %q is not the forge account bound to organization %s", errSecretScanSkipped, repo.Slug, owner, org.Slug)
+}
+
+// mirroredSecretScanTarget reads owner/name from the inventory row, else from
+// the owner/name provider id, else from the org's bound forge account. Never
+// from the org's display name, which any org admin can edit.
+func (s *Server) mirroredSecretScanTarget(ctx context.Context, org *store.Organization, repo *store.Repository) (secretScanTarget, error) {
 	target := secretScanTarget{}
 	forgeRepo, err := s.queries.GetForgeRepositoryByProviderRepoID(ctx, repo.Provider, repo.ProviderID)
 	if err != nil {
 		return target, fmt.Errorf("load forge repository: %w", err)
+	}
+	if forgeRepo == nil {
+		forgeRepo, err = s.queries.GetForgeRepositoryByProviderKey(ctx, repo.Provider, repo.ProviderID)
+		if err != nil {
+			return target, fmt.Errorf("load forge repository: %w", err)
+		}
 	}
 	if forgeRepo != nil {
 		target.owner = forgeRepo.Owner
@@ -345,14 +380,15 @@ func (s *Server) mirroredSecretScanTarget(ctx context.Context, repo *store.Repos
 		}
 	}
 	if target.owner == "" {
-		// No mirrored row: the org name is the forge-side login.
-		org, orgErr := s.queries.GetOrganizationByID(ctx, repo.OrgID)
-		if orgErr != nil {
-			return target, fmt.Errorf("load organization: %w", orgErr)
+		if owner, name, ok := repoCoordinates(repo.ProviderID); ok {
+			target.owner = owner
+			if target.name == "" {
+				target.name = name
+			}
 		}
-		if org != nil {
-			target.owner = org.Name
-		}
+	}
+	if target.owner == "" {
+		target.owner = org.BoundForgeAccount()
 	}
 	if target.name == "" {
 		target.name = repo.Name
@@ -647,6 +683,10 @@ func (s *Server) handleSecretScanCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.SecretScan.Timeout)
 	defer cancel()
 	findings, err := s.secretScanner.CheckPatch(ctx, patch)
+	if errors.Is(err, secretscan.ErrPatchTooLarge) {
+		api.JSONError(w, http.StatusRequestEntityTooLarge, "patch touches too many files or lines for a pre-push check; rely on the post-push scan")
+		return
+	}
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "secret check failed: "+truncateSecretScanError(err))
 		return

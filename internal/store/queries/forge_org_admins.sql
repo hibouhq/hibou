@@ -42,3 +42,10 @@ SELECT EXISTS(
     FROM forge_org_admins
     WHERE provider = $1 AND org_id = $2
 ) AS exists;
+
+-- name: DeleteForgeOrgAdminsByAccount :many
+-- An uninstalled or suspended App no longer proves anyone administers the
+-- account: drop the bindings so pending claims cannot be redeemed later.
+DELETE FROM forge_org_admins
+WHERE provider = $1 AND account = $2
+RETURNING id, provider, account, provider_user_id, org_id, granted, created_at, updated_at;

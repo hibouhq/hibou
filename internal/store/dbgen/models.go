@@ -1606,14 +1606,16 @@ type OrgMember struct {
 }
 
 type Organization struct {
-	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
-	Slug        string          `json:"slug"`
-	DisplayName string          `json:"display_name"`
-	Provider    string          `json:"provider"`
-	Settings    json.RawMessage `json:"settings"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID                uuid.UUID       `json:"id"`
+	Name              string          `json:"name"`
+	Slug              string          `json:"slug"`
+	DisplayName       string          `json:"display_name"`
+	Provider          string          `json:"provider"`
+	Settings          json.RawMessage `json:"settings"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	ForgeAccountID    sql.NullString  `json:"forge_account_id"`
+	ForgeAccountLogin sql.NullString  `json:"forge_account_login"`
 }
 
 type PrCheck struct {
@@ -2024,14 +2026,15 @@ type TestReport struct {
 }
 
 type User struct {
-	ID          uuid.UUID      `json:"id"`
-	Email       string         `json:"email"`
-	DisplayName string         `json:"display_name"`
-	AvatarUrl   sql.NullString `json:"avatar_url"`
-	Provider    string         `json:"provider"`
-	ProviderID  string         `json:"provider_id"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	ID           uuid.UUID      `json:"id"`
+	Email        string         `json:"email"`
+	DisplayName  string         `json:"display_name"`
+	AvatarUrl    sql.NullString `json:"avatar_url"`
+	Provider     string         `json:"provider"`
+	ProviderID   string         `json:"provider_id"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	SessionEpoch int64          `json:"session_epoch"`
 }
 
 type UserRepoAccess struct {

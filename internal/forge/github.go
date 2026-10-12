@@ -36,6 +36,9 @@ type GitHub struct {
 	webhookSecret string
 	appID         int64
 	privateKey    []byte
+	// orgMembershipScope adds read:org to the login scopes so an OAuth App
+	// (non-App mode) token can answer the sign-in org allowlist.
+	orgMembershipScope bool
 
 	// ownerTokens caches installation tokens per account so repo-level REST
 	// calls authenticate. Without this every contents/tree/compare call ran
@@ -70,6 +73,15 @@ func WithAppCredentials(appID int64, privateKey []byte) GitHubOption {
 	return func(g *GitHub) {
 		g.appID = appID
 		g.privateKey = append([]byte(nil), privateKey...)
+	}
+}
+
+// WithOrgMembershipScope requests read:org at login. Only needed when a
+// sign-in org allowlist is configured without App credentials: in App mode
+// membership is checked with the installation token instead.
+func WithOrgMembershipScope() GitHubOption {
+	return func(g *GitHub) {
+		g.orgMembershipScope = true
 	}
 }
 
@@ -238,7 +250,11 @@ func (g *GitHub) GetBranch(ctx context.Context, owner, repo, branch string) (*Br
 }
 
 func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
-	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	contentPath, err := checkedContentPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), contentPath, url.QueryEscape(ref))
 	request, err := g.newRequest(ctx, http.MethodGet, requestPath, nil)
 	if err != nil {
 		return nil, err
@@ -323,7 +339,11 @@ func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, 
 		payload["sha"] = sha
 	}
 
-	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath))
+	contentPath, err := checkedContentPath(filePath)
+	if err != nil {
+		return err
+	}
+	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), contentPath)
 	return g.doJSONOwner(ctx, owner, http.MethodPut, requestPath, payload, nil)
 }
 
@@ -417,19 +437,41 @@ func (g *GitHub) ComparePatch(ctx context.Context, owner, repo, base, head strin
 	return diff, nil
 }
 
-func (g *GitHub) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
-	payload, err := io.ReadAll(r.Body)
+// MaxWebhookPayloadBytes bounds a webhook body read before it is
+// authenticated, so an unsigned request cannot make the server buffer an
+// arbitrarily large body. GitHub caps deliveries at 25 MB.
+const MaxWebhookPayloadBytes = 25 << 20
+
+// ErrWebhookSecretNotConfigured is returned when a forge has no webhook
+// secret: verification fails closed rather than accepting unsigned payloads.
+var ErrWebhookSecretNotConfigured = errors.New("webhook secret not configured")
+
+// ReadWebhookPayload reads at most MaxWebhookPayloadBytes of a webhook body
+// and rewinds r.Body so later readers see the same bytes.
+func ReadWebhookPayload(r *http.Request, forgeName string) ([]byte, error) {
+	payload, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, MaxWebhookPayloadBytes))
 	if err != nil {
-		return nil, fmt.Errorf("read github webhook payload: %w", err)
+		return nil, fmt.Errorf("read %s webhook payload: %w", forgeName, err)
 	}
 	r.Body = io.NopCloser(bytes.NewReader(payload))
+	return payload, nil
+}
 
+// HasWebhookSecret reports whether webhook payloads can be verified.
+func (g *GitHub) HasWebhookSecret() bool { return g.webhookSecret != "" }
+
+func (g *GitHub) ValidateWebhookPayload(r *http.Request, secret string) ([]byte, error) {
 	activeSecret := secret
 	if activeSecret == "" {
 		activeSecret = g.webhookSecret
 	}
 	if activeSecret == "" {
-		return payload, nil
+		return nil, fmt.Errorf("github: %w", ErrWebhookSecretNotConfigured)
+	}
+
+	payload, err := ReadWebhookPayload(r, "github")
+	if err != nil {
+		return nil, err
 	}
 
 	signature := r.Header.Get("X-Hub-Signature-256")
@@ -587,13 +629,94 @@ func (g *GitHub) OAuth2Config(redirectURL string) *oauth2.Config {
 		ClientID:     g.clientID,
 		ClientSecret: g.clientSecret,
 		RedirectURL:  redirectURL,
-		Scopes:       []string{"read:user", "user:email", "repo"},
+		// No "repo": nothing reads repositories with the login token (App
+		// installation tokens do), and GitHub App user tokens ignore scopes.
+		Scopes: g.oauthScopes(),
 		// #nosec G101 -- OAuth endpoint URLs are constants, not credentials.
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://github.com/login/oauth/authorize",
 			TokenURL: "https://github.com/login/oauth/access_token",
 		},
 	}
+}
+
+func (g *GitHub) oauthScopes() []string {
+	scopes := []string{"read:user", "user:email"}
+	if g.orgMembershipScope && !g.isAppMode() {
+		scopes = append(scopes, "read:org")
+	}
+	return scopes
+}
+
+// AccountLogin returns the login of the token's user, the name a sign-in
+// allowlist matches against.
+func (g *GitHub) AccountLogin(ctx context.Context, token *oauth2.Token) (string, error) {
+	if token == nil || token.AccessToken == "" {
+		return "", errors.New("github account login requires access token")
+	}
+	request, err := g.newRequest(ctx, http.MethodGet, "/user", nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", githubBearerPrefix+token.AccessToken)
+	var payload githubUser
+	if err := g.do(request, &payload); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(payload.Login), nil
+}
+
+// IsOrgMember reports whether login is a member of org, for the sign-in
+// allowlist. In App mode the App's installation token on org answers it
+// (Organization → Members: read, already required); the user's consent is not
+// widened. Without an installation on org (or without App credentials) the
+// user's own token is asked, which needs read:org on an OAuth App token
+// (WithOrgMembershipScope). Any doubt answers false: the allowlist fails closed.
+func (g *GitHub) IsOrgMember(ctx context.Context, token *oauth2.Token, login, org string) (bool, error) {
+	login, org = strings.TrimSpace(login), strings.TrimSpace(org)
+	if login == "" || org == "" {
+		return false, nil
+	}
+	if g.isAppMode() {
+		path := "/orgs/" + url.PathEscape(org) + "/members/" + url.PathEscape(login)
+		request, err := g.newRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return false, err
+		}
+		g.authorizeForOwner(ctx, request, org)
+		if request.Header.Get("Authorization") != "" {
+			status, err := g.doWithStatus(request, nil)
+			if status == http.StatusNoContent {
+				return true, nil
+			}
+			if status == http.StatusNotFound || status == http.StatusFound {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			return false, nil
+		}
+	}
+	if token == nil || token.AccessToken == "" {
+		return false, nil
+	}
+	request, err := g.newRequest(ctx, http.MethodGet, "/user/memberships/orgs/"+url.PathEscape(org), nil)
+	if err != nil {
+		return false, err
+	}
+	request.Header.Set("Authorization", githubBearerPrefix+token.AccessToken)
+	var payload struct {
+		State string `json:"state"`
+	}
+	status, err := g.doWithStatus(request, &payload)
+	if err != nil {
+		if status == http.StatusNotFound || status == http.StatusForbidden {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.EqualFold(strings.TrimSpace(payload.State), "active"), nil
 }
 
 func (g *GitHub) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, error) {
@@ -894,6 +1017,83 @@ func (g *GitHub) listInstallations(ctx context.Context) ([]githubInstallation, e
 	return all, nil
 }
 
+// ErrInstallationNotFound means the App API has no installation with that id:
+// it was deleted, or the id never belonged to this App.
+var ErrInstallationNotFound = errors.New("github app installation not found")
+
+// InstallationAccount is the App API's authoritative view of an installation.
+// Webhook payloads are only as trustworthy as their signature; provisioning
+// re-reads the installation here before granting anyone admin.
+type InstallationAccount struct {
+	InstallationID int64
+	AccountID      string
+	AccountLogin   string
+	AccountType    string
+	Suspended      bool
+}
+
+// GetInstallationAccount fetches one installation of this App by id, JWT-
+// authenticated. Returns ErrInstallationNotFound on a 404.
+func (g *GitHub) GetInstallationAccount(ctx context.Context, installationID int64) (*InstallationAccount, error) {
+	if !g.isAppMode() {
+		return nil, errors.New("installation lookup requires GitHub App credentials")
+	}
+	if installationID <= 0 {
+		return nil, ErrInstallationNotFound
+	}
+	jwt, err := g.generateAppJWT()
+	if err != nil {
+		return nil, err
+	}
+	req, err := g.newRequest(ctx, http.MethodGet, fmt.Sprintf("/app/installations/%d", installationID), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", githubBearerPrefix+jwt)
+
+	var installation githubInstallation
+	status, err := g.doWithStatus(req, &installation)
+	if status == http.StatusNotFound {
+		return nil, ErrInstallationNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get github app installation %d: %w", installationID, err)
+	}
+	account := &InstallationAccount{
+		InstallationID: installation.ID,
+		AccountLogin:   installation.Account.Login,
+		AccountType:    installation.Account.Type,
+		Suspended:      installation.SuspendedAt != nil,
+	}
+	if installation.Account.ID > 0 {
+		account.AccountID = strconv.FormatInt(installation.Account.ID, 10)
+	}
+	return account, nil
+}
+
+// InstallationAccountIDs maps each installed account's lowercased login to its
+// immutable numeric id. A login is only a name: it can be renamed and
+// re-registered by someone else, so callers holding a stored account id use
+// this to confirm a login still denotes the same account.
+func (g *GitHub) InstallationAccountIDs(ctx context.Context) (map[string]string, error) {
+	if !g.isAppMode() {
+		return nil, nil
+	}
+	installations, err := g.listInstallations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]string, len(installations))
+	for _, installation := range installations {
+		login := strings.ToLower(strings.TrimSpace(installation.Account.Login))
+		if login == "" || installation.Account.ID <= 0 {
+			continue
+		}
+		ids[login] = strconv.FormatInt(installation.Account.ID, 10)
+	}
+	return ids, nil
+}
+
 // createInstallationToken creates an access token for an installation.
 func (g *GitHub) createInstallationToken(ctx context.Context, installationID int64) (*githubInstallationToken, error) {
 	jwt, err := g.generateAppJWT()
@@ -1094,7 +1294,11 @@ func (g *GitHub) doWithStatus(request *http.Request, out any) (int, error) {
 }
 
 func (g *GitHub) lookupContentSHA(ctx context.Context, owner, repo, filePath, ref string) (string, error) {
-	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), escapeContentPath(filePath), url.QueryEscape(ref))
+	contentPath, err := checkedContentPath(filePath)
+	if err != nil {
+		return "", err
+	}
+	requestPath := fmt.Sprintf("/repos/%s/%s/contents/%s?ref=%s", url.PathEscape(owner), url.PathEscape(repo), contentPath, url.QueryEscape(ref))
 	request, err := g.newRequest(ctx, http.MethodGet, requestPath, nil)
 	if err != nil {
 		return "", err
@@ -1112,12 +1316,38 @@ func (g *GitHub) lookupContentSHA(ctx context.Context, owner, repo, filePath, re
 	return payload.SHA, nil
 }
 
-func escapeContentPath(filePath string) string {
-	parts := strings.Split(strings.Trim(filePath, "/"), "/")
+// errUnsafeContentPath rejects repository paths that would escape the
+// /contents/ endpoint once the URL is normalized.
+var errUnsafeContentPath = errors.New("unsafe repository content path")
+
+// checkedContentPath escapes each segment of a repository file path for the
+// contents API. Empty, "." and ".." segments (and backslashes or NUL) are
+// rejected here, not left to callers, so a path can never walk out of
+// /contents/.
+func checkedContentPath(filePath string) (string, error) {
+	trimmed := strings.Trim(filePath, "/")
+	if trimmed == "" {
+		return "", errUnsafeContentPath
+	}
+	parts := strings.Split(trimmed, "/")
 	for index, part := range parts {
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\x00") {
+			return "", fmt.Errorf("%w: %q", errUnsafeContentPath, filePath)
+		}
 		parts[index] = url.PathEscape(part)
 	}
-	return strings.Join(parts, "/")
+	return strings.Join(parts, "/"), nil
+}
+
+// escapeContentPath is checkedContentPath for callers without an error path:
+// an unsafe path yields "", which can only address the repository root.
+// Prefer checkedContentPath.
+func escapeContentPath(filePath string) string {
+	escaped, err := checkedContentPath(filePath)
+	if err != nil {
+		return ""
+	}
+	return escaped
 }
 
 func decodeBase64Content(content string) ([]byte, error) {
@@ -1172,9 +1402,11 @@ type githubContentFile struct {
 type githubInstallation struct {
 	ID      int64 `json:"id"`
 	Account struct {
+		ID    int64  `json:"id"`
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"account"`
+	SuspendedAt *time.Time `json:"suspended_at"`
 }
 
 func (i githubInstallation) toInstallation() Installation {

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -53,7 +54,7 @@ func CallbackHandler(mgr *Manager) http.HandlerFunc {
 
 		user, err := mgr.HandleOAuthCallback(w, r)
 		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, err.Error())
+			WriteCallbackError(w, mgr, err)
 			return
 		}
 
@@ -62,14 +63,37 @@ func CallbackHandler(mgr *Manager) http.HandlerFunc {
 	}
 }
 
+// WriteCallbackError answers a failed OAuth callback. The detail (provider
+// responses, state mismatches) is logged, never echoed: the caller learns only
+// that sign-in failed, or that their account is not allowed.
+func WriteCallbackError(w http.ResponseWriter, mgr *Manager, err error) {
+	if errors.Is(err, ErrSignInNotAllowed) {
+		api.JSONError(w, http.StatusForbidden, ErrSignInNotAllowed.Error())
+		return
+	}
+	if mgr != nil {
+		mgr.cfg.Log.Warn().Err(err).Msg("oauth callback failed")
+	}
+	api.JSONError(w, http.StatusBadRequest, "sign-in failed; please try again")
+}
+
 // @Summary      Logout
-// @Description  Clears the current session cookie
+// @Description  Revokes every session of the current user and clears the session cookie
 // @Tags         auth
 // @Success      204  "No Content"
 // @Router       /auth/logout [post]
 func LogoutHandler(mgr *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mgr != nil {
+			// Clearing the cookie alone leaves a copied cookie valid until it
+			// expires; bumping the epoch kills it server-side.
+			if user, err := mgr.GetSessionUser(r, nil); err == nil && user != nil {
+				if err := mgr.RevokeSessions(r.Context(), user.ID); err != nil {
+					mgr.cfg.Log.Error().Err(err).Str("user_id", user.ID.String()).Msg("failed to revoke sessions on logout")
+					api.JSONError(w, http.StatusInternalServerError, "failed to log out")
+					return
+				}
+			}
 			mgr.ClearSession(w)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -108,7 +132,7 @@ func ProvidersHandler(mgr *Manager) http.HandlerFunc {
 }
 
 // @Summary      Dev login
-// @Description  Creates or fetches a local admin user for development. Only available when no forge providers are configured.
+// @Description  Creates or fetches a local admin user for development. Only available in development mode with no forge providers configured.
 // @Tags         auth
 // @Produce      json
 // @Success      302  "Found"
@@ -121,8 +145,8 @@ func DevLoginHandler(mgr *Manager) http.HandlerFunc {
 			api.JSONError(w, http.StatusInternalServerError, "auth manager is not configured")
 			return
 		}
-		if len(mgr.cfg.Providers) > 0 {
-			api.JSONError(w, http.StatusForbidden, "dev login is disabled when forge providers are configured")
+		if !mgr.DevLoginEnabled() {
+			api.JSONError(w, http.StatusForbidden, "dev login is only available in development mode with no forge providers configured")
 			return
 		}
 
@@ -142,6 +166,12 @@ func DevLoginHandler(mgr *Manager) http.HandlerFunc {
 		mgr.SetSessionCookie(w, user)
 		http.Redirect(w, r, "/", http.StatusFound)
 	}
+}
+
+// DevLoginEnabled reports whether /auth/dev-login may mint a session: only
+// in development, and only when no forge provider is configured.
+func (m *Manager) DevLoginEnabled() bool {
+	return m != nil && m.cfg.Development && len(m.cfg.Providers) == 0
 }
 
 func providerName(id string) string {

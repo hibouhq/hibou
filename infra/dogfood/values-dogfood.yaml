@@ -12,12 +12,30 @@ hibou:
       memory: 256Mi
     limits:
       cpu: "1"
-      memory: 1Gi
+      # GOMEMLIMIT is derived from this (80%, hibou.goMemLimitPercent).
+      memory: 1536Mi
+  # Below Cloudflare's 100 MB request-body cap, so oversized uploads get a
+  # clear 413 from Hibou instead of an opaque proxy error. 85 MiB.
+  maxUploadSize: "89128960"
+  # The MCP listener is plain HTTP on all interfaces; nothing on dogfood uses it.
+  mcp:
+    enabled: false
+  # Public instance: expired data is actually deleted, not just reported.
+  retention:
+    autoPurge: "true"
+  # Default-deny for hibou pods. k3s enforces NetworkPolicy (embedded
+  # kube-router) and runs Traefik in kube-system, the chart default for
+  # ingressFrom. Bundled Postgres / SeaweedFS / Trivy are in-namespace.
+  networkPolicy:
+    enabled: true
   logging:
     level: info
     format: json
   sessionSecretExistingSecret: hibou-session
   autoProvisionOrgs: true
+  # The instance is public once the code is: only hibouhq members may sign in.
+  auth:
+    allowedOrgs: [hibouhq]
   # Instance admins (announcement banners, instance settings, instance audit).
   # The list lives in a Secret (never in git) and is re-read live — edit it with:
   #   kubectl create secret generic hibou-instance-admins \

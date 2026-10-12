@@ -130,65 +130,35 @@ echo "https://hibouhq.com -> ${code}"
 # Best-effort: the rollout already succeeded, so failures warn and never fail
 # the deploy. The release row is derived from the tag's snapshot, which may
 # still be finishing artifact processing — hence the retry loop.
-# Resolve a hibou CLI matching the server, the same way the upload action
-# does: ask /api/v1/bin/version what the server serves, reuse a matching PATH
-# or cached binary, otherwise download from /api/v1/bin/{os}/{arch}. The CLI
-# has no self-update; version-matching happens here, at the invocation site.
-# Sets HIBOU_CLI (command array); returns non-zero when no CLI can be had.
+# Resolve a hibou CLI built or installed locally. It runs on the operator
+# workstation next to the kubeconfig and gh credentials, so it is never
+# downloaded from the Hibou server (a compromised server would otherwise get
+# code execution here). Order: $HIBOU_CLI_BIN, a hibou on PATH, else a build
+# from this checkout. Sets HIBOU_CLI (command array); returns non-zero when
+# no CLI can be had.
 ensure_hibou_cli() {
-  local want="" have="" os arch cache bin tmp
-  want="$(curl -sS --max-time 10 "${HIBOU_SERVER}/api/v1/bin/version" 2>/dev/null \
-    | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" || want=""
-
-  if command -v hibou >/dev/null; then
-    have="$(hibou version --short 2>/dev/null || true)"
-    if [ -n "$want" ] && [ "$have" = "$want" ]; then
-      HIBOU_CLI=(hibou)
-      return 0
-    fi
+  local out
+  if [ -n "${HIBOU_CLI_BIN:-}" ]; then
+    [ -x "${HIBOU_CLI_BIN}" ] || { echo "warn: HIBOU_CLI_BIN=${HIBOU_CLI_BIN} is not executable" >&2; return 1; }
+    HIBOU_CLI=("${HIBOU_CLI_BIN}")
+    return 0
   fi
-
-  if [ -z "$want" ]; then
-    # Server did not answer; a stale CLI beats none, source tree beats that.
-    if command -v hibou >/dev/null; then
-      echo "warn: could not read server CLI version — using hibou ${have:-unknown} from PATH" >&2
-      HIBOU_CLI=(hibou)
+  if command -v hibou >/dev/null; then
+    HIBOU_CLI=("$(command -v hibou)")
+    return 0
+  fi
+  if command -v go >/dev/null; then
+    out="$(mktemp -d)/hibou"
+    info "Building hibou CLI from ${ROOT}"
+    if (cd "$ROOT" && go build -o "$out" .); then
+      HIBOU_CLI=("$out")
       return 0
     fi
-    if command -v go >/dev/null; then
-      HIBOU_CLI=(go run "$ROOT")
-      return 0
-    fi
-    echo "warn: no server version, no hibou, no go toolchain" >&2
+    echo "warn: go build of the hibou CLI failed" >&2
     return 1
   fi
-
-  case "$(uname -s)" in
-    Linux)  os=linux;;
-    Darwin) os=darwin;;
-    *)      echo "warn: unsupported OS $(uname -s) for CLI download" >&2; return 1;;
-  esac
-  case "$(uname -m)" in
-    x86_64)         arch=amd64;;
-    aarch64|arm64)  arch=arm64;;
-    *)              echo "warn: unsupported arch $(uname -m) for CLI download" >&2; return 1;;
-  esac
-
-  cache="${XDG_CACHE_HOME:-$HOME/.cache}/hibou/bin"
-  bin="${cache}/hibou-${want}"
-  if [ ! -x "$bin" ]; then
-    info "Downloading hibou ${want} (${os}/${arch}) from ${HIBOU_SERVER}"
-    mkdir -p "$cache"
-    tmp="$(mktemp "${cache}/hibou.XXXXXX")"
-    if ! curl -fsSL --max-time 120 -o "$tmp" "${HIBOU_SERVER}/api/v1/bin/${os}/${arch}"; then
-      rm -f "$tmp"
-      echo "warn: CLI download failed" >&2
-      return 1
-    fi
-    chmod +x "$tmp"
-    mv "$tmp" "$bin"
-  fi
-  HIBOU_CLI=("$bin")
+  echo "warn: no hibou on PATH, no HIBOU_CLI_BIN, no go toolchain" >&2
+  return 1
 }
 
 record_deployment() {

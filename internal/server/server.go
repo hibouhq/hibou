@@ -116,6 +116,17 @@ type Server struct {
 	artifactInFlight   map[uuid.UUID]struct{}
 	activeArtifacts    int
 	advisoryScanActive atomic.Bool
+	// limits is cfg.Limits with defaults filled in (http_hardening.go).
+	limits       config.LimitsConfig
+	rateLimiters rateLimiters
+	// uploadSlots bounds uploads in flight; uploadWorkSlots bounds the
+	// background coverage/test parsers they hand off to.
+	uploadSlots     chan struct{}
+	uploadWorkSlots chan struct{}
+	// orgComponentScanGate: one org-wide rescan at a time, then a cooldown.
+	orgComponentScanGate cooldownGate
+	// coverageRefreshRunner coalesces org scan-coverage refreshes.
+	coverageRefreshRunner coalescingRunner
 }
 
 type healthResponse struct {
@@ -160,6 +171,15 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	r := chi.NewRouter()
 	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
 	configureRouter(r, log)
+	limits := effectiveLimits(cfg.Limits)
+	if db != nil {
+		store.ConfigurePool(db, store.PoolConfig{
+			MaxOpenConns:    limits.DB.MaxOpenConns,
+			MaxIdleConns:    limits.DB.MaxIdleConns,
+			ConnMaxLifetime: limits.DB.ConnMaxLifetime,
+			ConnMaxIdleTime: limits.DB.ConnMaxIdleTime,
+		})
+	}
 
 	s := &Server{
 		cfg:              cfg,
@@ -180,10 +200,22 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 		http: &http.Server{
 			Handler:           r,
 			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       120 * time.Second,
+			// Websockets, uploads and downloads adjust these per request
+			// (connectionDeadlineMiddleware).
+			ReadTimeout:    limits.HTTP.ReadTimeout,
+			WriteTimeout:   limits.HTTP.WriteTimeout,
+			IdleTimeout:    120 * time.Second,
+			MaxHeaderBytes: limits.HTTP.MaxHeaderBytes,
 		},
+		limits:          limits,
+		rateLimiters:    newRateLimiters(lifecycleCtx, limits.RateLimit),
+		uploadSlots:     make(chan struct{}, limits.Upload.MaxConcurrent),
+		uploadWorkSlots: make(chan struct{}, limits.Upload.ProcessingConcurrency),
 	}
 	r.Use(s.shutdownMiddleware)
+	r.Use(s.securityHeadersMiddleware)
+	r.Use(s.connectionDeadlineMiddleware)
+	r.Use(s.bodyLimitMiddleware)
 	if err := initializeServerServices(s, cfg, log, forges); err != nil {
 		shutdownCancel()
 		return nil, err
@@ -294,7 +326,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	)
 	s.staleScanChecker = notify.NewStaleScanChecker(s.queries, s.bus, log)
 	s.tokenExpiryChecker = notify.NewTokenExpiryChecker(s.queries, s.bus, log)
-	s.gatePublisher = forge.NewGatePublisher(forges, s.deltaSvc, s.bus, forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, wsGateNotifier{live: s.wsFanout}, cfg.BaseURL, log)
+	s.gatePublisher = forge.NewGatePublisher(forges, s.deltaSvc, s.bus, forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, wsGateNotifier{live: s.wsFanout, audience: s.queries}, cfg.BaseURL, log)
 	s.gatePublisher.SetAdvisoryScanEnabled(s.advisoryScanner != nil && len(s.advisoryProviders) > 0)
 	s.gatePublisher.SetCoverageCheck(s.prCoverageCheck)
 	s.notifySvc.Subscribe()
@@ -441,25 +473,40 @@ func (s *Server) routes(siteFS fs.FS) {
 	if s.cfg.Metrics.Enabled && s.cfg.Metrics.Port == 0 {
 		s.router.Handle("/metrics", s.MetricsHandler())
 	}
+	// Idempotent; covers a Server assembled without New (tests).
+	s.limits = effectiveLimits(s.limits)
+	if s.uploadSlots == nil {
+		s.uploadSlots = make(chan struct{}, s.limits.Upload.MaxConcurrent)
+	}
+	limitScans := rateLimitMiddleware(s.rateLimiters.scan, principalRateKey)
 	s.router.Route("/api/v1", func(r chi.Router) {
+		// Probes: kubelet polls these, never rate limited.
 		r.Get("/health", s.handleHealth)
 		r.Get("/ready", s.handleReady)
 		r.Get("/metrics", s.handleMetrics)
-		r.Get("/bin/version", s.handleBinVersion)
-		r.Get("/bin/{os}/{arch}", s.handleBinDownload)
-		r.Get("/version", s.handleVersion)
-		r.Get("/schemas/hibou-config.schema.json", s.handleGetConfigSchema)
-		r.Get("/ws", s.wsHub.HTTPHandler(s.authMgr, s.queries))
-		r.Get("/docs/*", httpSwagger.Handler(
-			httpSwagger.URL("/api/v1/docs/doc.json"),
-		))
-		// Public: the login page shows announcement banners too.
-		r.Get("/instance/banners", s.handleListActiveBanners)
-		r.Get("/auth/providers", auth.ProvidersHandler(s.authMgr))
-		r.Get("/auth/login", auth.LoginHandler(s.authMgr))
-		r.Get("/auth/callback", s.handleAuthCallback)
-		r.Post("/auth/logout", auth.LogoutHandler(s.authMgr))
-		r.Post("/auth/dev-login", auth.DevLoginHandler(s.authMgr))
+		r.Group(func(r chi.Router) {
+			r.Use(rateLimitMiddleware(s.rateLimiters.anonymous, ipRateKey))
+			r.Get("/bin/version", s.handleBinVersion)
+			r.Get("/bin/{os}/{arch}", s.handleBinDownload)
+			r.Get("/version", s.handleVersion)
+			r.Get("/schemas/hibou-config.schema.json", s.handleGetConfigSchema)
+			r.Get("/ws", s.wsHub.HTTPHandler(s.authMgr, s.queries))
+			r.Get("/docs/*", httpSwagger.Handler(
+				httpSwagger.URL("/api/v1/docs/doc.json"),
+			))
+			// Public: the login page shows announcement banners too.
+			r.Get("/instance/banners", s.handleListActiveBanners)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(rateLimitMiddleware(s.rateLimiters.auth, ipRateKey))
+			// logout and dev-login are cookie-bearing POSTs.
+			r.Use(s.csrfProtection)
+			r.Get("/auth/providers", auth.ProvidersHandler(s.authMgr))
+			r.Get("/auth/login", auth.LoginHandler(s.authMgr))
+			r.Get("/auth/callback", s.handleAuthCallback)
+			r.Post("/auth/logout", auth.LogoutHandler(s.authMgr))
+			r.Post("/auth/dev-login", auth.DevLoginHandler(s.authMgr))
+		})
 		r.Route("/webhooks/{provider}", func(r chi.Router) {
 			r.Use(s.webhookProtection)
 			r.Post("/", s.handleWebhook)
@@ -467,7 +514,15 @@ func (s *Server) routes(siteFS fs.FS) {
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
+			// Cookie-authenticated writes only: bearer requests and safe
+			// methods pass straight through.
+			r.Use(s.csrfProtection)
 			r.Use(s.tokenScopeGuard)
+			// SessionAuth only identifies; without this every handler had to
+			// remember to refuse anonymous callers (security audit §4.2).
+			r.Use(s.requirePrincipal)
+			r.Use(rateLimitMiddleware(s.rateLimiters.api, principalRateKey))
+			r.Use(s.requestTimeoutMiddleware)
 			r.Get("/users/me", s.handleGetMe)
 			// ADR-037: embedded MITRE catalog (reference data, no tenant data).
 			r.Get("/cwe", s.handleSearchCWECatalog)
@@ -534,7 +589,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/vulnerabilities", s.handleListOrgVulnerabilities)
 					r.Get("/cwes", s.handleListOrgCWEs)
 					r.Get("/components", s.handleListOrgComponents)
-					r.Post("/components/scan", s.handleTriggerOrgComponentScan)
+					r.With(limitScans).Post("/components/scan", s.handleTriggerOrgComponentScan)
 					r.Get("/licenses", s.handleGetOrgLicenses)
 					r.Get("/licenses/components", s.handleListOrgLicenseComponents)
 					r.Get("/licenses/policy", s.handleGetOrgLicensePolicy)
@@ -561,7 +616,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/scanner-requirements", s.handleGetScannerRequirements)
 					r.Get("/scan-coverage", s.handleGetOrgScanCoverage)
 					r.Post("/scanner-settings/bulk", s.handleBulkScannerSetting)
-					r.Post("/scan-coverage/refresh", s.handleRefreshOrgScanCoverage)
+					r.With(limitScans).Post("/scan-coverage/refresh", s.handleRefreshOrgScanCoverage)
 					r.Put("/scanner-requirements", s.handleSetScannerRequirement)
 					r.Delete("/scanner-requirements", s.handleDeleteScannerRequirement)
 					r.Post("/coverage-exceptions/{exceptionID}/decision", s.handleDecideCoverageException)
@@ -644,7 +699,7 @@ func (s *Server) routes(siteFS fs.FS) {
 					})
 					r.Route("/repos", func(r chi.Router) {
 						r.Post("/", s.handleEnrollRepo)
-						r.Post("/sync", s.handleSyncRepos)
+						r.With(limitScans).Post("/sync", s.handleSyncRepos)
 						r.Get("/", s.handleListRepos)
 						r.Put("/{repoSlug}", s.handleUpdateRepo)
 						r.Delete("/{repoSlug}", s.handleRemoveRepo)
@@ -662,7 +717,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/coverage-source", s.handleGetCoverageSource)
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/producer-runs", s.handleGetSnapshotProducerRuns)
 						r.Get("/{repoSlug}/applicability", s.handleGetRepoApplicability)
-						r.Post("/{repoSlug}/applicability/refresh", s.handleRefreshRepoApplicability)
+						r.With(limitScans).Post("/{repoSlug}/applicability/refresh", s.handleRefreshRepoApplicability)
 						r.Post("/{repoSlug}/scan-plans", s.handleCreateScanPlan)
 						r.Get("/{repoSlug}/scanner-settings", s.handleGetRepoScannerSettings)
 						r.Get("/{repoSlug}/scan-coverage", s.handleGetRepoScanCoverage)
@@ -697,8 +752,8 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Post("/{repoSlug}/vulnerabilities/{vulnID}/revocation", s.handleAttestSecretRevocation)
 						r.Get("/{repoSlug}/finding-acceptances", s.handleListFindingAcceptances)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
-						r.Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
-						r.Post("/{repoSlug}/secrets/scan", s.handleTriggerSecretScan)
+						r.With(limitScans).Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
+						r.With(limitScans).Post("/{repoSlug}/secrets/scan", s.handleTriggerSecretScan)
 						r.Get("/{repoSlug}/secrets/jobs", s.handleListSecretScanJobs)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
@@ -724,7 +779,7 @@ func (s *Server) routes(siteFS fs.FS) {
 				})
 			})
 			r.Post("/secret-scan/check", s.handleSecretScanCheck)
-			r.Post("/upload", s.handleUploadAuto)
+			r.With(rateLimitMiddleware(s.rateLimiters.upload, principalRateKey), s.uploadConcurrencyMiddleware).Post("/upload", s.handleUploadAuto)
 			r.Get("/uploads/{id}/status", s.handleGetUploadStatus)
 		})
 	})
@@ -766,6 +821,15 @@ func (s *Server) webhookProtection(next http.Handler) http.Handler {
 // bound to runtimeCtx.
 func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	loops := make([]string, 0, 10)
+	if s.orgProvisionSvc != nil {
+		// Orgs bound by login only stay open to a forge-rename takeover until
+		// their immutable account id is recorded (security audit §3.3).
+		go func() {
+			if err := s.orgProvisionSvc.BackfillForgeAccountIDs(runtimeCtx); err != nil {
+				s.log.Warn().Err(err).Msg("backfill forge account ids")
+			}
+		}()
+	}
 	if s.retentionWorker != nil && s.cfg.Background.RetentionEnabled {
 		loops = append(loops, "retention")
 		go s.runRetentionLoop(runtimeCtx)

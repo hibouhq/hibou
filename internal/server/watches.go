@@ -60,6 +60,9 @@ type createWatchRequest struct {
 }
 
 func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuthenticated(w, r) {
+		return
+	}
 	rows, err := s.queries.ListCVESubscriptions(r.Context())
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list watches")
@@ -78,6 +81,9 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 // The filtered query is what makes a wrong watch name visible before the watch
 // exists — a typo otherwise produces silence, which looks like safety.
 func (s *Server) handleListAdvisories(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuthenticated(w, r) {
+		return
+	}
 	keys := normalizedKeys(r.URL.Query()["product"])
 	if len(keys) == 0 {
 		api.JSONError(w, http.StatusBadRequest,
@@ -121,7 +127,14 @@ type watchCandidate struct {
 // It is the only signal that exists before somebody watches a product, and it
 // converts this feature's worst failure from "you were never told" into "you
 // were told and did not act", which is a different and more tractable problem.
+//
+// The list aggregates component names across every org on the instance, so it
+// is for whoever decides what the instance watches, not for any signed-in user:
+// an internal package name is tenant data and a dependency-confusion target.
 func (s *Server) handleListWatchCandidates(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireWatchWriter(w, r); !ok {
+		return
+	}
 	rows, err := s.queries.ListWatchCandidates(r.Context(), 50)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list uncovered components")

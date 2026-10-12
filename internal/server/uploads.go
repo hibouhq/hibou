@@ -187,7 +187,8 @@ const (
 )
 
 var (
-	prNumberPattern = regexp.MustCompile(`^refs/(pull|merge-requests)/(\d+)(?:/.*)?$`)
+	commitSHAPattern = regexp.MustCompile(`^[0-9a-z][0-9a-z._-]{0,63}$`)
+	prNumberPattern  = regexp.MustCompile(`^refs/(pull|merge-requests)/(\d+)(?:/.*)?$`)
 	// prCanonicalPattern matches a head/merge PR ref and captures the canonical
 	// form (refs/pull/N or refs/merge-requests/N) without the trailing segment.
 	prCanonicalPattern = regexp.MustCompile(`^(refs/(?:pull|merge-requests)/\d+)/(?:head|merge)$`)
@@ -386,12 +387,16 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	detectedType, format, detectedTool, err := detectArtifactType(content)
+	detectedType, format, detectedTool, items, err := detectArtifactTypeAndCount(content)
 	if err != nil {
 		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	uploadType = detectedType
+	if maxItems := s.uploadMaxItems(); items > maxItems {
+		api.JSONError(w, http.StatusUnprocessableEntity, fmt.Sprintf("artifact holds %d %s entries; the limit is %d (upload.max_items)", items, detectedType, maxItems))
+		return
+	}
 
 	tool := input.Tool
 	if tool == "" {
@@ -457,6 +462,9 @@ func decodeAutoUploadArtifact(artifact *uploadArtifact) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("artifact.content_base64 must be valid base64")
 	}
+	// Nothing reads the encoded form again: drop it so the collector can
+	// reclaim the largest copy while the upload is still being processed.
+	artifact.ContentBase64 = ""
 	return content, nil
 }
 
@@ -533,6 +541,12 @@ func (s *Server) handleSARIFUpload(w http.ResponseWriter, r *http.Request, userI
 }
 
 func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
+	// Reserve the parser slot first: the parse holds the decoded artifact,
+	// and an unbounded number of them is what exhausts memory.
+	if !s.acquireUploadWorker(r.Context()) {
+		api.JSONError(w, http.StatusServiceUnavailable, "upload processing capacity reached, retry later")
+		return false
+	}
 	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, true, &rawArtifactPayload{
 		kind:     "coverage",
 		format:   format,
@@ -541,9 +555,13 @@ func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, us
 		content:  content,
 	})
 	if !ok {
+		s.releaseUploadWorker()
 		return false
 	}
-	go s.processCoverageUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format)
+	go func() {
+		defer s.releaseUploadWorker()
+		s.processCoverageUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format)
+	}()
 	snapshot, ok = s.completeUploadSnapshotIfNeeded(w, r, input, snapshot)
 	if !ok {
 		return false
@@ -558,6 +576,12 @@ func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, us
 }
 
 func (s *Server) handleTestsUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
+	// Reserve the parser slot first: the parse holds the decoded artifact,
+	// and an unbounded number of them is what exhausts memory.
+	if !s.acquireUploadWorker(r.Context()) {
+		api.JSONError(w, http.StatusServiceUnavailable, "upload processing capacity reached, retry later")
+		return false
+	}
 	snapshot, ok := s.createUploadSnapshot(w, r, userID, input, true, &rawArtifactPayload{
 		kind:     "tests",
 		format:   format,
@@ -566,13 +590,17 @@ func (s *Server) handleTestsUpload(w http.ResponseWriter, r *http.Request, userI
 		content:  content,
 	})
 	if !ok {
+		s.releaseUploadWorker()
 		return false
 	}
 	testSource := ""
 	if input.Artifact != nil {
 		testSource = strings.TrimSpace(input.Artifact.Filename)
 	}
-	go s.processTestUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format, testSource)
+	go func() {
+		defer s.releaseUploadWorker()
+		s.processTestUpload(context.WithoutCancel(r.Context()), snapshot.ID, content, format, testSource)
+	}()
 	snapshot, ok = s.completeUploadSnapshotIfNeeded(w, r, input, snapshot)
 	if !ok {
 		return false
@@ -948,6 +976,27 @@ func (s *Server) handleGetUploadStatus(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusNotFound, uploadNotFoundMessage)
 		return
 	}
+	// The route guard checked the token scope with no org or repository, since
+	// neither is in the URL; check it against the upload's own (A9). A scoped
+	// token for another org or repository learns nothing, not even existence.
+	org, err := s.queries.GetOrganizationByID(r.Context(), repo.OrgID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, failedToLoadUploadStatus)
+		return
+	}
+	if org == nil || !tokenScopeAllows(r, apitoken.CapUploads, apitoken.AccessRead, org.Slug, repo.Slug) {
+		api.JSONError(w, http.StatusNotFound, uploadNotFoundMessage)
+		return
+	}
+	access, err := s.principalRepoAccess(r, repo.OrgID, role)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, failedToLoadUploadStatus)
+		return
+	}
+	if !access.allows(repo.ID) {
+		api.JSONError(w, http.StatusNotFound, uploadNotFoundMessage)
+		return
+	}
 
 	api.JSON(w, http.StatusOK, uploadStatusResponse{
 		UploadID:   snapshot.ID.String(),
@@ -1067,13 +1116,37 @@ func (s *Server) resolveUploadAuthorization(r *http.Request, queries *store.Quer
 	if role == "" {
 		return nil, nil, errNotFound("organization not found")
 	}
+	// Uploading writes findings and may enrol a repository: viewers and
+	// auditors are read-only (§4.4). Service principals resolve to developer
+	// or admin, so their uploads stay governed by token scope.
+	if !roleCanWrite(role) {
+		return nil, nil, errUploadRoleRequired
+	}
 
 	repo, err := queries.GetRepositoryBySlug(r.Context(), org.ID, input.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
+	// A repository collaborator (§4.3) uploads only to a repository the forge
+	// granted them write on, and never enrols a new one.
+	access, err := s.principalRepoAccess(r, org.ID, role)
+	if err != nil {
+		return nil, nil, err
+	}
+	if access.scoped {
+		if repo == nil || !access.allows(repo.ID) {
+			return nil, nil, errNotFound("repository not found")
+		}
+		if !roleCanWrite(access.repoRole(role, repo.ID)) {
+			return nil, nil, errUploadRoleRequired
+		}
+	}
 	return org, repo, nil
 }
+
+// errUploadRoleRequired is surfaced by writeUploadError, which maps messages
+// containing "required" to a 400.
+var errUploadRoleRequired = errors.New("the developer role or higher is required to upload to this organization")
 
 // enrollUploadRepository registers a repository the first time CI uploads for
 // it. Explicit enrolment is an org-admin action, which made every new pipeline
@@ -1413,7 +1486,7 @@ func normalizeUploadRequest(input *uploadRequest) {
 	input.Org = strings.TrimSpace(input.Org)
 	input.Repo = strings.TrimSpace(input.Repo)
 	input.Ref = strings.TrimSpace(input.Ref)
-	input.CommitSHA = strings.TrimSpace(input.CommitSHA)
+	input.CommitSHA = strings.ToLower(strings.TrimSpace(input.CommitSHA))
 	input.RunID = strings.TrimSpace(input.RunID)
 	input.RunAttempt = strings.TrimSpace(input.RunAttempt)
 	input.RunNumber = strings.TrimSpace(input.RunNumber)
@@ -1480,6 +1553,14 @@ func validateUploadRequest(input uploadRequest) error {
 	}
 	if input.CommitSHA == "" {
 		return errors.New("commit_sha is required")
+	}
+	// It is stored, shown, put in links and exported to CSV, so free text has
+	// no place: no spaces, quotes or a leading formula character. Real CI
+	// sends a hex object id; the charset is wider only because existing
+	// fixtures use readable placeholders; tighten to ^[0-9a-f]{7,64}$ once
+	// they are hex.
+	if !commitSHAPattern.MatchString(input.CommitSHA) {
+		return errors.New("commit_sha must be a commit id: up to 64 letters, digits, '.', '_' or '-', starting with a letter or digit")
 	}
 	return nil
 }
@@ -1601,6 +1682,10 @@ func (s *Server) writeUploadError(w http.ResponseWriter, err error) {
 	}
 	if ok := errorAsConflict(err, &conflict); ok {
 		api.JSONError(w, http.StatusConflict, conflict.message)
+		return
+	}
+	if errors.Is(err, errUploadRoleRequired) {
+		api.JSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	if ok := strings.Contains(err.Error(), "required"); ok {

@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -44,11 +48,34 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := provider.ValidateWebhookPayload(r, "")
+	r.Body = http.MaxBytesReader(w, r.Body, forge.MaxWebhookPayloadBytes)
+	payload, err := s.verifiedWebhookPayload(r, providerID, provider)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			api.JSONError(w, http.StatusRequestEntityTooLarge, "webhook payload too large")
+			return
+		}
 		api.JSONError(w, http.StatusUnauthorized, "invalid webhook payload")
 		return
 	}
+
+	// Replays of a verified delivery (same delivery id, or byte-identical
+	// body) are acknowledged without reprocessing. Keys are released when
+	// processing fails, so the forge's own redelivery still goes through.
+	replayKeys := webhookReplayKeys(providerID, provider.ID(), r, payload)
+	deliveries := s.webhookDeliveries()
+	if !deliveries.claim(replayKeys, time.Now()) {
+		s.log.Warn().Str("provider", providerID).Msg("ignored replayed webhook delivery")
+		api.JSON(w, http.StatusOK, webhookResponse{Received: true})
+		return
+	}
+	processed := false
+	defer func() {
+		if !processed {
+			deliveries.release(replayKeys)
+		}
+	}()
 
 	eventType := webhookEventType(provider.ID(), r)
 	if eventType == "" {
@@ -59,6 +86,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	event, err := provider.ParseWebhookEvent(eventType, payload)
 	if err != nil {
 		if errors.Is(err, forge.ErrUnsupportedWebhookEvent) {
+			processed = true
 			s.log.Debug().Str("provider", providerID).Str("event_type", eventType).Msg("ignored unsupported webhook event")
 			api.JSON(w, http.StatusOK, webhookResponse{Received: true})
 			return
@@ -66,8 +94,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusBadRequest, "unsupported webhook event")
 		return
 	}
+	if push, ok := event.(forge.PushEvent); ok {
+		// before/after reach git command lines (secret scanning): only object
+		// ids pass, never anything that could parse as an option.
+		if !isWebhookCommitSHA(push.Before) || !isWebhookCommitSHA(push.After) {
+			api.JSONError(w, http.StatusBadRequest, "invalid push commit sha")
+			return
+		}
+	}
 	handlers := s.webhookHandlers[event.EventType()]
 	if len(handlers) == 0 {
+		processed = true
 		s.log.Debug().Str("provider", providerID).Str("event_type", event.EventType()).Msg("ignored unhandled webhook event")
 		api.JSON(w, http.StatusOK, webhookResponse{Received: true})
 		return
@@ -80,7 +117,140 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	processed = true
 	api.JSON(w, http.StatusOK, webhookResponse{Received: true})
+}
+
+// webhookSecretReporter is implemented by forges that can say whether they
+// hold a webhook secret at all.
+type webhookSecretReporter interface {
+	HasWebhookSecret() bool
+}
+
+// verifiedWebhookPayload returns the authenticated webhook body. A forge
+// without a webhook secret fails closed, except in development, where the
+// payload is accepted unverified and every delivery says so in the log
+// (startup already refuses a secret-less forge outside development).
+func (s *Server) verifiedWebhookPayload(r *http.Request, providerID string, provider forge.Provider) ([]byte, error) {
+	if reporter, ok := provider.(webhookSecretReporter); ok && !reporter.HasWebhookSecret() && s.cfg.IsDevelopment() {
+		s.log.Warn().Str("provider", providerID).Msg("INSECURE: accepting an UNVERIFIED webhook payload because this forge has no webhook secret (development only)")
+		return forge.ReadWebhookPayload(r, providerID)
+	}
+	return provider.ValidateWebhookPayload(r, "")
+}
+
+// webhookCommitSHA matches a full SHA-1 or SHA-256 object id. Branch creation
+// and deletion use the all-zero id, which also matches.
+var webhookCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+func isWebhookCommitSHA(sha string) bool {
+	return webhookCommitSHA.MatchString(sha)
+}
+
+// webhookDeliveryHeader names the header carrying a forge's unique delivery id.
+func webhookDeliveryHeader(forgeType string) string {
+	switch forgeType {
+	case "github":
+		return "X-GitHub-Delivery"
+	case "gitlab":
+		return "X-Gitlab-Event-UUID"
+	case "forgejo", "gitea":
+		return "X-Gitea-Delivery"
+	default:
+		return ""
+	}
+}
+
+// webhookReplayKeys identifies a delivery twice over: by its delivery id
+// (unsigned header) and by the digest of its signed body, so a captured
+// delivery replayed under a fresh delivery id is still caught.
+func webhookReplayKeys(providerID, forgeType string, r *http.Request, payload []byte) []string {
+	digest := sha256.Sum256(payload)
+	keys := []string{providerID + "|body|" + hex.EncodeToString(digest[:])}
+	if header := webhookDeliveryHeader(forgeType); header != "" {
+		if id := strings.TrimSpace(r.Header.Get(header)); id != "" && len(id) <= 128 {
+			keys = append(keys, providerID+"|id|"+id)
+		}
+	}
+	return keys
+}
+
+const (
+	webhookReplayTTL     = time.Hour
+	webhookReplayMaxKeys = 50000
+)
+
+// webhookDeliveryCaches holds one replay window per Server. Replicas each
+// keep their own window, which still stops a replay burst against any one.
+var webhookDeliveryCaches sync.Map
+
+func (s *Server) webhookDeliveries() *webhookDeliveryCache {
+	if cache, ok := webhookDeliveryCaches.Load(s); ok {
+		return cache.(*webhookDeliveryCache)
+	}
+	cache, _ := webhookDeliveryCaches.LoadOrStore(s, newWebhookDeliveryCache(webhookReplayTTL, webhookReplayMaxKeys))
+	return cache.(*webhookDeliveryCache)
+}
+
+// webhookDeliveryCache is a bounded, TTL-expiring set of seen delivery keys.
+type webhookDeliveryCache struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	maxKeys int
+	seen    map[string]time.Time
+}
+
+func newWebhookDeliveryCache(ttl time.Duration, maxKeys int) *webhookDeliveryCache {
+	return &webhookDeliveryCache{ttl: ttl, maxKeys: maxKeys, seen: make(map[string]time.Time)}
+}
+
+// claim records keys and reports true when none was seen within the TTL.
+func (c *webhookDeliveryCache) claim(keys []string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range keys {
+		if seenAt, ok := c.seen[key]; ok && now.Sub(seenAt) < c.ttl {
+			return false
+		}
+	}
+	if len(c.seen)+len(keys) > c.maxKeys {
+		c.evict(now, len(keys))
+	}
+	for _, key := range keys {
+		c.seen[key] = now
+	}
+	return true
+}
+
+func (c *webhookDeliveryCache) release(keys []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range keys {
+		delete(c.seen, key)
+	}
+}
+
+// evict drops expired keys, then the oldest ones until room is made: under a
+// flood the window shrinks rather than memory growing.
+func (c *webhookDeliveryCache) evict(now time.Time, room int) {
+	for key, seenAt := range c.seen {
+		if now.Sub(seenAt) >= c.ttl {
+			delete(c.seen, key)
+		}
+	}
+	for len(c.seen)+room > c.maxKeys {
+		var oldestKey string
+		var oldest time.Time
+		for key, seenAt := range c.seen {
+			if oldestKey == "" || seenAt.Before(oldest) {
+				oldestKey, oldest = key, seenAt
+			}
+		}
+		if oldestKey == "" {
+			return
+		}
+		delete(c.seen, oldestKey)
+	}
 }
 
 func (s *Server) registerWebhookHandler(eventType string, h forgeEventHandler) {

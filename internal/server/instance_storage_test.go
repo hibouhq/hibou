@@ -63,7 +63,7 @@ func TestInstanceStorage(t *testing.T) {
 	request := func(email string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/instance/storage", nil)
 		if email != "" {
-			req = req.WithContext(auth.WithUser(req.Context(), &store.User{Email: email}))
+			req = req.WithContext(auth.WithUser(req.Context(), &store.User{Email: email, Provider: "github", ProviderID: "1"}))
 		}
 		rec := httptest.NewRecorder()
 		srv.handleInstanceStorage(rec, req)

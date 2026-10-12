@@ -634,7 +634,7 @@
                         class="text-emerald-300"
                       >
                         <a
-                          :href="vuln.remediation_link"
+                          :href="safeHref(vuln.remediation_link)"
                           target="_blank"
                           rel="noopener noreferrer"
                           class="underline"
@@ -1395,6 +1395,7 @@
 </template>
 
 <script setup lang="ts">
+import { safeHref } from '@/lib/safeUrl'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, Check, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'

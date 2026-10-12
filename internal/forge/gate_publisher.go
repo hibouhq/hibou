@@ -1006,7 +1006,26 @@ func (a *GatePublisher) loadGateRepository(ctx context.Context, ref dbgen.Ref) (
 		a.log.Debug().Str("repo_id", repo.ID.String()).Msg("skip annotation without repository coordinates")
 		return dbgen.Repository{}, nil, "", "", false
 	}
+	if guard, ok := a.store.(gateOwnerGuard); ok {
+		bound, err := guard.ForgeOwnerBoundToOrg(ctx, repo.OrgID, owner)
+		if err != nil {
+			a.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("check repository owner for gatePublisher")
+			return dbgen.Repository{}, nil, "", "", false
+		}
+		if !bound {
+			a.log.Warn().Str("repo_id", repo.ID.String()).Str("owner", owner).Msg("skip gate publish: repository owner is not the organization's forge account")
+			return dbgen.Repository{}, nil, "", "", false
+		}
+	}
 	return repo, provider, owner, name, true
+}
+
+// gateOwnerGuard is implemented by stores that can tell whether a repository
+// owner belongs to the org's bound forge account. Check runs and statuses are
+// posted with an installation token minted by owner, so a repository row that
+// names another tenant's repo must never reach the forge (security audit §3.1).
+type gateOwnerGuard interface {
+	ForgeOwnerBoundToOrg(ctx context.Context, orgID uuid.UUID, owner string) (bool, error)
 }
 
 func (a *GatePublisher) evaluateGate(ctx context.Context, annotation *gateContext) (*delta.GateResult, *delta.DeltaResult, bool) {
@@ -1489,6 +1508,10 @@ func (a *GatePublisherStoreAdapter) GetGateScanReadiness(ctx context.Context, sn
 
 func (a *GatePublisherStoreAdapter) GetSnapshotByRefCommit(ctx context.Context, refID uuid.UUID, commitSHA string) (dbgen.Snapshot, error) {
 	return a.queries.GetSnapshotRowByRefCommit(ctx, refID, commitSHA)
+}
+
+func (a *GatePublisherStoreAdapter) ForgeOwnerBoundToOrg(ctx context.Context, orgID uuid.UUID, owner string) (bool, error) {
+	return a.queries.ForgeOwnerBoundToOrg(ctx, orgID, owner)
 }
 
 func (a *GatePublisherStoreAdapter) GetRepoByID(ctx context.Context, id uuid.UUID) (dbgen.Repository, error) {

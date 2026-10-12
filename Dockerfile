@@ -25,7 +25,8 @@ FROM ${BASE_IMAGE} AS runtime
 # why it — and not trufflehog — is the verification engine we ship.
 # Checksum-verified content keeps the layer stable across rebuilds despite the
 # network fetch.
-FROM alpine:3 AS betterleaks
+# Pinned to the multi-arch index digest; Renovate keeps the tag and digest current.
+FROM alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS betterleaks
 ARG TARGETARCH
 ARG BETTERLEAKS_VERSION
 RUN set -eux; \

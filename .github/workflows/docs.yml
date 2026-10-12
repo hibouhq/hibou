@@ -32,7 +32,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
 
@@ -44,6 +44,10 @@ jobs:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [[ "${REF_TYPE}" == "tag" ]]; then
+            if [[ ! "${REF_NAME}" =~ ^v[0-9]+\.[0-9]+ ]]; then
+              echo "::error::Unexpected tag name: ${REF_NAME}"
+              exit 1
+            fi
             VERSION=$(echo "${REF_NAME}" | sed -E 's/^(v[0-9]+\.[0-9]+).*/\1/')
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
             echo "is_latest=false" >> "$GITHUB_OUTPUT"
@@ -61,7 +65,7 @@ jobs:
           fi
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -74,16 +78,19 @@ jobs:
 
       - name: Build docs
         uses: ./.github/actions/devcontainer-ci
+        # The version reaches the shell as data (env), never as interpolated
+        # script text.
+        env:
+          DOCS_VERSION: ${{ steps.version.outputs.version }}
         with:
           run-cmd: |
             cd docs && npm ci
-            DOCS_VERSION="${{ steps.version.outputs.version }}" \
-            DOCS_BASE="/${{ steps.version.outputs.version }}" \
-            PUBLIC_DOCS_VERSION="${{ steps.version.outputs.version }}" \
+            DOCS_BASE="/${DOCS_VERSION}" \
+            PUBLIC_DOCS_VERSION="${DOCS_VERSION}" \
             npm run build
 
       - name: Download existing site
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: github-pages-current
           path: _site
@@ -147,12 +154,12 @@ jobs:
           ls -la _site/
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: _site
 
       - name: Save site state for future builds
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: github-pages-current
           path: _site
@@ -161,4 +168,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

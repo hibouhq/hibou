@@ -118,7 +118,7 @@ func (s *Server) handleGetEffectiveRepoConfig(w http.ResponseWriter, r *http.Req
 	if s.repoConfigLoader == nil {
 		fileUnavailable = true
 	} else {
-		owner, name, resolved := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+		owner, name, resolved := s.boundRepoCoordinates(r.Context(), repo)
 		if !resolved {
 			fileUnavailable = true
 		} else if loaded, loadErr := s.repoConfigLoader.Load(r.Context(), repo.Provider, owner, name, repo.DefaultBranch); loadErr != nil {

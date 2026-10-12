@@ -40,6 +40,9 @@ runcmd:
       curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
       test -s /tmp/k3s-install.sh
       chmod +x /tmp/k3s-install.sh
+      # write-kubeconfig-mode 600: the generated kubeconfig is cluster-admin;
+      #   only root may read it (fetch it over ssh as root).
+      # secrets-encryption: Secrets are encrypted at rest in the datastore.
       # terminated-pod-gc-threshold: upstream default is 12500, so evicted pods
       #   are never collected in a cluster this size and pile up in the hundreds.
       # image-gc-*-threshold: the 85%/80% defaults reclaim far too late on a disk
@@ -48,7 +51,8 @@ runcmd:
       INSTALL_K3S_VERSION="${k3s_version}" /tmp/k3s-install.sh server \
         --tls-san $(curl -sf http://169.254.169.254/latest/meta-data/public-ipv4) \
         --node-name "${server_name}" \
-        --write-kubeconfig-mode 644 \
+        --write-kubeconfig-mode 600 \
+        --secrets-encryption \
         --kube-controller-manager-arg=terminated-pod-gc-threshold=50 \
         --kubelet-arg=image-gc-high-threshold=70 \
         --kubelet-arg=image-gc-low-threshold=50

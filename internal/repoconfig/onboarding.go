@@ -2,12 +2,14 @@ package repoconfig
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/forge"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 const onboardingBranchName = "hibou/configure"
@@ -22,6 +24,22 @@ func NewOnboardingService(forges map[string]forge.Provider, log zerolog.Logger) 
 		forges = map[string]forge.Provider{}
 	}
 	return &OnboardingService{forges: forges, log: log.With().Str("component", "repoconfig.onboarding").Logger()}
+}
+
+// ErrForeignRepository refuses onboarding a repository whose owner is not the
+// forge account the requesting org is bound to.
+var ErrForeignRepository = errors.New("repository owner is not the organization's forge account")
+
+// CreateOnboardingPRForOrg is CreateOnboardingPR on behalf of org: it writes a
+// branch and opens a PR with an installation token minted by owner, so owner
+// must be the org's own forge account (security audit §3.1). The context is
+// also bound to that account so no token for another installation can be
+// minted further down.
+func (s *OnboardingService) CreateOnboardingPRForOrg(ctx context.Context, org *store.Organization, providerID, owner, repo, defaultBranch string) (*forge.PullRequest, error) {
+	if org == nil || !org.OwnsForgeOwner(owner) {
+		return nil, ErrForeignRepository
+	}
+	return s.CreateOnboardingPR(forge.WithInstallationOwner(ctx, owner), providerID, owner, repo, defaultBranch)
 }
 
 func (s *OnboardingService) CreateOnboardingPR(ctx context.Context, providerID, owner, repo, defaultBranch string) (*forge.PullRequest, error) {

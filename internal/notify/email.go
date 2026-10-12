@@ -9,14 +9,15 @@ import (
 	"net/smtp"
 	"strconv"
 	"strings"
+	"time"
 )
 
-type EmailSender struct {
-	host string
-	port int
-	from string
-	auth smtp.Auth
-}
+// EmailSender delivers org-defined email integrations. Every SMTP setting
+// comes from the integration itself: an org can never borrow an instance
+// SMTP host or credentials (that would make the instance an open relay).
+type EmailSender struct{}
+
+const smtpDialTimeout = 10 * time.Second
 
 func (s *EmailSender) Type() string { return "email" }
 
@@ -28,9 +29,9 @@ func (s *EmailSender) Send(ctx context.Context, p Payload) error {
 	}
 
 	config := integrationConfig(p)
-	host := firstNonEmpty(configString(config, "smtp_host"), s.host)
-	port := configInt(config, "smtp_port", s.port)
-	from := firstNonEmpty(configString(config, "smtp_from"), s.from)
+	host := firstNonEmpty(configString(config, "smtp_host"))
+	port := configInt(config, "smtp_port", 0)
+	from := firstNonEmpty(configString(config, "smtp_from"))
 	username := configString(config, "smtp_username")
 	password := configString(config, "smtp_password")
 	recipients := configStringSlice(config, "recipients")
@@ -38,8 +39,11 @@ func (s *EmailSender) Send(ctx context.Context, p Payload) error {
 	if host == "" || port == 0 || from == "" || len(recipients) == 0 {
 		return errors.New("email integration requires smtp_host, smtp_port, smtp_from, and recipients")
 	}
-	auth := s.auth
-	if auth == nil && username != "" {
+	if port < 1 || port > 65535 {
+		return errors.New("email integration smtp_port must be between 1 and 65535")
+	}
+	var auth smtp.Auth
+	if username != "" {
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 	from = sanitizeHeader(from)
@@ -59,7 +63,7 @@ func (s *EmailSender) Send(ctx context.Context, p Payload) error {
 		renderNotificationText(p),
 	}, "\r\n")
 
-	return sendMailWithRequiredTLS(host, port, auth, from, recipients, []byte(message))
+	return sendMailWithRequiredTLS(ctx, host, port, auth, from, recipients, []byte(message))
 }
 
 func firstNonEmpty(values ...string) string {
@@ -87,16 +91,34 @@ func sanitizeAddressList(values []string) []string {
 	return cleaned
 }
 
-func sendMailWithRequiredTLS(host string, port int, auth smtp.Auth, from string, recipients []string, message []byte) error {
+// smtpDial is the SSRF-guarded dialer used for SMTP; tests may replace it.
+var smtpDial = guardedNotificationDialContext(&net.Dialer{Timeout: smtpDialTimeout})
+
+func sendMailWithRequiredTLS(ctx context.Context, host string, port int, auth smtp.Auth, from string, recipients []string, message []byte) error {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
 
-	if port == 465 {
-		conn, err := tls.Dial("tcp", addr, tlsConfig)
-		if err != nil {
+	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	defer cancel()
+	rawConn, err := smtpDial(ctx, "tcp", addr)
+	if err != nil {
+		if port == 465 {
 			return fmt.Errorf("dial smtps server: %w", err)
 		}
-		defer conn.Close()
+		return fmt.Errorf("dial smtp server: %w", err)
+	}
+	defer rawConn.Close()
+	// Bound the whole SMTP conversation, not just the dial.
+	deadline, _ := ctx.Deadline()
+	if err := rawConn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("set smtp deadline: %w", err)
+	}
+
+	if port == 465 {
+		conn := tls.Client(rawConn, tlsConfig)
+		if err := conn.HandshakeContext(ctx); err != nil {
+			return fmt.Errorf("dial smtps server: %w", err)
+		}
 
 		client, err := smtp.NewClient(conn, host)
 		if err != nil {
@@ -107,7 +129,7 @@ func sendMailWithRequiredTLS(host string, port int, auth smtp.Auth, from string,
 		return sendSMTPMessage(client, auth, from, recipients, message)
 	}
 
-	client, err := smtp.Dial(addr)
+	client, err := smtp.NewClient(rawConn, host)
 	if err != nil {
 		return fmt.Errorf("dial smtp server: %w", err)
 	}

@@ -20,6 +20,9 @@ type User struct {
 	ProviderID  string    `json:"provider_id"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// SessionEpoch is signed into every session cookie; bumping it revokes
+	// all sessions issued before. Never serialized.
+	SessionEpoch int64 `json:"-"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, email, displayName, provider, providerID string) (*User, error) {
@@ -105,5 +108,19 @@ func userFromRow(row dbgen.User) *User {
 		ProviderID:  row.ProviderID,
 		CreatedAt:   row.CreatedAt,
 		UpdatedAt:   row.UpdatedAt,
+
+		SessionEpoch: row.SessionEpoch,
 	}
+}
+
+// BumpUserSessionEpoch revokes every session issued to the user so far and
+// returns the new epoch.
+func (q *Queries) BumpUserSessionEpoch(ctx context.Context, id uuid.UUID) (int64, error) {
+	return q.db.BumpUserSessionEpoch(ctx, id)
+}
+
+// CountOrgsCreatedByUser counts the orgs the user created (non-forge admin
+// memberships), for the per-user org creation cap.
+func (q *Queries) CountOrgsCreatedByUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+	return q.db.CountOrgsCreatedByUser(ctx, userID)
 }

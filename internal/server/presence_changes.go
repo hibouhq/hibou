@@ -114,7 +114,7 @@ func (s *Server) presenceComparison(ctx context.Context, repo *store.Repository,
 		return indexComparison(cached.Files, cached.Truncated), nil
 	}
 	provider := s.forges[repo.Provider]
-	owner, name, ok := repoCoordinates(repo.ProviderID, repo.Name, repo.Slug)
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
 	if provider == nil || !ok {
 		return comparisonIndex{unsupported: true}, nil
 	}

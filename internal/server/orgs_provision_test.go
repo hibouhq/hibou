@@ -48,6 +48,8 @@ func TestHandleCreateOrgNonForgePathStillWorks(t *testing.T) {
 
 	srv, _, admin, _ := newDiscoveryTestServer(t)
 	srv.forges = map[string]forge.Provider{}
+	// Forge-less orgs exist only in development (dev login, no forge).
+	srv.cfg.Development = true
 	srv.orgProvisionSvc = orgprovision.NewService(orgprovision.NewStoreAdapter(srv.queries), nil, nil, false, srv.log)
 
 	recorder := httptest.NewRecorder()

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,29 +99,72 @@ func (c *Client) PostRaw(path string, contentType string, body io.Reader, out an
 	return c.doRequest(req, out)
 }
 
+// maxRetryAttempts bounds retries of a request the server shed with 429/503
+// (rate limit, upload concurrency limit). Each wait honours Retry-After.
+const maxRetryAttempts = 4
+
+// retrySleep is swapped by tests.
+var retrySleep = time.Sleep
+
 func (c *Client) do(method, path string, body any, out any) error {
 	url := c.Server + "/api/v1" + path
 
-	var bodyReader io.Reader
+	var data []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		data, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("marshal request: %w", err)
 		}
-		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
-	if err != nil {
-		return err
-	}
+	for attempt := 1; ; attempt++ {
+		var bodyReader io.Reader
+		if body != nil {
+			bodyReader = bytes.NewReader(data)
+		}
+		req, err := http.NewRequest(method, url, bodyReader)
+		if err != nil {
+			return err
+		}
 
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 
-	return c.doRequest(req, out)
+		err = c.doRequest(req, out)
+		var shed *shedError
+		if !errors.As(err, &shed) || attempt >= maxRetryAttempts {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "server busy (%d), retrying in %s\n", shed.status, shed.wait)
+		retrySleep(shed.wait)
+	}
+}
+
+// shedError is a 429/503 the server asked the client to retry later.
+type shedError struct {
+	status int
+	wait   time.Duration
+	err    error
+}
+
+func (e *shedError) Error() string { return e.err.Error() }
+func (e *shedError) Unwrap() error { return e.err }
+
+// retryAfter reads a Retry-After seconds value, bounded so a misbehaving
+// server cannot park a CI job.
+func retryAfter(header string) time.Duration {
+	const fallback, ceiling = 5 * time.Second, 60 * time.Second
+	seconds, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || seconds <= 0 {
+		return fallback
+	}
+	if wait := time.Duration(seconds) * time.Second; wait < ceiling {
+		return wait
+	}
+	return ceiling
 }
 
 func (c *Client) doRequest(req *http.Request, out any) error {
@@ -138,11 +182,17 @@ func (c *Client) doRequest(req *http.Request, out any) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var apiErr error
 		var apiResp APIResponse
 		if json.Unmarshal(respBody, &apiResp) == nil && apiResp.Error != "" {
-			return fmt.Errorf("API error (%d): %s", resp.StatusCode, apiResp.Error)
+			apiErr = fmt.Errorf("API error (%d): %s", resp.StatusCode, apiResp.Error)
+		} else {
+			apiErr = fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			return &shedError{status: resp.StatusCode, wait: retryAfter(resp.Header.Get("Retry-After")), err: apiErr}
+		}
+		return apiErr
 	}
 
 	if out == nil {

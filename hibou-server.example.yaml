@@ -224,18 +224,34 @@ max:
 # Local development may opt in with development: true or HIBOU_DEVELOPMENT=true.
 # Use the same value on every replica. Rotating it invalidates existing
 # hibou_session and hibou_oauth_state cookies and forces users to log in again.
+# Outside development the secret must be at least 32 bytes (openssl rand -hex 32).
 # session:
 #   secret: your-secure-secret-here
 
-# Instance administrators (case-insensitive emails). Instance admins manage
-# instance-wide settings (announcement banners, instance audit); the role is
-# distinct from org/repo admin membership. Prefer admins_file
+# Sign-in allowlists. Both empty (the default) keep sign-in open to any account
+# of a configured forge. When either is set, a user may sign in only if their
+# forge login is in allowed_users or they are a member of an allowed_orgs org;
+# anyone else is refused before a user row is created.
+# allowed_orgs is checked on GitHub only (App installation token on that org,
+# Organization → Members: read; without App credentials the login asks for
+# read:org instead). GitLab and Forgejo users must be listed in allowed_users.
+# Env: HIBOU_AUTH_ALLOWED_ORGS / HIBOU_AUTH_ALLOWED_USERS, comma-separated.
+# auth:
+#   allowed_orgs: "my-org"
+#   allowed_users: "octocat"
+
+# Instance administrators. Instance admins manage instance-wide settings
+# (announcement banners, instance audit); the role is distinct from org/repo
+# admin membership. Entries are "provider:provider_id" (recommended, e.g.
+# github:1234567, the immutable numeric account id) or emails
+# (case-insensitive). An email entry only matches GitHub accounts: GitLab and
+# Forgejo do not guarantee the email they report is verified. Prefer admins_file
 # (HIBOU_INSTANCE_ADMINS_FILE) in production: point it at a mounted Secret —
 # it is re-read on every check, so edits apply live and no email lands in git.
 # List changes are recorded in the instance audit log either way.
 # instance:
 #   admins_file: /etc/hibou/instance-admins/emails
-#   admins: "admin@example.com,ops@example.com"
+#   admins: "github:1234567,admin@example.com"
 
 # Forge configuration uses indexed environment variables:
 #   HIBOU_FORGE_0_TYPE=forgejo
@@ -244,6 +260,9 @@ max:
 #   HIBOU_FORGE_0_CLIENT_SECRET=...
 #   HIBOU_FORGE_0_WEBHOOK_SECRET=...
 #   HIBOU_FORGE_0_TOKEN=...
+#
+# Outside development, startup fails when a declared forge has no CLIENT_ID or
+# no WEBHOOK_SECRET: webhooks are only accepted with a valid signature/token.
 #
 # TOKEN is the forge API token the server authenticates its own calls with —
 # commit statuses, PR comments, repository reads. The OAuth2 client credentials
