@@ -2796,6 +2796,83 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/coverage-exceptions/{exceptionID}/decision": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Approve or reject a coverage exception",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exception ID",
+                        "name": "exceptionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Decision",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.decideExceptionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.CoverageException"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/cwes": {
             "get": {
                 "security": [
@@ -3947,6 +4024,185 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/producer-policies": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "How each producer's absent findings are resolved (ADR-034 §5): \"coverage\" (re-checked and the code changed), \"consecutive-absence\" (N covered scans without it) or \"explicit\" (only a decision). Producers without a row use the default.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "findings"
+                ],
+                "summary": "Producer resolution policies",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.producerPoliciesResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Org admins only. threshold is N for consecutive-absence and the number of unchanged covered scans after which an unconfirmed finding is no longer reported (1–100, default 3).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "findings"
+                ],
+                "summary": "Set a producer's resolution policy",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Policy",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.setProducerPolicyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.ProducerPolicy"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "findings"
+                ],
+                "summary": "Reset a producer's resolution policy to the default",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Producer name",
+                        "name": "producer",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/quality-gates": {
             "get": {
                 "security": [
@@ -4890,6 +5146,132 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/applicability": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The latest detection of which catalog scanners apply (ADR-035 §3): languages, modules, excluded paths with reasons, and applicable scanners with their capabilities. Status \"truncated\" or \"unknown\" means the forge did not give a complete view; it is never proof that nothing applies.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Scanner applicability of a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.repoApplicabilityResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/applicability/refresh": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lists the default branch's tracked paths at its head commit and stores the detection. Reads the forge only; no repository code runs.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Re-detect scanner applicability",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.repoApplicabilityResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/config/effective": {
             "get": {
                 "description": "What actually applies to a branch: the matched .hibou.yaml gate, DB-managed quality gates (the repo's own or inherited from the org), defaults filled in by the server, and unconditional rules — each labelled with its source.",
@@ -4934,6 +5316,84 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/server.effectiveConfigResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/coverage-exceptions": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Asks org admins to waive a requirement for this repository. Needs a reason and an expiry (at most 365 days); it takes effect only once approved.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Request an exception to an org scanner requirement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exception request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.requestCoverageExceptionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.CoverageException"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
                         }
                     }
                 }
@@ -5429,6 +5889,278 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/reassert": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Confirms the finding is still there (ADR-034 §4): updates \"last confirmed\" without creating a duplicate, and reopens it if it had been resolved or retracted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "findings"
+                ],
+                "summary": "Re-assert a manual or agent finding",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Finding fingerprint",
+                        "name": "fingerprint",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.assertionResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/resolve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Records that the problem is gone (ADR-034 §4). Requires a reason. The finding stops counting now and is no longer carried to new snapshots.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "findings"
+                ],
+                "summary": "Resolve a manual or agent finding",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Finding fingerprint",
+                        "name": "fingerprint",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reason",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.assertionDecisionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.assertionResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/findings/{fingerprint}/retract": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Withdraws an assertion that was wrong (ADR-034 §4). Allowed to the person who filed it, the filing token or its owner, and org admins.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "findings"
+                ],
+                "summary": "Retract a manual or agent finding",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Finding fingerprint",
+                        "name": "fingerprint",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reason",
+                        "name": "payload",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/server.assertionDecisionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.assertionResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -6052,6 +6784,570 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/scan-coverage": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Per scanner: what the policy asks (configured) and what actually ran (state: covered, pending, missing, missing_setup, failed, partial, stale, unverified, unsupported, exempt, disabled, not_applicable, unknown), from the default branch's recent runs (ADR-035 §6). Recomputed on request.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Scan coverage of a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/scancoverage.Cell"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/scan-plans": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Builds the reproducible plan CI executes (ADR-035 §4, ADR-036 §3): one job per applicable scanner with its scope, verified artifact location, ruleset, prerequisites and budget, or the exact blocker. Upload each job's report with plan_id and plan_job_id to bind it to the plan.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Create a scan plan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Plan request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.createScanPlanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "dry run",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.scanPlanResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.scanPlanResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/scan-plans/{planID}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Get a scan plan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Plan ID",
+                        "name": "planID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.scanPlanResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/scanner-settings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "One decision per scanner — required (org), enabled or disabled (repo), recommended (org default), off (pre-release) — with its source, the requirements behind it and any approved exception (ADR-035 §5). The same resolution feeds the scan plan.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Effective scanner settings of a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.repoScannerSettingsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Repository admins. \"disabled\" does not remove a scanner the organization requires; that needs an approved exception.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Enable, disable or inherit a scanner on a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Setting",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.setRepoScannerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.repoScannerSettingsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/scope-overrides": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Excluded paths and declared module roots (ADR-035 §3). Whether each exclusion applied, and why not, is in the latest applicability result.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Owner scope refinements of a repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/store.RepoScopeOverride"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Repository admins. kind \"exclude\" leaves a path out of analysis (applied only if it hides no code the org requires scanned, unless an exception for that path is approved); kind \"module_root\" declares a module the recipes miss. A reason is required; detection re-runs.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Add an owner scope refinement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Override",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.scopeOverrideRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.RepoScopeOverride"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Remove an owner scope refinement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Override ID",
+                        "name": "id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/snapshots/{snapshotID}/coverage-source": {
             "get": {
                 "security": [
@@ -6137,6 +7433,85 @@ const docTemplate = `{
                     },
                     "422": {
                         "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/snapshots/{snapshotID}/producer-runs": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Lists each producer (SARIF tool, secret scanning, SBOM matching) with what it covered on this snapshot — outcome, version, full or partial scope, files it did not analyse — compared with the previous finished snapshot of the same ref. A producer that ran before but not here is \"missing\": its findings were not re-checked (ADR-034).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "snapshots"
+                ],
+                "summary": "Scan coverage of a snapshot",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Snapshot ID",
+                        "name": "snapshotID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.producerRunsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -6729,6 +8104,367 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/scan-coverage": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "One row per repository × scanner from the persisted projection, required gaps first (ADR-035 §6). Filters: state, scanner, required=true. format=csv exports the filtered rows. The summary counts every state, not-applicable cells included, so the denominator is disclosed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Org scanner coverage matrix",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Cell state",
+                        "name": "state",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Scanner id",
+                        "name": "scanner",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Required cells only",
+                        "name": "required",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page (from 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Rows per page (max 200)",
+                        "name": "per_page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "csv",
+                        "name": "format",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.orgScanCoverageResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/scan-coverage/refresh": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Org admins. Recomputes every repository's cells in the background, one at a time.",
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Recompute the org scanner coverage matrix",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted"
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/scanner-requirements": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Org scanner requirements and pending exceptions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.orgScannerPolicyResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Org admins. Requires, on every repository with code in the language, a catalog scanner providing the capability (restricted to scanner_ids when set; pre-releases only when named). blocking fails the coverage check; advisory warns.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Require a scanner capability for a language",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Requirement",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/store.ScannerRequirement"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/store.ScannerRequirement"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Remove a scanner requirement",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Requirement ID",
+                        "name": "id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/scanner-settings/bulk": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Org admins. Applies to every repository where the scanner applies (from the coverage inventory) and its effective state would change. dry_run previews. Disabling never touches repositories where the org requires the scanner.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Enable or disable a scanner on many repositories",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Bulk setting",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.bulkScannerSettingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.bulkScannerSettingResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/search": {
             "get": {
                 "security": [
@@ -7295,6 +9031,43 @@ const docTemplate = `{
                                     "properties": {
                                         "data": {
                                             "$ref": "#/definitions/server.readyResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/scanner-catalog": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The scanners hibou supports in CI (ADR-035): capabilities per language with their evidence, pinned artifacts with sha256, and where this installation fetches each one (approved location, mirror, offline bundle or upstream) under its scanner_distribution policy.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "scanners"
+                ],
+                "summary": "Bundled scanner catalog",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.scannerCatalogResponse"
                                         }
                                     }
                                 }
@@ -8387,6 +10160,380 @@ const docTemplate = `{
                 }
             }
         },
+        "scancatalog.Applicability": {
+            "type": "object",
+            "properties": {
+                "build_systems": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "extensions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "manifests": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "scancatalog.Capability": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string"
+                }
+            }
+        },
+        "scancatalog.Command": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "scancatalog.Distribution": {
+            "type": "object",
+            "properties": {
+                "arch": {
+                    "type": "string"
+                },
+                "asset": {
+                    "type": "string"
+                },
+                "coordinates": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "libc": {
+                    "type": "string"
+                },
+                "os": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "signature": {
+                    "$ref": "#/definitions/scancatalog.Signature"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "scancatalog.Location": {
+            "type": "object",
+            "properties": {
+                "scanner_id": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source is approved-location, mirror, bundle or upstream.",
+                    "type": "string"
+                },
+                "url": {
+                    "description": "URL is https, or file:// for an offline bundle.",
+                    "type": "string"
+                }
+            }
+        },
+        "scancatalog.Resources": {
+            "type": "object",
+            "properties": {
+                "cpu": {
+                    "type": "integer"
+                },
+                "memory_mb": {
+                    "type": "integer"
+                },
+                "timeout_seconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "scancatalog.Ruleset": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "scancatalog.SARIFTraits": {
+            "type": "object",
+            "properties": {
+                "code_flows": {
+                    "type": "string"
+                },
+                "fingerprint": {
+                    "type": "string"
+                },
+                "paths": {
+                    "type": "string"
+                }
+            }
+        },
+        "scancatalog.Signature": {
+            "type": "object",
+            "properties": {
+                "certificate_url": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "signature_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "scancatalog.Stages": {
+            "type": "object",
+            "properties": {
+                "produces": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "requires": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "scancoverage.Cell": {
+            "type": "object",
+            "properties": {
+                "configured": {
+                    "type": "string"
+                },
+                "enforcement": {
+                    "type": "string"
+                },
+                "last_commit": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "scanner_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "scanplan.Job": {
+            "type": "object",
+            "properties": {
+                "artifact": {
+                    "$ref": "#/definitions/scancatalog.Location"
+                },
+                "blocked_reason": {
+                    "description": "BlockedReason names the exact setup blocker (ADR-035 §5).",
+                    "type": "string"
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/scancatalog.Capability"
+                    }
+                },
+                "command": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "exclusions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "prerequisites": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rationale": {
+                    "type": "string"
+                },
+                "resources": {
+                    "$ref": "#/definitions/scancatalog.Resources"
+                },
+                "ruleset": {
+                    "type": "string"
+                },
+                "scanner_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "description": "Scope is \"full\" when Targets cover the repository, else \"partial\".",
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "targets": {
+                    "description": "Targets are the module roots the job analyses (\".\" = repository).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "scanplan.Plan": {
+            "type": "object",
+            "properties": {
+                "applicability_status": {
+                    "description": "ApplicabilityStatus \"truncated\"/\"unknown\" means the plan may miss\nscopes: coverage built on it is not complete.",
+                    "type": "string"
+                },
+                "base_commit_sha": {
+                    "type": "string"
+                },
+                "catalog_revision": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "detection_revision": {
+                    "type": "string"
+                },
+                "digest": {
+                    "type": "string"
+                },
+                "jobs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/scanplan.Job"
+                    }
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "mode_reason": {
+                    "type": "string"
+                },
+                "runner": {
+                    "$ref": "#/definitions/scanplan.Runner"
+                }
+            }
+        },
+        "scanplan.Runner": {
+            "type": "object",
+            "properties": {
+                "arch": {
+                    "type": "string"
+                },
+                "libc": {
+                    "type": "string"
+                },
+                "os": {
+                    "type": "string"
+                }
+            }
+        },
+        "scanpolicy.Decision": {
+            "type": "object",
+            "properties": {
+                "applicable": {
+                    "type": "boolean"
+                },
+                "exempted": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "preview": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "repo_mode": {
+                    "description": "RepoMode is the repo's own setting, shown even when overridden.",
+                    "type": "string"
+                },
+                "requirements": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "scanner_id": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source: org-requirement, repo, org-default.",
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
         "server.addReleaseClientRequest": {
             "type": "object",
             "properties": {
@@ -8397,6 +10544,25 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "notes": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.assertionDecisionRequest": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.assertionResponse": {
+            "type": "object",
+            "properties": {
+                "assertion": {
+                    "$ref": "#/definitions/store.FindingAssertion"
+                },
+                "fingerprint": {
                     "type": "string"
                 }
             }
@@ -8454,6 +10620,9 @@ const docTemplate = `{
                 "complete": {
                     "type": "boolean"
                 },
+                "config_digest": {
+                    "type": "string"
+                },
                 "expect": {
                     "type": "integer"
                 },
@@ -8462,6 +10631,19 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "org": {
+                    "type": "string"
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "plan_id": {
+                    "description": "PlanID / PlanJobID bind the report to the scan plan job that produced\nit (ADR-035 §4); the job's planned scope becomes the declared scope.",
+                    "type": "string"
+                },
+                "plan_job_id": {
                     "type": "string"
                 },
                 "pr_number": {
@@ -8494,10 +10676,17 @@ const docTemplate = `{
                 "run_number": {
                     "type": "string"
                 },
+                "scope": {
+                    "description": "Run declaration (ADR-034 §2): what the producer covered. scope is\n\"full\" or \"partial\"; paths lists what a partial run analysed. SARIF\nvalues (tool.driver.version) win over tool_version.",
+                    "type": "string"
+                },
                 "tag": {
                     "type": "string"
                 },
                 "tool": {
+                    "type": "string"
+                },
+                "tool_version": {
                     "type": "string"
                 }
             }
@@ -8545,6 +10734,56 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "server.bulkScannerChange": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "repo_slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.bulkScannerSettingRequest": {
+            "type": "object",
+            "properties": {
+                "dry_run": {
+                    "description": "DryRun returns the repositories that would change without changing them.",
+                    "type": "boolean"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "scanner_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.bulkScannerSettingResponse": {
+            "type": "object",
+            "properties": {
+                "applied": {
+                    "type": "boolean"
+                },
+                "changes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.bulkScannerChange"
+                    }
+                },
+                "kept": {
+                    "description": "Kept are repositories left alone: disabling a scanner the org\nrequires needs an exception, not a bulk action.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.bulkScannerChange"
+                    }
                 }
             }
         },
@@ -8957,6 +11196,38 @@ const docTemplate = `{
                 }
             }
         },
+        "server.createScanPlanRequest": {
+            "type": "object",
+            "properties": {
+                "base_commit_sha": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "dry_run": {
+                    "description": "DryRun returns the plan without storing it (UI preview).",
+                    "type": "boolean"
+                },
+                "mode": {
+                    "description": "Mode \"\" lets hibou choose (baseline or full); \"sweep\" asks for one.",
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "runner": {
+                    "$ref": "#/definitions/scanplan.Runner"
+                },
+                "scanners": {
+                    "description": "Scanners selects catalog scanners explicitly, including pre-releases;\nempty means every applicable, non-preview scanner. Repo and org\npolicy (ADR-035 §5) will narrow this.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "server.createSearchPresetRequest": {
             "type": "object",
             "properties": {
@@ -9067,6 +11338,14 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "string"
+                }
+            }
+        },
+        "server.decideExceptionRequest": {
+            "type": "object",
+            "properties": {
+                "approve": {
+                    "type": "boolean"
                 }
             }
         },
@@ -9304,6 +11583,14 @@ const docTemplate = `{
                 },
                 "advisory": {
                     "$ref": "#/definitions/server.findingAdvisoryResponse"
+                },
+                "assertion": {
+                    "description": "Assertion is the lifecycle of a manual or agent finding (ADR-034 §4):\nlast confirmed, and the decision that closed it if any.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.FindingAssertion"
+                        }
+                    ]
                 },
                 "dispute": {
                     "description": "Dispute is the human-axis override of an in-source suppression\n(ADR-026): present when someone contested the scanner's suppression.",
@@ -9746,6 +12033,24 @@ const docTemplate = `{
                 }
             }
         },
+        "server.offlineBundleStatus": {
+            "type": "object",
+            "properties": {
+                "catalog_revision": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "matches_catalog": {
+                    "description": "MatchesCatalog: exported for the catalog this server pins. After an\nupgrade a mismatched bundle lacks the newly pinned artifacts.",
+                    "type": "boolean"
+                }
+            }
+        },
         "server.orgComponentScanResponse": {
             "type": "object",
             "properties": {
@@ -10115,6 +12420,134 @@ const docTemplate = `{
                 }
             }
         },
+        "server.orgScanCoverageResponse": {
+            "type": "object",
+            "properties": {
+                "cells": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ScanCoverageCell"
+                    }
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "per_page": {
+                    "type": "integer"
+                },
+                "summary": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ScanCoverageSummary"
+                    }
+                }
+            }
+        },
+        "server.orgScannerPolicyResponse": {
+            "type": "object",
+            "properties": {
+                "pending_exceptions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.CoverageException"
+                    }
+                },
+                "requirements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ScannerRequirement"
+                    }
+                }
+            }
+        },
+        "server.producerCoverage": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "finding_count": {
+                    "type": "integer"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "previous_version": {
+                    "type": "string"
+                },
+                "producer": {
+                    "type": "string"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ProducerRun"
+                    }
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "scope_declared": {
+                    "type": "boolean"
+                },
+                "scope_paths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipped_files": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.SkippedFile"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.producerPoliciesResponse": {
+            "type": "object",
+            "properties": {
+                "default_threshold": {
+                    "type": "integer"
+                },
+                "policies": {
+                    "description": "Policies are the org's explicit choices; a producer without one uses\nthe default (coverage, or explicit for agent:* producers).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ProducerPolicy"
+                    }
+                }
+            }
+        },
+        "server.producerRunsResponse": {
+            "type": "object",
+            "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
+                "previous_commit_sha": {
+                    "type": "string"
+                },
+                "previous_snapshot_id": {
+                    "type": "string"
+                },
+                "producers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.producerCoverage"
+                    }
+                },
+                "snapshot_id": {
+                    "type": "string"
+                }
+            }
+        },
         "server.reachabilityRequest": {
             "type": "object",
             "properties": {
@@ -10189,6 +12622,19 @@ const docTemplate = `{
                 }
             }
         },
+        "server.repoApplicabilityResponse": {
+            "type": "object",
+            "properties": {
+                "applicability": {
+                    "description": "Applicability is the latest detection, or null before the first one.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.RepoApplicability"
+                        }
+                    ]
+                }
+            }
+        },
         "server.repoInventorySummary": {
             "type": "object",
             "properties": {
@@ -10226,6 +12672,29 @@ const docTemplate = `{
                 "repoLifecycleStatusDiscovered",
                 "repoLifecycleStatusDeleted"
             ]
+        },
+        "server.repoScannerSettingsResponse": {
+            "type": "object",
+            "properties": {
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/scanpolicy.Decision"
+                    }
+                },
+                "exceptions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.CoverageException"
+                    }
+                },
+                "requirements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.ScannerRequirement"
+                    }
+                }
+            }
         },
         "server.repositoryInventoryEntry": {
             "type": "object",
@@ -10277,10 +12746,207 @@ const docTemplate = `{
                 }
             }
         },
+        "server.requestCoverageExceptionRequest": {
+            "type": "object",
+            "properties": {
+                "expires_in_days": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "requirement_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                }
+            }
+        },
         "server.resolveReleaseDivergenceRequest": {
             "type": "object",
             "properties": {
                 "action": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.scanPlanResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "plan": {
+                    "$ref": "#/definitions/scanplan.Plan"
+                }
+            }
+        },
+        "server.scannerCatalogDistribution": {
+            "type": "object",
+            "properties": {
+                "arch": {
+                    "type": "string"
+                },
+                "asset": {
+                    "type": "string"
+                },
+                "coordinates": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "libc": {
+                    "type": "string"
+                },
+                "location": {
+                    "$ref": "#/definitions/scancatalog.Location"
+                },
+                "os": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "signature": {
+                    "$ref": "#/definitions/scancatalog.Signature"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "unavailable": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.scannerCatalogEntry": {
+            "type": "object",
+            "properties": {
+                "adapter_version": {
+                    "type": "string"
+                },
+                "applicability": {
+                    "$ref": "#/definitions/scancatalog.Applicability"
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/scancatalog.Capability"
+                    }
+                },
+                "command": {
+                    "$ref": "#/definitions/scancatalog.Command"
+                },
+                "diff_support": {
+                    "type": "string"
+                },
+                "distributions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.scannerCatalogDistribution"
+                    }
+                },
+                "engine": {
+                    "type": "string"
+                },
+                "engine_version": {
+                    "type": "string"
+                },
+                "exit_codes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "homepage": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "notes": {
+                    "type": "string"
+                },
+                "prerelease": {
+                    "type": "boolean"
+                },
+                "producer_names": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "resources": {
+                    "$ref": "#/definitions/scancatalog.Resources"
+                },
+                "rulesets": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "sarif": {
+                    "$ref": "#/definitions/scancatalog.SARIFTraits"
+                },
+                "stages": {
+                    "$ref": "#/definitions/scancatalog.Stages"
+                },
+                "support_status": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.scannerCatalogResponse": {
+            "type": "object",
+            "properties": {
+                "bundle": {
+                    "description": "Bundle: the imported offline bundle, in offline mode only.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.offlineBundleStatus"
+                        }
+                    ]
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "rulesets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/scancatalog.Ruleset"
+                    }
+                },
+                "scanners": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.scannerCatalogEntry"
+                    }
+                }
+            }
+        },
+        "server.scopeOverrideRequest": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "reason": {
                     "type": "string"
                 }
             }
@@ -10353,6 +13019,31 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "comment": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.setProducerPolicyRequest": {
+            "type": "object",
+            "properties": {
+                "policy": {
+                    "type": "string"
+                },
+                "producer": {
+                    "type": "string"
+                },
+                "threshold": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.setRepoScannerRequest": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string"
+                },
+                "scanner_id": {
                     "type": "string"
                 }
             }
@@ -11049,6 +13740,47 @@ const docTemplate = `{
                 }
             }
         },
+        "store.CoverageException": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "decided_at": {
+                    "type": "string"
+                },
+                "decided_by": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "repo_slug": {
+                    "type": "string"
+                },
+                "requested_by": {
+                    "type": "string"
+                },
+                "requirement_id": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "store.Deployment": {
             "type": "object",
             "properties": {
@@ -11151,6 +13883,44 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "vex_justification": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.FindingAssertion": {
+            "type": "object",
+            "properties": {
+                "closed_api_key_id": {
+                    "type": "string"
+                },
+                "closed_at": {
+                    "type": "string"
+                },
+                "closed_by": {
+                    "type": "string"
+                },
+                "closed_kind": {
+                    "type": "string"
+                },
+                "closed_reason": {
+                    "type": "string"
+                },
+                "fingerprint": {
+                    "type": "string"
+                },
+                "last_confirmed_api_key_id": {
+                    "type": "string"
+                },
+                "last_confirmed_at": {
+                    "type": "string"
+                },
+                "last_confirmed_by": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -11528,6 +14298,89 @@ const docTemplate = `{
                 }
             }
         },
+        "store.ProducerPolicy": {
+            "type": "object",
+            "properties": {
+                "policy": {
+                    "type": "string"
+                },
+                "producer": {
+                    "type": "string"
+                },
+                "threshold": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "updated_by": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.ProducerRun": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {
+                    "type": "string"
+                },
+                "config_digest": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "finding_count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "plan_id": {
+                    "description": "PlanID / PlanJobID: the scan plan job that produced the run, when it\nwas planned (ADR-035 §4). Evidence for enforced coverage requires it.",
+                    "type": "string"
+                },
+                "plan_job_id": {
+                    "type": "string"
+                },
+                "producer": {
+                    "type": "string"
+                },
+                "run_index": {
+                    "type": "integer"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "scope_declared": {
+                    "type": "boolean"
+                },
+                "scope_paths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipped_files": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/store.SkippedFile"
+                    }
+                },
+                "snapshot_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
         "store.QualityGate": {
             "type": "object",
             "properties": {
@@ -11823,6 +14676,64 @@ const docTemplate = `{
                 }
             }
         },
+        "store.RepoApplicability": {
+            "type": "object",
+            "properties": {
+                "catalog_revision": {
+                    "type": "string"
+                },
+                "commit_sha": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "detection_revision": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "ref_name": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.RepoScopeOverride": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
         "store.Repository": {
             "type": "object",
             "properties": {
@@ -11864,6 +14775,90 @@ const docTemplate = `{
                 }
             }
         },
+        "store.ScanCoverageCell": {
+            "type": "object",
+            "properties": {
+                "computed_at": {
+                    "type": "string"
+                },
+                "configured": {
+                    "type": "string"
+                },
+                "enforcement": {
+                    "type": "string"
+                },
+                "last_commit": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "repo_name": {
+                    "type": "string"
+                },
+                "repo_slug": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "scanner_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.ScanCoverageSummary": {
+            "type": "object",
+            "properties": {
+                "cells": {
+                    "type": "integer"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "store.ScannerRequirement": {
+            "type": "object",
+            "properties": {
+                "capability": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "enforcement": {
+                    "type": "string"
+                },
+                "freshness_days": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string"
+                },
+                "scanner_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "store.SeverityLevel": {
             "type": "string",
             "enum": [
@@ -11888,6 +14883,17 @@ const docTemplate = `{
                 "SeverityLevelLow",
                 "SeverityLevelInfo"
             ]
+        },
+        "store.SkippedFile": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
         },
         "store.Team": {
             "type": "object",
@@ -12008,6 +15014,9 @@ const docTemplate = `{
                 "confidence": {
                     "type": "string"
                 },
+                "consecutive_absences": {
+                    "type": "integer"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -12092,6 +15101,12 @@ const docTemplate = `{
                 "last_seen_at": {
                     "type": "string"
                 },
+                "last_seen_commit": {
+                    "type": "string"
+                },
+                "last_seen_snapshot_id": {
+                    "type": "string"
+                },
                 "location_hash": {
                     "type": "string"
                 },
@@ -12119,6 +15134,13 @@ const docTemplate = `{
                 "original_severity": {
                     "$ref": "#/definitions/store.SeverityLevel"
                 },
+                "presence": {
+                    "description": "Presence (ADR-034 §3): \"reported\" when the producer reported the\nfinding in this snapshot; \"not_rechecked\" / \"unconfirmed\" when the row\nwas carried forward because nothing re-checked it. Still open either way.",
+                    "type": "string"
+                },
+                "presence_reason": {
+                    "type": "string"
+                },
                 "present_on_default_branch": {
                     "type": "boolean"
                 },
@@ -12144,6 +15166,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "remediation_link": {
+                    "type": "string"
+                },
+                "resolution_reason": {
+                    "description": "ResolutionReason is set on a delta's resolved findings only (not\nstored): fixed, file_removed, no_longer_reported, producer_changed.\nOnly the first two are fixes a PR can claim (ADR-034 §6).",
                     "type": "string"
                 },
                 "resolved_at": {

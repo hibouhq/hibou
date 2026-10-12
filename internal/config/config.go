@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/hibouhq/hibou/internal/retention"
+	"github.com/hibouhq/hibou/internal/scancatalog"
 )
 
 const DefaultSessionSecret = "change-me-in-production"
@@ -72,8 +73,11 @@ type Config struct {
 	EPSS                         EPSSConfig
 	Worker                       WorkerConfig
 	SecretScan                   SecretScanConfig
-	Metrics                      MetricsConfig
-	StorageUsage                 StorageUsageConfig
+	// ScannerDistribution controls where CI fetches bundled scanners from
+	// (ADR-035): upstream, an operator mirror, or an offline bundle.
+	ScannerDistribution scancatalog.DistributionConfig
+	Metrics             MetricsConfig
+	StorageUsage        StorageUsageConfig
 
 	Forges []ForgeConfig
 }
@@ -368,6 +372,7 @@ func Load() (Config, error) {
 	v.SetDefault("retention.preset", "envelope")
 	v.SetDefault("retention.auto_purge", false)
 	v.SetDefault("background.secret_scan.enabled", false)
+	v.SetDefault("scanner_distribution.mode", scancatalog.ModeUpstream)
 	v.SetDefault("secret_scan.enabled", false)
 	v.SetDefault("secret_scan.providers", []string{})
 	v.SetDefault("secret_scan.temp_dir", "")
@@ -569,6 +574,15 @@ func Load() (Config, error) {
 		},
 		Metrics:      metricsCfg,
 		StorageUsage: storageUsage,
+		ScannerDistribution: scancatalog.DistributionConfig{
+			Mode:           v.GetString("scanner_distribution.mode"),
+			MirrorBaseURL:  v.GetString("scanner_distribution.mirror_base_url"),
+			MavenMirrorURL: v.GetString("scanner_distribution.maven_mirror_url"),
+			Locations:      v.GetStringMapString("scanner_distribution.locations"),
+			BundleDir:      v.GetString("scanner_distribution.bundle_dir"),
+			ApprovedHosts:  normalizeList(v.GetStringSlice("scanner_distribution.approved_hosts")),
+			CABundle:       strings.TrimSpace(v.GetString("scanner_distribution.ca_bundle")),
+		}.Normalize(),
 	}
 
 	cfg.Forges = loadForgeConfigs()

@@ -255,6 +255,9 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 	}
 
 	s.maybeEnqueueSecretScan(r.Context(), repo, refType, refName, event)
+	if refType == store.RefTypeBranch {
+		s.refreshApplicabilityAsync(repo, refName)
+	}
 	return nil
 }
 

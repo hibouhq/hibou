@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/cliclient"
 	"github.com/hibouhq/hibou/internal/cliconfig"
+	"github.com/hibouhq/hibou/internal/sarif"
 )
 
 var (
@@ -27,6 +31,10 @@ var (
 	uploadExpect     int
 	uploadServer     string
 	uploadToken      string
+	uploadSourceRoot string
+	// Run declaration (ADR-034): overrides .hibou.yaml's scanners section.
+	uploadScope string
+	uploadPaths []string
 )
 
 type uploadBase struct {
@@ -410,6 +418,7 @@ func runUploadAuto(file string, complete bool, expect int) error {
 	if err != nil {
 		return fmt.Errorf("read file: %w", err)
 	}
+	data = withContextFingerprints(data, uploadSourceRoot)
 
 	base, err := resolveUploadBase()
 	if err != nil {
@@ -430,11 +439,196 @@ func runUploadAuto(file string, complete bool, expect int) error {
 		},
 	}
 	setOptionalUploadContextFields(payload, ci)
+	setRunDeclarationFields(payload)
 	if expect > 0 {
 		payload["expect"] = expect
 	}
 
 	return submitUpload(client, "/upload", payload)
+}
+
+// setRunDeclarationFields sends what the scan covered. Without it the server
+// records the run as an assumed full scan: a diff-aware or path-filtered job
+// must say --scope=partial (and --path for what it analysed), or findings
+// outside its paths would read as fixed.
+func setRunDeclarationFields(payload map[string]any) {
+	if uploadScope != "" {
+		payload["scope"] = uploadScope
+	}
+	if len(uploadPaths) > 0 {
+		payload["paths"] = uploadPaths
+	}
+}
+
+// withContextFingerprints gives SARIF results without a scanner fingerprint a
+// line-independent one computed from the checked-out source (ADR-034, D15),
+// so a finding keeps its identity and triage when code above it moves. Any
+// failure uploads the file unchanged: the server then falls back to its
+// line-based identity, as before.
+func withContextFingerprints(data []byte, sourceRoot string) []byte {
+	if !bytes.Contains(data, []byte(`"runs"`)) {
+		return data
+	}
+	data = withRepoRelativePaths(data, sourceRoot)
+	out, added, err := sarif.AddContextFingerprints(data, sourceFileReader(sourceRoot))
+	if err != nil {
+		return data
+	}
+	if added > 0 {
+		fmt.Printf("Added content fingerprints to %d result(s)\n", added)
+	}
+	return out
+}
+
+// withRepoRelativePaths rewrites SARIF paths that are relative to a module's
+// source root (SpotBugs writes com/acme/App.java for java/src/main/java/com/
+// acme/App.java) to repo-relative ones, when exactly one file of the checkout
+// ends with that path. Hibou compares paths with the forge's (change checks,
+// file links): a path the forge never lists would read as "unchanged".
+func withRepoRelativePaths(data []byte, sourceRoot string) []byte {
+	index := &checkoutIndex{root: sourceRoot}
+	out, rewritten, err := sarif.RewriteArtifactURIs(data, index.resolve)
+	if err != nil {
+		return data
+	}
+	if rewritten > 0 {
+		fmt.Printf("Rewrote %d SARIF path(s) to repo-relative\n", rewritten)
+	}
+	return out
+}
+
+// checkoutIndex maps file names to repo-relative paths, built on the first
+// path that does not resolve as written.
+type checkoutIndex struct {
+	root   string
+	built  bool
+	byName map[string][]string
+}
+
+// checkoutIndexSkipDirs are build outputs and dependency trees: a source file
+// is not looked up there.
+var checkoutIndexSkipDirs = map[string]bool{
+	".git": true, "node_modules": true, "target": true, "build": true, "dist": true,
+	"vendor": true, ".venv": true, "venv": true, "__pycache__": true, ".gradle": true, ".idea": true,
+}
+
+// maxCheckoutIndexFiles bounds the walk on very large monorepos; beyond it,
+// paths stay as the scanner wrote them.
+const maxCheckoutIndexFiles = 500000
+
+func (c *checkoutIndex) resolve(uri, baseURI string) (string, bool) {
+	if strings.Contains(uri, "://") || baseURI != "" || filepath.IsAbs(uri) {
+		return "", false
+	}
+	relative := filepath.ToSlash(filepath.Clean(strings.TrimPrefix(uri, "./")))
+	if strings.HasPrefix(relative, "../") {
+		return "", false
+	}
+	if _, err := os.Stat(filepath.Join(c.root, filepath.FromSlash(relative))); err == nil {
+		return "", false
+	}
+	c.build()
+	var match string
+	for _, candidate := range c.byName[filepath.Base(relative)] {
+		if strings.HasSuffix(candidate, "/"+relative) {
+			if match != "" {
+				return "", false // ambiguous: two modules hold the same path
+			}
+			match = candidate
+		}
+	}
+	return match, match != ""
+}
+
+func (c *checkoutIndex) build() {
+	if c.built {
+		return
+	}
+	c.built = true
+	c.byName = map[string][]string{}
+	count := 0
+	_ = filepath.WalkDir(c.root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if path != c.root && checkoutIndexSkipDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if count >= maxCheckoutIndexFiles {
+			return filepath.SkipAll
+		}
+		relative, relErr := filepath.Rel(c.root, path)
+		if relErr != nil {
+			return nil
+		}
+		count++
+		c.byName[entry.Name()] = append(c.byName[entry.Name()], filepath.ToSlash(relative))
+		return nil
+	})
+}
+
+// maxFingerprintSourceBytes skips generated or minified files too large to be
+// worth reading for a five-line context window.
+const maxFingerprintSourceBytes = 8 << 20
+
+// sourceFileReader resolves a SARIF artifact location the way scanners write
+// them: an absolute file:// URI, a path under a file:// originalUriBaseIds
+// entry, or a path relative to the source root (the CI checkout).
+func sourceFileReader(sourceRoot string) sarif.SourceReader {
+	return func(uri, baseURI string) ([]byte, error) {
+		path, err := resolveSourcePath(sourceRoot, uri, baseURI)
+		if err != nil {
+			return nil, err
+		}
+		// #nosec G304 -- the CLI reads the CI checkout files that the user's own SARIF names, with the user's privileges
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() || info.Size() > maxFingerprintSourceBytes {
+			return nil, errors.New("not a readable source file")
+		}
+		return io.ReadAll(file)
+	}
+}
+
+func resolveSourcePath(sourceRoot, uri, baseURI string) (string, error) {
+	if path, ok := fileURIPath(uri); ok {
+		return path, nil
+	}
+	relative, err := url.PathUnescape(uri)
+	if err != nil {
+		relative = uri
+	}
+	if strings.Contains(relative, "://") {
+		return "", errors.New("unsupported uri scheme")
+	}
+	if base, ok := fileURIPath(baseURI); ok {
+		return filepath.Join(base, filepath.FromSlash(relative)), nil
+	}
+	if filepath.IsAbs(relative) {
+		return relative, nil
+	}
+	return filepath.Join(sourceRoot, filepath.FromSlash(relative)), nil
+}
+
+func fileURIPath(uri string) (string, bool) {
+	if !strings.HasPrefix(uri, "file://") {
+		return "", false
+	}
+	parsed, err := url.Parse(uri)
+	if err != nil || parsed.Path == "" {
+		return "", false
+	}
+	return filepath.FromSlash(parsed.Path), true
 }
 
 func runUploadComplete() error {
@@ -511,5 +705,8 @@ func init() {
 		command.Flags().BoolVar(&uploadComplete, "complete", true, "Complete the snapshot after uploading (set --complete=false for multi-job pipelines)")
 		command.Flags().BoolVar(&uploadNoComplete, "no-complete", false, "Do not complete the snapshot after uploading")
 		command.Flags().IntVar(&uploadExpect, "expect", 0, "Expected number of upload calls for auto-completion (0 = disabled)")
+		command.Flags().StringVar(&uploadScope, "scope", "", "Override the scope .hibou.yaml's scanners section gives this upload: 'full' or 'partial'")
+		command.Flags().StringArrayVar(&uploadPaths, "path", nil, "File or directory a partial scan analysed (repeatable; implies --scope=partial)")
+		command.Flags().StringVar(&uploadSourceRoot, "source-root", ".", "Checkout root that relative SARIF paths resolve against (used to fingerprint findings by content)")
 	}
 }

@@ -198,6 +198,7 @@
                   <div class="flex items-center gap-1.5">
                     <span>{{ vulnerability.scanner_name || 'n/a' }}</span>
                     <FindingOriginBadge :finding="vulnerability" />
+                    <PresenceBadge :finding="vulnerability" />
                   </div>
                 </td>
                 <td class="px-3 py-2.5 text-gray-400">
@@ -244,6 +245,7 @@ import FilterBar from '@/components/FilterBar.vue'
 import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
+import PresenceBadge from '@/components/finding/PresenceBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import CweChips from '@/components/finding/CweChips.vue'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
@@ -296,6 +298,7 @@ const filterDefs = computed(() => [
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
   { key: 'acceptance', label: 'Triage', options: ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed'] },
+  { key: 'presence', label: 'Presence', options: ['reported', 'not-rechecked', 'unconfirmed'], multi: true },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
   // ADR-037. No org facet endpoint: completion searches the catalog.

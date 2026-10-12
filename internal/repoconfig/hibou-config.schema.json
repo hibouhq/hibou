@@ -32,6 +32,13 @@
     "releases": {
       "$ref": "#/$defs/releasesConfig",
       "description": "Optional release derivation settings (ADR-024): which tags count as releases when their analysis snapshot is uploaded."
+    },
+    "scanners": {
+      "type": "object",
+      "description": "How CI runs each scanner (ADR-034 §2), keyed by the SARIF tool name (tool.driver.name, case-insensitive). Describes coverage only; enabling or requiring scanners stays in hibou (ADR-035). An upload's own --scope/--path or scan plan binding wins over this.",
+      "additionalProperties": {
+        "$ref": "#/$defs/scannerRun"
+      }
     }
   },
   "$defs": {
@@ -343,6 +350,34 @@
         }
       },
       "description": "Deny new findings by CWE (ADR-037). Every list uses the same compiler as the cwe:, cwe-tree:, cwe-set: and cwe-category: filter qualifiers."
+    },
+    "scannerRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "full",
+            "partial",
+            "changed-files"
+          ],
+          "description": "full: the whole repository is scanned (the default when a tool is not listed). partial: only `paths` (or an unknown part, when none) is scanned. changed-files: on pull requests only the files the PR changes are scanned, derived by hibou from the PR comparison; branch builds are full."
+        },
+        "paths": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "description": "Directories or files a partial scan covers, relative to the repository root. Only with scope partial."
+        }
+      }
     }
   }
 }

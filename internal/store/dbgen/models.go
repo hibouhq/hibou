@@ -271,6 +271,49 @@ func (ns NullFindingOrigin) Value() (driver.Value, error) {
 	return string(ns.FindingOrigin), nil
 }
 
+type FindingPresence string
+
+const (
+	FindingPresenceReported     FindingPresence = "reported"
+	FindingPresenceNotRechecked FindingPresence = "not_rechecked"
+	FindingPresenceUnconfirmed  FindingPresence = "unconfirmed"
+)
+
+func (e *FindingPresence) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = FindingPresence(s)
+	case string:
+		*e = FindingPresence(s)
+	default:
+		return fmt.Errorf("unsupported scan type for FindingPresence: %T", src)
+	}
+	return nil
+}
+
+type NullFindingPresence struct {
+	FindingPresence FindingPresence `json:"finding_presence"`
+	Valid           bool            `json:"valid"` // Valid is true if FindingPresence is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullFindingPresence) Scan(value interface{}) error {
+	if value == nil {
+		ns.FindingPresence, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.FindingPresence.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullFindingPresence) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.FindingPresence), nil
+}
+
 type IntegrationType string
 
 const (
@@ -493,6 +536,91 @@ func (ns NullNotificationStatus) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return string(ns.NotificationStatus), nil
+}
+
+type ProducerRunOutcome string
+
+const (
+	ProducerRunOutcomeCompleted ProducerRunOutcome = "completed"
+	ProducerRunOutcomePartial   ProducerRunOutcome = "partial"
+	ProducerRunOutcomeFailed    ProducerRunOutcome = "failed"
+)
+
+func (e *ProducerRunOutcome) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ProducerRunOutcome(s)
+	case string:
+		*e = ProducerRunOutcome(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ProducerRunOutcome: %T", src)
+	}
+	return nil
+}
+
+type NullProducerRunOutcome struct {
+	ProducerRunOutcome ProducerRunOutcome `json:"producer_run_outcome"`
+	Valid              bool               `json:"valid"` // Valid is true if ProducerRunOutcome is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullProducerRunOutcome) Scan(value interface{}) error {
+	if value == nil {
+		ns.ProducerRunOutcome, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ProducerRunOutcome.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullProducerRunOutcome) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ProducerRunOutcome), nil
+}
+
+type ProducerRunScope string
+
+const (
+	ProducerRunScopeFull    ProducerRunScope = "full"
+	ProducerRunScopePartial ProducerRunScope = "partial"
+)
+
+func (e *ProducerRunScope) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ProducerRunScope(s)
+	case string:
+		*e = ProducerRunScope(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ProducerRunScope: %T", src)
+	}
+	return nil
+}
+
+type NullProducerRunScope struct {
+	ProducerRunScope ProducerRunScope `json:"producer_run_scope"`
+	Valid            bool             `json:"valid"` // Valid is true if ProducerRunScope is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullProducerRunScope) Scan(value interface{}) error {
+	if value == nil {
+		ns.ProducerRunScope, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ProducerRunScope.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullProducerRunScope) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ProducerRunScope), nil
 }
 
 type Reachability string
@@ -1121,6 +1249,7 @@ type ComparePatchCache struct {
 	Truncated bool            `json:"truncated"`
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"created_at"`
+	PathsOnly bool            `json:"paths_only"`
 }
 
 type Component struct {
@@ -1139,6 +1268,20 @@ type ComponentDependency struct {
 	ComponentID          uuid.UUID `json:"component_id"`
 	DependsOnComponentID uuid.UUID `json:"depends_on_component_id"`
 	CreatedAt            time.Time `json:"created_at"`
+}
+
+type CoverageException struct {
+	ID            uuid.UUID     `json:"id"`
+	RepoID        uuid.UUID     `json:"repo_id"`
+	RequirementID uuid.UUID     `json:"requirement_id"`
+	Scope         string        `json:"scope"`
+	Reason        string        `json:"reason"`
+	Status        string        `json:"status"`
+	RequestedBy   uuid.NullUUID `json:"requested_by"`
+	DecidedBy     uuid.NullUUID `json:"decided_by"`
+	DecidedAt     sql.NullTime  `json:"decided_at"`
+	ExpiresAt     time.Time     `json:"expires_at"`
+	CreatedAt     time.Time     `json:"created_at"`
 }
 
 type CoverageFile struct {
@@ -1266,6 +1409,20 @@ type FindingAcceptance struct {
 	VexJustification NullVexJustification `json:"vex_justification"`
 }
 
+type FindingAssertion struct {
+	RepoID                uuid.UUID      `json:"repo_id"`
+	Fingerprint           string         `json:"fingerprint"`
+	LastConfirmedAt       sql.NullTime   `json:"last_confirmed_at"`
+	LastConfirmedBy       uuid.NullUUID  `json:"last_confirmed_by"`
+	LastConfirmedApiKeyID uuid.NullUUID  `json:"last_confirmed_api_key_id"`
+	ClosedKind            sql.NullString `json:"closed_kind"`
+	ClosedAt              sql.NullTime   `json:"closed_at"`
+	ClosedBy              uuid.NullUUID  `json:"closed_by"`
+	ClosedApiKeyID        uuid.NullUUID  `json:"closed_api_key_id"`
+	ClosedReason          sql.NullString `json:"closed_reason"`
+	UpdatedAt             time.Time      `json:"updated_at"`
+}
+
 type FindingCwe struct {
 	VulnerabilityID uuid.UUID `json:"vulnerability_id"`
 	CweID           int32     `json:"cwe_id"`
@@ -1289,6 +1446,19 @@ type FindingDispute struct {
 	Reason      string        `json:"reason"`
 	DisputedBy  uuid.NullUUID `json:"disputed_by"`
 	CreatedAt   time.Time     `json:"created_at"`
+}
+
+type FindingResolution struct {
+	ID          uuid.UUID `json:"id"`
+	RepoID      uuid.UUID `json:"repo_id"`
+	RefID       uuid.UUID `json:"ref_id"`
+	SnapshotID  uuid.UUID `json:"snapshot_id"`
+	Type        string    `json:"type"`
+	Fingerprint string    `json:"fingerprint"`
+	Producer    string    `json:"producer"`
+	Reason      string    `json:"reason"`
+	CommitSha   string    `json:"commit_sha"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type ForgeOrgAdmin struct {
@@ -1472,6 +1642,35 @@ type PrCheckResolvedFingerprint struct {
 	Fingerprint string    `json:"fingerprint"`
 }
 
+type ProducerPolicy struct {
+	OrgID     uuid.UUID     `json:"org_id"`
+	Producer  string        `json:"producer"`
+	Policy    string        `json:"policy"`
+	Threshold int32         `json:"threshold"`
+	UpdatedBy uuid.NullUUID `json:"updated_by"`
+	UpdatedAt time.Time     `json:"updated_at"`
+}
+
+type ProducerRun struct {
+	ID            uuid.UUID          `json:"id"`
+	SnapshotID    uuid.UUID          `json:"snapshot_id"`
+	ArtifactID    uuid.NullUUID      `json:"artifact_id"`
+	RunIndex      int32              `json:"run_index"`
+	Producer      string             `json:"producer"`
+	Version       sql.NullString     `json:"version"`
+	ConfigDigest  sql.NullString     `json:"config_digest"`
+	Scope         ProducerRunScope   `json:"scope"`
+	ScopeDeclared bool               `json:"scope_declared"`
+	ScopePaths    []string           `json:"scope_paths"`
+	Outcome       ProducerRunOutcome `json:"outcome"`
+	SkippedFiles  json.RawMessage    `json:"skipped_files"`
+	FindingCount  int32              `json:"finding_count"`
+	Detail        sql.NullString     `json:"detail"`
+	CreatedAt     time.Time          `json:"created_at"`
+	PlanID        uuid.NullUUID      `json:"plan_id"`
+	PlanJobID     sql.NullString     `json:"plan_job_id"`
+}
+
 type ProductPackageMapping struct {
 	ID             uuid.UUID       `json:"id"`
 	SubscriptionID uuid.UUID       `json:"subscription_id"`
@@ -1537,6 +1736,36 @@ type Release struct {
 	DismissedCommitSha sql.NullString  `json:"dismissed_commit_sha"`
 }
 
+type RepoApplicability struct {
+	ID                uuid.UUID       `json:"id"`
+	RepoID            uuid.UUID       `json:"repo_id"`
+	RefName           string          `json:"ref_name"`
+	CommitSha         string          `json:"commit_sha"`
+	DetectionRevision string          `json:"detection_revision"`
+	CatalogRevision   string          `json:"catalog_revision"`
+	Status            string          `json:"status"`
+	Result            json.RawMessage `json:"result"`
+	CreatedAt         time.Time       `json:"created_at"`
+}
+
+type RepoScannerSetting struct {
+	RepoID    uuid.UUID     `json:"repo_id"`
+	ScannerID string        `json:"scanner_id"`
+	Mode      string        `json:"mode"`
+	UpdatedBy uuid.NullUUID `json:"updated_by"`
+	UpdatedAt time.Time     `json:"updated_at"`
+}
+
+type RepoScopeOverride struct {
+	ID        uuid.UUID     `json:"id"`
+	RepoID    uuid.UUID     `json:"repo_id"`
+	Kind      string        `json:"kind"`
+	Path      string        `json:"path"`
+	Reason    string        `json:"reason"`
+	CreatedBy uuid.NullUUID `json:"created_by"`
+	CreatedAt time.Time     `json:"created_at"`
+}
+
 type Repository struct {
 	ID                     uuid.UUID     `json:"id"`
 	OrgID                  uuid.UUID     `json:"org_id"`
@@ -1562,6 +1791,34 @@ type Scan struct {
 	StartedAt          sql.NullTime `json:"started_at"`
 	CompletedAt        sql.NullTime `json:"completed_at"`
 	CreatedAt          time.Time    `json:"created_at"`
+}
+
+type ScanCoverage struct {
+	RepoID      uuid.UUID    `json:"repo_id"`
+	ScannerID   string       `json:"scanner_id"`
+	State       string       `json:"state"`
+	Reason      string       `json:"reason"`
+	Configured  string       `json:"configured"`
+	Required    bool         `json:"required"`
+	Enforcement string       `json:"enforcement"`
+	LastRunAt   sql.NullTime `json:"last_run_at"`
+	LastCommit  string       `json:"last_commit"`
+	ComputedAt  time.Time    `json:"computed_at"`
+}
+
+type ScanPlan struct {
+	ID                uuid.UUID       `json:"id"`
+	RepoID            uuid.UUID       `json:"repo_id"`
+	RefName           string          `json:"ref_name"`
+	CommitSha         string          `json:"commit_sha"`
+	BaseCommitSha     sql.NullString  `json:"base_commit_sha"`
+	Mode              string          `json:"mode"`
+	Digest            string          `json:"digest"`
+	DetectionRevision string          `json:"detection_revision"`
+	CatalogRevision   string          `json:"catalog_revision"`
+	Plan              json.RawMessage `json:"plan"`
+	CreatedByApiKeyID uuid.NullUUID   `json:"created_by_api_key_id"`
+	CreatedAt         time.Time       `json:"created_at"`
 }
 
 type ScanProvider struct {
@@ -1600,6 +1857,18 @@ type ScanRule struct {
 type ScanRuleCwe struct {
 	ScanRuleID uuid.UUID `json:"scan_rule_id"`
 	CweID      int32     `json:"cwe_id"`
+}
+
+type ScannerRequirement struct {
+	ID            uuid.UUID     `json:"id"`
+	OrgID         uuid.UUID     `json:"org_id"`
+	Language      string        `json:"language"`
+	Capability    string        `json:"capability"`
+	ScannerIds    []string      `json:"scanner_ids"`
+	FreshnessDays int32         `json:"freshness_days"`
+	Enforcement   string        `json:"enforcement"`
+	CreatedBy     uuid.NullUUID `json:"created_by"`
+	CreatedAt     time.Time     `json:"created_at"`
 }
 
 type SearchPreset struct {
@@ -1665,17 +1934,23 @@ type Snapshot struct {
 }
 
 type SnapshotArtifact struct {
-	ID          uuid.UUID      `json:"id"`
-	SnapshotID  uuid.UUID      `json:"snapshot_id"`
-	Kind        string         `json:"kind"`
-	Format      sql.NullString `json:"format"`
-	ToolName    sql.NullString `json:"tool_name"`
-	ObjectKey   string         `json:"object_key"`
-	Sha256      sql.NullString `json:"sha256"`
-	SizeBytes   int64          `json:"size_bytes"`
-	ContentType sql.NullString `json:"content_type"`
-	CreatedAt   time.Time      `json:"created_at"`
-	Filename    string         `json:"filename"`
+	ID           uuid.UUID      `json:"id"`
+	SnapshotID   uuid.UUID      `json:"snapshot_id"`
+	Kind         string         `json:"kind"`
+	Format       sql.NullString `json:"format"`
+	ToolName     sql.NullString `json:"tool_name"`
+	ObjectKey    string         `json:"object_key"`
+	Sha256       sql.NullString `json:"sha256"`
+	SizeBytes    int64          `json:"size_bytes"`
+	ContentType  sql.NullString `json:"content_type"`
+	CreatedAt    time.Time      `json:"created_at"`
+	Filename     string         `json:"filename"`
+	Scope        sql.NullString `json:"scope"`
+	ScopePaths   []string       `json:"scope_paths"`
+	ToolVersion  sql.NullString `json:"tool_version"`
+	ConfigDigest sql.NullString `json:"config_digest"`
+	PlanID       uuid.NullUUID  `json:"plan_id"`
+	PlanJobID    sql.NullString `json:"plan_job_id"`
 }
 
 type SnapshotCodeRef struct {
@@ -1854,6 +2129,11 @@ type Vulnerability struct {
 	CvssVersion             NullCvssVersion  `json:"cvss_version"`
 	CvssVector              string           `json:"cvss_vector"`
 	RatedBy                 string           `json:"rated_by"`
+	Presence                FindingPresence  `json:"presence"`
+	PresenceReason          sql.NullString   `json:"presence_reason"`
+	LastSeenSnapshotID      uuid.NullUUID    `json:"last_seen_snapshot_id"`
+	LastSeenCommit          sql.NullString   `json:"last_seen_commit"`
+	ConsecutiveAbsences     int32            `json:"consecutive_absences"`
 }
 
 type VulnerabilityExternalIssue struct {

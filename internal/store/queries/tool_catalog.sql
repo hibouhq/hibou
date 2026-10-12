@@ -73,3 +73,23 @@ WHERE s.org_id = $1
     AND LOWER(COALESCE(cr.format, '')) IN ('cobertura', 'jacoco', 'clover', 'lcov', 'gocover')
 GROUP BY COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown')
 ORDER BY COALESCE(NULLIF(TRIM(cr.format), ''), 'unknown');
+
+-- name: ListProducerRunToolStats :many
+-- Per producer: when it last ran, its latest outcome, and its last failure
+-- (ADR-034 §2). Feeds the tool catalog's health and "latest run partial or
+-- failed" warning.
+SELECT
+    pr.producer,
+    MAX(pr.created_at) AS last_run_at,
+    MAX(pr.created_at) FILTER (WHERE pr.outcome = 'completed') AS last_success_at,
+    MAX(pr.created_at) FILTER (WHERE pr.outcome = 'failed') AS last_error_at,
+    COALESCE((ARRAY_AGG(pr.detail ORDER BY pr.created_at DESC)
+        FILTER (WHERE pr.outcome = 'failed' AND pr.detail IS NOT NULL))[1], '')::text AS last_error,
+    COALESCE((ARRAY_AGG(pr.outcome::text ORDER BY pr.created_at DESC))[1], '')::text AS last_outcome,
+    COUNT(*)::bigint AS run_count,
+    COUNT(DISTINCT s.repo_id)::bigint AS repo_count
+FROM producer_runs pr
+JOIN snapshots s ON s.id = pr.snapshot_id
+WHERE s.org_id = $1
+GROUP BY pr.producer
+ORDER BY pr.producer;

@@ -265,6 +265,15 @@ func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref 
 // truncated tree (GitHub caps ~100k entries) returns what was received —
 // resolution then degrades to exact-path matches for anything missing.
 func (g *GitHub) ListTreePaths(ctx context.Context, owner, repo, ref string) ([]string, error) {
+	listing, err := g.ListTree(ctx, owner, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	return listing.Paths, nil
+}
+
+// ListTree is ListTreePaths with GitHub's truncation flag kept.
+func (g *GitHub) ListTree(ctx context.Context, owner, repo, ref string) (*TreeListing, error) {
 	requestPath := fmt.Sprintf(
 		"/repos/%s/%s/git/trees/%s?recursive=1",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref),
@@ -296,7 +305,7 @@ func (g *GitHub) ListTreePaths(ctx context.Context, owner, repo, ref string) ([]
 			paths = append(paths, entry.Path)
 		}
 	}
-	return paths, nil
+	return &TreeListing{Paths: paths, Truncated: payload.Truncated}, nil
 }
 
 func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {

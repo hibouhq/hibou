@@ -409,3 +409,7 @@ func (q *Queries) CountComponentsByOrg(ctx context.Context, orgID uuid.UUID) (in
 func (q *Queries) ListScansBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.Scan, error) {
 	return q.db.ListScansBySnapshot(ctx, snapshotID)
 }
+
+func (q *Queries) ListProducerRunToolStats(ctx context.Context, orgID uuid.UUID) ([]dbgen.ListProducerRunToolStatsRow, error) {
+	return q.db.ListProducerRunToolStats(ctx, orgID)
+}

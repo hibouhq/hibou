@@ -90,6 +90,10 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 		// Lowercased so the same scanner keys identically wherever the name
 		// appears (SARIF driver "Trivy", server-side provider "trivy").
 		toolName := strings.ToLower(strings.TrimSpace(run.Tool.Driver.Name))
+		toolVersion := strings.TrimSpace(run.Tool.Driver.Version)
+		if toolVersion == "" {
+			toolVersion = strings.TrimSpace(run.Tool.Driver.SemanticVersion)
+		}
 		taxonomy := newCWETaxonomy(run)
 		for _, result := range run.Results {
 			rule := resolveRule(run.Tool, result)
@@ -108,6 +112,8 @@ func ExtractFindings(doc *Document, repoID string) ([]Finding, error) {
 
 			finding := Finding{
 				Tool:         toolName,
+				ToolVersion:  toolVersion,
+				TraceFiles:   codeFlowFiles(result.CodeFlows),
 				RuleID:       ruleID,
 				Severity:     mapSeverity(result.Level),
 				FilePath:     filePath,
@@ -440,4 +446,36 @@ func firstFingerprintValue(values map[string]string) string {
 func sha256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+// codeFlowFiles lists the distinct files of a result's code flows
+// (codeFlows[].threadFlows[].locations[].location.physicalLocation), in
+// first-seen order. Decoded loosely: codeFlows stay untyped elsewhere.
+func codeFlowFiles(codeFlows []map[string]any) []string {
+	files := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, codeFlow := range codeFlows {
+		threadFlows, _ := codeFlow["threadFlows"].([]any)
+		for _, rawThread := range threadFlows {
+			thread, _ := rawThread.(map[string]any)
+			locations, _ := thread["locations"].([]any)
+			for _, rawLocation := range locations {
+				threadLocation, _ := rawLocation.(map[string]any)
+				location, _ := threadLocation["location"].(map[string]any)
+				physical, _ := location["physicalLocation"].(map[string]any)
+				artifact, _ := physical["artifactLocation"].(map[string]any)
+				uri, _ := artifact["uri"].(string)
+				uri = strings.TrimSpace(uri)
+				if uri == "" {
+					continue
+				}
+				if _, dup := seen[uri]; dup {
+					continue
+				}
+				seen[uri] = struct{}{}
+				files = append(files, uri)
+			}
+		}
+	}
+	return files
 }

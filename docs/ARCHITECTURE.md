@@ -92,6 +92,12 @@ forge webhooks ─────────▶ refs ◀── snapshots ──▶
    you add an interface — a missed forwarding method once shipped a gate that
    silently never ran (ADR-029's implementation notes).
 
+What a finding missing from a new snapshot means (carried forward, not
+re-checked, unconfirmed or resolved on evidence), and how bundled scanners
+are planned, run in CI and proven to have run, is described in
+[FINDING-PRESENCE-AND-SCANNERS.md](FINDING-PRESENCE-AND-SCANNERS.md). Read it
+before changing presence, the delta or the scanner packages.
+
 ## Domain model anchors
 
 `organizations → repositories → refs (branches/PRs,

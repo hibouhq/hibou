@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -281,5 +283,69 @@ func TestResolveUploadContextGitLabMergedResultsUsesSourceBranchSHA(t *testing.T
 
 	if ctx.commitSHA != "realhead4242" {
 		t.Fatalf("commitSHA = %q, want the MR source branch head", ctx.commitSHA)
+	}
+}
+
+func TestWithContextFingerprintsReadsCheckout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "io.go"), []byte("package pkg\n\nfunc f() {\n\tos.ReadFile(p)\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc := []byte(`{"runs":[{"tool":{"driver":{"name":"gosec"}},"results":[{"ruleId":"G304","locations":[{"physicalLocation":{"artifactLocation":{"uri":"pkg/io.go"},"region":{"startLine":4}}}]}]}]}`)
+	if out := withContextFingerprints(doc, root); !strings.Contains(string(out), "hibou/contextHash/v1") {
+		t.Fatalf("expected a content fingerprint, got %s", out)
+	}
+	if out := withContextFingerprints(doc, t.TempDir()); string(out) != string(doc) {
+		t.Fatal("missing source must upload the file unchanged")
+	}
+	sbom := []byte(`{"bomFormat":"CycloneDX"}`)
+	if out := withContextFingerprints(sbom, root); string(out) != string(sbom) {
+		t.Fatal("non-SARIF must pass through")
+	}
+}
+
+func TestResolveSourcePath(t *testing.T) {
+	cases := []struct{ uri, base, want string }{
+		{"pkg/a.go", "", filepath.Join("/root", "pkg", "a.go")},
+		{"a%20b.go", "", filepath.Join("/root", "a b.go")},
+		{"file:///abs/a.go", "", "/abs/a.go"},
+		{"a.go", "file:///src/", filepath.Join("/src", "a.go")},
+	}
+	for _, tc := range cases {
+		got, err := resolveSourcePath("/root", tc.uri, tc.base)
+		if err != nil || got != tc.want {
+			t.Errorf("resolveSourcePath(%q, %q) = %q, %v; want %q", tc.uri, tc.base, got, err, tc.want)
+		}
+	}
+	if _, err := resolveSourcePath("/root", "https://x/a.go", ""); err == nil {
+		t.Error("remote uri must be rejected")
+	}
+}
+
+// SpotBugs writes paths relative to the Java source root; the upload makes
+// them repo-relative so change checks and links match the forge.
+func TestWithRepoRelativePaths(t *testing.T) {
+	root := t.TempDir()
+	for _, path := range []string{"java/src/main/java/com/acme/App.java", "a/Dup.java", "b/Dup.java", "java/target/classes/com/acme/App.java"} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("class X {}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := []byte(`{"runs":[{"tool":{"driver":{"name":"SpotBugs"}},"results":[
+	  {"ruleId":"A","locations":[{"physicalLocation":{"artifactLocation":{"uri":"com/acme/App.java"},"region":{"startLine":1}}}]},
+	  {"ruleId":"B","locations":[{"physicalLocation":{"artifactLocation":{"uri":"Dup.java"},"region":{"startLine":1}}}]}]}]}`)
+	out := string(withRepoRelativePaths(doc, root))
+	if !strings.Contains(out, `"java/src/main/java/com/acme/App.java"`) {
+		t.Fatalf("source-root path not rewritten: %s", out)
+	}
+	if !strings.Contains(out, `"Dup.java"`) {
+		t.Fatalf("ambiguous path must stay as written: %s", out)
 	}
 }

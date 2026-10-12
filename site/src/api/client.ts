@@ -327,6 +327,233 @@ export interface SnapshotFile {
   created_at: string
 }
 
+/** A file a producer did not analyse (ADR-034 §2). */
+export interface SkippedFile {
+  path: string
+  /** timeout | too_large | parse_error | resource_limit | other */
+  reason: string
+}
+
+export interface ProducerRun {
+  id: string
+  snapshot_id: string
+  artifact_id?: string
+  run_index: number
+  producer: string
+  version?: string
+  config_digest?: string
+  scope: 'full' | 'partial'
+  scope_declared: boolean
+  scope_paths: string[]
+  outcome: 'completed' | 'partial' | 'failed' | ''
+  skipped_files: SkippedFile[]
+  finding_count: number
+  detail?: string
+  created_at: string
+}
+
+/** One producer's scan coverage on a snapshot, compared with the previous
+ * finished snapshot of the ref. */
+export interface ProducerCoverage {
+  producer: string
+  status: 'ran' | 'new' | 'missing' | 'pending'
+  outcome?: 'completed' | 'partial' | 'failed'
+  version?: string
+  previous_version?: string
+  scope?: 'full' | 'partial'
+  scope_declared: boolean
+  scope_paths: string[]
+  finding_count: number
+  skipped_files: SkippedFile[]
+  detail?: string
+  runs: ProducerRun[]
+}
+
+export interface SnapshotProducerRuns {
+  snapshot_id: string
+  commit_sha: string
+  previous_snapshot_id?: string
+  previous_commit_sha?: string
+  producers: ProducerCoverage[]
+}
+
+/** One entry of the org tool catalog (internal/toolcatalog). */
+export interface ToolCatalogEntry {
+  name: string
+  category: 'advisory_provider' | 'sast' | 'secret_scanning' | 'sbom_generator' | 'vex_source' | 'coverage'
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'inactive'
+  last_seen_at: string
+  last_success_at?: string
+  last_error_at?: string
+  last_error?: string
+  data_points: number
+  repo_count: number
+  last_outcome?: 'completed' | 'partial' | 'failed'
+  warning?: string
+  resolution_policy?: ProducerPolicyKind
+  policy_threshold?: number
+}
+
+/** How a producer's absent findings are resolved (ADR-034 §5). */
+export type ProducerPolicyKind = 'coverage' | 'consecutive-absence' | 'explicit' | 'retired'
+
+export interface ProducerPolicy {
+  producer: string
+  policy: ProducerPolicyKind
+  threshold: number
+  updated_at: string
+}
+
+export interface ToolCatalog {
+  org_name: string
+  generated_at: string
+  tools: ToolCatalogEntry[]
+}
+
+/** Scanner applicability of a repository (ADR-035 §3). */
+export interface ScannerCapability {
+  language: string
+  capability: string
+  /** "declared" or "measured:<where>" */
+  evidence: string
+}
+
+export interface ApplicabilityResult {
+  revision: string
+  status: 'complete' | 'truncated' | 'unknown'
+  file_count: number
+  languages: Record<string, number>
+  modules: Array<{ root: string; build_system: string; manifest: string; languages: string[] }>
+  exclusions: Array<{ path: string; reason: string }>
+  applicable: Array<{ scanner_id: string; preview?: boolean; modules: string[]; languages: string[]; capabilities: ScannerCapability[]; reason: string }>
+  text_only: boolean
+  owner_exclusions?: Array<{ path: string; reason: string; languages: string[]; applied: boolean; blocked?: string }>
+}
+
+export interface RepoScopeOverride {
+  id: string
+  kind: 'exclude' | 'module_root'
+  path: string
+  reason: string
+  created_at: string
+}
+
+export interface RepoApplicability {
+  id: string
+  ref_name: string
+  commit_sha: string
+  detection_revision: string
+  catalog_revision: string
+  status: ApplicabilityResult['status']
+  result: ApplicabilityResult
+  created_at: string
+}
+
+export interface ScannerCatalogEntry {
+  id: string
+  name: string
+  engine_version: string
+  license: string
+  support_status: 'supported' | 'preview'
+  prerelease: boolean
+  notes?: string
+  capabilities: ScannerCapability[]
+  rulesets: string[]
+}
+
+export interface ScannerCatalog {
+  revision: string
+  mode: 'upstream' | 'mirror' | 'offline'
+  scanners: ScannerCatalogEntry[]
+  rulesets: Array<{ id: string; name: string; license: string; status: string; notes?: string }>
+  /** The imported offline bundle, in offline mode only. */
+  bundle?: OfflineBundleStatus
+}
+
+export interface OfflineBundleStatus {
+  created_at?: string
+  catalog_revision?: string
+  matches_catalog: boolean
+  error?: string
+}
+
+/** A scan plan job (ADR-035 §4). */
+export interface ScanPlanJob {
+  id: string
+  scanner_id: string
+  status: 'ready' | 'blocked'
+  blocked_reason?: string
+  targets: string[]
+  exclusions: string[]
+  scope: 'full' | 'partial'
+  capabilities: ScannerCapability[]
+  artifact?: { url: string; sha256: string; source: string }
+  ruleset?: string
+  prerequisites: string[]
+  rationale: string
+}
+
+export interface ScanPlan {
+  digest: string
+  mode: 'baseline' | 'full' | 'sweep'
+  mode_reason: string
+  commit_sha: string
+  runner: { os: string; arch: string }
+  applicability_status: string
+  jobs: ScanPlanJob[]
+}
+
+/** Scanner policy (ADR-035 §5). */
+export interface ScannerDecision {
+  scanner_id: string
+  state: 'required' | 'enabled' | 'recommended' | 'disabled' | 'off' | 'not_applicable'
+  source: 'org-requirement' | 'repo' | 'org-default'
+  repo_mode: 'inherit' | 'enabled' | 'disabled'
+  requirements?: string[]
+  exempted?: string[]
+  applicable: boolean
+  preview?: boolean
+  reason: string
+}
+
+export interface ScannerRequirement {
+  id: string
+  language: string
+  capability: string
+  scanner_ids: string[]
+  freshness_days: number
+  enforcement: 'advisory' | 'blocking'
+  created_at: string
+}
+
+export interface CoverageException {
+  id: string
+  repo_id: string
+  repo_slug?: string
+  requirement_id: string
+  scope: string
+  reason: string
+  status: 'requested' | 'approved' | 'rejected'
+  expires_at: string
+  created_at: string
+}
+
+/** One repository × scanner cell of the org coverage matrix (ADR-035 §6). */
+export interface ScanCoverageCell {
+  repo_id: string
+  repo_slug?: string
+  repo_name?: string
+  scanner_id: string
+  state: string
+  reason: string
+  configured: string
+  required: boolean
+  enforcement?: string
+  last_run_at?: string
+  last_commit?: string
+  computed_at: string
+}
+
 export interface ComponentDelta {
   purl?: string
   name: string
@@ -640,6 +867,8 @@ export interface Ref {
   latest_commit_sha?: string
 }
 
+export type FindingPresence = 'reported' | 'not_rechecked' | 'unconfirmed'
+
 export interface Vulnerability {
   /** Advisory is on a known-exploited catalog (CISA KEV / ENISA EUVD). */
   kev?: boolean
@@ -704,6 +933,16 @@ export interface Vulnerability {
   origin_token_name?: string
   origin_owner_type?: string
   origin_owner_id?: string
+  // Presence (ADR-034): 'reported' when the producer reported the finding on
+  // this snapshot; 'not_rechecked' / 'unconfirmed' when it was carried
+  // forward because nothing re-checked it. Still open either way.
+  presence?: FindingPresence
+  presence_reason?: string
+  last_seen_snapshot_id?: string
+  last_seen_commit?: string
+  consecutive_absences?: number
+  /** Delta resolutions only: fixed | file_removed | no_longer_reported | producer_changed. */
+  resolution_reason?: string
   // Server-side acceptance projection (ADR-023); absent = open.
   acceptance?: FindingAcceptance
   // Server-side dispute projection (ADR-026); absent = suppression uncontested.
@@ -915,7 +1154,21 @@ export interface FindingHistory {
   truncated: boolean
 }
 
+/** Lifecycle of a manual or agent-filed finding (ADR-034 §4). */
+export interface FindingAssertion {
+  fingerprint: string
+  last_confirmed_at?: string
+  last_confirmed_by?: string
+  last_confirmed_api_key_id?: string
+  closed_kind?: 'resolved' | 'retracted'
+  closed_at?: string
+  closed_reason?: string
+  updated_at: string
+}
+
 export interface FindingDetail {
+  /** Manual and agent findings only. */
+  assertion?: FindingAssertion
   finding: Vulnerability
   advisory?: FindingAdvisory
   kev?: FindingKEV
@@ -1269,6 +1522,9 @@ export interface RefSummary {
 export interface DeltaResult {
   new_vulnerabilities: Vulnerability[]
   resolved_vulnerabilities: Vulnerability[]
+  /** Base findings the head build did not re-check (ADR-034 §6): not fixed,
+   * still counted. Each carries presence_reason. */
+  not_rechecked_vulnerabilities?: Vulnerability[]
   unchanged_vulnerabilities: number
 }
 
@@ -2514,6 +2770,127 @@ class ApiClient {
     )
   }
 
+  getScannerCatalog() {
+    return this.request<ApiResponse<ScannerCatalog>>('/scanner-catalog')
+  }
+
+  getRepoApplicability(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<{ applicability: RepoApplicability | null }>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/applicability`)
+  }
+
+  refreshRepoApplicability(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<{ applicability: RepoApplicability | null }>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/applicability/refresh`, { method: 'POST' })
+  }
+
+  previewScanPlan(provider: string, slug: string, repoSlug: string, runner: { os: string; arch: string }) {
+    return this.request<ApiResponse<{ plan: ScanPlan }>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/scan-plans`, {
+      method: 'POST',
+      body: JSON.stringify({ runner, dry_run: true }),
+    })
+  }
+
+  listScopeOverrides(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<RepoScopeOverride[]>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/scope-overrides`)
+  }
+
+  createScopeOverride(provider: string, slug: string, repoSlug: string, body: { kind: RepoScopeOverride['kind']; path: string; reason: string }) {
+    return this.request<ApiResponse<RepoScopeOverride>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/scope-overrides`, { method: 'POST', body: JSON.stringify(body) })
+  }
+
+  deleteScopeOverride(provider: string, slug: string, repoSlug: string, id: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}/scope-overrides?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  getRepoScannerSettings(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<{ decisions: ScannerDecision[]; requirements: ScannerRequirement[]; exceptions: CoverageException[] }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/scanner-settings`,
+    )
+  }
+
+  setRepoScannerSetting(provider: string, slug: string, repoSlug: string, scannerID: string, mode: ScannerDecision['repo_mode']) {
+    return this.request<ApiResponse<{ decisions: ScannerDecision[]; requirements: ScannerRequirement[]; exceptions: CoverageException[] }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/scanner-settings`,
+      { method: 'PUT', body: JSON.stringify({ scanner_id: scannerID, mode }) },
+    )
+  }
+
+  requestCoverageException(provider: string, slug: string, repoSlug: string, body: { requirement_id: string; reason: string; expires_in_days: number; scope?: string }) {
+    return this.request<ApiResponse<CoverageException>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/coverage-exceptions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  getScannerRequirements(provider: string, slug: string) {
+    return this.request<ApiResponse<{ requirements: ScannerRequirement[]; pending_exceptions: CoverageException[] }>>(`/orgs/${provider}/${slug}/scanner-requirements`)
+  }
+
+  setScannerRequirement(provider: string, slug: string, body: Pick<ScannerRequirement, 'language' | 'capability' | 'scanner_ids' | 'freshness_days' | 'enforcement'>) {
+    return this.request<ApiResponse<ScannerRequirement>>(`/orgs/${provider}/${slug}/scanner-requirements`, { method: 'PUT', body: JSON.stringify(body) })
+  }
+
+  deleteScannerRequirement(provider: string, slug: string, id: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/scanner-requirements?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  decideCoverageException(provider: string, slug: string, id: string, approve: boolean) {
+    return this.request<ApiResponse<CoverageException>>(`/orgs/${provider}/${slug}/coverage-exceptions/${id}/decision`, {
+      method: 'POST',
+      body: JSON.stringify({ approve }),
+    })
+  }
+
+  getOrgScanCoverage(provider: string, slug: string, filter: { state?: string; scanner?: string; required?: boolean; page?: number }) {
+    const query = new URLSearchParams()
+    if (filter.state) query.set('state', filter.state)
+    if (filter.scanner) query.set('scanner', filter.scanner)
+    if (filter.required) query.set('required', 'true')
+    if (filter.page) query.set('page', String(filter.page))
+    return this.request<ApiResponse<{ cells: ScanCoverageCell[]; summary: Array<{ state: string; required: boolean; cells: number }>; page: number; per_page: number }>>(
+      `/orgs/${provider}/${slug}/scan-coverage?${query.toString()}`,
+    )
+  }
+
+  orgScanCoverageCsvUrl(provider: string, slug: string, filter: { state?: string; scanner?: string; required?: boolean }) {
+    const query = new URLSearchParams({ format: 'csv' })
+    if (filter.state) query.set('state', filter.state)
+    if (filter.scanner) query.set('scanner', filter.scanner)
+    if (filter.required) query.set('required', 'true')
+    return `${API_BASE}/orgs/${provider}/${slug}/scan-coverage?${query.toString()}`
+  }
+
+  bulkScannerSetting(provider: string, slug: string, body: { scanner_id: string; mode: 'enabled' | 'disabled'; dry_run: boolean }) {
+    return this.request<ApiResponse<{ changes: Array<{ repo_id: string; repo_slug: string; from: string }>; kept: Array<{ repo_id: string; repo_slug: string; from: string }>; applied: boolean }>>(
+      `/orgs/${provider}/${slug}/scanner-settings/bulk`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )
+  }
+
+  refreshOrgScanCoverage(provider: string, slug: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/scan-coverage/refresh`, { method: 'POST' })
+  }
+
+  getToolCatalog(provider: string, slug: string) {
+    return this.request<ApiResponse<ToolCatalog>>(`/orgs/${provider}/${slug}/tool-catalog`)
+  }
+
+  setProducerPolicy(provider: string, slug: string, body: { producer: string; policy: ProducerPolicyKind; threshold: number }) {
+    return this.request<ApiResponse<ProducerPolicy>>(`/orgs/${provider}/${slug}/producer-policies`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+  }
+
+  resetProducerPolicy(provider: string, slug: string, producer: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/producer-policies?producer=${encodeURIComponent(producer)}`, { method: 'DELETE' })
+  }
+
+  getSnapshotProducerRuns(provider: string, slug: string, repoSlug: string, snapshotId: string) {
+    return this.request<ApiResponse<SnapshotProducerRuns>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/snapshots/${snapshotId}/producer-runs`,
+    )
+  }
+
   // Absolute path to download all of a snapshot's files as a zip. The browser
   // navigates here directly to start the download.
   snapshotArchiveUrl(provider: string, slug: string, repoSlug: string, snapshotId: string) {
@@ -2804,6 +3181,21 @@ class ApiClient {
 
   // ADR-026: contest an in-source suppression — the finding counts as open
   // until the directive is removed or the dispute withdrawn.
+  // ADR-034 §4: decisions on manual and agent findings.
+  reassertFinding(provider: string, slug: string, repoSlug: string, fingerprint: string) {
+    return this.request<ApiResponse<{ fingerprint: string; assertion: FindingAssertion }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/findings/${encodeURIComponent(fingerprint)}/reassert`,
+      { method: 'POST' },
+    )
+  }
+
+  closeAssertion(provider: string, slug: string, repoSlug: string, fingerprint: string, action: 'resolve' | 'retract', reason: string) {
+    return this.request<ApiResponse<{ fingerprint: string; assertion: FindingAssertion }>>(
+      `/orgs/${provider}/${slug}/repos/${repoSlug}/findings/${encodeURIComponent(fingerprint)}/${action}`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    )
+  }
+
   setFindingDispute(provider: string, slug: string, repoSlug: string, vulnID: string, reason: string) {
     return this.request<ApiResponse<FindingDispute>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/${vulnID}/dispute`,

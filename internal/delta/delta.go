@@ -11,14 +11,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/presence"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 type DeltaResult struct {
-	New       []store.Vulnerability `json:"new_vulnerabilities"`
-	Resolved  []store.Vulnerability `json:"resolved_vulnerabilities"`
-	Unchanged int                   `json:"unchanged_vulnerabilities"`
+	New      []store.Vulnerability `json:"new_vulnerabilities"`
+	Resolved []store.Vulnerability `json:"resolved_vulnerabilities"`
+	// NotRechecked are base findings the PR snapshot did not re-check
+	// (ADR-034 §6): their producer did not run, failed, or ran without their
+	// file. They are not fixed and keep counting; each carries presence
+	// "not_rechecked" and the reason.
+	NotRechecked []store.Vulnerability `json:"not_rechecked_vulnerabilities"`
+	Unchanged    int                   `json:"unchanged_vulnerabilities"`
 }
 
 type DeltaStore interface {
@@ -37,10 +43,11 @@ type vexScopeStore interface {
 }
 
 type Service struct {
-	store     DeltaStore
-	gateStore GateStore
-	vexStore  VEXStore
-	log       zerolog.Logger
+	store           DeltaStore
+	gateStore       GateStore
+	vexStore        VEXStore
+	presenceOptions PresenceOptionsFunc
+	log             zerolog.Logger
 }
 
 func NewService(store DeltaStore, log zerolog.Logger, vexStore ...VEXStore) *Service {
@@ -106,15 +113,131 @@ func (s *Service) ComputeDelta(ctx context.Context, prSnapshotID, targetSnapshot
 		resolved = append(resolved, vuln)
 	}
 	filteredNewVulns, resolved = cancelIdentityPairs(filteredNewVulns, resolved)
+	filteredNewVulns, resolved = cancelLineDriftPairs(filteredNewVulns, resolved, prSet, targetSet)
+	resolved, notRechecked, err := s.splitNotRechecked(ctx, prSnapshotID, targetSnapshotID, resolved)
+	if err != nil {
+		return nil, err
+	}
+	// Rows the PR snapshot carried forward are present, hence "unchanged",
+	// but nothing looked at them in this build either.
+	for key, vuln := range prSet {
+		if _, inTarget := targetSet[key]; inTarget && vuln.Presence != "" && vuln.Presence != store.PresenceReported {
+			notRechecked = append(notRechecked, vuln)
+		}
+	}
 	// Always emit empty (not nil) slices so the JSON arrays are [] not null.
 	if filteredNewVulns == nil {
 		filteredNewVulns = []store.Vulnerability{}
 	}
 	result.New = filteredNewVulns
 	result.Resolved = resolved
+	result.NotRechecked = notRechecked
 	result.Unchanged = unchanged
 
 	return result, nil
+}
+
+// coverageStore is satisfied by the real store. Without it the delta keeps
+// the pre-ADR-034 reading: everything absent from the PR is resolved.
+type coverageStore interface {
+	SnapshotProducerRuns(ctx context.Context, snapshotID uuid.UUID) ([]store.ProducerRun, error)
+	SnapshotCoverageKnown(ctx context.Context, snapshotID uuid.UUID) (bool, error)
+	GetSnapshotByID(ctx context.Context, id uuid.UUID) (*store.Snapshot, error)
+}
+
+// PresenceOptionsFunc loads the producer policies and forge change checker
+// for a head snapshot. The server provides it; the delta has no forge.
+type PresenceOptionsFunc func(ctx context.Context, headSnapshotID uuid.UUID) (presence.Options, error)
+
+// SetPresenceOptions lets PR deltas apply the code-change rule and the org's
+// producer policies (ADR-034 §6). Without it coverage alone decides.
+func (s *Service) SetPresenceOptions(fn PresenceOptionsFunc) {
+	if s != nil {
+		s.presenceOptions = fn
+	}
+}
+
+// splitNotRechecked separates, among base findings absent from the PR
+// snapshot, those the PR's producers actually covered (resolved) from those
+// nothing re-checked (ADR-034 §6). A PR snapshot is usually the first of its
+// ref, so nothing was carried into it: the PR's own producer runs decide. A
+// snapshot processed before runs were recorded keeps the old reading.
+func (s *Service) splitNotRechecked(ctx context.Context, prSnapshotID, targetSnapshotID uuid.UUID, resolved []store.Vulnerability) ([]store.Vulnerability, []store.Vulnerability, error) {
+	notRechecked := make([]store.Vulnerability, 0)
+	coverage, ok := s.store.(coverageStore)
+	if !ok || len(resolved) == 0 {
+		return resolved, notRechecked, nil
+	}
+	known, err := coverage.SnapshotCoverageKnown(ctx, prSnapshotID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load PR snapshot coverage: %w", err)
+	}
+	if !known {
+		return resolved, notRechecked, nil
+	}
+	prRuns, err := coverage.SnapshotProducerRuns(ctx, prSnapshotID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load PR producer runs: %w", err)
+	}
+	targetRuns, err := coverage.SnapshotProducerRuns(ctx, targetSnapshotID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load target producer runs: %w", err)
+	}
+	targetCommit := ""
+	if target, err := coverage.GetSnapshotByID(ctx, targetSnapshotID); err == nil && target != nil {
+		targetCommit = target.CommitSHA
+	}
+	opts := presence.Options{}
+	if s.presenceOptions != nil {
+		if loaded, err := s.presenceOptions(ctx, prSnapshotID); err != nil {
+			s.log.Warn().Err(err).Str("snapshot", prSnapshotID.String()).Msg("presence options unavailable; coverage alone decides")
+		} else {
+			opts = loaded
+		}
+	}
+
+	produced := make([]store.Vulnerability, 0, len(resolved))
+	// A resolved or retracted assertion was decided: it stays resolved.
+	decided := make([]store.Vulnerability, 0)
+	for _, vuln := range resolved {
+		if presence.ProducerOf(vuln) == "" {
+			if vuln.Status == "resolved" {
+				decided = append(decided, vuln)
+				continue
+			}
+			// An assertion has no producer to re-check it; ADR-034 §4 keeps
+			// it open until a decision (resolve, retract) ends it.
+			vuln.Presence = store.PresenceNotRechecked
+			reason := presence.ReasonAssertion
+			vuln.PresenceReason = &reason
+			notRechecked = append(notRechecked, vuln)
+			continue
+		}
+		produced = append(produced, vuln)
+	}
+	// The PR build against the base, through the same rules as a branch's
+	// next snapshot: not covered → not re-checked, covered but unchanged →
+	// unconfirmed, both kept on the base side (ADR-034 §6).
+	carries, resolutions := presence.Plan(
+		presence.Snapshot{ID: targetSnapshotID, CommitSHA: targetCommit, Rows: produced, Runs: targetRuns},
+		presence.Snapshot{ID: prSnapshotID, Runs: prRuns},
+		opts,
+	)
+	for _, carry := range carries {
+		vuln := carry.Source
+		vuln.Presence = carry.Presence
+		reason := carry.Reason
+		vuln.PresenceReason = &reason
+		notRechecked = append(notRechecked, vuln)
+	}
+	kept := append(make([]store.Vulnerability, 0, len(resolutions)+len(decided)), decided...)
+	for _, resolution := range resolutions {
+		vuln := resolution.Source
+		reason := resolution.Reason
+		vuln.ResolutionReason = &reason
+		kept = append(kept, vuln)
+	}
+	return kept, notRechecked, nil
 }
 
 // acceptanceStore is satisfied by the real store; acceptance filtering
@@ -459,6 +582,74 @@ func identityKey(vuln store.Vulnerability) string {
 	return strings.Join(parts, "|")
 }
 
+// cancelLineDriftPairs drops new/resolved pairs that are the same code finding
+// moved to another line (ADR-034 "Identity drift"). Most scanners emit no
+// fingerprint, so the fallback identity hashes the start line: adding lines
+// above a finding re-keys it, which reads as a new finding (and can fail a
+// gate) plus a false fix. A pair cancels only when its line-free key occurs
+// exactly once in each whole snapshot — two G101 hits in one file stay
+// unpaired, since which one moved cannot be told.
+func cancelLineDriftPairs(newVulns, resolved []store.Vulnerability, prSet, targetSet map[string]store.Vulnerability) ([]store.Vulnerability, []store.Vulnerability) {
+	if len(newVulns) == 0 || len(resolved) == 0 {
+		return newVulns, resolved
+	}
+	prCounts := driftKeyCounts(prSet)
+	targetCounts := driftKeyCounts(targetSet)
+	resolvedByKey := make(map[string]int, len(resolved))
+	for i, vuln := range resolved {
+		if key := driftKey(vuln); key != "" && prCounts[key] == 1 && targetCounts[key] == 1 {
+			resolvedByKey[key] = i
+		}
+	}
+	drop := make(map[int]struct{})
+	keptNew := newVulns[:0]
+	for _, vuln := range newVulns {
+		key := driftKey(vuln)
+		if i, ok := resolvedByKey[key]; ok && key != "" {
+			drop[i] = struct{}{}
+			delete(resolvedByKey, key)
+			continue
+		}
+		keptNew = append(keptNew, vuln)
+	}
+	keptResolved := make([]store.Vulnerability, 0, len(resolved))
+	for i, vuln := range resolved {
+		if _, ok := drop[i]; ok {
+			continue
+		}
+		keptResolved = append(keptResolved, vuln)
+	}
+	return keptNew, keptResolved
+}
+
+func driftKeyCounts(set map[string]store.Vulnerability) map[string]int {
+	counts := make(map[string]int, len(set))
+	for _, vuln := range set {
+		if key := driftKey(vuln); key != "" {
+			counts[key]++
+		}
+	}
+	return counts
+}
+
+// driftKey is identityKey without the line, plus the message so two different
+// diagnostics of one rule in one file are not confused. Only located code
+// findings qualify: dependency and secret rows have no line to drift.
+func driftKey(vuln store.Vulnerability) string {
+	filePath := strings.TrimSpace(ptrString(vuln.FilePath))
+	identifier := strings.TrimSpace(vuln.PrimaryIdentifierValue)
+	if filePath == "" || identifier == "" || vuln.StartLine == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(vuln.Type)),
+		strings.ToLower(strings.TrimSpace(vuln.ScannerName)),
+		identifier,
+		filePath,
+		strings.TrimSpace(vuln.Description),
+	}, "|")
+}
+
 func ptrString(s *string) string {
 	if s == nil {
 		return ""
@@ -474,4 +665,76 @@ func nonEmptyStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+// RekeyPair is one finding seen under two fingerprints: Old in the earlier
+// snapshot, New in the later one.
+type RekeyPair struct {
+	Old store.Vulnerability
+	New store.Vulnerability
+}
+
+// RekeyedPairs finds findings whose fingerprint changed between two snapshots
+// of a ref while the finding itself did not: a fallback-key scope change, the
+// switch to content fingerprints (ADR-034, D15), or a line move. Same rules as
+// the delta's pairing passes — exact identity first, then the one-to-one
+// line-free match — so triage follows exactly the pairs the delta cancels.
+func RekeyedPairs(older, newer []store.Vulnerability) []RekeyPair {
+	olderSet := uniqueVulnerabilities(older)
+	newerSet := uniqueVulnerabilities(newer)
+	gone := make([]store.Vulnerability, 0)
+	for key, vuln := range olderSet {
+		if _, ok := newerSet[key]; !ok {
+			gone = append(gone, vuln)
+		}
+	}
+	appeared := make([]store.Vulnerability, 0)
+	for key, vuln := range newerSet {
+		if _, ok := olderSet[key]; !ok {
+			appeared = append(appeared, vuln)
+		}
+	}
+	if len(gone) == 0 || len(appeared) == 0 {
+		return nil
+	}
+
+	pairs := make([]RekeyPair, 0)
+	byIdentity := make(map[string][]store.Vulnerability)
+	for _, vuln := range gone {
+		if key := identityKey(vuln); key != "" {
+			byIdentity[key] = append(byIdentity[key], vuln)
+		}
+	}
+	paired := make(map[string]struct{})
+	unpaired := make([]store.Vulnerability, 0, len(appeared))
+	for _, vuln := range appeared {
+		key := identityKey(vuln)
+		if candidates := byIdentity[key]; key != "" && len(candidates) > 0 {
+			pairs = append(pairs, RekeyPair{Old: candidates[0], New: vuln})
+			paired[vulnerabilityKey(candidates[0])] = struct{}{}
+			byIdentity[key] = candidates[1:]
+			continue
+		}
+		unpaired = append(unpaired, vuln)
+	}
+
+	olderCounts := driftKeyCounts(olderSet)
+	newerCounts := driftKeyCounts(newerSet)
+	goneByDrift := make(map[string]store.Vulnerability)
+	for _, vuln := range gone {
+		if _, ok := paired[vulnerabilityKey(vuln)]; ok {
+			continue
+		}
+		if key := driftKey(vuln); key != "" && olderCounts[key] == 1 && newerCounts[key] == 1 {
+			goneByDrift[key] = vuln
+		}
+	}
+	for _, vuln := range unpaired {
+		key := driftKey(vuln)
+		if old, ok := goneByDrift[key]; ok && key != "" {
+			pairs = append(pairs, RekeyPair{Old: old, New: vuln})
+			delete(goneByDrift, key)
+		}
+	}
+	return pairs
 }

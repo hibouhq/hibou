@@ -22,6 +22,10 @@ import (
 
 type GenericFinding struct {
 	Tool        string
+	ToolVersion string
+	// TraceFiles are the files a taint finding's flow passes through, kept in
+	// metadata.trace_files for the resolution rule of ADR-036 §6.
+	TraceFiles  []string
 	RuleID      string
 	Severity    string
 	FilePath    string
@@ -121,14 +125,21 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 		}
 		status := "detected"
 		metadata := json.RawMessage(`{}`)
+		fields := map[string]any{}
 		if finding.Suppressed {
 			// A scanner-suppressed result never opens a finding (ADR-023);
 			// kind + justification ride the metadata for the detail view.
 			status = "suppressed"
-			encoded, marshalErr := json.Marshal(map[string]any{"suppression": map[string]string{
+			fields["suppression"] = map[string]string{
 				"kind":          finding.SuppressionKind,
 				"justification": finding.SuppressionJustification,
-			}})
+			}
+		}
+		if len(finding.TraceFiles) > 0 {
+			fields["trace_files"] = finding.TraceFiles
+		}
+		if len(fields) > 0 {
+			encoded, marshalErr := json.Marshal(fields)
 			if marshalErr != nil {
 				return created, marshalErr
 			}
@@ -145,6 +156,7 @@ func (i *Ingester) Ingest(ctx context.Context, snapshotID uuid.UUID, findings []
 			Severity:               severity,
 			Status:                 status,
 			ScannerName:            strings.TrimSpace(finding.Tool),
+			ScannerVersion:         strings.TrimSpace(finding.ToolVersion),
 			FilePath:               nullString(strings.TrimSpace(finding.FilePath)),
 			StartLine:              sql.NullInt32{Int32: startLine, Valid: startLine > 0},
 			EndLine:                sql.NullInt32{Int32: endLine, Valid: endLine > 0},

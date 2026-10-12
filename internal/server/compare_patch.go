@@ -22,6 +22,12 @@ func (s *Server) changedLinesForComparison(ctx context.Context, repo *store.Repo
 
 	if cached, err := s.queries.GetComparePatchCache(ctx, repo.ID, baseSHA, headSHA); err != nil {
 		s.log.Warn().Err(err).Str("repo_id", repo.ID.String()).Msg("read compare patch cache")
+	} else if cached != nil && cached.PathsOnly {
+		// A paths-only row (finding presence) has no hunks: the diff view
+		// re-fetches and upgrades it — unless this forge never has line data.
+		if limited, ok := provider.(forge.PathsOnlyComparer); ok && limited.ComparesPathsOnly() {
+			return nil
+		}
 	} else if cached != nil {
 		return patchDiffFromCache(cached)
 	}
@@ -37,6 +43,17 @@ func (s *Server) changedLinesForComparison(ctx context.Context, repo *store.Repo
 		return nil
 	}
 	if patch == nil {
+		return nil
+	}
+	if patch.PathsOnly {
+		// No line data (Forgejo): patch coverage degrades to the file-level
+		// view rather than reading "no changed lines". Cached paths-only for
+		// finding presence.
+		entry := cacheEntryFromPatchDiff(patch)
+		entry.PathsOnly = true
+		if err := s.queries.UpsertComparePatchCache(ctx, repo.ID, baseSHA, headSHA, entry); err != nil {
+			s.log.Warn().Err(err).Str("repo_id", repo.ID.String()).Msg("write compare patch cache")
+		}
 		return nil
 	}
 

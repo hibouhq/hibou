@@ -137,10 +137,64 @@ func (f *Forgejo) GetBranch(ctx context.Context, owner, repo, branch string) (*B
 	return &result, nil
 }
 
-// ListTreePaths is not yet implemented for Forgejo; source path resolution
-// degrades to exact matches.
-func (f *Forgejo) ListTreePaths(context.Context, string, string, string) ([]string, error) {
-	return nil, nil
+// ListTreePaths returns every blob path at a ref.
+func (f *Forgejo) ListTreePaths(ctx context.Context, owner, repo, ref string) ([]string, error) {
+	listing, err := f.ListTree(ctx, owner, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	return listing.Paths, nil
+}
+
+// forgejoTreePageSize is the page size asked of the git trees API; servers
+// cap it at their own maximum, which the loop tolerates.
+const forgejoTreePageSize = 1000
+
+// ListTree pages through the recursive git trees API (Forgejo and Gitea),
+// blobs only. More than maxTreeListingFiles entries returns truncated.
+func (f *Forgejo) ListTree(ctx context.Context, owner, repo, ref string) (*TreeListing, error) {
+	listing := &TreeListing{Paths: make([]string, 0)}
+	seen := 0
+	for page := 1; ; page++ {
+		path := fmt.Sprintf(
+			"/api/v1/repos/%s/%s/git/trees/%s?recursive=true&per_page=%d&page=%d",
+			url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref), forgejoTreePageSize, page,
+		)
+		var payload struct {
+			Tree []struct {
+				Path string `json:"path"`
+				Type string `json:"type"`
+			} `json:"tree"`
+			Truncated  bool `json:"truncated"`
+			TotalCount int  `json:"total_count"`
+		}
+		request, err := f.newRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, err
+		}
+		status, err := f.doWithStatus(request, &payload)
+		if status == http.StatusNotFound {
+			return nil, ErrFileNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range payload.Tree {
+			if entry.Type == "blob" {
+				listing.Paths = append(listing.Paths, entry.Path)
+			}
+		}
+		seen += len(payload.Tree)
+		// Gitea's paginated trees set truncated when more pages remain; the
+		// listing ends on the first page that is not truncated.
+		if !payload.Truncated || len(payload.Tree) == 0 || (payload.TotalCount > 0 && seen >= payload.TotalCount) {
+			return listing, nil
+		}
+		if len(listing.Paths) >= maxTreeListingFiles {
+			listing.Truncated = true
+			return listing, nil
+		}
+	}
 }
 
 func (f *Forgejo) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
@@ -375,10 +429,67 @@ func (f *Forgejo) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo,
 	return &user, nil
 }
 
-// ComparePatch is not yet implemented for Forgejo; patch coverage degrades to
-// the file-level coverage diff. See PatchDiff docs.
-func (f *Forgejo) ComparePatch(context.Context, string, string, string, string) (*PatchDiff, error) {
-	return nil, nil
+// ComparesPathsOnly: Forgejo's compare API has no hunks.
+func (f *Forgejo) ComparesPathsOnly() bool { return true }
+
+// ComparePatch lists the files changed between base and head through the
+// compare API (Forgejo and Gitea 1.20+), which reports files per commit and
+// no hunks: the result is PathsOnly. A file's last status across the commits
+// wins (added then removed = removed). An instance without the endpoint
+// answers 404, read as "cannot compare" rather than as a failure.
+func (f *Forgejo) ComparePatch(ctx context.Context, owner, repo, base, head string) (*PatchDiff, error) {
+	path := fmt.Sprintf("/api/v1/repos/%s/%s/compare/%s...%s", url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(base), url.PathEscape(head))
+	request, err := f.newRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		TotalCommits int `json:"total_commits"`
+		Commits      []struct {
+			Files []struct {
+				Filename string `json:"filename"`
+				Status   string `json:"status"`
+			} `json:"files"`
+		} `json:"commits"`
+	}
+	status, err := f.doWithStatus(request, &payload)
+	if status == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Commits come newest first; replay oldest first so the last status wins.
+	order := make([]string, 0)
+	statuses := map[string]string{}
+	for i := len(payload.Commits) - 1; i >= 0; i-- {
+		for _, file := range payload.Commits[i].Files {
+			name := strings.TrimSpace(file.Filename)
+			if name == "" {
+				continue
+			}
+			if _, seen := statuses[name]; !seen {
+				order = append(order, name)
+			}
+			statuses[name] = file.Status
+		}
+	}
+	diff := &PatchDiff{
+		Files:     make([]PatchFile, 0, len(order)),
+		PathsOnly: true,
+		Truncated: payload.TotalCommits > len(payload.Commits),
+	}
+	for _, name := range order {
+		status := "modified"
+		switch statuses[name] {
+		case "added":
+			status = "added"
+		case "removed", "deleted":
+			status = "removed"
+		}
+		diff.Files = append(diff.Files, PatchFile{Path: name, Status: status})
+	}
+	return diff, nil
 }
 
 func (f *Forgejo) ListUserAccess(context.Context, *oauth2.Token) (UserAccess, error) {

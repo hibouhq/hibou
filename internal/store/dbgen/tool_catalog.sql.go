@@ -224,6 +224,70 @@ func (q *Queries) ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]
 	return items, nil
 }
 
+const listProducerRunToolStats = `-- name: ListProducerRunToolStats :many
+SELECT
+    pr.producer,
+    MAX(pr.created_at) AS last_run_at,
+    MAX(pr.created_at) FILTER (WHERE pr.outcome = 'completed') AS last_success_at,
+    MAX(pr.created_at) FILTER (WHERE pr.outcome = 'failed') AS last_error_at,
+    COALESCE((ARRAY_AGG(pr.detail ORDER BY pr.created_at DESC)
+        FILTER (WHERE pr.outcome = 'failed' AND pr.detail IS NOT NULL))[1], '')::text AS last_error,
+    COALESCE((ARRAY_AGG(pr.outcome::text ORDER BY pr.created_at DESC))[1], '')::text AS last_outcome,
+    COUNT(*)::bigint AS run_count,
+    COUNT(DISTINCT s.repo_id)::bigint AS repo_count
+FROM producer_runs pr
+JOIN snapshots s ON s.id = pr.snapshot_id
+WHERE s.org_id = $1
+GROUP BY pr.producer
+ORDER BY pr.producer
+`
+
+type ListProducerRunToolStatsRow struct {
+	Producer      string      `json:"producer"`
+	LastRunAt     interface{} `json:"last_run_at"`
+	LastSuccessAt interface{} `json:"last_success_at"`
+	LastErrorAt   interface{} `json:"last_error_at"`
+	LastError     string      `json:"last_error"`
+	LastOutcome   string      `json:"last_outcome"`
+	RunCount      int64       `json:"run_count"`
+	RepoCount     int64       `json:"repo_count"`
+}
+
+// Per producer: when it last ran, its latest outcome, and its last failure
+// (ADR-034 §2). Feeds the tool catalog's health and "latest run partial or
+// failed" warning.
+func (q *Queries) ListProducerRunToolStats(ctx context.Context, orgID uuid.UUID) ([]ListProducerRunToolStatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProducerRunToolStats, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProducerRunToolStatsRow{}
+	for rows.Next() {
+		var i ListProducerRunToolStatsRow
+		if err := rows.Scan(
+			&i.Producer,
+			&i.LastRunAt,
+			&i.LastSuccessAt,
+			&i.LastErrorAt,
+			&i.LastError,
+			&i.LastOutcome,
+			&i.RunCount,
+			&i.RepoCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVEXSourceStats = `-- name: ListVEXSourceStats :many
 SELECT
     vs.source::text AS source,

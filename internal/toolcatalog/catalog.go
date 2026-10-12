@@ -12,6 +12,7 @@ import (
 const (
 	CategoryAdvisoryProvider = "advisory_provider"
 	CategorySAST             = "sast"
+	CategorySecretScanning   = "secret_scanning"
 	CategorySBOMGenerator    = "sbom_generator"
 	CategoryVEXSource        = "vex_source"
 	CategoryCoverage         = "coverage"
@@ -37,6 +38,14 @@ type ToolEntry struct {
 	LastError     string    `json:"last_error,omitempty"`
 	DataPoints    int64     `json:"data_points"`
 	RepoCount     int64     `json:"repo_count"`
+	// LastOutcome is the outcome of the producer's latest run (completed,
+	// partial, failed); Warning explains a partial or failed one (ADR-034).
+	LastOutcome string `json:"last_outcome,omitempty"`
+	Warning     string `json:"warning,omitempty"`
+	// ResolutionPolicy / PolicyThreshold: how this producer's absent
+	// findings are resolved (ADR-034 §5); set for producers with runs.
+	ResolutionPolicy string `json:"resolution_policy,omitempty"`
+	PolicyThreshold  int    `json:"policy_threshold,omitempty"`
 }
 
 type Catalog struct {
@@ -52,7 +61,8 @@ type Service struct {
 
 type Store interface {
 	ListAdvisoryProviderStats(ctx context.Context, orgID uuid.UUID) ([]AdvisoryProviderStat, error)
-	ListVulnerabilityToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error)
+	ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error)
+	ListProducerRunToolStats(ctx context.Context, orgID uuid.UUID) ([]ProducerRunStat, error)
 	ListVEXSourceStats(ctx context.Context, orgID uuid.UUID) ([]VEXSourceStat, error)
 	ListComponentEcosystemStats(ctx context.Context, orgID uuid.UUID) ([]ComponentEcosystemStat, error)
 	ListCoverageSnapshotStats(ctx context.Context, orgID uuid.UUID) ([]CoverageSnapshotStat, error)
@@ -72,6 +82,18 @@ type FindingToolStat struct {
 	LastSeenAt   time.Time
 	FindingCount int64
 	RepoCount    int64
+}
+
+// ProducerRunStat summarizes a producer's recorded runs (ADR-034 §2).
+type ProducerRunStat struct {
+	Producer      string
+	LastRunAt     time.Time
+	LastSuccessAt time.Time
+	LastErrorAt   time.Time
+	LastError     string
+	LastOutcome   string
+	RunCount      int64
+	RepoCount     int64
 }
 
 type VEXSourceStat struct {
@@ -111,11 +133,26 @@ func (s *Service) Catalog(ctx context.Context, orgID uuid.UUID, orgName string) 
 		tools = append(tools, advisoryEntry(stat, generatedAt))
 	}
 
-	findingStats, err := s.store.ListVulnerabilityToolStats(ctx, orgID)
+	// Producers with recorded runs carry real health; tools only known from
+	// their findings (uploads before run recording) keep the activity view.
+	runStats, err := s.store.ListProducerRunToolStats(ctx, orgID)
+	if err != nil {
+		return Catalog{}, err
+	}
+	withRuns := make(map[string]struct{}, len(runStats))
+	for _, stat := range runStats {
+		entry := producerEntry(stat, generatedAt)
+		withRuns[entry.Name] = struct{}{}
+		tools = append(tools, entry)
+	}
+	findingStats, err := s.store.ListFindingToolStats(ctx, orgID)
 	if err != nil {
 		return Catalog{}, err
 	}
 	for _, stat := range findingStats {
+		if _, ok := withRuns[normalizeName(stat.Tool)]; ok {
+			continue
+		}
 		tools = append(tools, activityEntry(strings.TrimSpace(stat.Tool), CategorySAST, stat.LastSeenAt, stat.LastSeenAt, time.Time{}, "", stat.FindingCount, stat.RepoCount, generatedAt))
 	}
 
@@ -179,6 +216,40 @@ func advisoryEntry(stat AdvisoryProviderStat, now time.Time) ToolEntry {
 		DataPoints:    stat.TotalAdvisories,
 		RepoCount:     stat.RepoCount,
 	}
+}
+
+// producerEntry rates a producer by its latest run: failed is unhealthy,
+// partial degraded (some files or paths went unanalysed), and no run in the
+// inactive window inactive.
+func producerEntry(stat ProducerRunStat, now time.Time) ToolEntry {
+	name := normalizeName(stat.Producer)
+	category := CategorySAST
+	if strings.HasPrefix(name, "secret-scanning") {
+		category = CategorySecretScanning
+	}
+	entry := ToolEntry{
+		Name:          name,
+		Category:      category,
+		Status:        StatusHealthy,
+		LastSeenAt:    stat.LastRunAt,
+		LastSuccessAt: stat.LastSuccessAt,
+		LastErrorAt:   stat.LastErrorAt,
+		LastError:     strings.TrimSpace(stat.LastError),
+		DataPoints:    stat.RunCount,
+		RepoCount:     stat.RepoCount,
+		LastOutcome:   stat.LastOutcome,
+	}
+	switch {
+	case stat.LastRunAt.IsZero() || stat.LastRunAt.Before(now.Add(-inactiveWindow)):
+		entry.Status = StatusInactive
+	case stat.LastOutcome == "failed":
+		entry.Status = StatusUnhealthy
+		entry.Warning = "Latest run failed: its findings were not re-checked."
+	case stat.LastOutcome == "partial":
+		entry.Status = StatusDegraded
+		entry.Warning = "Latest run was partial: findings outside what it analysed were not re-checked."
+	}
+	return entry
 }
 
 func activityEntry(name, category string, lastSeenAt, lastSuccessAt, lastErrorAt time.Time, lastError string, dataPoints, repoCount int64, now time.Time) ToolEntry {

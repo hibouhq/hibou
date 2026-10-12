@@ -497,3 +497,21 @@ func TestExploitedQualifier(t *testing.T) {
 		}
 	}
 }
+
+func TestToSQLPresence(t *testing.T) {
+	node, err := Parse("presence:not-rechecked,unconfirmed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ToSQL(node, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Where != "(v.presence = 'not_rechecked' OR v.presence = 'unconfirmed')" || len(result.Params) != 0 {
+		t.Fatalf("where = %q params = %v", result.Where, result.Params)
+	}
+	node, _ = Parse("presence:gone")
+	if _, err := ToSQL(node, 1); err == nil {
+		t.Fatal("unknown presence value must be rejected")
+	}
+}

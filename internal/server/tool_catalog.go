@@ -27,6 +27,20 @@ func (s *Server) handleGetToolCatalog(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to build tool catalog")
 		return
 	}
+	policies, err := s.queries.ListProducerPolicies(r.Context(), org.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load producer policies")
+		return
+	}
+	policyFor := producerPolicyLookup(policies)
+	for i := range catalog.Tools {
+		if catalog.Tools[i].LastOutcome == "" {
+			continue // not a producer with recorded runs
+		}
+		policy := policyFor(catalog.Tools[i].Name)
+		catalog.Tools[i].ResolutionPolicy = policy.Kind
+		catalog.Tools[i].PolicyThreshold = policy.Threshold
+	}
 
 	api.JSON(w, http.StatusOK, catalog)
 }

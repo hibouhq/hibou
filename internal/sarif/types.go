@@ -11,6 +11,9 @@ type Document struct {
 type Run struct {
 	Tool    Tool     `json:"tool"`
 	Results []Result `json:"results"`
+	// Invocations (§3.20) say whether the tool ran to completion and which
+	// inputs it gave up on — the coverage evidence of ADR-034.
+	Invocations []Invocation `json:"invocations"`
 	// Taxonomies holds standard taxonomies such as CWE (§3.14.8); rules and
 	// results point into them through relationships and taxa.
 	Taxonomies                     []ToolComponent                 `json:"taxonomies"`
@@ -35,9 +38,11 @@ type Tool struct {
 }
 
 type ToolComponent struct {
-	Name                string                   `json:"name"`
-	GUID                string                   `json:"guid"`
-	Version             string                   `json:"version"`
+	Name    string `json:"name"`
+	GUID    string `json:"guid"`
+	Version string `json:"version"`
+	// SemanticVersion (§3.19.9) is where OpenGrep and Semgrep put theirs.
+	SemanticVersion     string                   `json:"semanticVersion"`
 	Rules               []ReportingDescriptor    `json:"rules"`
 	Taxa                []ReportingDescriptor    `json:"taxa"`
 	SupportedTaxonomies []ToolComponentReference `json:"supportedTaxonomies"`
@@ -153,6 +158,24 @@ type Message struct {
 	Text string `json:"text"`
 }
 
+// Invocation (§3.20) describes one execution of the tool.
+type Invocation struct {
+	// ExecutionSuccessful is required by the spec; a nil pointer means the
+	// producer omitted it, which is read as success.
+	ExecutionSuccessful        *bool          `json:"executionSuccessful"`
+	ExitCode                   *int           `json:"exitCode,omitempty"`
+	ToolExecutionNotifications []Notification `json:"toolExecutionNotifications"`
+}
+
+// Notification (§3.58) is a tool diagnostic: a timeout, a file it could not
+// parse, a rule that failed to load.
+type Notification struct {
+	Descriptor *ReportingDescriptorReference `json:"descriptor,omitempty"`
+	Message    Message                       `json:"message"`
+	Level      string                        `json:"level"`
+	Locations  []Location                    `json:"locations"`
+}
+
 // RuleDescriptor is the normalized, per-rule catalog record extracted from a
 // SARIF reportingDescriptor. It maps 1:1 onto the scan_rules table so rule text
 // is stored once instead of copied onto every finding.
@@ -174,7 +197,12 @@ type RuleDescriptor struct {
 }
 
 type Finding struct {
-	Tool         string          `json:"tool"`
+	Tool        string `json:"tool"`
+	ToolVersion string `json:"tool_version,omitempty"`
+	// TraceFiles are the files a taint finding's code flows pass through
+	// (source, intermediate steps, sink), in first-seen order. A change in
+	// any of them may repair the flow (ADR-036 §6).
+	TraceFiles   []string        `json:"trace_files,omitempty"`
 	RuleID       string          `json:"rule_id"`
 	Severity     string          `json:"severity"`
 	FilePath     string          `json:"file_path"`

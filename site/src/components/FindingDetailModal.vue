@@ -50,6 +50,15 @@
                     title="Call-graph analysis found the vulnerable symbol on this code's call path"
                   >reachable</span>
                   <FindingOriginBadge :finding="detail.finding" />
+                  <span
+                    v-if="showsPresenceBadge(detail.finding)"
+                    class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+                    :class="detail.finding.presence === 'unconfirmed' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-surface-border bg-surface-overlay text-gray-400'"
+                    :title="presenceTitle(detail.finding)"
+                  >
+                    <Clock class="h-3 w-3" />
+                    {{ detail.finding.presence === 'unconfirmed' ? 'unconfirmed' : 'not re-checked' }}
+                  </span>
                 </div>
 
                 <h2 class="mt-2 text-lg font-semibold leading-snug text-white">
@@ -242,6 +251,35 @@
                       v-if="detail.dispute.created_at"
                       class="text-xs opacity-75"
                     > · {{ formatDate(detail.dispute.created_at) }}</span>
+                  </p>
+                </FindingSection>
+
+                <FindingSection
+                  v-if="isAssertion"
+                  title="Filed by hand"
+                  boxed
+                >
+                  <p class="text-sm text-gray-200">
+                    {{ detail.finding.origin === 'agent' ? `Filed by agent ${detail.finding.origin_token_name || 'an API token'}` : 'Filed by a person' }}
+                    · last confirmed {{ detail.assertion?.last_confirmed_at ? formatDate(detail.assertion.last_confirmed_at) : 'never' }}
+                  </p>
+                  <p class="mt-1 text-xs text-gray-500">
+                    No scanner re-checks this finding, so it stays open from commit to commit until someone resolves or retracts it.
+                    <template v-if="detail.finding.presence_reason === 'location_gone'">
+                      Its file is gone: review whether it still applies.
+                    </template>
+                  </p>
+                  <p
+                    v-if="detail.assertion?.closed_kind"
+                    class="mt-2 rounded-lg border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-300"
+                  >
+                    {{ detail.assertion.closed_kind === 'resolved' ? 'Resolved' : 'Retracted' }}<template v-if="detail.assertion.closed_reason">
+                      — {{ detail.assertion.closed_reason }}
+                    </template>
+                    <span
+                      v-if="detail.assertion.closed_at"
+                      class="text-xs opacity-75"
+                    > · {{ formatDate(detail.assertion.closed_at) }}</span>
                   </p>
                 </FindingSection>
 
@@ -464,6 +502,75 @@
                   False positive…
                 </button>
               </template>
+              <template v-if="isAssertion">
+                <template v-if="assertionForm">
+                  <input
+                    v-model="assertionReason"
+                    type="text"
+                    class="w-64 rounded-lg border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-accent/50 focus:outline-none"
+                    :placeholder="assertionForm === 'resolve' ? 'Why is it gone? (required)' : 'Why was it wrong? (optional)'"
+                    @keyup.enter="submitAssertionDecision"
+                    @keyup.esc="assertionForm = null"
+                  >
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-200 transition hover:border-accent/50 disabled:opacity-50"
+                    :disabled="assertionBusy || (assertionForm === 'resolve' && !assertionReason.trim())"
+                    @click="submitAssertionDecision"
+                  >
+                    {{ assertionForm === 'resolve' ? 'Resolve' : 'Retract' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="px-2 py-1.5 text-xs text-gray-500 transition hover:text-gray-300"
+                    @click="assertionForm = null"
+                  >
+                    Cancel
+                  </button>
+                </template>
+                <template v-else-if="detail.assertion?.closed_kind">
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    :disabled="assertionBusy"
+                    title="Confirm the problem is still there: the finding reopens"
+                    @click="reassert"
+                  >
+                    Re-assert
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    :disabled="assertionBusy"
+                    title="Confirm the problem is still there"
+                    @click="reassert"
+                  >
+                    Still there
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    title="The problem is gone. Requires a reason."
+                    @click="assertionForm = 'resolve'"
+                  >
+                    Resolve…
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-danger/50 hover:text-danger"
+                    title="The finding was wrong. Allowed to whoever filed it and org admins."
+                    @click="assertionForm = 'retract'"
+                  >
+                    Retract…
+                  </button>
+                </template>
+                <span
+                  v-if="assertionError"
+                  class="text-xs text-danger"
+                >{{ assertionError }}</span>
+              </template>
               <button
                 v-if="detail.finding.type === 'secret' && detail.finding.status !== 'resolved'"
                 type="button"
@@ -485,11 +592,12 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
 
-import { Flame, X } from 'lucide-vue-next'
+import { Clock, Flame, X } from 'lucide-vue-next'
 
 import { api, type FindingCWE, type AcceptanceReasonKind, type FindingDetail, type FindingDispute, type Repository, type Vulnerability } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
+import { presenceTitle, showsPresenceBadge } from '@/lib/presence'
 import CodeFindingDetails from '@/components/finding/CodeFindingDetails.vue'
 import DependencyFindingDetails from '@/components/finding/DependencyFindingDetails.vue'
 import FindingKEVDetails from '@/components/finding/FindingKEVDetails.vue'
@@ -571,6 +679,45 @@ const disputeFormOpen = ref(false)
 const disputeReason = ref('')
 const disputeBusy = ref(false)
 const disputeError = ref('')
+
+// ADR-034 §4: manual and agent findings end only by a decision.
+const isAssertion = computed(() => detail.value?.finding.origin === 'human' || detail.value?.finding.origin === 'agent')
+const assertionForm = ref<'resolve' | 'retract' | null>(null)
+const assertionReason = ref('')
+const assertionBusy = ref(false)
+const assertionError = ref('')
+
+async function reassert() {
+  if (assertionBusy.value || !detail.value) return
+  assertionBusy.value = true
+  assertionError.value = ''
+  try {
+    await api.reassertFinding(props.provider, props.slug, props.repoSlug, detail.value.finding.fingerprint)
+    await load()
+  } catch (err) {
+    assertionError.value = err instanceof Error ? err.message : 'Failed to re-assert the finding'
+  } finally {
+    assertionBusy.value = false
+  }
+}
+
+async function submitAssertionDecision() {
+  const action = assertionForm.value
+  const reason = assertionReason.value.trim()
+  if (!action || assertionBusy.value || !detail.value || (action === 'resolve' && !reason)) return
+  assertionBusy.value = true
+  assertionError.value = ''
+  try {
+    await api.closeAssertion(props.provider, props.slug, props.repoSlug, detail.value.finding.fingerprint, action, reason)
+    assertionForm.value = null
+    assertionReason.value = ''
+    await load()
+  } catch (err) {
+    assertionError.value = err instanceof Error ? err.message : `Failed to ${action} the finding`
+  } finally {
+    assertionBusy.value = false
+  }
+}
 
 async function submitDispute() {
   const reason = disputeReason.value.trim()

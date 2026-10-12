@@ -23,6 +23,16 @@ type SnapshotArtifact struct {
 	ContentType *string   `json:"content_type,omitempty"`
 	Filename    string    `json:"filename,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+	// What the uploader declared about the run (ADR-034 §2); SARIF values
+	// win when both are present.
+	Scope        *string  `json:"scope,omitempty"`
+	ScopePaths   []string `json:"scope_paths,omitempty"`
+	ToolVersion  *string  `json:"tool_version,omitempty"`
+	ConfigDigest *string  `json:"config_digest,omitempty"`
+	// PlanID / PlanJobID bind the artifact to the scan plan job that
+	// produced it (ADR-035 §4); nil for unplanned reports.
+	PlanID    *uuid.UUID `json:"plan_id,omitempty"`
+	PlanJobID *string    `json:"plan_job_id,omitempty"`
 }
 
 type CreateSnapshotArtifactParams struct {
@@ -102,16 +112,51 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByOrg(ctx context.Context, orgID
 
 func snapshotArtifactFromRow(row dbgen.SnapshotArtifact) *SnapshotArtifact {
 	return &SnapshotArtifact{
-		ID:          row.ID,
-		SnapshotID:  row.SnapshotID,
-		Kind:        row.Kind,
-		Format:      stringPtrFromNull(row.Format),
-		ToolName:    stringPtrFromNull(row.ToolName),
-		ObjectKey:   row.ObjectKey,
-		SHA256:      stringPtrFromNull(row.Sha256),
-		SizeBytes:   row.SizeBytes,
-		ContentType: stringPtrFromNull(row.ContentType),
-		Filename:    row.Filename,
-		CreatedAt:   row.CreatedAt,
+		ID:           row.ID,
+		SnapshotID:   row.SnapshotID,
+		Kind:         row.Kind,
+		Format:       stringPtrFromNull(row.Format),
+		ToolName:     stringPtrFromNull(row.ToolName),
+		ObjectKey:    row.ObjectKey,
+		SHA256:       stringPtrFromNull(row.Sha256),
+		SizeBytes:    row.SizeBytes,
+		ContentType:  stringPtrFromNull(row.ContentType),
+		Filename:     row.Filename,
+		CreatedAt:    row.CreatedAt,
+		Scope:        stringPtrFromNull(row.Scope),
+		ScopePaths:   row.ScopePaths,
+		ToolVersion:  stringPtrFromNull(row.ToolVersion),
+		ConfigDigest: stringPtrFromNull(row.ConfigDigest),
+		PlanID:       uuidPtrFromNull(row.PlanID),
+		PlanJobID:    stringPtrFromNull(row.PlanJobID),
 	}
+}
+
+// ArtifactRunDeclaration is the run metadata an uploader may send with an
+// artifact: scope, the paths a partial scan covered, and the tool's version
+// and configuration digest.
+type ArtifactRunDeclaration struct {
+	Scope        *string
+	ScopePaths   []string
+	ToolVersion  *string
+	ConfigDigest *string
+}
+
+// Empty reports whether nothing was declared.
+func (d ArtifactRunDeclaration) Empty() bool {
+	return d.Scope == nil && len(d.ScopePaths) == 0 && d.ToolVersion == nil && d.ConfigDigest == nil
+}
+
+func (q *Queries) SetSnapshotArtifactRunDeclaration(ctx context.Context, artifactID uuid.UUID, declaration ArtifactRunDeclaration) error {
+	paths := declaration.ScopePaths
+	if paths == nil {
+		paths = []string{}
+	}
+	return q.db.SetSnapshotArtifactRunDeclaration(ctx, dbgen.SetSnapshotArtifactRunDeclarationParams{
+		ID:           artifactID,
+		Scope:        nullStringFromPtr(declaration.Scope),
+		ScopePaths:   paths,
+		ToolVersion:  nullStringFromPtr(declaration.ToolVersion),
+		ConfigDigest: nullStringFromPtr(declaration.ConfigDigest),
+	})
 }

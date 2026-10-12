@@ -17,6 +17,9 @@ import (
 type ComparePatchCacheEntry struct {
 	Truncated bool                     `json:"truncated"`
 	Files     []ComparePatchCachedFile `json:"files"`
+	// PathsOnly: files and status without hunks or lines (finding presence
+	// only). Never serve it to a diff view.
+	PathsOnly bool `json:"paths_only,omitempty"`
 }
 
 type ComparePatchCachedFile struct {
@@ -50,7 +53,7 @@ func (q *Queries) GetComparePatchCache(ctx context.Context, repoID uuid.UUID, ba
 		// re-fetches from the forge and overwrites it.
 		return nil, nil
 	}
-	return &ComparePatchCacheEntry{Truncated: row.Truncated, Files: files}, nil
+	return &ComparePatchCacheEntry{Truncated: row.Truncated, Files: files, PathsOnly: row.PathsOnly}, nil
 }
 
 func (q *Queries) UpsertComparePatchCache(ctx context.Context, repoID uuid.UUID, baseSHA, headSHA string, entry ComparePatchCacheEntry) error {
@@ -64,7 +67,11 @@ func (q *Queries) UpsertComparePatchCache(ctx context.Context, repoID uuid.UUID,
 		HeadSha:   headSHA,
 		Truncated: entry.Truncated,
 		Payload:   payload,
+		PathsOnly: entry.PathsOnly,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // a full row already there: kept, not downgraded
+	}
 	return err
 }
 

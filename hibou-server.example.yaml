@@ -52,6 +52,20 @@ secret_scan:
   temp_dir: ""
   on_push: false
 
+# Bundled scanners (ADR-035): where CI fetches the scanners of the catalog
+# (GET /api/v1/scanner-catalog). A mirror changes the location, never the
+# pinned version or sha256. upstream: approved locations, then the mirror,
+# then upstream. mirror: never upstream. offline: bundle_dir only, no network.
+scanner_distribution:
+  mode: upstream
+  # mirror_base_url: https://mirror.example.internal/scanners  # <base>/<scanner-id>/<version>/<asset>
+  # maven_mirror_url: https://maven.example.internal/maven2    # replaces repo1.maven.org/maven2
+  # locations:                                                 # per scanner: <base>/<version>/<asset>
+  #   opengrep: https://bin.example.internal/opengrep
+  # bundle_dir: /srv/hibou/scanner-bundle                      # offline mode
+  # approved_hosts: [mirror.example.internal, maven.example.internal]
+  # ca_bundle: /etc/ssl/internal-ca.pem
+
 # CVE Program feed (ADR-028) — watch products whose advisories name a version
 # range but no package, and map them to packages by hand.
 #

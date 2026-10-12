@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
+	"github.com/hibouhq/hibou/internal/presence"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -44,7 +46,21 @@ type GatePublisher struct {
 	// an instance that never scans, waiting for a scan would block every gate
 	// forever. Set from the server's advisory-scan configuration.
 	advisoryScanEnabled bool
-	log                 zerolog.Logger
+	// coverageCheck evaluates required scan coverage on the PR head
+	// (ADR-035 §5); nil on installations without scanner policy.
+	coverageCheck CoverageCheck
+	log           zerolog.Logger
+}
+
+// CoverageCheck returns, for a PR head snapshot, the required-coverage gaps
+// that must fail the check (blocking) and those that only warn.
+type CoverageCheck func(ctx context.Context, repoID, headSnapshotID uuid.UUID) (blocking, advisory []string, err error)
+
+// SetCoverageCheck wires the scanner-policy coverage evaluation in.
+func (a *GatePublisher) SetCoverageCheck(check CoverageCheck) {
+	if a != nil {
+		a.coverageCheck = check
+	}
 }
 
 // SetAdvisoryScanEnabled wires the server's advisory-scan configuration in;
@@ -723,10 +739,21 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 	}
 
 	if deltaResult != nil {
-		fmt.Fprintf(&b, "| 🆕 New | ✅ Resolved | ♻️ Unchanged |\n| :---: | :---: | :---: |\n| %d | %d | %d |\n\n",
-			len(deltaResult.New), len(deltaResult.Resolved), deltaResult.Unchanged)
+		fixed, noLongerReported := splitFixes(deltaResult.Resolved)
+		fmt.Fprintf(&b, "| 🆕 New | ✅ Fixed | ⏸️ Not re-checked | ♻️ Unchanged |\n| :---: | :---: | :---: | :---: |\n| %d | %d | %d | %d |\n\n",
+			len(deltaResult.New), len(fixed), len(deltaResult.NotRechecked), deltaResult.Unchanged)
+		if len(noLongerReported) > 0 {
+			fmt.Fprintf(&b, "%d no longer reported after a scanner or rule change, or after repeated absence — not counted as fixed.\n\n", len(noLongerReported))
+		}
 		if chips := severityChips(deltaResult.New); chips != "" {
 			fmt.Fprintf(&b, "**New by severity:** %s\n\n", chips)
+		}
+		if lines := notRecheckedSummary(deltaResult.NotRechecked); len(lines) > 0 {
+			fmt.Fprintf(&b, "<details><summary>%d not re-checked — still counted, not fixed</summary>\n\n", len(deltaResult.NotRechecked))
+			for _, line := range lines {
+				fmt.Fprintf(&b, "- %s\n", line)
+			}
+			b.WriteString("\n</details>\n\n")
 		}
 	}
 
@@ -746,6 +773,65 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 	// deterministic body is what lets UpsertPRComment skip no-op edits.
 	fmt.Fprintf(&b, "\n<sub>%s</sub>\n", provenanceLine(annotation))
 	return b.String()
+}
+
+// splitFixes separates resolutions a PR can claim as fixes (the code changed
+// where the finding was, or its file is gone) from findings that are merely
+// no longer reported (ADR-034 §6).
+func splitFixes(resolved []store.Vulnerability) (fixed, noLongerReported []store.Vulnerability) {
+	for _, vuln := range resolved {
+		if isClaimableFix(vuln) {
+			fixed = append(fixed, vuln)
+		} else {
+			noLongerReported = append(noLongerReported, vuln)
+		}
+	}
+	return fixed, noLongerReported
+}
+
+func isClaimableFix(vuln store.Vulnerability) bool {
+	if vuln.ResolutionReason == nil {
+		return true // a delta computed without presence rules
+	}
+	switch *vuln.ResolutionReason {
+	case presence.ResolvedFixed, presence.ResolvedFileRemoved:
+		return true
+	}
+	return false
+}
+
+// notRecheckedSummary explains, per producer, why base findings were not
+// re-checked by this build (ADR-034 §6), most frequent first.
+func notRecheckedSummary(vulns []store.Vulnerability) []string {
+	type group struct {
+		producer, reason string
+		count            int
+	}
+	groups := make(map[string]*group)
+	order := make([]string, 0)
+	for _, vuln := range vulns {
+		producer := presence.ProducerOf(vuln)
+		if producer == "" {
+			producer = "manual and agent findings"
+		}
+		reason := ""
+		if vuln.PresenceReason != nil {
+			reason = *vuln.PresenceReason
+		}
+		key := producer + "\x00" + reason
+		if groups[key] == nil {
+			groups[key] = &group{producer: producer, reason: reason}
+			order = append(order, key)
+		}
+		groups[key].count++
+	}
+	sort.SliceStable(order, func(i, j int) bool { return groups[order[i]].count > groups[order[j]].count })
+	lines := make([]string, 0, len(order))
+	for _, key := range order {
+		g := groups[key]
+		lines = append(lines, fmt.Sprintf("`%s` — %s (%d)", g.producer, presence.ReasonText(g.reason), g.count))
+	}
+	return lines
 }
 
 // provenanceLine names what was evaluated — and, when CI recorded it, what was
@@ -940,7 +1026,33 @@ func (a *GatePublisher) evaluateGate(ctx context.Context, annotation *gateContex
 		a.log.Error().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("evaluate PR gates")
 		return nil, nil, false
 	}
+	a.applyCoverageCheck(ctx, annotation, gateResult)
 	return gateResult, deltaResult, true
+}
+
+// applyCoverageCheck adds required scan coverage to the verdict (ADR-035
+// §5): a blocking gap fails the check like a finding gate, an advisory one is
+// a note. Kept apart from finding gates by its "Scan coverage:" prefix. A
+// failure to evaluate is logged, not turned into a pass or a fail.
+func (a *GatePublisher) applyCoverageCheck(ctx context.Context, annotation *gateContext, gateResult *delta.GateResult) {
+	if a.coverageCheck == nil || gateResult == nil {
+		return
+	}
+	blocking, advisory, err := a.coverageCheck(ctx, annotation.repo.ID, annotation.snapshot.ID)
+	if err != nil {
+		a.log.Warn().Err(err).Str("repo_id", annotation.repo.ID.String()).Msg("evaluate scan coverage")
+		return
+	}
+	for _, gap := range blocking {
+		gateResult.Reasons = append(gateResult.Reasons, "Scan coverage: "+gap)
+	}
+	for _, gap := range advisory {
+		gateResult.Notes = append(gateResult.Notes, "Scan coverage: "+gap)
+	}
+	if len(blocking) > 0 {
+		gateResult.Passed = false
+		gateResult.Configured = true
+	}
 }
 
 func (a *GatePublisher) loadGateConfig(ctx context.Context, annotation *gateContext) *delta.GateConfig {
@@ -1294,7 +1406,9 @@ func (a *GatePublisher) persistGate(ctx context.Context, annotation *gateContext
 		fingerprints := make([]string, 0, len(deltaResult.Resolved))
 		if annotation.claimsVerified {
 			for _, vulnerability := range deltaResult.Resolved {
-				if vulnerability.Fingerprint != "" {
+				// "fix in #N" is only claimed for real fixes, not for
+				// findings a scanner upgrade stopped reporting.
+				if vulnerability.Fingerprint != "" && isClaimableFix(vulnerability) {
 					fingerprints = append(fingerprints, vulnerability.Fingerprint)
 				}
 			}

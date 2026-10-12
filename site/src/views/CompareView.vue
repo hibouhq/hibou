@@ -382,9 +382,14 @@
               <span class="text-sm text-gray-500">new</span>
             </div>
             <p class="mt-2 text-sm">
-              <span :class="comparison.delta.resolved_vulnerabilities.length > 0 ? 'text-emerald-300' : 'text-gray-400'">
-                {{ comparison.delta.resolved_vulnerabilities.length }} resolved
+              <span :class="claimableFixCount > 0 ? 'text-emerald-300' : 'text-gray-400'">
+                {{ claimableFixCount }} fixed
               </span>
+              <span
+                v-if="(comparison.delta.not_rechecked_vulnerabilities?.length ?? 0) > 0"
+                class="text-gray-400"
+                title="Absent from the head build, but its scanner did not re-check them: they still count"
+              > · {{ comparison.delta.not_rechecked_vulnerabilities?.length }} not re-checked</span>
             </p>
           </button>
 
@@ -553,7 +558,11 @@
               <span
                 v-if="group.kind === 'resolved'"
                 :class="changeBadgeClass('resolved')"
-              >resolved</span>
+              >fixed</span>
+              <span
+                v-else-if="group.kind === 'not_rechecked'"
+                :class="changeBadgeClass('not_rechecked')"
+              >not re-checked</span>
               <span
                 v-else
                 :class="changeBadgeClass('new')"
@@ -587,7 +596,7 @@
                   v-for="vuln in group.rows"
                   :key="`${vuln.change}-${vuln.id}`"
                   class="transition hover:bg-white/5"
-                  :class="vuln.type === 'malware' && vuln.change !== 'resolved' ? 'border-l-2 border-malware bg-malware/5' : ''"
+                  :class="vuln.type === 'malware' && vuln.change === 'new' ? 'border-l-2 border-malware bg-malware/5' : ''"
                 >
                   <td class="w-28 px-4 py-3">
                     <span class="inline-flex items-center gap-1.5">
@@ -603,6 +612,14 @@
                   </td>
                   <td class="max-w-md truncate px-4 py-3 text-gray-300">
                     {{ vuln.title }}
+                    <span
+                      v-if="vuln.change === 'not_rechecked'"
+                      class="ml-2 text-xs text-gray-500"
+                    >{{ vuln.presence === 'unconfirmed' ? 'unconfirmed — ' : '' }}{{ presenceReasonText(vuln.presence_reason) }}</span>
+                    <span
+                      v-else-if="vuln.change === 'resolved' && !isClaimableFix(vuln)"
+                      class="ml-2 text-xs text-gray-500"
+                    >{{ resolutionReasonText(vuln.resolution_reason, vuln.scanner_name) }}</span>
                   </td>
                   <!-- Kind-specific cell: a dep vuln is not a SAST hit. -->
                   <td class="px-4 py-3 text-xs text-gray-400">
@@ -1391,8 +1408,9 @@ import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
 import { forgeFileUrl, forgeLabel, forgeRefUrl } from '@/lib/forgeLinks'
 import { newLicensesIntroduced } from '@/lib/licenses'
+import { isClaimableFix, presenceReasonText, resolutionReasonText } from '@/lib/presence'
 
-type VulnRow = Vulnerability & { change: 'new' | 'resolved' }
+type VulnRow = Vulnerability & { change: 'new' | 'resolved' | 'not_rechecked' }
 type ComponentRow = Omit<ComponentEntry, 'version'> & {
   version: string
   vuln_delta: number | null
@@ -1637,11 +1655,16 @@ const failedSnapshotWarning = computed(() => {
 })
 
 // ─── Derived data ─────────────────────────────────────────────────────────────
+// Only real fixes count as "fixed" (ADR-034 §6): a finding a scanner upgrade
+// stopped reporting is listed, not claimed.
+const claimableFixCount = computed(() => (comparison.value?.delta.resolved_vulnerabilities ?? []).filter(isClaimableFix).length)
+
 const vulnRows = computed<VulnRow[]>(() => {
   if (!comparison.value) return []
   return [
     ...comparison.value.delta.new_vulnerabilities.map((vuln) => ({ ...vuln, change: 'new' as const })),
     ...comparison.value.delta.resolved_vulnerabilities.map((vuln) => ({ ...vuln, change: 'resolved' as const })),
+    ...(comparison.value.delta.not_rechecked_vulnerabilities ?? []).map((vuln) => ({ ...vuln, change: 'not_rechecked' as const })),
   ]
 })
 
@@ -1649,7 +1672,7 @@ const vulnRows = computed<VulnRow[]>(() => {
 // not the finding — 436 findings from one added base image is ONE decision).
 interface SecurityGroup {
   key: string
-  kind: 'dependency' | 'code' | 'secret' | 'resolved'
+  kind: 'dependency' | 'code' | 'secret' | 'resolved' | 'not_rechecked'
   label: string
   // Why this group exists in the delta — e.g. the component was added by
   // this change vs a finding in changed code.
@@ -1680,7 +1703,13 @@ const securityGroups = computed<SecurityGroup[]>(() => {
   for (const row of vulnRows.value) {
     if (securitySeverityFilter.value && String(row.severity) !== securitySeverityFilter.value) continue
     if (row.change === 'resolved') {
-      push('resolved', 'resolved', 'Resolved', 'No longer reported by the head snapshot', row)
+      push('resolved', 'resolved', 'Fixed', 'Its scanner re-checked the code and no longer reports it', row)
+      continue
+    }
+    if (row.change === 'not_rechecked') {
+      // ADR-034 §6: absent from the head, but nothing looked again — still
+      // counted on the base side, never a fix.
+      push('not_rechecked', 'not_rechecked', 'Not re-checked', 'The head build did not re-check these; they still count', row)
       continue
     }
     if (row.type === 'dependency' || row.type === 'container' || row.type === 'malware') {
@@ -1700,7 +1729,8 @@ const securityGroups = computed<SecurityGroup[]>(() => {
   }
 
   return [...groups.values()].sort((a, b) => {
-    if ((a.kind === 'resolved') !== (b.kind === 'resolved')) return a.kind === 'resolved' ? 1 : -1
+    const tail = (kind: SecurityGroup['kind']) => (kind === 'resolved' ? 2 : kind === 'not_rechecked' ? 1 : 0)
+    if (tail(a.kind) !== tail(b.kind)) return tail(a.kind) - tail(b.kind)
     // A group carrying malware outranks every other open group.
     const malware = Number(b.rows.some(row => row.type === 'malware')) - Number(a.rows.some(row => row.type === 'malware'))
     if (malware !== 0) return malware
@@ -1725,7 +1755,7 @@ function toggleGroup(key: string) {
 watch(securityGroups, (groups) => {
   const next = new Set<string>()
   for (const group of groups) {
-    if (group.kind !== 'resolved' && (group.worst >= 4 || group.rows.length <= 3)) next.add(group.key)
+    if (group.kind !== 'resolved' && group.kind !== 'not_rechecked' && (group.worst >= 4 || group.rows.length <= 3)) next.add(group.key)
   }
   expandedGroups.value = next
 }, { immediate: true })
@@ -2171,6 +2201,9 @@ function changeBadgeClass(change: string) {
   }
   if (change === 'resolved' || change === 'added') {
     return 'rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-300'
+  }
+  if (change === 'not_rechecked') {
+    return 'rounded-full bg-surface-overlay px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-gray-400'
   }
   if (change === 'updated') {
     return 'rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-blue-300'

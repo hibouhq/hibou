@@ -32,6 +32,7 @@ const router = createRouter({
             { path: 'licenses', name: 'org-licenses', component: () => import('@/views/org/LicensesTab.vue') },
             { path: 'clients', name: 'org-clients', component: () => import('@/views/org/ClientsTab.vue') },
             { path: 'triage', name: 'org-triage', component: () => import('@/views/org/TriageTab.vue') },
+            { path: 'scanners', name: 'org-scanners', component: () => import('@/views/org/ScannersTab.vue') },
             // The Access tab moved under Settings.
             { path: 'access', redirect: to => ({ name: 'org-settings-access', params: to.params }) },
             {
@@ -44,6 +45,8 @@ const router = createRouter({
                 { path: 'members', name: 'org-settings-members', component: () => import('@/views/org/settings/MembersSettings.vue') },
                 { path: 'quality-gates', name: 'org-settings-gates', component: () => import('@/views/org/settings/GatesSettings.vue') },
                 { path: 'license-policy', name: 'org-settings-license-policy', component: () => import('@/views/org/settings/LicensePolicySettings.vue') },
+                { path: 'scanner-requirements', name: 'org-settings-scanner-requirements', component: () => import('@/views/org/settings/ScannerRequirementsSettings.vue') },
+                { path: 'tools', name: 'org-settings-tools', component: () => import('@/views/org/settings/ToolsSettings.vue') },
                 { path: 'integrations', name: 'org-settings-integrations', component: () => import('@/views/org/settings/IntegrationsSettings.vue') },
                 { path: 'notifications', name: 'org-settings-notifications', component: () => import('@/views/org/settings/NotificationsSettings.vue') },
                 { path: 'audit', name: 'org-settings-audit', component: () => import('@/views/org/settings/AuditSettings.vue') },
@@ -139,6 +142,7 @@ const router = createRouter({
                 { path: '', name: 'repo-settings', redirect: to => ({ name: 'repo-settings-general', params: to.params }) },
                 { path: 'general', name: 'repo-settings-general', component: () => import('@/views/repo/settings/GeneralSettings.vue') },
                 { path: 'configuration', name: 'repo-settings-config', component: () => import('@/views/repo/settings/ConfigSettings.vue') },
+                { path: 'scanners', name: 'repo-settings-scanners', component: () => import('@/views/repo/settings/ScannersSettings.vue') },
                 { path: 'audit', name: 'repo-settings-audit', component: () => import('@/views/repo/settings/AuditSettings.vue') },
               ],
             },

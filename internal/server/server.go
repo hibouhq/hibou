@@ -43,6 +43,7 @@ import (
 	"github.com/hibouhq/hibou/internal/objstore"
 	"github.com/hibouhq/hibou/internal/orgprovision"
 	"github.com/hibouhq/hibou/internal/permissionsync"
+	"github.com/hibouhq/hibou/internal/presence"
 	"github.com/hibouhq/hibou/internal/provider"
 	"github.com/hibouhq/hibou/internal/provider/osv"
 	"github.com/hibouhq/hibou/internal/provider/trivy"
@@ -50,6 +51,7 @@ import (
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/repoinventory"
 	"github.com/hibouhq/hibou/internal/retention"
+	"github.com/hibouhq/hibou/internal/scancatalog"
 	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/secretscan"
 	"github.com/hibouhq/hibou/internal/store"
@@ -60,27 +62,31 @@ import (
 )
 
 type Server struct {
-	cfg                config.Config
-	db                 *sql.DB
-	enforcer           *rbac.Enforcer
-	authMgr            *auth.Manager
-	forges             map[string]forge.Provider
-	log                zerolog.Logger
-	queries            *store.Queries
-	bus                *events.Bus
-	objStore           objstore.Store
-	wsHub              *ws.Hub
-	wsFanout           ws.LiveDelivery
-	wsListener         closeableListener
-	notifySvc          *notify.Service
-	deltaSvc           *delta.Service
-	repoConfigLoader   *repoconfig.Loader
-	onboardingSvc      *repoconfig.OnboardingService
-	inventorySvc       *repoinventory.Service
-	orgProvisionSvc    *orgprovision.Service
-	permissionSyncSvc  *permissionsync.Service
-	complianceSvc      *compliance.Service
-	toolCatalogSvc     *toolcatalog.Service
+	cfg               config.Config
+	db                *sql.DB
+	enforcer          *rbac.Enforcer
+	authMgr           *auth.Manager
+	forges            map[string]forge.Provider
+	log               zerolog.Logger
+	queries           *store.Queries
+	bus               *events.Bus
+	objStore          objstore.Store
+	wsHub             *ws.Hub
+	wsFanout          ws.LiveDelivery
+	wsListener        closeableListener
+	notifySvc         *notify.Service
+	deltaSvc          *delta.Service
+	repoConfigLoader  *repoconfig.Loader
+	onboardingSvc     *repoconfig.OnboardingService
+	inventorySvc      *repoinventory.Service
+	orgProvisionSvc   *orgprovision.Service
+	permissionSyncSvc *permissionsync.Service
+	complianceSvc     *compliance.Service
+	toolCatalogSvc    *toolcatalog.Service
+	scanCatalog       *scancatalog.Catalog
+	bundleManifest    bundleManifestCache
+	// compareGate bounds forge compare traffic for finding presence.
+	compareGate        compareGate
 	advisoryScanner    advisoryScanner
 	advisoryIngester   *advisory.Ingester
 	advisoryProviders  []string
@@ -217,6 +223,15 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.notifySvc = notify.NewService(s.queries, s.wsFanout, s.bus, log)
 	deltaStore := delta.NewStoreAdapter(s.queries)
 	s.deltaSvc = delta.NewService(deltaStore, log, deltaStore)
+	// PR deltas apply the same presence rules as a branch's next snapshot:
+	// the forge's change check and the org's producer policies (ADR-034 §6).
+	s.deltaSvc.SetPresenceOptions(func(ctx context.Context, headSnapshotID uuid.UUID) (presence.Options, error) {
+		snapshot, err := s.queries.GetSnapshotByID(ctx, headSnapshotID)
+		if err != nil || snapshot == nil {
+			return presence.Options{}, err
+		}
+		return s.presenceOptions(ctx, s.queries, snapshot)
+	})
 	s.repoConfigLoader = repoconfig.NewLoader(s.forges, log)
 	s.onboardingSvc = repoconfig.NewOnboardingService(s.forges, log)
 	s.inventorySvc = repoinventory.NewService(s.queries, s.forges, log)
@@ -228,6 +243,16 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 		WithPublisher(s.bus)
 	s.complianceSvc = compliance.NewService(compliance.NewStoreAdapter(s.queries), log)
 	s.toolCatalogSvc = toolcatalog.NewService(toolcatalog.NewStoreAdapter(s.queries))
+	// ADR-035: the scanner catalog is embedded data; a distribution policy
+	// that could fetch from an unapproved place fails startup, not a CI run.
+	scanCatalog, err := scancatalog.Load()
+	if err != nil {
+		return fmt.Errorf("load scanner catalog: %w", err)
+	}
+	if err := cfg.ScannerDistribution.Validate(scanCatalog); err != nil {
+		return err
+	}
+	s.scanCatalog = scanCatalog
 	providers := buildAdvisoryProviders(cfg, log)
 	advisoryCache := cache.New(s.queries, cache.Config{DefaultTTL: cfg.CacheTTL}, log)
 	advisoryIngester := advisory.NewIngester(s.queries, log)
@@ -271,6 +296,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.tokenExpiryChecker = notify.NewTokenExpiryChecker(s.queries, s.bus, log)
 	s.gatePublisher = forge.NewGatePublisher(forges, s.deltaSvc, s.bus, forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, wsGateNotifier{live: s.wsFanout}, cfg.BaseURL, log)
 	s.gatePublisher.SetAdvisoryScanEnabled(s.advisoryScanner != nil && len(s.advisoryProviders) > 0)
+	s.gatePublisher.SetCoverageCheck(s.prCoverageCheck)
 	s.notifySvc.Subscribe()
 	s.dispatcher.Subscribe()
 	s.gatePublisher.Subscribe()
@@ -445,6 +471,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/users/me", s.handleGetMe)
 			// ADR-037: embedded MITRE catalog (reference data, no tenant data).
 			r.Get("/cwe", s.handleSearchCWECatalog)
+			r.Get("/scanner-catalog", s.handleGetScannerCatalog)
 			r.Get("/cwe/sets", s.handleListCWESets)
 			// Tools: compare two SBOM files no repository holds.
 			r.Post("/tools/sbom/compare", s.handleCompareLocalSBOMs)
@@ -530,6 +557,16 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Post("/{keyID}/reject", s.handleRejectOrgAPIKey)
 					})
 					r.Get("/tool-catalog", s.handleGetToolCatalog)
+					r.Get("/producer-policies", s.handleListProducerPolicies)
+					r.Get("/scanner-requirements", s.handleGetScannerRequirements)
+					r.Get("/scan-coverage", s.handleGetOrgScanCoverage)
+					r.Post("/scanner-settings/bulk", s.handleBulkScannerSetting)
+					r.Post("/scan-coverage/refresh", s.handleRefreshOrgScanCoverage)
+					r.Put("/scanner-requirements", s.handleSetScannerRequirement)
+					r.Delete("/scanner-requirements", s.handleDeleteScannerRequirement)
+					r.Post("/coverage-exceptions/{exceptionID}/decision", s.handleDecideCoverageException)
+					r.Put("/producer-policies", s.handleSetProducerPolicy)
+					r.Delete("/producer-policies", s.handleDeleteProducerPolicy)
 					r.Get("/search", s.handleGlobalSearch)
 					r.Route("/members", func(r chi.Router) {
 						r.Get("/", s.handleListOrgMembers)
@@ -623,6 +660,18 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/files.zip", s.handleDownloadSnapshotArchive)
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/files/{artifactID}", s.handleDownloadSnapshotFile)
 						r.Get("/{repoSlug}/snapshots/{snapshotID}/coverage-source", s.handleGetCoverageSource)
+						r.Get("/{repoSlug}/snapshots/{snapshotID}/producer-runs", s.handleGetSnapshotProducerRuns)
+						r.Get("/{repoSlug}/applicability", s.handleGetRepoApplicability)
+						r.Post("/{repoSlug}/applicability/refresh", s.handleRefreshRepoApplicability)
+						r.Post("/{repoSlug}/scan-plans", s.handleCreateScanPlan)
+						r.Get("/{repoSlug}/scanner-settings", s.handleGetRepoScannerSettings)
+						r.Get("/{repoSlug}/scan-coverage", s.handleGetRepoScanCoverage)
+						r.Put("/{repoSlug}/scanner-settings", s.handleSetRepoScannerSetting)
+						r.Post("/{repoSlug}/coverage-exceptions", s.handleRequestCoverageException)
+						r.Get("/{repoSlug}/scope-overrides", s.handleListScopeOverrides)
+						r.Post("/{repoSlug}/scope-overrides", s.handleCreateScopeOverride)
+						r.Delete("/{repoSlug}/scope-overrides", s.handleDeleteScopeOverride)
+						r.Get("/{repoSlug}/scan-plans/{planID}", s.handleGetScanPlan)
 						r.Post("/{repoSlug}/sbom/compare", s.handleCompareSBOMs)
 						r.Get("/{repoSlug}/compare", s.handleCompareRefs)
 						r.Get("/{repoSlug}/trends", s.handleGetTrends)
@@ -637,6 +686,9 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/findings/{fingerprint}", s.handleGetFindingDetail)
 						r.Get("/{repoSlug}/findings/{fingerprint}/history", s.handleGetFindingHistory)
 						r.Put("/{repoSlug}/findings/{fingerprint}/cwes", s.handleSetFindingCWEs)
+						r.Post("/{repoSlug}/findings/{fingerprint}/reassert", s.handleReassertFinding)
+						r.Post("/{repoSlug}/findings/{fingerprint}/retract", s.handleRetractFinding)
+						r.Post("/{repoSlug}/findings/{fingerprint}/resolve", s.handleResolveFinding)
 						r.Post("/{repoSlug}/reachability", s.handleSubmitReachability)
 						r.Put("/{repoSlug}/vulnerabilities/acceptance", s.handleBatchFindingAcceptance)
 						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/acceptance", s.handleSetFindingAcceptance)

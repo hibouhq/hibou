@@ -1,49 +1,90 @@
-# hibou (HIBOU Is Basically Observant & Unsleeping)
+# Hibou
 
-> **Status:** Early development. The core backend (API, auth, multi-tenant org management) and build pipeline are mostly in place. Ingestion, findings, and the full UI are under active development — see [TODO.md](TODO.md) for the roadmap.
+**Self-hosted, open-source security intelligence for the software lifecycle.** Bring dependency vulnerabilities, code findings, secrets, coverage, and release impact into one workspace on your own infrastructure. Keep your scanners; give their results a shared history and a place to act. Hibou is currently self-hosted only, not a hosted SaaS offering.
 
-An Open Security Intelligence Platform for the Software Lifecycle. Unify dependency risk, code findings, PR analysis, and release impact into a single multi-tenant system.
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-yellow)](https://github.com/hibouhq/hibou/releases)
+[![Go + Vue](https://img.shields.io/badge/built_with-Go_%2B_Vue-42b883)](#architecture)
 
+[Self-Host](#self-host) · [Documentation](docs/src/content/docs/getting-started/introduction.mdx) · [Releases](https://github.com/hibouhq/hibou/releases) · [Discussions](https://github.com/hibouhq/hibou/discussions) · [Comparison](docs/COMPARISON.md)
 
-> **NOTE:** This is a one-person experiment, developed on spare time — no roadmap promises, no support guarantees. Forks welcome.
+[![Hibou walkthrough: repository overview, vulnerability triage, dependency inventory, and coverage](docs/images/readme/walkthrough.gif)](docs/images/readme/walkthrough.gif)
 
-Read [COMPARISON.md](https://github.com/hibouhq/hibou/blob/main/docs/COMPARISON.md) to see where hibou stands against existing products.
+*A real walkthrough from a self-hosted dogfooding instance: start at the organization, filter findings with a grouped `OR` query, open Log4j detail, switch to Hibou's real SBOM inventory, inspect coverage, and browse releases. Vulnerability examples come from the intentionally vulnerable [sample project](https://github.com/hibouhq/hibou-sample-project); dependency, coverage, and release views come from Hibou itself.*
 
-> **Disclaimer 2:** I'm alone on that experiment, I'll be more than happy to get any feedbacks and new ideas, but don't expect anything from me, feel free to fork.
+> [!IMPORTANT]
+> **Hibou is in alpha.** This is a solo, spare-time experiment built with LLM assistance, not a production-readiness or support promise. Expect bugs, incomplete workflows, and documentation that can lag behind the code. Feedback and forks are welcome; see the [roadmap](TODO.md).
 
-> **Disclaimer 3:** This project uses LLM-assisted development to iterate quickly on user experience, automation, and proactive workflows. The current focus is shipping core capabilities first, then hardening stability, security, and dogfooding practices as the project matures.
+[Features](#features) · [Capabilities](#capabilities) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#contributing)
 
-> **Disclaimer 4 :** The doc is best efforts, even not yet hosted, do not consider it up to date. Feel free to ask questions in [Discussions](https://github.com/hibouhq/hibou/discussions)  .
-
+| Keep your tools | Review what changed | Own your deployment |
+| --- | --- | --- |
+| Ingest SBOMs, SARIF, secret findings, and coverage from your existing pipeline. | Compare snapshots and pull requests instead of treating every scan as a new inbox. | A Go binary with an embedded Vue UI, PostgreSQL, and Docker or Helm deployment. |
 
 ## Features
 
-> **Note:** Some feats are still roadmap, WIP and maybe buggy, the UI/UX is absolutely not yet which is why alpha releases only.
+Every image below comes from a self-hosted dogfooding instance. The sample repository supplies vulnerability examples; Hibou's own scans supply dependency licenses, coverage, and release history. Click an image for the full-size capture.
 
-- **Multi-tenant** — organization → team → repository hierarchy with RBAC (admin, developer, auditor, release_manager, viewer)
-- **Single binary** — Go backend embeds the Vue 3 SPA; one artifact to deploy
-- **SBOM ingestion** — CycloneDX (JSON/XML) and SPDX (JSON) with async processing and dedup
-- **Vulnerability scanning** — pluggable advisory providers (OSV.dev, NVD, GitHub Advisory, Trivy, Sonatype OSS Index) with canonical alias merging
-- **Secret scanning** — Using Gitleaks, trufflehog, betterleaks and GitHub secret scanning API.
-- **SARIF support** — ingest results from Semgrep, CodeQL, or any SARIF 2.1.0 producer
-- **VEX management** — create, import, and export VEX statements in OpenVEX, CSAF, and CycloneDX formats
-- **Automatic VEX generation** — auto-creates VEX statements on component upgrade/removal; supplier VEX propagation with expiry and re-evaluation
-- **Reachability analysis** — Go call graph analysis (server-side, RTA/VTA), Java bytecode analysis (CI-side), Rust source parsing (CI-side) to auto-VEX unreachable vulnerabilities
-- **Coverage integration** — multi-format ingestion (Cobertura, JaCoCo, Clover, LCOV, Go cover), PR coverage deltas, and configurable quality gates (min coverage, regression grace, diff minimum)
-- **Malware detection** — flags typosquat, dependency confusion, backdoor, and cryptominer packages from OSV and OpenSSF Package Analysis
-- **PR quality gates** — delta analysis (new/resolved vulns and findings) with configurable thresholds per branch pattern; **advisory by default (never breaks the build), blocking opt-in**; the check updates live when a finding is dismissed (VEX) — no CI re-run
-- **Forge integrations** — GitHub, Forgejo/Gitea, and GitLab with a forge-native PR check (commit status everywhere, rich GitHub Check Run in App mode), PR annotations, and webhook events
-- **Config-as-code** — `.hibou.yaml` per-repo configuration with JSON Schema and onboarding PR creation
-- **Compliance reporting** — point-in-time reports with ISO 27001 control mapping and SoA generation
-- **Release & client tracking** — releases, deployments, rollback history, and CVE impact analysis across clients
-- **Notifications** — Slack, Teams, Discord, webhook (HMAC-signed), and email with configurable rules per org
-- **Real-time updates** — WebSocket hub with per-user channels and topic subscriptions
-- **Audit logging** — immutable log of 30+ action types with actor, IP, and full context
-- **MCP server** — built-in Model Context Protocol server for AI assistant integration
-- **CLI** — `login`, `upload`, `repos`, `status` commands for CI pipeline integration
-- **API-first** — REST API with JSON envelopes, pagination, and error handling
-- **Cloud-native** — Helm chart Available
-- **sqlc** — type-safe database layer generated from plain SQL
+### Start with the organization
+
+[![Organization overview with repository scan freshness, vulnerability counts, and exploited-CVE alerts](docs/images/readme/organization.png)](docs/images/readme/organization.png)
+
+Scan freshness and risk across repositories share one view. Start at the organization, then move into the repository that needs attention.
+
+### See the repository, not just the scan
+
+[![Repository overview with exploited vulnerability alerts, severity breakdown, snapshots, SBOM components, and coverage](docs/images/readme/repository.png)](docs/images/readme/repository.png)
+
+Security posture, known exploited vulnerabilities, dependency inventory, coverage, and uploaded artifacts sit alongside branch and snapshot history. Switch context without losing the repository you are investigating.
+
+| Prioritize findings | Understand the risk |
+| --- | --- |
+| [![Findings table with severity, CVSS, EPSS, source, status, and triage controls](docs/images/readme/findings.png)](docs/images/readme/findings.png) | [![Log4j finding detail with known exploitation, scores, affected package, remediation, and CWE references](docs/images/readme/finding-detail.png)](docs/images/readme/finding-detail.png) |
+| **Start with the signal.** Filter by severity, type, source, triage state, or known exploitation. CVSS, EPSS, and scanner provenance help you choose what deserves attention first. | **Go beyond a CVE identifier.** Open a finding to inspect exploitation context, affected package, remediation, and weakness classification. Track triage decisions with VEX rather than losing them between scans. |
+
+### Ask a precise question
+
+[![Advanced vulnerability query with Boolean grouping, OR, AND, autocomplete, and two exploited findings](docs/images/readme/advanced-query.png)](docs/images/readme/advanced-query.png)
+
+Combine fields with `AND`, `OR`, and parentheses. Autocomplete exposes available filters while you type. For example, prioritize exploited dependency vulnerabilities with high or critical severity:
+
+```text
+(severity:critical OR severity:high) AND type:dependency AND exploited:true
+```
+
+| Know what you ship | Put coverage in context |
+| --- | --- |
+| [![Dependency inventory from uploaded SBOMs showing package versions, ecosystems, licenses, and vulnerability counts](docs/images/readme/dependencies.png)](docs/images/readme/dependencies.png) | [![Coverage view with summary metrics and file-level coverage for the sample project](docs/images/readme/coverage.png)](docs/images/readme/coverage.png) |
+| **An inventory with history.** Import CycloneDX or SPDX SBOMs, inspect components, and compare snapshots as packages are added, upgraded, or removed. Connect dependency risk to the software you actually ship. | **More than a percentage.** Bring Go cover, LCOV, Cobertura, JaCoCo, and Clover reports into the same repository view. Follow file-level coverage and PR deltas, with configurable coverage gates. |
+
+### Review changes before they land
+
+Compare branches, pull requests, and snapshots to see new and resolved findings, dependency changes, and coverage deltas. Forge-native checks bring the result back to GitHub, Forgejo/Gitea, or GitLab.
+
+Quality gates are **advisory by default; blocking is opt-in**. A triage decision can update the PR check without rerunning CI.
+
+### Follow the versions you ship
+
+[![Hibou release history with per-version vulnerability counts and client associations including Castor](docs/images/readme/releases.png)](docs/images/readme/releases.png)
+
+Review risk per release and see which clients are associated with each version. Release history connects findings to deployed software instead of leaving them attached only to a branch scan.
+
+## Capabilities
+
+Availability and maturity vary by integration. The [documentation](docs/src/content/docs/getting-started/introduction.mdx) and [roadmap](TODO.md) describe the details and remaining work.
+
+| Area | Included |
+| --- | --- |
+| **Scan ingestion** | CycloneDX JSON/XML, SPDX JSON, SARIF 2.1.0, secret findings, coverage reports, and test results. |
+| **Dependency intelligence** | OSV.dev, NVD, GitHub Advisory, Trivy, and Sonatype OSS Index integration; advisory alias merging; malware signals from OSV and OpenSSF Package Analysis. |
+| **Triage and VEX** | OpenVEX, CSAF, and CycloneDX import/export; automatic statements for component upgrades/removals; supplier VEX propagation and re-evaluation. |
+| **Reachability** | Go call graphs (RTA/VTA), Java bytecode analysis, and Rust source analysis to help identify unreachable vulnerable code. |
+| **Code and secrets** | SARIF from Semgrep, CodeQL, and other producers; Gitleaks, TruffleHog, Betterleaks, and GitHub secret scanning integration. See [SAST scanners](docs/SAST-SCANNERS.md). |
+| **Pull requests** | Delta analysis, branch-pattern quality gates, coverage thresholds, forge-native statuses, GitHub Check Runs in App mode, and annotations. |
+| **Release impact** | Releases, client deployments, rollback history, and CVE impact analysis across clients. |
+| **Organization controls** | Organization/team/repository hierarchy, RBAC, audit logging, ISO 27001 control mapping, and point-in-time compliance reports. |
+| **Automation** | REST API, CLI, built-in MCP server, `.hibou.yaml` config-as-code, and onboarding PRs. |
+| **Notifications** | Slack, Teams, Discord, HMAC-signed webhooks, and email with organization-level rules; real-time UI updates. |
 
 ## Architecture
 
@@ -57,53 +98,42 @@ Read [COMPARISON.md](https://github.com/hibouhq/hibou/blob/main/docs/COMPARISON.
 
 ## Quick Start
 
-### Using the devcontainer (recommended)
+### Try it locally
 
-1. Open in VS Code with the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension
-2. Reopen in container when prompted
-3. Start the infrastructure:
-   ```bash
-   docker compose up -d
-   ```
-4. Copy the environment file:
-   ```bash
-   cp .env.example .env
-   ```
-5. Seed sample data (snapshots, coverage, tags, PRs, advisories):
-   ```bash
-   make seed
-   ```
-6. Start the dev servers:
-   ```bash
-   make dev
-   ```
-7. Open http://localhost:8080 (frontend) or http://localhost:8585 (API)
+**Prerequisites:** Docker with Compose, Git, Make, Go 1.26.3+, and Node.js 22+. The [VS Code devcontainer](.devcontainer/devcontainer.json) provides the development toolchain.
 
-### Manual setup
+```bash
+git clone https://github.com/hibouhq/hibou.git
+cd hibou
+cp .env.example .env
+go mod download
+npm --prefix site install
+make dev-local
+```
 
-**Prerequisites:** Go 1.24+, Node.js 22+, PostgreSQL 18, golangci-lint, sqlc
+This starts PostgreSQL and Trivy, then the API and Vite frontend. Open **http://localhost:3000** and select **Dev Login**. The API listens on **http://localhost:8585**. Database migrations run automatically when the server starts.
 
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   go mod download
-   cd site && npm install && cd ..
-   ```
-3. Start PostgreSQL and set `HIBOU_DATABASE_URL`
-4. Run the dev servers:
-   ```bash
-   make dev
-   ```
+To populate the local instance with example snapshots, findings, coverage, and pull requests, run `make seed` in a second terminal once PostgreSQL is ready.
+
+> [!WARNING]
+> Dev Login is for private local development only. Do not expose this instance publicly. Use forge authentication and a production configuration when deploying.
+
+### Self-host
+
+Deploy the embedded UI and Go backend as a single binary or container, backed by PostgreSQL. A [Helm chart](chart/hibou) is included for Kubernetes.
+
+See the [deployment guide](docs/DEPLOYMENT.md), [server configuration example](hibou-server.example.yaml), and [forge authentication guide](docs/src/content/docs/admin/authentication.mdx). Use `make dev` for development with your configured forge provider.
 
 ## Make Targets
 
 | Target | Description |
 |--------|-------------|
-| `make` | Lint, test, and build |
+| `make` | Generate, lint, test, and build |
 | `make dev` | Run backend + Vite frontend concurrently (hot reload) |
+| `make dev-local` | Start local infrastructure and run with Dev Login |
 | `make seed` | (Re-)seed the database with sample data |
 | `make reset` | Drop the schema and re-seed from scratch |
-| `make generate` | Run sqlc code generation |
+| `make generate` | Generate sqlc database code and Swagger API docs |
 | `make lint` | Run Go and frontend linters + check generated code |
 | `make test` | Run Go and frontend tests |
 | `make build` | Build frontend then Go binary |
@@ -148,7 +178,11 @@ See [.env.example](.env.example) for all available options.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Feedback from real workflows is especially useful during alpha. Report a bug with the version, scanner/artifact format, reproduction steps, and a screenshot with sensitive data removed. Share ideas in [Discussions](https://github.com/hibouhq/hibou/discussions).
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines, [architecture](docs/ARCHITECTURE.md) for the system design, and [ADRs](docs/adr) for design decisions.
+
+Hibou stands for *HIBOU Is Basically Observant & Unsleeping*.
 
 ## License
 

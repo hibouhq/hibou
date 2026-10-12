@@ -275,3 +275,27 @@ func (RepositoryEvent) EventType() string {
 var ErrNotImplemented = errors.New("forge: provider not implemented")
 var ErrFileNotFound = errors.New("forge: file not found")
 var ErrUnsupportedWebhookEvent = errors.New("forge: unsupported webhook event")
+
+// TreeListing is a repository's blob paths at a ref, and whether the forge
+// returned all of them. A truncated listing must never be read as "these are
+// all the files" (ADR-035 §3: unknown, not "not applicable").
+type TreeListing struct {
+	Paths     []string
+	Truncated bool
+}
+
+// TreeLister is implemented by forges that can list a tree and say whether
+// the list is complete.
+type TreeLister interface {
+	ListTree(ctx context.Context, owner, repo, ref string) (*TreeListing, error)
+}
+
+// maxTreeListingFiles caps paginated listings (GitLab, Forgejo): beyond it
+// the listing is returned truncated.
+const maxTreeListingFiles = 100000
+
+// PathsOnlyComparer is implemented by forges whose ComparePatch never has
+// line data: re-fetching a paths-only cache row for a diff view is pointless.
+type PathsOnlyComparer interface {
+	ComparesPathsOnly() bool
+}

@@ -115,10 +115,47 @@ func (g *GitLab) GetBranch(ctx context.Context, owner, repo, branch string) (*Br
 	return &result, nil
 }
 
-// ListTreePaths is not yet implemented for GitLab; source path resolution
-// degrades to exact matches.
-func (g *GitLab) ListTreePaths(context.Context, string, string, string) ([]string, error) {
-	return nil, nil
+// ListTreePaths returns every blob path at a ref.
+func (g *GitLab) ListTreePaths(ctx context.Context, owner, repo, ref string) ([]string, error) {
+	listing, err := g.ListTree(ctx, owner, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	return listing.Paths, nil
+}
+
+// gitlabTreePageSize is GitLab's maximum per_page.
+const gitlabTreePageSize = 100
+
+// ListTree pages through GitLab's recursive repository tree, blobs only. A
+// repository larger than maxTreeListingFiles returns truncated.
+func (g *GitLab) ListTree(ctx context.Context, owner, repo, ref string) (*TreeListing, error) {
+	listing := &TreeListing{Paths: make([]string, 0)}
+	for page := 1; ; page++ {
+		path := fmt.Sprintf(
+			"/api/v4/projects/%s/repository/tree?recursive=true&ref=%s&per_page=%d&page=%d",
+			gitlabProjectID(owner, repo), url.QueryEscape(ref), gitlabTreePageSize, page,
+		)
+		var entries []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		}
+		if err := g.doJSON(ctx, http.MethodGet, path, nil, &entries); err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.Type == "blob" {
+				listing.Paths = append(listing.Paths, entry.Path)
+			}
+		}
+		if len(entries) < gitlabTreePageSize {
+			return listing, nil
+		}
+		if len(listing.Paths) >= maxTreeListingFiles {
+			listing.Truncated = true
+			return listing, nil
+		}
+	}
 }
 
 func (g *GitLab) GetFileContent(ctx context.Context, owner, repo, filePath, ref string) ([]byte, error) {
@@ -365,10 +402,71 @@ func (g *GitLab) UserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, 
 	return &user, nil
 }
 
-// ComparePatch is not yet implemented for GitLab; patch coverage degrades to
-// the file-level coverage diff. See PatchDiff docs.
-func (g *GitLab) ComparePatch(context.Context, string, string, string, string) (*PatchDiff, error) {
-	return nil, nil
+type gitlabCompareResponse struct {
+	CompareTimeout bool                `json:"compare_timeout"`
+	Diffs          []gitlabCompareDiff `json:"diffs"`
+}
+
+type gitlabCompareDiff struct {
+	OldPath     string `json:"old_path"`
+	NewPath     string `json:"new_path"`
+	NewFile     bool   `json:"new_file"`
+	RenamedFile bool   `json:"renamed_file"`
+	DeletedFile bool   `json:"deleted_file"`
+	TooLarge    bool   `json:"too_large"`
+	Diff        string `json:"diff"`
+}
+
+// ComparePatch fetches the changed files between base and head through
+// GitLab's repository compare API (straight=true: the direct base..head diff,
+// like GitHub's three-dot compare on linear history). A timed-out comparison
+// or a diff GitLab omitted as too large marks the result Truncated: the file
+// is known to have changed, its lines are not.
+func (g *GitLab) ComparePatch(ctx context.Context, owner, repo, base, head string) (*PatchDiff, error) {
+	path := fmt.Sprintf(
+		"/api/v4/projects/%s/repository/compare?from=%s&to=%s&straight=true",
+		gitlabProjectID(owner, repo),
+		url.QueryEscape(base),
+		url.QueryEscape(head),
+	)
+	var payload gitlabCompareResponse
+	if err := g.doJSON(ctx, http.MethodGet, path, nil, &payload); err != nil {
+		return nil, err
+	}
+
+	diff := &PatchDiff{Files: make([]PatchFile, 0, len(payload.Diffs)), Truncated: payload.CompareTimeout}
+	for _, file := range payload.Diffs {
+		newPath := strings.TrimSpace(file.NewPath)
+		if newPath == "" {
+			newPath = strings.TrimSpace(file.OldPath)
+		}
+		if newPath == "" {
+			continue
+		}
+		status := "modified"
+		oldPath := ""
+		switch {
+		case file.NewFile:
+			status = "added"
+		case file.DeletedFile:
+			status = "removed"
+		case file.RenamedFile:
+			status = "renamed"
+			oldPath = file.OldPath
+		}
+		if file.TooLarge {
+			diff.Truncated = true
+		}
+		// GitLab's diff omits the ---/+++ header; the hunks parse the same.
+		diff.Files = append(diff.Files, PatchFile{
+			Path:       newPath,
+			OldPath:    oldPath,
+			Status:     status,
+			AddedLines: sortedUniqueLines(ParseUnifiedPatch(file.Diff)),
+			Hunks:      file.Diff,
+		})
+	}
+	return diff, nil
 }
 
 func (g *GitLab) ListUserAccess(context.Context, *oauth2.Token) (UserAccess, error) {

@@ -334,6 +334,7 @@
                     :class="triageFor(vulnerability).badgeClass"
                     :title="triageTitle(vulnerability)"
                   >{{ triageFor(vulnerability).label }}</span>
+                  <PresenceBadge :finding="vulnerability" />
                   <RouterLink
                     v-if="vulnerability.fixed_in_prs?.length"
                     :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: vulnerability.fixed_in_prs[0].ref_name } }"
@@ -449,6 +450,7 @@ import { useDialog } from '@/composables/useDialog'
 import FilterBar from '@/components/FilterBar.vue'
 import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
+import PresenceBadge from '@/components/finding/PresenceBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
@@ -583,11 +585,14 @@ const fileOptions = computed(() => mergeFacetOptions(facetCounts.value.file, see
 // 'disputed' is deliberately last: it lives on the dispute axis (ADR-026),
 // not the acceptance one — position separates it from the acceptance states.
 const acceptanceOptions = ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed']
+const presenceOptions = ['reported', 'not-rechecked', 'unconfirmed']
 const filterDefs = computed(() => [
   { key: 'status', label: 'Status', options: statusOptions, multi: true, primary: true, hidden: true, defaultValue: 'detected' },
   { key: 'type', label: 'Type', options: typeOptions, multi: true },
   { key: 'severity', label: 'Severity', options: severityOptions, multi: true },
   { key: 'acceptance', label: 'Triage', options: acceptanceOptions },
+  // ADR-034: carried findings — open, but not re-checked on this snapshot.
+  { key: 'presence', label: 'Presence', options: presenceOptions, multi: true },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
   // hidden: no dropdown pill (the red toggle is the UI) — the def exists so a

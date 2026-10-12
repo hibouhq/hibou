@@ -81,6 +81,18 @@
             {{ eventDetail(event) }}
           </p>
           <p
+            v-else-if="(event.kind === 'resolved' || event.kind === 'no_longer_reported') && resolutionReasonText(stringOf(event, 'reason'))"
+            class="mt-0.5 text-xs text-gray-500"
+          >
+            {{ capitalize(resolutionReasonText(stringOf(event, 'reason'), stringOf(event, 'producer'), stringOf(event, 'producer_version'))) }}.
+          </p>
+          <p
+            v-else-if="event.kind === 'not_rechecked'"
+            class="mt-0.5 text-xs text-gray-500"
+          >
+            {{ capitalize(presenceReasonText(stringOf(event, 'reason'))) }} on this commit, so the finding was kept open rather than marked fixed.
+          </p>
+          <p
             v-else-if="event.kind === 'became_unreachable'"
             class="mt-0.5 text-xs text-gray-500"
           >
@@ -143,6 +155,7 @@ import { api, type FindingHistoryEvent } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
 import { kevSourceLabel } from '@/lib/kev'
+import { presenceReasonText, resolutionReasonText } from '@/lib/presence'
 
 // The finding's own timeline: scan observations merged with triage decisions.
 // It reads the fingerprint-scoped history endpoint, not the org audit log —
@@ -199,6 +212,13 @@ const LABELS: Record<string, string> = {
   triaged: 'Triaged',
   kev_listed: 'Known exploitation listed',
   kev_delisted: 'Exploitation listing removed',
+  not_rechecked: 'Not re-checked',
+  no_longer_reported: 'No longer reported',
+  reasserted: 'Confirmed still present',
+  retracted: 'Retracted',
+  resolved_by_decision: 'Resolved',
+  rekeyed: 'Identity updated, triage kept',
+  rechecked: 'Re-checked, still present',
 }
 
 function eventLabel(event: FindingHistoryEvent): string {
@@ -217,6 +237,7 @@ function markerClass(event: FindingHistoryEvent): string {
     case 'resolved':
     case 'revoked':
     case 'became_unreachable':
+    case 'resolved_by_decision':
       return 'border-ok/40 bg-ok/15 text-ok'
     case 'accepted':
     case 'reopened':
@@ -225,6 +246,8 @@ function markerClass(event: FindingHistoryEvent): string {
       return 'border-danger/40 bg-danger/15 text-danger'
     case 'false_positive':
     case 'kev_delisted':
+    case 'no_longer_reported':
+    case 'not_rechecked':
       return 'border-surface-border bg-surface-overlay text-gray-400'
     default:
       return 'border-surface-border bg-surface-overlay text-gray-500'
@@ -234,6 +257,10 @@ function markerClass(event: FindingHistoryEvent): string {
 // The reason is the part of a decision worth reading; expiry matters because an
 // acceptance that lapses turns back into an open finding.
 function eventDetail(event: FindingHistoryEvent): string {
+  // Their reason is a code, worded by the dedicated line instead.
+  if (event.kind === 'not_rechecked' || (event.source === 'scan' && (event.kind === 'resolved' || event.kind === 'no_longer_reported'))) {
+    return ''
+  }
   const parts: string[] = []
   const reason = stringOf(event, 'reason')
   const comment = stringOf(event, 'comment')
@@ -253,6 +280,10 @@ function eventDetail(event: FindingHistoryEvent): string {
 function labelsOf(event: FindingHistoryEvent): string[] {
   const labels = event.detail?.labels
   return Array.isArray(labels) ? labels.filter((label): label is string => typeof label === 'string') : []
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 function stringOf(event: FindingHistoryEvent, key: string): string {

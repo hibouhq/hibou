@@ -1,0 +1,472 @@
+{
+  "schema_version": 1,
+  "revision": "2026-10-10.1",
+  "scanners": [
+    {
+      "id": "opengrep",
+      "name": "OpenGrep",
+      "engine": "opengrep",
+      "engine_version": "1.30.1",
+      "adapter_version": "1",
+      "license": "LGPL-2.1",
+      "support_status": "supported",
+      "prerelease": false,
+      "producer_names": [
+        "opengrep oss"
+      ],
+      "homepage": "https://github.com/opengrep/opengrep",
+      "distributions": [
+        {
+          "kind": "binary",
+          "os": "linux",
+          "arch": "amd64",
+          "libc": "glibc",
+          "asset": "opengrep_manylinux_x86",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_manylinux_x86",
+          "sha256": "d3195b9d8d5ae93179f6aa5f5daaba6a920a5a09d38c5d5ae5e60924050210c4",
+          "size": 46553256,
+          "signature": {
+            "kind": "cosign-keyless",
+            "signature_url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_manylinux_x86.sig",
+            "certificate_url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_manylinux_x86.cert"
+          }
+        },
+        {
+          "kind": "binary",
+          "os": "linux",
+          "arch": "arm64",
+          "libc": "glibc",
+          "asset": "opengrep_manylinux_aarch64",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_manylinux_aarch64",
+          "sha256": "a730f6fdce1e978ea29e610a2e0503bfe1ec31fce08979a9a84e3699f03e16ee",
+          "size": 47982360,
+          "signature": {
+            "kind": "cosign-keyless",
+            "signature_url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_manylinux_aarch64.sig",
+            "certificate_url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_manylinux_aarch64.cert"
+          }
+        },
+        {
+          "kind": "binary",
+          "os": "linux",
+          "arch": "amd64",
+          "libc": "musl",
+          "asset": "opengrep_musllinux_x86",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_musllinux_x86",
+          "sha256": "e66f22675fae171ac1244d49b7f6a2e15a2d3613f3df9aad3c7fb2aaa1461c3a",
+          "size": 48645960
+        },
+        {
+          "kind": "binary",
+          "os": "linux",
+          "arch": "arm64",
+          "libc": "musl",
+          "asset": "opengrep_musllinux_aarch64",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_musllinux_aarch64",
+          "sha256": "1162fa775fd5865032bd8a0484fbdeb41f1c6711d88caf36e9981f98921c087d",
+          "size": 49874680
+        },
+        {
+          "kind": "binary",
+          "os": "darwin",
+          "arch": "arm64",
+          "asset": "opengrep_osx_arm64",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_osx_arm64",
+          "sha256": "7b788794e111ce3fb83f0aa52c100a3b85d37d8b59482262109031f50d4a8d91",
+          "size": 47397296
+        },
+        {
+          "kind": "binary",
+          "os": "darwin",
+          "arch": "amd64",
+          "asset": "opengrep_osx_x86",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v1.30.1/opengrep_osx_x86",
+          "sha256": "a8c6d5f51bb38253b48e9a80fca63684aa2a0f9abfeacea27b8d8b5778476bae",
+          "size": 48421600
+        }
+      ],
+      "rulesets": [
+        "opengrep-rules"
+      ],
+      "capabilities": [
+        {
+          "language": "java",
+          "capability": "source-patterns",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "python",
+          "capability": "source-patterns",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "javascript",
+          "capability": "source-patterns",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "java",
+          "capability": "intrafile-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "python",
+          "capability": "intrafile-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "javascript",
+          "capability": "intrafile-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "kotlin",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        },
+        {
+          "language": "go",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        },
+        {
+          "language": "typescript",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        },
+        {
+          "language": "ruby",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        },
+        {
+          "language": "php",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        },
+        {
+          "language": "csharp",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        },
+        {
+          "language": "rust",
+          "capability": "source-patterns",
+          "evidence": "declared"
+        }
+      ],
+      "applicability": {
+        "extensions": [
+          ".java",
+          ".kt",
+          ".go",
+          ".js",
+          ".jsx",
+          ".mjs",
+          ".ts",
+          ".tsx",
+          ".py",
+          ".rb",
+          ".php",
+          ".cs",
+          ".rs"
+        ]
+      },
+      "stages": {
+        "requires": [
+          "source"
+        ],
+        "produces": [
+          "sarif"
+        ]
+      },
+      "diff_support": "none",
+      "resources": {
+        "cpu": 2,
+        "memory_mb": 4096,
+        "timeout_seconds": 1800
+      },
+      "exit_codes": {
+        "0": "ok",
+        "1": "findings",
+        "default": "error"
+      },
+      "command": {
+        "args": [
+          "scan",
+          "--taint-intrafile",
+          "--sarif-output={sarif}",
+          "-f",
+          "{rules}",
+          "{targets}"
+        ]
+      },
+      "sarif": {
+        "fingerprint": "matchBasedId/v1",
+        "paths": "repo-relative",
+        "code_flows": "none"
+      }
+    },
+    {
+      "id": "opengrep-interfile",
+      "name": "OpenGrep (interfile pre-release)",
+      "engine": "opengrep",
+      "engine_version": "2.0.0-nopython-interfile.alpha.3",
+      "adapter_version": "1",
+      "license": "LGPL-2.1",
+      "support_status": "preview",
+      "prerelease": true,
+      "producer_names": [
+        "opengrep oss"
+      ],
+      "homepage": "https://github.com/opengrep/opengrep",
+      "notes": "Reports semanticVersion 1.30.0: identify it by digest, never by version string. Pass --dataflow-traces or findings carry no code flow.",
+      "distributions": [
+        {
+          "kind": "binary",
+          "os": "linux",
+          "arch": "amd64",
+          "asset": "opengrep_linux_x86",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_linux_x86",
+          "sha256": "c974a8d6918a49ae340fad22913b131d0e20d8cd6682e4890ef057f4e29d6184",
+          "size": 160057056,
+          "signature": {
+            "kind": "cosign-keyless",
+            "signature_url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_linux_x86.sig",
+            "certificate_url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_linux_x86.cert"
+          }
+        },
+        {
+          "kind": "binary",
+          "os": "linux",
+          "arch": "arm64",
+          "asset": "opengrep_linux_aarch64",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_linux_aarch64",
+          "sha256": "20fc71aeadf7b6b93688d445cb5e5119d14ea6c68b6a6bf57cfed4ed3f402e51",
+          "size": 164265128,
+          "signature": {
+            "kind": "cosign-keyless",
+            "signature_url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_linux_aarch64.sig",
+            "certificate_url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_linux_aarch64.cert"
+          }
+        },
+        {
+          "kind": "binary",
+          "os": "darwin",
+          "arch": "arm64",
+          "asset": "opengrep_osx_arm64",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_osx_arm64",
+          "sha256": "aa88b9f69cbf663fba3e9b5a7b610728ce25a1b4f498eca388aff677cf4b1a1a",
+          "size": 174493624
+        },
+        {
+          "kind": "binary",
+          "os": "darwin",
+          "arch": "amd64",
+          "asset": "opengrep_osx_x86",
+          "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0-nopython-interfile.alpha.3/opengrep_osx_x86",
+          "sha256": "b5b9abeaf72751b23d0bfc8e58ad71b5be8b65a66772b58c7a6859003f8fb103",
+          "size": 166035072
+        }
+      ],
+      "rulesets": [
+        "opengrep-rules"
+      ],
+      "capabilities": [
+        {
+          "language": "java",
+          "capability": "source-patterns",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "python",
+          "capability": "source-patterns",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "javascript",
+          "capability": "source-patterns",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "java",
+          "capability": "intrafile-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "python",
+          "capability": "intrafile-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "javascript",
+          "capability": "intrafile-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "java",
+          "capability": "cross-file-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "python",
+          "capability": "cross-file-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        },
+        {
+          "language": "javascript",
+          "capability": "cross-file-taint",
+          "evidence": "measured:hibou-sample-project security-scans 2026-10-10"
+        }
+      ],
+      "applicability": {
+        "extensions": [
+          ".java",
+          ".py",
+          ".js",
+          ".jsx",
+          ".mjs"
+        ]
+      },
+      "stages": {
+        "requires": [
+          "source"
+        ],
+        "produces": [
+          "sarif"
+        ]
+      },
+      "diff_support": "none",
+      "resources": {
+        "cpu": 4,
+        "memory_mb": 8192,
+        "timeout_seconds": 3600
+      },
+      "exit_codes": {
+        "0": "ok",
+        "1": "findings",
+        "default": "error"
+      },
+      "command": {
+        "args": [
+          "scan",
+          "--taint-interfile",
+          "--dataflow-traces",
+          "--sarif-output={sarif}",
+          "-f",
+          "{rules}",
+          "{targets}"
+        ]
+      },
+      "sarif": {
+        "fingerprint": "matchBasedId/v1",
+        "paths": "repo-relative",
+        "code_flows": "with-flag"
+      }
+    },
+    {
+      "id": "spotbugs-findsecbugs",
+      "name": "SpotBugs + Find Security Bugs",
+      "engine": "spotbugs",
+      "engine_version": "4.9.3",
+      "adapter_version": "1",
+      "license": "LGPL-2.1 (SpotBugs), LGPL-3.0 (Find Security Bugs)",
+      "support_status": "supported",
+      "prerelease": false,
+      "producer_names": [
+        "spotbugs"
+      ],
+      "homepage": "https://spotbugs.github.io",
+      "notes": "Writes paths relative to the Java source root and no fingerprints: hibou upload rewrites the paths and adds content fingerprints. exitCode 1 means bugs found, not failure. Transitive Maven dependencies are resolved by Maven, not yet locked here.",
+      "distributions": [
+        {
+          "kind": "maven",
+          "coordinates": "com.github.spotbugs:spotbugs-maven-plugin:4.9.3.0",
+          "url": "https://repo1.maven.org/maven2/com/github/spotbugs/spotbugs-maven-plugin/4.9.3.0/spotbugs-maven-plugin-4.9.3.0.jar",
+          "sha256": "6ec416eb2684c321a0834811d8a0e2f2abf8a697ae2381c276155aa34fcb735c"
+        },
+        {
+          "kind": "maven",
+          "coordinates": "com.github.spotbugs:spotbugs:4.9.3",
+          "url": "https://repo1.maven.org/maven2/com/github/spotbugs/spotbugs/4.9.3/spotbugs-4.9.3.jar",
+          "sha256": "710e8b98f1ae23cdb71aaaf07e8d71fb63b44f2bbbaa1df3c3ba0de62aba6ec9"
+        },
+        {
+          "kind": "maven",
+          "coordinates": "com.h3xstream.findsecbugs:findsecbugs-plugin:1.13.0",
+          "url": "https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/1.13.0/findsecbugs-plugin-1.13.0.jar",
+          "sha256": "c239763a8c327b5fb653a34dece6398578bf435b9a32c212bb8e1abe701368a5"
+        }
+      ],
+      "rulesets": [],
+      "capabilities": [
+        {
+          "language": "java",
+          "capability": "bytecode-security",
+          "evidence": "measured:hibou-sample-project java/ 2026-10-10"
+        },
+        {
+          "language": "java",
+          "capability": "bytecode-correctness",
+          "evidence": "measured:hibou-sample-project java/ 2026-10-10"
+        },
+        {
+          "language": "kotlin",
+          "capability": "bytecode-security",
+          "evidence": "declared"
+        }
+      ],
+      "applicability": {
+        "manifests": [
+          "pom.xml"
+        ],
+        "build_systems": [
+          "maven"
+        ]
+      },
+      "stages": {
+        "requires": [
+          "compiled-classes",
+          "classpath"
+        ],
+        "produces": [
+          "sarif"
+        ]
+      },
+      "diff_support": "none",
+      "resources": {
+        "cpu": 2,
+        "memory_mb": 4096,
+        "timeout_seconds": 1800
+      },
+      "exit_codes": {
+        "0": "ok",
+        "1": "findings",
+        "default": "error"
+      },
+      "command": {
+        "args": [
+          "-B",
+          "-Psast",
+          "spotbugs:spotbugs"
+        ]
+      },
+      "sarif": {
+        "fingerprint": "none",
+        "paths": "source-root-relative",
+        "code_flows": "none"
+      }
+    }
+  ],
+  "rulesets": [
+    {
+      "id": "opengrep-rules",
+      "name": "OpenGrep community rules",
+      "source": "https://github.com/opengrep/opengrep-rules",
+      "revision": "f1d2b562b414783763fd02a6ed2736eaed622efa",
+      "license": "NOASSERTION",
+      "status": "license-review-pending",
+      "notes": "GitHub reports no license (NOASSERTION). Not selectable by plans until an operator approves it after a license review."
+    }
+  ]
+}

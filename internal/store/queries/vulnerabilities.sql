@@ -66,7 +66,14 @@ ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET
     rated_by = EXCLUDED.rated_by,
     status = CASE WHEN vulnerabilities.status = 'resolved' THEN vulnerabilities.status ELSE EXCLUDED.status END,
     metadata = EXCLUDED.metadata,
-    rule_ref_id = EXCLUDED.rule_ref_id
+    rule_ref_id = EXCLUDED.rule_ref_id,
+    -- Its producer reported it again: a row carried forward earlier in this
+    -- snapshot (ADR-034) is now a real observation.
+    presence = 'reported',
+    presence_reason = NULL,
+    last_seen_snapshot_id = NULL,
+    last_seen_commit = NULL,
+    consecutive_absences = 0
 RETURNING *;
 
 -- name: GetVulnerabilityByID :one
@@ -442,7 +449,12 @@ WITH observations AS (
            -- that suppressed the finding.
            v.metadata #>> '{suppression,justification}' AS suppression_justification,
            LAG(v.status::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_status,
-           LAG(v.reachability::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_reachability
+           LAG(v.reachability::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_reachability,
+           -- ADR-034: a carried row (not re-checked) and its return to a real
+           -- report are timeline events too.
+           v.presence::text AS presence,
+           v.presence_reason,
+           LAG(v.presence::text) OVER (PARTITION BY r.id ORDER BY s.created_at, s.id) AS previous_presence
     FROM vulnerabilities v
     JOIN snapshots s ON s.id = v.snapshot_id
     JOIN refs r ON r.id = s.ref_id
@@ -454,9 +466,13 @@ SELECT ref_name, ref_type, commit_sha, observed_at, status, severity,
        COALESCE(previous_status, '')::text AS previous_status,
        COALESCE(suppression_justification, '')::text AS suppression_justification,
        COALESCE(reachability, '')::text AS reachability,
-       COALESCE(previous_reachability, '')::text AS previous_reachability
+       COALESCE(previous_reachability, '')::text AS previous_reachability,
+       presence,
+       COALESCE(previous_presence, '')::text AS previous_presence,
+       COALESCE(presence_reason, '')::text AS presence_reason
 FROM observations
 WHERE previous_status IS DISTINCT FROM status
+   OR (previous_presence IS NOT NULL AND previous_presence IS DISTINCT FROM presence)
    -- A reachability verdict is a timeline event too: it changes whether the
    -- finding gates (org opt-in) and what the VEX export says. Only definite
    -- verdicts qualify — a new snapshot's rows start unknown until classified,

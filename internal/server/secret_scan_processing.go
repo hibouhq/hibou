@@ -232,20 +232,65 @@ func (s *Server) executeSecretScanJob(ctx context.Context, job *store.SecretScan
 	}
 
 	branch := strings.TrimPrefix(job.RefName, "refs/heads/")
-	if job.Mode == store.SecretScanModeIncremental && job.FromCommit != "" && job.FromCommit != gitZeroSHA {
-		_, err = s.secretScanner.RunIncrementalScan(ctx, repo.ID, snapshot.ID, target.cloneURL, branch, job.FromCommit, job.ToCommit, token)
+	incremental := job.Mode == store.SecretScanModeIncremental && job.FromCommit != "" && job.FromCommit != gitZeroSHA
+	var created int
+	if incremental {
+		created, err = s.secretScanner.RunIncrementalScan(ctx, repo.ID, snapshot.ID, target.cloneURL, branch, job.FromCommit, job.ToCommit, token)
 	} else {
 		// A full job with no commit range is a baseline (enrolment, manual
 		// rescan): scan every branch so branch-only history isn't dark forever.
 		// A new-branch push records its head and stays scoped to that branch.
 		allBranches := strings.TrimSpace(job.FromCommit) == "" && strings.TrimSpace(job.ToCommit) == ""
-		_, err = s.secretScanner.RunFullScan(ctx, repo.ID, snapshot.ID, target.cloneURL, branch, token, allBranches)
+		created, err = s.secretScanner.RunFullScan(ctx, repo.ID, snapshot.ID, target.cloneURL, branch, token, allBranches)
 	}
+	s.recordSecretScanRun(ctx, snapshot.ID, job, incremental, created, err)
+	s.reconcileFindingPresenceLate(ctx, snapshot.ID)
 	if err != nil {
 		return err
 	}
 	s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 	return nil
+}
+
+// secretScanProducer is the producer key of server-side secret scanning
+// (ADR-034 §2). One producer for all configured providers: findings are
+// de-duplicated across providers, so a secret's scanner_name depends on which
+// provider saw it first and cannot key its producer.
+const secretScanProducer = "secret-scanning"
+
+// recordSecretScanRun stores the scan's producer run. An incremental scan
+// only looks at the pushed commits, so it is partial: secrets found earlier
+// were not re-checked by it.
+func (s *Server) recordSecretScanRun(ctx context.Context, snapshotID uuid.UUID, job *store.SecretScanJob, incremental bool, created int, scanErr error) {
+	run := store.ProducerRunInput{
+		Producer:      secretScanProducer,
+		Scope:         store.ProducerScopeFull,
+		ScopeDeclared: true,
+		Outcome:       store.ProducerOutcomeCompleted,
+		FindingCount:  created,
+	}
+	if incremental {
+		run.Scope = store.ProducerScopePartial
+		run.Outcome = store.ProducerOutcomePartial
+		detail := fmt.Sprintf("incremental scan of commits %s..%s", shortSHA(job.FromCommit), shortSHA(job.ToCommit))
+		run.Detail = &detail
+	}
+	if scanErr != nil {
+		run.Outcome = store.ProducerOutcomeFailed
+		detail := truncateSecretScanError(scanErr)
+		run.Detail = &detail
+	}
+	if _, err := s.queries.UpsertSnapshotProducerRun(ctx, snapshotID, run); err != nil {
+		s.log.Warn().Err(err).Str("snapshot", snapshotID.String()).Msg("record secret scan producer run")
+	}
+}
+
+func shortSHA(sha string) string {
+	sha = strings.TrimSpace(sha)
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 type secretScanTarget struct {

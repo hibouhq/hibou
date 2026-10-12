@@ -22,6 +22,40 @@ type RepoConfig struct {
 	Coverage     *CoverageConfig `yaml:"coverage,omitempty" json:"coverage,omitempty"`
 	Upload       *UploadConfig   `yaml:"upload,omitempty" json:"upload,omitempty"`
 	Releases     *ReleasesConfig `yaml:"releases,omitempty" json:"releases,omitempty"`
+	// Scanners says how CI runs each tool (ADR-034 §2), keyed by SARIF tool
+	// name. It describes coverage only: which scanners are enabled or
+	// required stays hibou state (ADR-035 D10/D11).
+	Scanners map[string]ScannerRun `yaml:"scanners,omitempty" json:"scanners,omitempty"`
+}
+
+// Scanner run scopes accepted in .hibou.yaml.
+const (
+	ScannerScopeFull         = "full"
+	ScannerScopePartial      = "partial"
+	ScannerScopeChangedFiles = "changed-files"
+)
+
+const (
+	maxScannerPaths   = 1000
+	maxScannerPathLen = 1024
+)
+
+// ScannerRun is what one tool covers. changed-files: on pull requests the
+// tool scans only the files the PR changes, which hibou derives from the PR
+// comparison; branch builds are full.
+type ScannerRun struct {
+	Scope string   `yaml:"scope" json:"scope"`
+	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
+}
+
+// ScannerRunFor returns the configured run of a producer (lowercased SARIF
+// tool name), if any.
+func (c *RepoConfig) ScannerRunFor(producer string) (ScannerRun, bool) {
+	if c == nil || producer == "" {
+		return ScannerRun{}, false
+	}
+	run, ok := c.Scanners[strings.ToLower(strings.TrimSpace(producer))]
+	return run, ok
 }
 
 type QualityGate struct {
@@ -238,6 +272,16 @@ func DefaultYAML() []byte {
 		"# releases:",
 		"#   tag_pattern: \"^payments-v\\\\d+\\\\.\\\\d+\\\\.\\\\d+$\"",
 		"",
+		"# How CI runs each scanner, keyed by SARIF tool name (ADR-034). Unlisted",
+		"# tools are assumed to scan the whole repository; a scan that covers less",
+		"# must say so, or findings outside it would read as fixed:",
+		"# scanners:",
+		"#   semgrep:",
+		"#     scope: changed-files   # PR builds scan only the PR's files",
+		"#   eslint:",
+		"#     scope: partial",
+		"#     paths: [web/]",
+		"",
 	}, "\n"))
 }
 
@@ -285,6 +329,49 @@ func (c *RepoConfig) validate() error {
 		return err
 	}
 
+	return c.normalizeScanners()
+}
+
+// normalizeScanners validates the scanners section and lowercases its keys,
+// the way producers are named.
+func (c *RepoConfig) normalizeScanners() error {
+	if len(c.Scanners) == 0 {
+		return nil
+	}
+	normalized := make(map[string]ScannerRun, len(c.Scanners))
+	for name, run := range c.Scanners {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			return errors.New("scanners: tool name must not be empty")
+		}
+		if _, dup := normalized[key]; dup {
+			return fmt.Errorf("scanners.%s is listed twice (tool names are case-insensitive)", name)
+		}
+		run.Scope = strings.ToLower(strings.TrimSpace(run.Scope))
+		switch run.Scope {
+		case ScannerScopeFull, ScannerScopeChangedFiles:
+			if len(run.Paths) > 0 {
+				return fmt.Errorf("scanners.%s.paths is only allowed with scope partial", name)
+			}
+		case ScannerScopePartial:
+		default:
+			return fmt.Errorf("scanners.%s.scope must be full, partial or changed-files", name)
+		}
+		if len(run.Paths) > maxScannerPaths {
+			return fmt.Errorf("scanners.%s.paths lists more than %d entries", name, maxScannerPaths)
+		}
+		paths := make([]string, 0, len(run.Paths))
+		for _, entry := range run.Paths {
+			entry = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(entry), "./"), "/")
+			if entry == "" || len(entry) > maxScannerPathLen {
+				return fmt.Errorf("scanners.%s.paths entries must be 1 to %d characters", name, maxScannerPathLen)
+			}
+			paths = append(paths, entry)
+		}
+		run.Paths = paths
+		normalized[key] = run
+	}
+	c.Scanners = normalized
 	return nil
 }
 

@@ -19,6 +19,10 @@ type PatchDiff struct {
 	// compare API returns at most 300 files); callers should surface this so
 	// a partial patch coverage number is never mistaken for a complete one.
 	Truncated bool
+	// PathsOnly: the forge gave which files changed but no line data
+	// (Forgejo's compare API). Good for finding presence, not for patch
+	// coverage or a diff view.
+	PathsOnly bool
 }
 
 // PatchFile is one changed file and the new-side line numbers a change touched.

@@ -141,6 +141,19 @@ func (s *Server) handleCreateFinding(w http.ResponseWriter, r *http.Request) {
 	if err := s.queries.AttachFindingCWEs(r.Context(), created); err == nil {
 		finding = &created[0]
 	}
+	// Filing is the first confirmation, and filing the same finding again is
+	// a re-assert (ADR-034 §4): no duplicate, "last confirmed" moves, and a
+	// resolved or retracted assertion reopens.
+	userID, apiKeyID := principalIDs(r, user)
+	if previous, err := s.queries.GetFindingAssertion(r.Context(), repo.ID, finding.Fingerprint); err == nil {
+		if _, err := s.queries.ConfirmFindingAssertion(r.Context(), repo.ID, finding.Fingerprint, userID, apiKeyID); err != nil {
+			s.log.Warn().Err(err).Str("fingerprint", finding.Fingerprint).Msg("record assertion confirmation")
+		} else if previous != nil && previous.ClosedKind != "" {
+			if err := s.reopenAssertion(r, finding); err != nil {
+				s.log.Warn().Err(err).Str("fingerprint", finding.Fingerprint).Msg("reopen re-filed assertion")
+			}
+		}
+	}
 
 	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionFindingCreate, map[string]any{
 		"finding_id":  finding.ID.String(),

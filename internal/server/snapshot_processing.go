@@ -170,13 +170,15 @@ func (s *Server) processClaimedArtifactSnapshotBase(ctx context.Context, snapsho
 		return nil, err
 	}
 	result := &artifactProcessingResult{}
+	// Read before any transaction: it may ask the forge.
+	scopes := s.resolveConfiguredScopes(ctx, snapshot, artifacts)
 
 	failures := make([]artifactProcessingFailure, 0)
 	for _, artifact := range artifacts {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		componentsIngested, err := s.processClaimableSnapshotArtifact(ctx, snapshot, artifact)
+		componentsIngested, err := s.processClaimableSnapshotArtifact(ctx, snapshot, artifact, scopes)
 		if err != nil {
 			if shouldAbortArtifactProcessing(err) {
 				return nil, err
@@ -186,6 +188,7 @@ func (s *Server) processClaimedArtifactSnapshotBase(ctx context.Context, snapsho
 				kind:       artifact.Kind,
 				err:        err,
 			})
+			s.recordFailedArtifactRun(ctx, snapshot, artifact, err)
 			continue
 		}
 		result.componentsIngested += componentsIngested
@@ -194,17 +197,19 @@ func (s *Server) processClaimedArtifactSnapshotBase(ctx context.Context, snapsho
 	if len(failures) == 0 {
 		// Empty claimable sets can still happen if artifacts disappear after claim but before load.
 		// Treat that the same as an all-success pass so the caller completes the owned snapshot.
+		s.afterArtifactIngest(ctx, snapshot)
 		return result, nil
 	}
 	message := truncateArtifactProcessingMessage(formatArtifactProcessingFailures(failures))
 	if len(failures) == len(artifacts) {
 		return nil, errors.New(message)
 	}
+	s.afterArtifactIngest(ctx, snapshot)
 	result.warning = message
 	return result, nil
 }
 
-func (s *Server) processClaimableSnapshotArtifact(ctx context.Context, snapshot *store.Snapshot, artifact store.SnapshotArtifact) (int, error) {
+func (s *Server) processClaimableSnapshotArtifact(ctx context.Context, snapshot *store.Snapshot, artifact store.SnapshotArtifact, scopes *configuredScopes) (int, error) {
 	loadedArtifact, err := s.loadSnapshotArtifact(ctx, artifact)
 	if err != nil {
 		return 0, err
@@ -218,7 +223,7 @@ func (s *Server) processClaimableSnapshotArtifact(ctx context.Context, snapshot 
 	componentsIngested := 0
 	switch loadedArtifact.artifact.Kind {
 	case "sarif":
-		if err := s.ingestSARIFArtifact(ctx, queries, snapshot, loadedArtifact); err != nil {
+		if err := s.ingestSARIFArtifact(ctx, queries, snapshot, loadedArtifact, scopes); err != nil {
 			_ = tx.Rollback()
 			return 0, err
 		}
@@ -254,6 +259,7 @@ func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *ar
 		s.enqueueAdvisoryScan(snapshotID, "system")
 	}
 	s.reconcileReleasesForSnapshot(ctx, snapshotID)
+	s.refreshScanCoverageForSnapshot(ctx, snapshotID)
 	// The gate must not depend on the advisory scan happening. ScanCompleted is
 	// published only by the advisory scanner, and that only runs when components
 	// were ingested — so a coverage-only or SARIF-only PR never got a gate check
@@ -525,12 +531,23 @@ func (s *Server) loadSnapshotArtifact(ctx context.Context, artifact store.Snapsh
 	return loadedSnapshotArtifact{artifact: artifact, content: content}, nil
 }
 
-func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) error {
+func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact, scopes *configuredScopes) error {
 	doc, err := sarif.Parse(bytes.NewReader(artifact.content))
 	if err != nil {
 		return fmt.Errorf("parse sarif artifact %s: %w", artifact.artifact.ID, err)
 	}
-	parsedFindings, err := sarif.ExtractFindings(doc, snapshot.RefID.String())
+	// The fallback identity (results without a scanner or content
+	// fingerprint) is scoped to the repo, not the ref: a ref-scoped key gave
+	// the same finding different fingerprints on a PR and on its target, so
+	// triage recorded on main did not apply in the PR.
+	ref, err := queries.GetRefByID(ctx, snapshot.RefID)
+	if err != nil {
+		return fmt.Errorf("load ref for sarif artifact %s: %w", artifact.artifact.ID, err)
+	}
+	if ref == nil {
+		return fmt.Errorf("load ref for sarif artifact %s: ref %s not found", artifact.artifact.ID, snapshot.RefID)
+	}
+	parsedFindings, err := sarif.ExtractFindings(doc, ref.RepoID.String())
 	if err != nil {
 		return fmt.Errorf("extract sarif findings %s: %w", artifact.artifact.ID, err)
 	}
@@ -553,6 +570,8 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 		}
 		genericFindings = append(genericFindings, findings.GenericFinding{
 			Tool:                     finding.Tool,
+			ToolVersion:              finding.ToolVersion,
+			TraceFiles:               finding.TraceFiles,
 			RuleID:                   finding.RuleID,
 			Severity:                 finding.Severity,
 			FilePath:                 finding.FilePath,
@@ -583,7 +602,96 @@ func (s *Server) ingestSARIFArtifact(ctx context.Context, queries *store.Queries
 	if err != nil {
 		return fmt.Errorf("ingest sarif findings %s: %w", artifact.artifact.ID, err)
 	}
+	if err := queries.ReplaceArtifactProducerRuns(ctx, snapshot.ID, artifact.artifact.ID, sarifProducerRuns(doc, artifact.artifact, scopes)); err != nil {
+		return fmt.Errorf("record producer runs %s: %w", artifact.artifact.ID, err)
+	}
+	if artifact.artifact.PlanID != nil && artifact.artifact.PlanJobID != nil {
+		if err := queries.BindArtifactToPlanJob(ctx, artifact.artifact.ID, *artifact.artifact.PlanID, *artifact.artifact.PlanJobID); err != nil {
+			return fmt.Errorf("bind producer runs to plan job %s: %w", artifact.artifact.ID, err)
+		}
+	}
 	return nil
+}
+
+// afterArtifactIngest runs the cross-snapshot steps once every artifact is
+// ingested, before the snapshot completes and the gate reads it: triage
+// follows re-keyed findings first (its pairing must see only reported rows),
+// then findings the producers did not re-check are carried forward.
+func (s *Server) afterArtifactIngest(ctx context.Context, snapshot *store.Snapshot) {
+	s.carryTriageAcrossRekeys(ctx, snapshot)
+	s.reconcileFindingPresence(ctx, snapshot.ID)
+}
+
+// sarifProducerRuns turns each SARIF run into its producer_runs row (ADR-034
+// §2): the run's own evidence, completed by what the uploader declared.
+// SARIF wins for the version. Scope comes from the upload's declaration,
+// else from .hibou.yaml's scanners section, else it is an assumed full run.
+func sarifProducerRuns(doc *sarif.Document, artifact store.SnapshotArtifact, scopes *configuredScopes) []store.ProducerRunInput {
+	evidence := sarif.ExtractRunEvidence(doc)
+	runs := make([]store.ProducerRunInput, 0, len(evidence))
+	for _, run := range evidence {
+		producer := run.Producer
+		if producer == "" && artifact.ToolName != nil {
+			producer = strings.ToLower(strings.TrimSpace(*artifact.ToolName))
+		}
+		input := store.ProducerRunInput{
+			Producer:      producer,
+			Version:       artifact.ToolVersion,
+			ConfigDigest:  artifact.ConfigDigest,
+			Scope:         store.ProducerScopeFull,
+			ScopeDeclared: artifact.Scope != nil,
+			ScopePaths:    artifact.ScopePaths,
+			Outcome:       run.Outcome,
+			FindingCount:  run.FindingCount,
+		}
+		if run.Version != "" {
+			version := run.Version
+			input.Version = &version
+		}
+		if artifact.Scope != nil {
+			input.Scope = *artifact.Scope
+		} else {
+			input.Scope, input.ScopePaths, input.ScopeDeclared = scopes.runScope(producer)
+		}
+		if input.Scope == store.ProducerScopePartial && input.Outcome == store.ProducerOutcomeCompleted {
+			input.Outcome = store.ProducerOutcomePartial
+		}
+		if run.Detail != "" {
+			detail := run.Detail
+			input.Detail = &detail
+		}
+		input.SkippedFiles = make([]store.SkippedFile, len(run.Skipped))
+		for i, skipped := range run.Skipped {
+			input.SkippedFiles[i] = store.SkippedFile{Path: skipped.Path, Reason: skipped.Reason}
+		}
+		runs = append(runs, input)
+	}
+	return runs
+}
+
+// recordFailedArtifactRun marks a SARIF artifact that could not be ingested
+// as a failed run of its producer, so its findings read as not re-checked
+// instead of fixed. Best effort, outside the rolled-back ingest transaction.
+func (s *Server) recordFailedArtifactRun(ctx context.Context, snapshot *store.Snapshot, artifact store.SnapshotArtifact, cause error) {
+	if artifact.Kind != "sarif" || s.queries == nil {
+		return
+	}
+	producer := "unknown"
+	if artifact.ToolName != nil && strings.TrimSpace(*artifact.ToolName) != "" {
+		producer = strings.ToLower(strings.TrimSpace(*artifact.ToolName))
+	}
+	detail := truncateArtifactProcessingMessage(cause.Error())
+	if err := s.queries.ReplaceArtifactProducerRuns(ctx, snapshot.ID, artifact.ID, []store.ProducerRunInput{{
+		Producer:      producer,
+		Version:       artifact.ToolVersion,
+		ConfigDigest:  artifact.ConfigDigest,
+		Scope:         store.ProducerScopeFull,
+		ScopeDeclared: artifact.Scope != nil,
+		Outcome:       store.ProducerOutcomeFailed,
+		Detail:        &detail,
+	}}); err != nil {
+		s.log.Warn().Err(err).Str("artifact", artifact.ID.String()).Msg("record failed producer run")
+	}
 }
 
 // scanRuleInput maps a parsed SARIF rule descriptor onto the generic ingest
@@ -792,4 +900,26 @@ func formatArtifactProcessingFailures(failures []artifactProcessingFailure) stri
 		return "artifact ingest warning: " + parts[0]
 	}
 	return "artifact ingest warnings: " + strings.Join(parts, "; ")
+}
+
+// refreshScanCoverageForSnapshot updates the scanner coverage inventory
+// (ADR-035 §6) when a default-branch snapshot finishes: its runs are the
+// inventory's evidence.
+func (s *Server) refreshScanCoverageForSnapshot(ctx context.Context, snapshotID uuid.UUID) {
+	if s.scanCatalog == nil {
+		return
+	}
+	snapshot, err := s.queries.GetSnapshotByID(ctx, snapshotID)
+	if err != nil || snapshot == nil {
+		return
+	}
+	ref, err := s.queries.GetRefByID(ctx, snapshot.RefID)
+	if err != nil || ref == nil {
+		return
+	}
+	repo, err := s.queries.GetRepositoryByID(ctx, ref.RepoID)
+	if err != nil || repo == nil || ref.Name != repo.DefaultBranch {
+		return
+	}
+	s.refreshScanCoverageAsync(repo)
 }

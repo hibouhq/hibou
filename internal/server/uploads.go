@@ -57,6 +57,74 @@ type autoUploadRequest struct {
 	Artifact *uploadArtifact `json:"artifact,omitempty"`
 	Complete *bool           `json:"complete,omitempty"`
 	Expect   *int            `json:"expect,omitempty"`
+	// Run declaration (ADR-034 §2): what the producer covered. scope is
+	// "full" or "partial"; paths lists what a partial run analysed. SARIF
+	// values (tool.driver.version) win over tool_version.
+	Scope        string   `json:"scope,omitempty"`
+	Paths        []string `json:"paths,omitempty"`
+	ToolVersion  string   `json:"tool_version,omitempty"`
+	ConfigDigest string   `json:"config_digest,omitempty"`
+	// PlanID / PlanJobID bind the report to the scan plan job that produced
+	// it (ADR-035 §4); the job's planned scope becomes the declared scope.
+	PlanID    string `json:"plan_id,omitempty"`
+	PlanJobID string `json:"plan_job_id,omitempty"`
+}
+
+// Bounds on the run declaration: a partial PR scan lists changed files, not
+// a whole monorepo.
+const (
+	maxDeclaredScopePaths   = 10000
+	maxDeclaredScopePathLen = 1024
+	maxDeclaredValueLen     = 256
+)
+
+// runDeclaration validates and normalizes the run fields of an upload.
+func (input *autoUploadRequest) runDeclaration() (store.ArtifactRunDeclaration, error) {
+	var declaration store.ArtifactRunDeclaration
+	scope := strings.ToLower(strings.TrimSpace(input.Scope))
+	switch scope {
+	case "":
+		if len(input.Paths) > 0 {
+			scope = store.ProducerScopePartial
+		}
+	case store.ProducerScopeFull, store.ProducerScopePartial:
+	default:
+		return declaration, errors.New("scope must be 'full' or 'partial'")
+	}
+	if scope == store.ProducerScopeFull && len(input.Paths) > 0 {
+		return declaration, errors.New("paths are only allowed with scope 'partial'")
+	}
+	if len(input.Paths) > maxDeclaredScopePaths {
+		return declaration, fmt.Errorf("at most %d paths are allowed", maxDeclaredScopePaths)
+	}
+	paths := make([]string, 0, len(input.Paths))
+	seen := make(map[string]struct{}, len(input.Paths))
+	for _, path := range input.Paths {
+		path = strings.TrimPrefix(strings.TrimSpace(path), "./")
+		if path == "" {
+			continue
+		}
+		if len(path) > maxDeclaredScopePathLen {
+			return declaration, fmt.Errorf("path longer than %d characters", maxDeclaredScopePathLen)
+		}
+		if _, dup := seen[path]; dup {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	toolVersion := strings.TrimSpace(input.ToolVersion)
+	configDigest := strings.TrimSpace(input.ConfigDigest)
+	if len(toolVersion) > maxDeclaredValueLen || len(configDigest) > maxDeclaredValueLen {
+		return declaration, fmt.Errorf("tool_version and config_digest are limited to %d characters", maxDeclaredValueLen)
+	}
+	if scope != "" {
+		declaration.Scope = &scope
+	}
+	declaration.ScopePaths = paths
+	declaration.ToolVersion = optionalTrimmedString(toolVersion)
+	declaration.ConfigDigest = optionalTrimmedString(configDigest)
+	return declaration, nil
 }
 
 type uploadArtifact struct {
@@ -81,6 +149,7 @@ type uploadStatusResponse struct {
 }
 
 type detectedUpload struct {
+	repo         *store.Repository
 	input        *autoUploadRequest
 	content      []byte
 	detectedType string
@@ -90,11 +159,15 @@ type detectedUpload struct {
 }
 
 type rawArtifactPayload struct {
-	kind     string
-	format   string
-	tool     string
-	filename string
-	content  []byte
+	kind        string
+	format      string
+	tool        string
+	filename    string
+	content     []byte
+	declaration store.ArtifactRunDeclaration
+	// planID / planJobID: the plan binding, already validated.
+	planID    *uuid.UUID
+	planJobID string
 }
 
 // uploadArtifactFilename returns the original filename the client sent, if any.
@@ -326,6 +399,7 @@ func (s *Server) handleUploadAuto(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = s.handleDetectedUploadType(w, r, actorID, detectedUpload{
+		repo:         repo,
 		input:        input,
 		content:      content,
 		detectedType: detectedType,
@@ -351,6 +425,9 @@ func (s *Server) parseAutoUploadRequest(w http.ResponseWriter, r *http.Request) 
 	normalizeUploadRequest(&input.uploadRequest)
 	input.Tool = strings.TrimSpace(input.Tool)
 	if err := validateUploadRequest(input.uploadRequest); err != nil {
+		return nil, nil, err
+	}
+	if _, err := input.runDeclaration(); err != nil {
 		return nil, nil, err
 	}
 	if input.Artifact == nil {
@@ -388,7 +465,7 @@ func (s *Server) handleDetectedUploadType(w http.ResponseWriter, r *http.Request
 	case "sbom":
 		return s.handleSBOMUpload(w, r, userID, upload.input, upload.content, upload.format, upload.status)
 	case "sarif":
-		return s.handleSARIFUpload(w, r, userID, upload.input, upload.content, upload.tool, upload.status)
+		return s.handleSARIFUpload(w, r, userID, upload.repo, upload.input, upload.content, upload.tool, upload.status)
 	case "coverage":
 		return s.handleCoverageUpload(w, r, userID, upload.input, upload.content, upload.format, upload.status)
 	case "tests":
@@ -415,17 +492,44 @@ func (s *Server) handleSBOMUpload(w http.ResponseWriter, r *http.Request, userID
 	}, status)
 }
 
-func (s *Server) handleSARIFUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, tool string, status *string) bool {
+func (s *Server) handleSARIFUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, repo *store.Repository, input *autoUploadRequest, content []byte, tool string, status *string) bool {
 	if tool == "" {
 		api.JSONError(w, http.StatusBadRequest, "tool could not be detected from SARIF content; provide 'tool' in the request")
 		return false
 	}
-	return s.writePendingUploadSnapshotResponse(w, r, userID, input, rawArtifactPayload{
-		kind:     "sarif",
-		tool:     tool,
-		filename: uploadArtifactFilename(input),
-		content:  content,
-	}, status)
+	declaration, err := input.runDeclaration()
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	payload := rawArtifactPayload{
+		kind:        "sarif",
+		tool:        tool,
+		filename:    uploadArtifactFilename(input),
+		content:     content,
+		declaration: declaration,
+	}
+	if input.PlanID != "" || input.PlanJobID != "" {
+		planID, err := uuid.Parse(strings.TrimSpace(input.PlanID))
+		if err != nil || strings.TrimSpace(input.PlanJobID) == "" {
+			api.JSONError(w, http.StatusBadRequest, "plan_id and plan_job_id go together, and plan_id must be a UUID")
+			return false
+		}
+		if repo == nil {
+			api.JSONError(w, http.StatusBadRequest, "repository not found for the plan binding")
+			return false
+		}
+		planned, err := s.planJobDeclaration(r.Context(), repo, planID, strings.TrimSpace(input.PlanJobID), input.CommitSHA)
+		if err != nil {
+			api.JSONError(w, http.StatusBadRequest, "plan binding refused: "+err.Error())
+			return false
+		}
+		payload.declaration.Scope = planned.Scope
+		payload.declaration.ScopePaths = planned.ScopePaths
+		payload.planID = &planID
+		payload.planJobID = strings.TrimSpace(input.PlanJobID)
+	}
+	return s.writePendingUploadSnapshotResponse(w, r, userID, input, payload, status)
 }
 
 func (s *Server) handleCoverageUpload(w http.ResponseWriter, r *http.Request, userID uuid.UUID, input *autoUploadRequest, content []byte, format string, status *string) bool {
@@ -604,7 +708,13 @@ func (s *Server) loadUploadSnapshotForCompletion(r *http.Request, userID uuid.UU
 
 func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID, artifact *rawArtifactPayload) (*store.Snapshot, error) {
 	var artifactParams *store.CreateSnapshotArtifactParams
+	var declaration store.ArtifactRunDeclaration
+	var binding *planBinding
 	if artifact != nil {
+		declaration = artifact.declaration
+		if artifact.planID != nil {
+			binding = &planBinding{planID: *artifact.planID, jobID: artifact.planJobID}
+		}
 		if s.objStore == nil {
 			// Defensive only: server startup now fails if the configured artifact store cannot initialize.
 			return nil, errors.New("artifact store unavailable")
@@ -619,7 +729,7 @@ func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID
 		}
 		artifactParams = &params
 	}
-	if err := s.finalizeUploadSnapshotTx(ctx, snapshotID, artifactParams); err != nil {
+	if err := s.finalizeUploadSnapshotTx(ctx, snapshotID, artifactParams, declaration, binding); err != nil {
 		return nil, err
 	}
 	return s.loadSnapshotByID(ctx, snapshotID)
@@ -642,7 +752,13 @@ func buildSnapshotArtifactParams(snapshotID uuid.UUID, kind, format, tool, filen
 	}
 }
 
-func (s *Server) finalizeUploadSnapshotTx(ctx context.Context, snapshotID uuid.UUID, artifactParams *store.CreateSnapshotArtifactParams) error {
+// planBinding is a validated upload-to-plan-job binding.
+type planBinding struct {
+	planID uuid.UUID
+	jobID  string
+}
+
+func (s *Server) finalizeUploadSnapshotTx(ctx context.Context, snapshotID uuid.UUID, artifactParams *store.CreateSnapshotArtifactParams, declaration store.ArtifactRunDeclaration, binding *planBinding) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -663,6 +779,16 @@ func (s *Server) finalizeUploadSnapshotTx(ctx context.Context, snapshotID uuid.U
 		if created != nil {
 			if err := queries.AddSnapshotArtifactBytes(ctx, snapshotID, artifactParams.SizeBytes); err != nil {
 				return err
+			}
+			if !declaration.Empty() {
+				if err := queries.SetSnapshotArtifactRunDeclaration(ctx, created.ID, declaration); err != nil {
+					return err
+				}
+			}
+			if binding != nil {
+				if err := queries.BindArtifactToPlanJob(ctx, created.ID, binding.planID, binding.jobID); err != nil {
+					return err
+				}
 			}
 		}
 	}

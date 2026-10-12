@@ -71,7 +71,9 @@ func (s *Server) advisoryScanPass(ctx context.Context) error {
 	failed := 0
 	s.log.Info().Int("snapshots", len(snapshotIDs)).Strs("providers", s.advisoryProviders).Msg("starting advisory scan pass")
 	for _, snapshotID := range snapshotIDs {
-		if _, err := s.advisoryScanner.RunScan(ctx, snapshotID, s.advisoryProviders, "system"); err != nil {
+		_, err := s.advisoryScanner.RunScan(ctx, snapshotID, s.advisoryProviders, "system")
+		s.reconcileFindingPresenceLate(ctx, snapshotID)
+		if err != nil {
 			failed++
 			s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
 			continue
@@ -163,5 +165,8 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 		if _, err := s.advisoryScanner.RunScan(scanCtx, snapshotID, providers, triggeredBy); err != nil && !errors.Is(err, context.Canceled) {
 			s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
 		}
+		// SBOM matching is a producer (ADR-034): its dependency findings were
+		// carried as pending until this scan finished.
+		s.reconcileFindingPresenceLate(scanCtx, snapshotID)
 	}()
 }

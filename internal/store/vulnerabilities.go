@@ -142,7 +142,26 @@ type Vulnerability struct {
 	EPSS            *EPSSScore      `json:"epss,omitempty"`
 	RatingsDisagree bool            `json:"ratings_disagree,omitempty"`
 	Ratings         []FindingRating `json:"ratings,omitempty"`
+	// Presence (ADR-034 §3): "reported" when the producer reported the
+	// finding in this snapshot; "not_rechecked" / "unconfirmed" when the row
+	// was carried forward because nothing re-checked it. Still open either way.
+	Presence            string     `json:"presence"`
+	PresenceReason      *string    `json:"presence_reason,omitempty"`
+	LastSeenSnapshotID  *uuid.UUID `json:"last_seen_snapshot_id,omitempty"`
+	LastSeenCommit      *string    `json:"last_seen_commit,omitempty"`
+	ConsecutiveAbsences int        `json:"consecutive_absences,omitempty"`
+	// ResolutionReason is set on a delta's resolved findings only (not
+	// stored): fixed, file_removed, no_longer_reported, producer_changed.
+	// Only the first two are fixes a PR can claim (ADR-034 §6).
+	ResolutionReason *string `json:"resolution_reason,omitempty"`
 }
+
+// Finding presence values (ADR-034 §3).
+const (
+	PresenceReported     = "reported"
+	PresenceNotRechecked = "not_rechecked"
+	PresenceUnconfirmed  = "unconfirmed"
+)
 
 // CVSSScore is one CVSS rating as the API shows it.
 type CVSSScore struct {
@@ -919,6 +938,11 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		LastSeenAt:              row.LastSeenAt,
 		CVSS:                    cvssFromRow(row.CvssScore, row.CvssVersion, row.CvssVector),
 		RatedBy:                 row.RatedBy,
+		Presence:                string(row.Presence),
+		PresenceReason:          stringPtrFromNull(row.PresenceReason),
+		LastSeenSnapshotID:      uuidPtrFromNull(row.LastSeenSnapshotID),
+		LastSeenCommit:          stringPtrFromNull(row.LastSeenCommit),
+		ConsecutiveAbsences:     int(row.ConsecutiveAbsences),
 	}
 }
 
@@ -977,7 +1001,7 @@ func scanVulnerabilityWithAcceptance(scanner interface {
 	return vulnerability, nil
 }
 
-const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id, cvss_score, cvss_version, cvss_vector, rated_by"
+const vulnerabilitySelectColumns = "id, type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value, original_severity, severity, severity_override_reason, severity_override_by, status, state_comment, detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor, scanner_version, scanner_external_id, file_path, start_line, end_line, location_hash, fingerprint, component_id, component_name, component_version, component_purl, ecosystem, advisory_id, affected_range_id, language, confidence, solution, has_remediation, remediation_link, reachability, due_date, present_on_default_branch, resolved_on_default_branch, secret_type, secret_hash, commit_sha, author_email, verified, created_by, metadata, created_at, updated_at, first_seen_at, last_seen_at, origin, origin_api_key_id, origin_token_name, origin_owner_type, origin_owner_id, cvss_score, cvss_version, cvss_vector, rated_by, presence, presence_reason, last_seen_snapshot_id, last_seen_commit, consecutive_absences"
 
 func dynamicVulnerabilitySelectColumns() string {
 	return "v." + strings.ReplaceAll(vulnerabilitySelectColumns, ", ", ", v.")
@@ -1083,6 +1107,11 @@ func vulnerabilityScanDest(row *dbgen.Vulnerability) []interface{} {
 		&row.CvssVersion,
 		&row.CvssVector,
 		&row.RatedBy,
+		&row.Presence,
+		&row.PresenceReason,
+		&row.LastSeenSnapshotID,
+		&row.LastSeenCommit,
+		&row.ConsecutiveAbsences,
 	}
 }
 
@@ -1288,6 +1317,11 @@ type FindingTransition struct {
 	// appearing or changing). Empty means unknown/not analyzed.
 	Reachability         string `json:"reachability,omitempty"`
 	PreviousReachability string `json:"previous_reachability,omitempty"`
+	// Presence/PreviousPresence (ADR-034 §3): the observation was carried
+	// forward (not re-checked) or reported again after being carried.
+	Presence         string `json:"presence,omitempty"`
+	PreviousPresence string `json:"previous_presence,omitempty"`
+	PresenceReason   string `json:"presence_reason,omitempty"`
 }
 
 // GetFindingFirstObservation returns the oldest observation of a fingerprint on
@@ -1336,6 +1370,9 @@ func (q *Queries) ListFindingTransitions(ctx context.Context, repoID uuid.UUID, 
 			SuppressionJustification: row.SuppressionJustification,
 			Reachability:             row.Reachability,
 			PreviousReachability:     row.PreviousReachability,
+			Presence:                 row.Presence,
+			PreviousPresence:         row.PreviousPresence,
+			PresenceReason:           row.PresenceReason,
 		}
 	}
 	return out, nil

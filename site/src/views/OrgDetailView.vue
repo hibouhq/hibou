@@ -97,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { Bug, ChevronDown, LayoutDashboard, LineChart, ListChecks, Package, Scale, Settings, ShieldAlert, Users } from 'lucide-vue-next'
+import { Bug, ChevronDown, LayoutDashboard, LineChart, ListChecks, Package, Radar, Scale, Settings, ShieldAlert, Users } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 
@@ -133,6 +133,7 @@ const tabs = computed(() => [
   { label: 'Dependencies', name: 'org-dependencies', icon: Package, count: componentsTotal.value },
   { label: 'Licenses', name: 'org-licenses', icon: Scale, count: null },
   { label: 'Triage', name: 'org-triage', icon: ListChecks, count: null },
+  { label: 'Scanners', name: 'org-scanners', icon: Radar, count: null },
   { label: 'Clients', name: 'org-clients', icon: Users, count: null },
   { label: 'Insights', name: 'org-insights', icon: LineChart, count: null },
   { label: 'Settings', name: 'org-settings', icon: Settings, count: null },

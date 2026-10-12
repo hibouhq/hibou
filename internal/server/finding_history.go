@@ -12,6 +12,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/presence"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -40,6 +41,12 @@ var findingActivityActions = []string{
 	audit.ActionFindingCWEs,
 	audit.ActionFindingDispute,
 	audit.ActionSecretRevoked,
+	// ADR-034 §4: decisions on manual and agent findings.
+	audit.ActionFindingReassert,
+	audit.ActionFindingRetract,
+	audit.ActionFindingResolve,
+	// Triage copied to a re-keyed fingerprint (ADR-034, D15).
+	audit.ActionFindingRekeyed,
 }
 
 // findingActivityContextKeys is the allowlist projected out of an audit entry's
@@ -168,6 +175,22 @@ func (s *Server) handleGetFindingHistory(w http.ResponseWriter, r *http.Request)
 		anchor.Kind = "first_detected"
 		anchor.From = ""
 		response.Events = append(response.Events, anchor)
+	}
+
+	// ADR-034: a resolution has no row in the snapshot that resolved it, so
+	// the scan series alone cannot show it; finding_resolutions holds the
+	// evidence ("Resolved in e4f5a6b", "No longer reported by gosec 2.29").
+	resolutions, err := s.queries.ListFindingResolutions(r.Context(), repo.ID, fingerprint, maxFindingScanEvents+1)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load finding history")
+		return
+	}
+	if len(resolutions) > maxFindingScanEvents {
+		resolutions = resolutions[:maxFindingScanEvents]
+		response.Truncated = true
+	}
+	for _, resolution := range resolutions {
+		response.Events = append(response.Events, resolutionHistoryEvent(resolution))
 	}
 
 	entries, err := s.queries.ListFindingActivity(r.Context(), org.ID, repo.ID, fingerprint, findingActivityActions, maxFindingActivityEvents+1)
@@ -331,6 +354,21 @@ func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
 	// verdict (the query's second arm): the call-graph analysis proved the
 	// vulnerable symbol unreachable, or revealed it reachable again. From/To
 	// carry the verdicts for these events, not the status.
+	// A carried row (ADR-034): the producer did not re-check the finding on
+	// this commit, or re-checked and reported it again after a gap.
+	if transition.PreviousStatus == transition.Status && transition.PreviousPresence != "" && transition.Presence != transition.PreviousPresence {
+		if transition.Presence == store.PresenceReported {
+			event.Kind = "rechecked"
+		} else {
+			event.Kind = "not_rechecked"
+			if transition.PresenceReason != "" {
+				event.Detail = map[string]any{"reason": transition.PresenceReason, "reason_text": presence.ReasonText(transition.PresenceReason)}
+			}
+		}
+		event.From = transition.PreviousPresence
+		event.To = transition.Presence
+		return event
+	}
 	if transition.PreviousStatus == transition.Status && transition.Reachability != "" {
 		if transition.Reachability == "not_reachable" {
 			event.Kind = "became_unreachable"
@@ -349,6 +387,30 @@ func scanHistoryEvent(transition store.FindingTransition) findingHistoryEvent {
 		event.Detail = map[string]any{"comment": justification}
 	}
 	return event
+}
+
+// resolutionHistoryEvent renders a recorded resolution (ADR-034 §3). Kind
+// "resolved" for a fix or a removed file; "no_longer_reported" when the
+// finding only stopped being reported (scanner change, repeated absence).
+func resolutionHistoryEvent(resolution store.FindingResolution) findingHistoryEvent {
+	kind := "resolved"
+	if resolution.Reason == presence.ResolvedNoLongerReported || resolution.Reason == presence.ResolvedProducerChanged || resolution.Reason == presence.ResolvedProducerRetired {
+		kind = "no_longer_reported"
+	}
+	detail := map[string]any{"reason": resolution.Reason, "producer": resolution.Producer}
+	if resolution.ProducerVersion != "" {
+		detail["producer_version"] = resolution.ProducerVersion
+	}
+	return findingHistoryEvent{
+		Source:    "scan",
+		Kind:      kind,
+		At:        resolution.CreatedAt,
+		RefName:   resolution.RefName,
+		RefType:   resolution.RefType,
+		CommitSHA: resolution.CommitSHA,
+		To:        "resolved",
+		Detail:    detail,
+	}
 }
 
 // scanEventKind names the transition the way a reader thinks about it: the
@@ -413,6 +475,14 @@ func activityEventKind(action, status string) string {
 		return "revoked"
 	case audit.ActionFindingCWEs:
 		return "reclassified"
+	case audit.ActionFindingReassert:
+		return "reasserted"
+	case audit.ActionFindingRetract:
+		return "retracted"
+	case audit.ActionFindingResolve:
+		return "resolved_by_decision"
+	case audit.ActionFindingRekeyed:
+		return "rekeyed"
 	case audit.ActionFindingDispute:
 		if status == "undisputed" {
 			return "dispute_withdrawn"

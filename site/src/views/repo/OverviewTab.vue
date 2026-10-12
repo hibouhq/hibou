@@ -228,6 +228,14 @@
           </a>
         </section>
 
+        <ScanCoveragePanel
+          v-if="shownSnapshotId"
+          :provider="provider"
+          :slug="slug"
+          :repo-slug="repoSlug"
+          :snapshot-id="shownSnapshotId"
+        />
+
         <!-- Snapshot files -->
         <section
           v-if="shownSnapshotId"
@@ -315,6 +323,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { api, type RefSummary, type Repository, type SeverityCounts, type Snapshot, type SnapshotFile } from '@/api/client'
 import { relativeTime } from '@/lib/datetime'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
+import ScanCoveragePanel from '@/components/ScanCoveragePanel.vue'
 import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 
 type SeverityKey = keyof SeverityCounts

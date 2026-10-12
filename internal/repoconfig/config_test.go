@@ -312,3 +312,47 @@ func TestWeaknessesKeyPointsAtRename(t *testing.T) {
 		t.Fatalf("want a rename hint, got %v", err)
 	}
 }
+
+func TestParseScanners(t *testing.T) {
+	cfg, err := Parse([]byte(`version: 1
+scanners:
+  Semgrep:
+    scope: changed-files
+  eslint:
+    scope: partial
+    paths: ["./web/", "tools"]
+  gosec:
+    scope: FULL
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if run, ok := cfg.ScannerRunFor("semgrep"); !ok || run.Scope != ScannerScopeChangedFiles {
+		t.Fatalf("semgrep = %+v, %v; want changed-files (keys are case-insensitive)", run, ok)
+	}
+	if run, _ := cfg.ScannerRunFor("ESLint"); run.Scope != ScannerScopePartial || len(run.Paths) != 2 || run.Paths[0] != "web" {
+		t.Fatalf("eslint = %+v; want partial [web tools]", run)
+	}
+	if run, _ := cfg.ScannerRunFor("gosec"); run.Scope != ScannerScopeFull {
+		t.Fatalf("gosec = %+v; want full", run)
+	}
+	if _, ok := cfg.ScannerRunFor("trivy"); ok {
+		t.Fatal("unlisted tool must not be configured")
+	}
+}
+
+func TestParseRejectsInvalidScanners(t *testing.T) {
+	for name, body := range map[string]string{
+		"unknown scope":         "scanners:\n  semgrep:\n    scope: diff\n",
+		"missing scope":         "scanners:\n  semgrep:\n    paths: [web]\n",
+		"paths with full":       "scanners:\n  semgrep:\n    scope: full\n    paths: [web]\n",
+		"paths with changed":    "scanners:\n  semgrep:\n    scope: changed-files\n    paths: [web]\n",
+		"duplicate after lower": "scanners:\n  semgrep:\n    scope: full\n  Semgrep:\n    scope: full\n",
+		"empty path":            "scanners:\n  eslint:\n    scope: partial\n    paths: [\"./\"]\n",
+		"unknown field":         "scanners:\n  semgrep:\n    scope: full\n    config_digest: x\n",
+	} {
+		if _, err := Parse([]byte("version: 1\n" + body)); err == nil {
+			t.Errorf("%s: Parse accepted %q", name, body)
+		}
+	}
+}

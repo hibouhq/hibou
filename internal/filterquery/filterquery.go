@@ -99,6 +99,9 @@ var AllowedColumns = map[string]string{
 	"cvss":            "v.cvss_score",
 	"epss":            "",
 	"epss-percentile": "",
+	// ADR-034 §3: was the finding reported in this snapshot, or carried
+	// forward because nothing re-checked it — see presenceQualifierToSQL.
+	"presence": "v.presence",
 }
 
 const maxDepth = 16
@@ -383,6 +386,8 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 		return exploitedQualifierToSQL(values, param)
 	case "acceptance":
 		return acceptanceQualifierToSQL(values, param)
+	case "presence":
+		return presenceQualifierToSQL(column, values, param)
 	case "label":
 		return labelQualifierToSQL(values, param)
 	case "file":
@@ -579,6 +584,29 @@ func acceptanceQualifierToSQL(values []string, param int) (string, []interface{}
 			parts = append(parts, "fd.id IS NOT NULL")
 		default:
 			return "", nil, param, fmt.Errorf("acceptance must be one of risk, fp, accepted, open, disputed (got %q)", value)
+		}
+	}
+	if len(parts) == 1 {
+		return parts[0], nil, param, nil
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", nil, param, nil
+}
+
+// presenceQualifierToSQL maps presence:reported|not-rechecked|unconfirmed
+// (ADR-034). A closed vocabulary, so the SQL is parameterless; underscores
+// are accepted as well as the hyphenated spelling the filter bar shows.
+func presenceQualifierToSQL(column string, values []string, param int) (string, []interface{}, int, error) {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.ReplaceAll(strings.ToLower(value), "_", "-") {
+		case "reported":
+			parts = append(parts, column+" = 'reported'")
+		case "not-rechecked":
+			parts = append(parts, column+" = 'not_rechecked'")
+		case "unconfirmed":
+			parts = append(parts, column+" = 'unconfirmed'")
+		default:
+			return "", nil, param, fmt.Errorf("presence must be one of reported, not-rechecked, unconfirmed (got %q)", value)
 		}
 	}
 	if len(parts) == 1 {

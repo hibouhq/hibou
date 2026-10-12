@@ -35,7 +35,16 @@ var (
 	_ licensePolicyReader = (*StoreAdapter)(nil)
 	_ kevLister           = (*StoreAdapter)(nil)
 	_ cweLister           = (*StoreAdapter)(nil)
+	_ coverageStore       = (*StoreAdapter)(nil)
 )
+
+func (a *StoreAdapter) SnapshotProducerRuns(ctx context.Context, snapshotID uuid.UUID) ([]store.ProducerRun, error) {
+	return a.queries.SnapshotProducerRuns(ctx, snapshotID)
+}
+
+func (a *StoreAdapter) SnapshotCoverageKnown(ctx context.Context, snapshotID uuid.UUID) (bool, error) {
+	return a.queries.SnapshotCoverageKnown(ctx, snapshotID)
+}
 
 func (a *StoreAdapter) ListFindingCWEs(ctx context.Context, vulnerabilityIDs []uuid.UUID) (map[uuid.UUID][]store.FindingCWE, error) {
 	return a.queries.ListFindingCWEs(ctx, vulnerabilityIDs)

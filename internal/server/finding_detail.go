@@ -32,6 +32,9 @@ type findingDetailResponse struct {
 	Dispute     *store.FindingDispute     `json:"dispute,omitempty"`
 	VEX         []findingVEXResponse      `json:"vex,omitempty"`
 	Occurrences []store.FindingOccurrence `json:"occurrences"`
+	// Assertion is the lifecycle of a manual or agent finding (ADR-034 §4):
+	// last confirmed, and the decision that closed it if any.
+	Assertion *store.FindingAssertion `json:"assertion,omitempty"`
 }
 
 type findingAdvisoryResponse struct {
@@ -189,6 +192,14 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 	s.attachRiskMetrics(r.Context(), findings, true)
 	finding.EPSS, finding.RatingsDisagree, finding.Ratings = findings[0].EPSS, findings[0].RatingsDisagree, findings[0].Ratings
 
+	if finding.Origin == string(store.FindingOriginHuman) || finding.Origin == string(store.FindingOriginAgent) {
+		assertion, err := s.queries.GetFindingAssertion(r.Context(), repo.ID, finding.Fingerprint)
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to load assertion")
+			return
+		}
+		response.Assertion = assertion
+	}
 	api.JSON(w, http.StatusOK, response)
 }
 

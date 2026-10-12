@@ -1,11 +1,16 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,13 +18,92 @@ import (
 	"github.com/hibouhq/hibou/internal/version"
 )
 
+var (
+	binOSes   = []string{"linux", "darwin", "windows"}
+	binArches = []string{"amd64", "arm64"}
+)
+
+// handleBinVersion reports the CLI version the server serves and the sha256
+// of each served binary, keyed "os/arch". The checksums let the action
+// detect a truncated or altered download; they come from the same server,
+// so they are no defence against that server itself.
 func (s *Server) handleBinVersion(w http.ResponseWriter, r *http.Request) {
-	api.JSON(w, http.StatusOK, map[string]string{
+	checksums := map[string]string{}
+	if dir, err := binDir(); err == nil {
+		for _, osName := range binOSes {
+			for _, arch := range binArches {
+				if sum, ok := binChecksum(filepath.Join(dir, binFilename(osName, arch))); ok {
+					checksums[osName+"/"+arch] = sum
+				}
+			}
+		}
+	}
+	api.JSON(w, http.StatusOK, map[string]any{
 		"version": version.Version,
 		"commit":  version.Commit,
 		"os":      runtime.GOOS,
 		"arch":    runtime.GOARCH,
+		"sha256":  checksums,
 	})
+}
+
+// binChecksums caches each binary's sha256 by path, size and mtime, so the
+// files are hashed once, not per CI run.
+var binChecksums = struct {
+	sync.Mutex
+	entries map[string]binChecksumEntry
+}{entries: map[string]binChecksumEntry{}}
+
+type binChecksumEntry struct {
+	size    int64
+	modTime time.Time
+	sum     string
+}
+
+func binChecksum(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	binChecksums.Lock()
+	defer binChecksums.Unlock()
+	if entry, ok := binChecksums.entries[path]; ok && entry.size == info.Size() && entry.modTime.Equal(info.ModTime()) {
+		return entry.sum, true
+	}
+	file, err := os.Open(path) // #nosec G304 -- path is binDir() joined with a name built from fixed os/arch lists
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", false
+	}
+	sum := hex.EncodeToString(hash.Sum(nil))
+	binChecksums.entries[path] = binChecksumEntry{size: info.Size(), modTime: info.ModTime(), sum: sum}
+	return sum, true
+}
+
+func binFilename(osName, arch string) string {
+	ext := ""
+	if osName == "windows" {
+		ext = ".exe"
+	}
+	return fmt.Sprintf("hibou-%s-%s%s", osName, arch, ext)
+}
+
+// binDir is the directory of the resolved server executable; the CLI
+// binaries live next to it.
+func binDir() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(exePath), nil
 }
 
 // handleVersion reports the running version alongside the latest released
@@ -47,31 +131,20 @@ func (s *Server) handleBinDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := ""
-	if reqOS == "windows" {
-		ext = ".exe"
-	}
-	filename := fmt.Sprintf("hibou-%s-%s%s", reqOS, reqArch, ext)
-
-	// Resolve the directory containing the running executable
-	exePath, err := os.Executable()
+	filename := binFilename(reqOS, reqArch)
+	exeDir, err := binDir()
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "cannot locate server binary")
 		return
 	}
-	exePath, err = filepath.EvalSymlinks(exePath)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "cannot resolve server binary path")
-		return
-	}
-	exeDir := filepath.Dir(exePath)
 
-	// All binaries live in hibou-bin/ next to the resolved executable
+	// All binaries live next to the resolved executable
 	binPath := filepath.Join(exeDir, filename)
-	if info, err := os.Lstat(binPath); err == nil && info.Mode().IsRegular() {
+	if sum, ok := binChecksum(binPath); ok {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
 		w.Header().Set("X-Hibou-Version", version.Version)
+		w.Header().Set("X-Hibou-SHA256", sum)
 		http.ServeFile(w, r, binPath)
 		return
 	}

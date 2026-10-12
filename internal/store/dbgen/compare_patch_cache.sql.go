@@ -30,7 +30,7 @@ func (q *Queries) DeleteComparePatchCacheForCommit(ctx context.Context, arg Dele
 }
 
 const getComparePatchCache = `-- name: GetComparePatchCache :one
-SELECT repo_id, base_sha, head_sha, truncated, payload, created_at FROM compare_patch_cache
+SELECT repo_id, base_sha, head_sha, truncated, payload, created_at, paths_only FROM compare_patch_cache
 WHERE repo_id = $1 AND base_sha = $2 AND head_sha = $3
 `
 
@@ -50,16 +50,18 @@ func (q *Queries) GetComparePatchCache(ctx context.Context, arg GetComparePatchC
 		&i.Truncated,
 		&i.Payload,
 		&i.CreatedAt,
+		&i.PathsOnly,
 	)
 	return i, err
 }
 
 const upsertComparePatchCache = `-- name: UpsertComparePatchCache :one
-INSERT INTO compare_patch_cache (repo_id, base_sha, head_sha, truncated, payload)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO compare_patch_cache (repo_id, base_sha, head_sha, truncated, payload, paths_only)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (repo_id, base_sha, head_sha)
-DO UPDATE SET truncated = EXCLUDED.truncated, payload = EXCLUDED.payload
-RETURNING repo_id, base_sha, head_sha, truncated, payload, created_at
+DO UPDATE SET truncated = EXCLUDED.truncated, payload = EXCLUDED.payload, paths_only = EXCLUDED.paths_only
+WHERE compare_patch_cache.paths_only OR NOT EXCLUDED.paths_only
+RETURNING repo_id, base_sha, head_sha, truncated, payload, created_at, paths_only
 `
 
 type UpsertComparePatchCacheParams struct {
@@ -68,10 +70,13 @@ type UpsertComparePatchCacheParams struct {
 	HeadSha   string          `json:"head_sha"`
 	Truncated bool            `json:"truncated"`
 	Payload   json.RawMessage `json:"payload"`
+	PathsOnly bool            `json:"paths_only"`
 }
 
 // Immutable inputs, so a conflicting row is identical by construction; the
 // upsert exists only to make concurrent first-loads idempotent.
+// A paths-only row (finding presence) is upgraded by a full one, never the
+// reverse.
 func (q *Queries) UpsertComparePatchCache(ctx context.Context, arg UpsertComparePatchCacheParams) (ComparePatchCache, error) {
 	row := q.db.QueryRowContext(ctx, upsertComparePatchCache,
 		arg.RepoID,
@@ -79,6 +84,7 @@ func (q *Queries) UpsertComparePatchCache(ctx context.Context, arg UpsertCompare
 		arg.HeadSha,
 		arg.Truncated,
 		arg.Payload,
+		arg.PathsOnly,
 	)
 	var i ComparePatchCache
 	err := row.Scan(
@@ -88,6 +94,7 @@ func (q *Queries) UpsertComparePatchCache(ctx context.Context, arg UpsertCompare
 		&i.Truncated,
 		&i.Payload,
 		&i.CreatedAt,
+		&i.PathsOnly,
 	)
 	return i, err
 }

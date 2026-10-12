@@ -39,16 +39,43 @@ func (a *StoreAdapter) ListAdvisoryProviderStats(ctx context.Context, orgID uuid
 	return stats, nil
 }
 
-func (a *StoreAdapter) ListVulnerabilityToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error) {
-	rows, err := a.queries.ListVulnerabilityToolStats(ctx, orgID)
+// ListFindingToolStats reads code-finding tools (not dependency or malware
+// matching) with their last-seen time and repo count. The catalog used to
+// read ListVulnerabilityToolStats, which carries neither, so every SAST tool
+// showed as inactive.
+func (a *StoreAdapter) ListFindingToolStats(ctx context.Context, orgID uuid.UUID) ([]FindingToolStat, error) {
+	rows, err := a.queries.ListFindingToolStats(ctx, orgID)
 	if err != nil {
 		return nil, err
 	}
 	stats := make([]FindingToolStat, 0, len(rows))
 	for _, row := range rows {
 		stats = append(stats, FindingToolStat{
-			Tool:         row.ScannerName,
-			FindingCount: row.Count,
+			Tool:         row.Tool,
+			LastSeenAt:   interfaceTimeValue(row.LastSeenAt),
+			FindingCount: row.FindingCount,
+			RepoCount:    row.RepoCount,
+		})
+	}
+	return stats, nil
+}
+
+func (a *StoreAdapter) ListProducerRunToolStats(ctx context.Context, orgID uuid.UUID) ([]ProducerRunStat, error) {
+	rows, err := a.queries.ListProducerRunToolStats(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	stats := make([]ProducerRunStat, 0, len(rows))
+	for _, row := range rows {
+		stats = append(stats, ProducerRunStat{
+			Producer:      row.Producer,
+			LastRunAt:     interfaceTimeValue(row.LastRunAt),
+			LastSuccessAt: interfaceTimeValue(row.LastSuccessAt),
+			LastErrorAt:   interfaceTimeValue(row.LastErrorAt),
+			LastError:     row.LastError,
+			LastOutcome:   row.LastOutcome,
+			RunCount:      row.RunCount,
+			RepoCount:     row.RepoCount,
 		})
 	}
 	return stats, nil

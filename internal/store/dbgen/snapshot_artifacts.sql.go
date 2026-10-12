@@ -10,6 +10,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 const createSnapshotArtifact = `-- name: CreateSnapshotArtifact :one
@@ -30,7 +31,7 @@ WHERE NOT EXISTS (
 	FROM snapshot_artifacts
 	WHERE snapshot_id = $1 AND object_key = $5
 )
-RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename
+RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id
 `
 
 type CreateSnapshotArtifactParams struct {
@@ -70,12 +71,18 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshot
 		&i.ContentType,
 		&i.CreatedAt,
 		&i.Filename,
+		&i.Scope,
+		pq.Array(&i.ScopePaths),
+		&i.ToolVersion,
+		&i.ConfigDigest,
+		&i.PlanID,
+		&i.PlanJobID,
 	)
 	return i, err
 }
 
 const getSnapshotArtifactByID = `-- name: GetSnapshotArtifactByID :one
-SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename FROM snapshot_artifacts
+SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id FROM snapshot_artifacts
 WHERE id = $1
 `
 
@@ -94,6 +101,12 @@ func (q *Queries) GetSnapshotArtifactByID(ctx context.Context, id uuid.UUID) (Sn
 		&i.ContentType,
 		&i.CreatedAt,
 		&i.Filename,
+		&i.Scope,
+		pq.Array(&i.ScopePaths),
+		&i.ToolVersion,
+		&i.ConfigDigest,
+		&i.PlanID,
+		&i.PlanJobID,
 	)
 	return i, err
 }
@@ -191,7 +204,7 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repo
 }
 
 const listSnapshotArtifactsBySnapshot = `-- name: ListSnapshotArtifactsBySnapshot :many
-SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename FROM snapshot_artifacts
+SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id FROM snapshot_artifacts
 WHERE snapshot_id = $1
 ORDER BY created_at
 `
@@ -217,6 +230,12 @@ func (q *Queries) ListSnapshotArtifactsBySnapshot(ctx context.Context, snapshotI
 			&i.ContentType,
 			&i.CreatedAt,
 			&i.Filename,
+			&i.Scope,
+			pq.Array(&i.ScopePaths),
+			&i.ToolVersion,
+			&i.ConfigDigest,
+			&i.PlanID,
+			&i.PlanJobID,
 		); err != nil {
 			return nil, err
 		}
