@@ -32,8 +32,19 @@
         class="mt-6 space-y-4"
         @submit.prevent="lookup"
       >
+        <div
+          v-if="linkCode"
+          role="note"
+          class="rounded-md border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200"
+        >
+          You opened a sign-in link. Type the code your own terminal or IDE is showing right now; do not copy it
+          from the link or from a message someone sent you.
+        </div>
         <p class="text-sm text-gray-400">
           Enter the code shown by <code class="text-gray-300">hibou login</code> or your IDE.
+        </p>
+        <p class="text-sm font-medium text-amber-200">
+          Only approve if you started this sign-in yourself on this device.
         </p>
         <input
           v-model="typedCode"
@@ -68,7 +79,7 @@
       >
         <div>
           <p class="text-sm text-gray-400">
-            Check that this code matches the one in your terminal:
+            Check that this code matches the one on your device:
           </p>
           <p class="mt-2 text-center font-mono text-3xl font-semibold tracking-[0.3em] text-gray-100">
             {{ request.user_code }}
@@ -87,12 +98,14 @@
           </dt>
           <dd class="break-all text-gray-200">
             {{ request.client_name || 'not given' }}
+            <span class="block text-xs text-gray-500">reported by the device (unverified)</span>
           </dd>
           <dt class="text-gray-500">
             From
           </dt>
-          <dd class="font-mono text-gray-200">
-            {{ request.requester_ip }}
+          <dd class="text-gray-200">
+            <span class="font-mono">{{ request.requester_ip }}</span>
+            <span class="block text-xs text-gray-500">IP address as seen by the server (best effort; a proxy or VPN changes it)</span>
           </dd>
           <dt class="text-gray-500">
             Started
@@ -106,14 +119,17 @@
           role="note"
           class="rounded-md border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200"
         >
-          Approve only if you started this sign-in yourself in the last few minutes. Someone who sends you
-          this link is asking for access to your account.
+          Only approve if you started this sign-in yourself on this device, in the last few minutes. Someone who
+          sends you a link or a code is asking for access to your account.
         </div>
 
         <fieldset>
           <legend class="mb-2 text-sm font-medium text-gray-200">
             Access
           </legend>
+          <p class="mb-2 text-xs text-gray-500">
+            Only what the device asked for, or less, is offered.
+          </p>
           <div class="space-y-2">
             <label
               v-for="preset in request.presets"
@@ -223,8 +239,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   api,
@@ -234,6 +250,7 @@ import {
   type TokenAccessLevel,
   type TokenCapability,
 } from '@/api/client'
+import { defaultDevicePreset, normalizeUserCode, userCodesMatch } from '@/lib/deviceLogin'
 
 const PRESET_LABELS: Record<DeviceLoginPreset, { title: string; hint: string }> = {
   cli: { title: 'CLI', hint: 'Upload scans, check gates and secrets, read findings. Cannot triage or change settings.' },
@@ -242,9 +259,14 @@ const PRESET_LABELS: Record<DeviceLoginPreset, { title: string; hint: string }> 
 const EXPIRY_DAYS = [30, 90, 180, 365]
 
 const route = useRoute()
-const typedCode = ref(typeof route.query.user_code === 'string' ? route.query.user_code : '')
+const router = useRouter()
+// A code from verification_uri_complete is never looked up or shown: the user
+// must type the code their own device shows, and it must match the link. A
+// link someone else sent then leads nowhere without that person's device.
+const linkCode = ref(typeof route.query.user_code === 'string' ? route.query.user_code : '')
+const typedCode = ref('')
 const request = ref<DeviceLoginRequest | null>(null)
-const selectedPreset = ref<DeviceLoginPreset>('cli')
+const selectedPreset = ref<DeviceLoginPreset>('read-only')
 const expiryDays = ref(90)
 const busy = ref(false)
 const error = ref('')
@@ -276,17 +298,31 @@ function orgAccess(org: DeviceLoginOrgReach): string {
 function describe(err: unknown): string {
   const message = err instanceof Error ? err.message : ''
   if (/invalid or has expired/i.test(message)) return 'This code is invalid or has expired. Start the sign-in again.'
-  if (/HTTP 429/.test(message) || /rate/i.test(message)) return 'Too many attempts. Wait a minute and try again.'
+  if (/HTTP 429/.test(message) || /rate|too many/i.test(message)) return 'Too many attempts. Wait a minute and try again.'
   return message || 'Something went wrong. Try again.'
 }
 
 async function lookup() {
-  busy.value = true
   error.value = ''
+  if (linkCode.value && !userCodesMatch(typedCode.value, linkCode.value)) {
+    // Forget the link: if the user started a new sign-in, the next attempt
+    // looks up the code they typed.
+    linkCode.value = ''
+    void router.replace({ query: {} })
+    error.value = normalizeUserCode(typedCode.value)
+      ? 'This code does not match the link you opened. Only approve a code your own device is showing; if it is, press Continue again.'
+      : 'Type the code exactly as your device shows it (XXXX-XXXX).'
+    return
+  }
+  busy.value = true
   try {
     const res = await api.getDeviceLogin(typedCode.value.trim())
     request.value = res.data
-    selectedPreset.value = res.data.requested_preset
+    selectedPreset.value = defaultDevicePreset(
+      res.data.client_id,
+      res.data.requested_preset,
+      res.data.presets.map((preset) => preset.key),
+    )
   } catch (err) {
     error.value = describe(err)
   } finally {
@@ -326,12 +362,4 @@ async function deny() {
     busy.value = false
   }
 }
-
-onMounted(() => {
-  // A prefilled link still shows the code for comparison before any approval:
-  // looking it up changes nothing.
-  if (typedCode.value) {
-    void lookup()
-  }
-})
 </script>

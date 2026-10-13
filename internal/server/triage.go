@@ -12,6 +12,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/cvefeed"
 	"github.com/hibouhq/hibou/internal/cvetriage"
 	"github.com/hibouhq/hibou/internal/cwe"
@@ -72,8 +73,16 @@ type triageDecisionRequest struct {
 // cve-triager — whichever org the URL names. An org-scoped grant does not
 // reach them: it would let one tenant write advisories every tenant reads.
 // The org only attributes the audit entry.
+//
+// API tokens are refused outright, unscoped legacy ones included: the route
+// guard's session-only rule lets those through, and a token must never carry
+// its creator's instance authority.
 func (s *Server) loadTriageOrg(w http.ResponseWriter, r *http.Request) (*store.Organization, bool) {
 	if !s.requireAuthenticated(w, r) {
+		return nil, false
+	}
+	if auth.TokenAuthFromContext(r.Context()) != nil {
+		api.JSONError(w, http.StatusForbidden, "CVE triage is only available from a browser session, not with an API token")
 		return nil, false
 	}
 	if !s.canSeeInstanceInventory(r) {

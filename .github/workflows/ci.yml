@@ -29,6 +29,27 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Every `uses: ./.github/actions/...` after a container step loads its
+      # action.yml from the workspace, which the devcontainer has mounted
+      # read-write. Record .github and .devcontainer now, before any container
+      # step, outside the workspace; each "Verify workflow files are unchanged"
+      # step below compares against it before the host loads a local action
+      # again. Plain find/sha256sum, not git: host git would read .git/config,
+      # which the container can also write (core.fsmonitor runs a command).
+      # This catches workspace tampering, not a container escape: the
+      # devcontainer is privileged (docker-in-docker). See THREAT-MODEL.md,
+      # "CI and release trust".
+      - name: Record workflow files
+        run: find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort > "${RUNNER_TEMP}/workspace-trust.manifest"
+
+      # Read from git before any container step can touch .git.
+      - name: Get commit info
+        if: github.event_name != 'pull_request'
+        id: commit
+        run: |
+          echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GHCR
         if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -61,6 +82,9 @@ jobs:
             # others for the same two cores.
             go build ./...
 
+      - name: Verify workflow files are unchanged
+        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
+
       # Two waves of two, not one wave of five.
       #
       # `ubuntu-latest` on a private repo is 2 vCPU / 7 GB. The previous
@@ -92,6 +116,29 @@ jobs:
                 fi
                 (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
 
+      - name: Verify workflow files are unchanged
+        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
+
+      # Copy the binaries out of the workspace as soon as they are built, so no
+      # later container step can swap them: the host runs hibou-linux-amd64
+      # (Hibou upload), and a release checksums, signs and publishes the copies.
+      - name: Snapshot built binaries
+        env:
+          IS_RELEASE: ${{ github.event_name == 'release' }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/dist"
+          mkdir -p "${out}"
+          bins=(hibou-linux-amd64)
+          if [ "${IS_RELEASE}" = "true" ]; then
+            bins=(hibou-darwin-arm64 hibou-linux-amd64 hibou-linux-arm64 hibou-windows-amd64.exe hibou-windows-arm64.exe)
+          fi
+          for b in "${bins[@]}"; do
+            [ -f "dist/${b}" ] && [ ! -L "dist/${b}" ] || { echo "::error::dist/${b} missing or not a regular file"; exit 1; }
+            install -m 0755 "dist/${b}" "${out}/${b}"
+          done
+          (cd "${out}" && sha256sum "${bins[@]}" | tee SHA256SUMS)
+
       - parallel:
           - name: Go coverage
             uses: ./.github/actions/devcontainer-ci
@@ -114,14 +161,10 @@ jobs:
                 trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
                 node scripts/sbom-license.mjs frontend-sbom.cdx.json frontend "${GITHUB_SHA}"
 
-      # --- Publishing (push to main, or a published release; never a PR) ---
+      - name: Verify workflow files are unchanged
+        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
 
-      - name: Get commit info
-        if: github.event_name != 'pull_request'
-        id: commit
-        run: |
-          echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      # --- Publishing (push to main, or a published release; never a PR) ---
 
       - name: Build and push image
         if: github.event_name != 'pull_request'
@@ -203,46 +246,9 @@ jobs:
             # host signs and attests below.
             docker buildx bake -f docker-bake.hcl --metadata-file bake-metadata.json
 
-      - name: Check Hibou upload config
-        id: hibou-ci
-        run: |
-          # Upload only when the API token secret is set AND the server URL is a
-          # real http(s) URL — not empty and not the docs placeholder. This keeps
-          # forks and unconfigured repos (or a var left as "your-hibou-domain")
-          # from attempting an upload against an unreachable host.
-          if [[ -n "$HIBOU_API_TOKEN" && "$HIBOU_SERVER_URL" =~ ^https?://[^[:space:]]+ && "$HIBOU_SERVER_URL" != *your-hibou-domain* ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Hibou upload skipped — set repo variable HIBOU_SERVER_URL to a real https:// URL and secret HIBOU_API_TOKEN to enable."
-          fi
-        env:
-          HIBOU_SERVER_URL: ${{ vars.HIBOU_SERVER_URL }}
-          HIBOU_API_TOKEN: ${{ secrets.HIBOU_API_TOKEN }}
-
-      # The CLI is the one built above from this commit: nothing fetched from
-      # the Hibou server is ever executed in this job.
-      - name: Upload to Hibou
-        if: steps.hibou-ci.outputs.enabled == 'true'
-        continue-on-error: true
-        uses: ./.github/actions/hibou-upload
-        with:
-          cli-path: ${{ github.workspace }}/dist/hibou-linux-amd64
-          # On releases the image SBOM is uploaded afterwards into the same
-          # (org, repo, ref, sha) snapshot, so defer completion; otherwise
-          # this is the only upload and should finalize the snapshot.
-          complete: ${{ github.event_name == 'release' && 'false' || 'true' }}
-          server: ${{ vars.HIBOU_SERVER_URL }}
-          token: ${{ secrets.HIBOU_API_TOKEN }}
-          file: |
-            coverage.out
-            site/coverage/lcov.info
-            junit-go.xml
-            site/junit-front.xml
-            gosec.sarif
-            trivy-fs.sarif
-            go-sbom.cdx.json
-            frontend-sbom.cdx.json
+      - name: Verify workflow files are unchanged
+        if: github.event_name != 'pull_request'
+        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
 
       - name: Upload security artifacts
         if: always() && vars.UPLOAD_GITHUB_SECURITY_ARTIFACTS == 'true'
@@ -267,8 +273,11 @@ jobs:
 
       # --- Signing and provenance (host only: the OIDC token never enters the devcontainer) ---
 
+      # cosign keyless signing records the signer identity (this repository and
+      # workflow) in the public Rekor log, so it is skipped while the repository
+      # is private, like the GitHub attestations below.
       - name: Install cosign
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !github.event.repository.private
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Resolve image digest
@@ -288,7 +297,7 @@ jobs:
 
       # Signs the pushed index: the release tags, or the sha-* tag on main.
       - name: Sign image
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !github.event.repository.private
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           DIGEST: ${{ steps.image.outputs.digest }}
@@ -305,65 +314,61 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
-      - name: Checksum and sign release binaries
-        if: github.event_name == 'release'
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum \
-            hibou-darwin-arm64 \
-            hibou-linux-amd64 \
-            hibou-linux-arm64 \
-            hibou-windows-amd64.exe \
-            hibou-windows-arm64.exe \
-            > SHA256SUMS
-          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      # SHA256SUMS was computed by "Snapshot built binaries", over the copies
+      # taken before any later container step ran.
+      - name: Sign release checksums
+        if: github.event_name == 'release' && !github.event.repository.private
+        working-directory: ${{ runner.temp }}/dist
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
 
       - name: Attest release binaries provenance
         if: github.event_name == 'release' && !github.event.repository.private
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-checksums: dist/SHA256SUMS
+          subject-checksums: ${{ runner.temp }}/dist/SHA256SUMS
 
       # No --clobber: a release's assets are immutable; re-running against a
       # release that already has them fails instead of replacing them.
+      # GH_REPO: gh does not consult the workspace's git remotes.
       - name: Upload release binaries
         if: github.event_name == 'release'
+        working-directory: ${{ runner.temp }}/dist
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           REF_NAME: ${{ github.event.release.tag_name }}
         run: |
-          gh release upload "${REF_NAME}" \
-            dist/hibou-darwin-arm64 \
-            dist/hibou-linux-amd64 \
-            dist/hibou-linux-arm64 \
-            dist/hibou-windows-amd64.exe \
-            dist/hibou-windows-arm64.exe \
-            dist/SHA256SUMS \
-            dist/SHA256SUMS.sigstore.json
+          set -euo pipefail
+          assets=(
+            hibou-darwin-arm64
+            hibou-linux-amd64
+            hibou-linux-arm64
+            hibou-windows-amd64.exe
+            hibou-windows-arm64.exe
+            SHA256SUMS
+          )
+          # Absent while the repository is private (signing skipped).
+          [ -f SHA256SUMS.sigstore.json ] && assets+=(SHA256SUMS.sigstore.json)
+          gh release upload "${REF_NAME}" "${assets[@]}"
 
       - name: Generate image SBOM
         if: github.event_name == 'release'
         uses: ./.github/actions/devcontainer-ci
         env:
-          REPO: ${{ github.repository }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         with:
+          # By digest: the image that was signed and attested, not whatever
+          # the version tag points at by now.
           run-cmd: |
             set -euo pipefail
-            trivy image --format cyclonedx --output image-sbom.cdx.json "ghcr.io/${REPO,,}:${RELEASE_VERSION}"
+            trivy image --format cyclonedx --output image-sbom.cdx.json "${IMAGE}@${DIGEST}"
             node scripts/sbom-license.mjs image-sbom.cdx.json image "${RELEASE_VERSION}"
 
-      - name: Upload image SBOM to Hibou
-        if: github.event_name == 'release' && steps.hibou-ci.outputs.enabled == 'true'
-        continue-on-error: true
-        uses: ./.github/actions/hibou-upload
-        with:
-          cli-path: ${{ github.workspace }}/dist/hibou-linux-amd64
-          # Final upload of the release snapshot; completes it.
-          server: ${{ vars.HIBOU_SERVER_URL }}
-          token: ${{ secrets.HIBOU_API_TOKEN }}
-          file: image-sbom.cdx.json
+      - name: Verify workflow files are unchanged
+        if: github.event_name == 'release'
+        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
 
       - name: Publish Helm chart
         if: github.event_name != 'pull_request'
@@ -434,7 +439,7 @@ jobs:
             echo "${chart_repo}@${chart_digest}" > chart-ref.txt
 
       - name: Sign Helm chart
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !github.event.repository.private
         env:
           REPO_OWNER: ${{ github.repository_owner }}
         run: |
@@ -445,3 +450,61 @@ jobs:
             exit 1
           fi
           cosign sign --yes "${ref}"
+
+      - name: Verify workflow files are unchanged
+        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
+
+      - name: Check Hibou upload config
+        id: hibou-ci
+        run: |
+          # Upload only when the API token secret is set AND the server URL is a
+          # real http(s) URL — not empty and not the docs placeholder. This keeps
+          # forks and unconfigured repos (or a var left as "your-hibou-domain")
+          # from attempting an upload against an unreachable host.
+          if [[ -n "$HIBOU_API_TOKEN" && "$HIBOU_SERVER_URL" =~ ^https?://[^[:space:]]+ && "$HIBOU_SERVER_URL" != *your-hibou-domain* ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Hibou upload skipped — set repo variable HIBOU_SERVER_URL to a real https:// URL and secret HIBOU_API_TOKEN to enable."
+          fi
+        env:
+          HIBOU_SERVER_URL: ${{ vars.HIBOU_SERVER_URL }}
+          HIBOU_API_TOKEN: ${{ secrets.HIBOU_API_TOKEN }}
+
+      # Last, after every signing step: the CLI runs on the host with the
+      # job's credentials in reach, so it must not run before anything it could
+      # influence. It is the copy of the binary built above from this commit
+      # (taken before later container steps); nothing fetched from the Hibou
+      # server is ever executed in this job.
+      - name: Upload to Hibou
+        if: steps.hibou-ci.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/hibou-upload
+        with:
+          cli-path: ${{ runner.temp }}/dist/hibou-linux-amd64
+          # On releases the image SBOM is uploaded afterwards into the same
+          # (org, repo, ref, sha) snapshot, so defer completion; otherwise
+          # this is the only upload and should finalize the snapshot.
+          complete: ${{ github.event_name == 'release' && 'false' || 'true' }}
+          server: ${{ vars.HIBOU_SERVER_URL }}
+          token: ${{ secrets.HIBOU_API_TOKEN }}
+          file: |
+            coverage.out
+            site/coverage/lcov.info
+            junit-go.xml
+            site/junit-front.xml
+            gosec.sarif
+            trivy-fs.sarif
+            go-sbom.cdx.json
+            frontend-sbom.cdx.json
+
+      - name: Upload image SBOM to Hibou
+        if: github.event_name == 'release' && steps.hibou-ci.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/hibou-upload
+        with:
+          cli-path: ${{ runner.temp }}/dist/hibou-linux-amd64
+          # Final upload of the release snapshot; completes it.
+          server: ${{ vars.HIBOU_SERVER_URL }}
+          token: ${{ secrets.HIBOU_API_TOKEN }}
+          file: image-sbom.cdx.json

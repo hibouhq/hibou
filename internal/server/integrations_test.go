@@ -126,7 +126,10 @@ func TestIntegrationSecretsWriteOnlySealedAndAudited(t *testing.T) {
 	}
 	assertNoSecrets(t, "update response", rec.Body.String(), hook, hmacSecret)
 	stored, _ = srv.queries.GetIntegrationByID(context.Background(), created.Data.ID)
-	opened, err := notify.Secrets().OpenConfig(stored.Config)
+	if !strings.Contains(string(stored.Config), `"enc:v2:`) {
+		t.Fatalf("stored secrets are not sealed with the row-bound v2 format: %s", stored.Config)
+	}
+	opened, err := notify.Secrets().OpenConfig(notify.IntegrationSealContext(*stored), stored.Config)
 	if err != nil {
 		t.Fatalf("OpenConfig: %v", err)
 	}
@@ -134,6 +137,29 @@ func TestIntegrationSecretsWriteOnlySealedAndAudited(t *testing.T) {
 	_ = json.Unmarshal(opened, &config)
 	if config["webhook_url"] != hook || config["secret"] != hmacSecret || config["channel"] != "#alerts" {
 		t.Fatalf("stored config after masked round-trip = %v", config)
+	}
+
+	// Moving the destination while keeping the masked HMAC secret would send
+	// it to whoever controls the new URL: refused until it is re-entered.
+	const evilHook = "https://hooks.slack.com/services/T999/B999/ATTACKER"
+	rec = callOrgHandler(t, admin, org.Slug, http.MethodPut, map[string]any{
+		"name":    "alerts",
+		"enabled": true,
+		"config":  map[string]any{"webhook_url": evilHook, "secret": notify.MaskedSecret, "channel": "#alerts"},
+	}, srv.handleUpdateIntegration, map[string]string{"integrationID": integrationID})
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "re-enter secret when changing webhook_url") {
+		t.Fatalf("destination change with masked secret: status = %d (%s), want 422", rec.Code, rec.Body.String())
+	}
+	rec = callOrgHandler(t, admin, org.Slug, http.MethodPut, map[string]any{
+		"name":    "alerts",
+		"enabled": true,
+		"config":  map[string]any{"webhook_url": evilHook, "channel": "#alerts"},
+	}, srv.handleUpdateIntegration, map[string]string{"integrationID": integrationID})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("destination change with omitted secret: status = %d (%s), want 422", rec.Code, rec.Body.String())
+	}
+	if after, _ := srv.queries.GetIntegrationByID(context.Background(), created.Data.ID); string(after.Config) != string(stored.Config) {
+		t.Fatal("a refused update changed the stored config")
 	}
 
 	rec = callOrgHandler(t, admin, org.Slug, http.MethodDelete, nil, srv.handleDeleteIntegration, map[string]string{"integrationID": integrationID})
@@ -158,22 +184,38 @@ func TestIntegrationSecretsWriteOnlySealedAndAudited(t *testing.T) {
 	}
 }
 
-// Q3: notification-rule destination configs follow the same rules.
-func TestNotificationRuleDestinationSecretsWriteOnly(t *testing.T) {
+// Q3: notification-rule destination configs only select integrations, and
+// never by a credential field: a rule (or a dry-run) matching on a guessed
+// webhook URL would confirm the guess. Such fields are refused with 422.
+func TestNotificationRuleDestinationRefusesCredentialSelectors(t *testing.T) {
 	srv, org, admin, _ := newDiscoveryTestServer(t)
 	const hook = "https://hooks.slack.com/services/T000/B000/RULESECRET"
 
+	for _, handler := range []http.HandlerFunc{srv.handleCreateNotificationRule, srv.handleDryRunNotificationRule} {
+		rec := callOrgHandler(t, admin, org.Slug, http.MethodPost, map[string]any{
+			"name":               "critical",
+			"event_type":         "scan.failed",
+			"destination_type":   "slack",
+			"destination_config": map[string]any{"webhook_url": hook},
+			"enabled":            true,
+		}, handler, nil)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("credential selector: status = %d (%s), want 422", rec.Code, rec.Body.String())
+		}
+		assertNoSecrets(t, "refusal", rec.Body.String(), hook)
+	}
+
+	integrationID := "6a1f2c3e-0000-4000-8000-000000000001"
 	rec := callOrgHandler(t, admin, org.Slug, http.MethodPost, map[string]any{
 		"name":               "critical",
 		"event_type":         "scan.failed",
 		"destination_type":   "slack",
-		"destination_config": map[string]any{"webhook_url": hook},
+		"destination_config": map[string]any{"integration_id": integrationID},
 		"enabled":            true,
 	}, srv.handleCreateNotificationRule, nil)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d (%s)", rec.Code, rec.Body.String())
 	}
-	assertNoSecrets(t, "create response", rec.Body.String(), hook)
 	var created struct {
 		Data dbgen.NotificationRule `json:"data"`
 	}
@@ -183,26 +225,25 @@ func TestNotificationRuleDestinationSecretsWriteOnly(t *testing.T) {
 		"name":               "critical-renamed",
 		"event_type":         "scan.failed",
 		"destination_type":   "slack",
-		"destination_config": map[string]any{"webhook_url": notify.MaskedSecret},
+		"destination_config": map[string]any{"integration_id": integrationID, "webhook_url": notify.MaskedSecret},
+		"enabled":            true,
+	}, srv.handleUpdateNotificationRule, map[string]string{"ruleID": created.Data.ID.String()})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("update with a masked credential selector: status = %d (%s), want 422", rec.Code, rec.Body.String())
+	}
+	rec = callOrgHandler(t, admin, org.Slug, http.MethodPut, map[string]any{
+		"name":               "critical-renamed",
+		"event_type":         "scan.failed",
+		"destination_type":   "slack",
+		"destination_config": map[string]any{"integration_id": integrationID},
 		"enabled":            true,
 	}, srv.handleUpdateNotificationRule, map[string]string{"ruleID": created.Data.ID.String()})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update status = %d (%s)", rec.Code, rec.Body.String())
 	}
-	stored, err := srv.queries.GetNotificationRuleByID(context.Background(), created.Data.ID)
-	if err != nil || stored == nil {
-		t.Fatalf("GetNotificationRuleByID: %v", err)
-	}
-	opened, _ := notify.Secrets().OpenConfig(stored.DestinationConfig)
-	if !strings.Contains(string(opened), "RULESECRET") {
-		t.Fatalf("masked round-trip lost the stored URL: %s", opened)
-	}
 	entries := auditEntriesFor(t, srv, "notification_rule", created.Data.ID.String())
 	if findAuditAction(entries, audit.ActionNotificationRuleCreate) == nil || findAuditAction(entries, audit.ActionNotificationRuleUpdate) == nil {
 		t.Fatalf("rule create/update not audited: %d entries", len(entries))
-	}
-	for _, entry := range entries {
-		assertNoSecrets(t, entry.Action+" audit context", string(entry.Context), hook)
 	}
 }
 

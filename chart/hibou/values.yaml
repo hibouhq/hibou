@@ -119,18 +119,22 @@ hibou:
   # -- MCP listener (plain HTTP on mcp.port, all interfaces). Disable unless an MCP client inside the cluster needs it.
   mcp:
     enabled: false
+    # -- MCP listener port (HIBOU_MCP_PORT). Must differ from 8080 and metrics.port.
+    port: 8081
   # -- Retention overrides passed to the server. Empty keeps the server default.
   retention:
     # -- "true" lets the retention worker delete expired data instead of only reporting it.
     autoPurge: ""
-  # -- Default-deny NetworkPolicy for hibou pods (server and workers), plus an ingress policy on the bundled SeaweedFS that admits only hibou pods (and the bucket job) on the S3 port. Off by default because it needs a CNI that enforces NetworkPolicy; turn it on wherever the CNI does. When on, only the listed traffic is allowed, and the metrics policy's open application-port rule is dropped.
+  # -- Default-deny NetworkPolicy for hibou pods (server and workers). Off by default because it locks down hibou's own ingress and egress, which must match your ingress controller and external dependencies; turn it on wherever the CNI enforces NetworkPolicy. When on, only the listed traffic is allowed, and the metrics policy's open application-port rule is dropped. The ingress-only policies on the bundled SeaweedFS, PostgreSQL and Trivy are separate and on by default (seaweedfs/postgresql/trivy.networkPolicy).
   networkPolicy:
     enabled: false
-    # -- Peers allowed to reach the application port (8080), as NetworkPolicy `from` entries. Point it at the ingress controller's namespace.
+    # -- Peers allowed to reach the application port (8080), as NetworkPolicy `from` entries. The default matches k3s, whose Traefik runs in kube-system. Other controllers live elsewhere: ingress-nginx in `ingress-nginx`, a Traefik Helm install in `traefik`, the AWS/GCE load balancers send traffic from node or VPC addresses (use an ipBlock with the node/VPC CIDR). Check with `kubectl get pods -A -l app.kubernetes.io/name=<controller>` and set the matching namespace, or the ingress returns 502/504 once the policy is on.
     ingressFrom:
       - namespaceSelector:
           matchLabels:
             kubernetes.io/metadata.name: kube-system
+    # -- Peers allowed to reach the MCP port when hibou.mcp.enabled, as NetworkPolicy `from` entries. Empty admits pods in the release namespace only.
+    mcpFrom: []
     # -- In-namespace ports hibou pods may reach: bundled Postgres, SeaweedFS S3 and Trivy.
     inNamespacePorts: [5432, 8333, 4954]
     # -- External TCP ports hibou may reach outside private ranges: forge APIs, OSV, the CVE feed, webhook notifications. Add 465/587 for email integrations.
@@ -285,8 +289,13 @@ seaweedfs:
     # NOTE: the runnable SeaweedFS image is published on Docker Hub as
     # chrislusf/seaweedfs. The ghcr.io/seaweedfs/seaweedfs path only hosts the Helm chart.
     repository: chrislusf/seaweedfs
-    tag: "4.34"
+    # -- Tag pinned to the multi-arch index digest; Renovate (helm-values) keeps both current.
+    tag: "4.34@sha256:6620371e8af8282056685c652d4637265698c9e2c2d59f9594e6ac333ad6c634"
     pullPolicy: IfNotPresent
+  # -- Ingress NetworkPolicy, always rendered with the bundled SeaweedFS: only hibou pods and the bucket job reach the S3 port. It is also what keeps the S3 gateway's gRPC port (8333+10000), which accepts unauthenticated IAM updates, unreachable, so run a CNI that enforces NetworkPolicy.
+  networkPolicy:
+    # -- Extra `from` peers for the S3 port (e.g. a backup job).
+    extraFrom: []
   # -- Existing Secret containing keys accessKeyID, secretAccessKey, and s3-config.json.
   # When empty, the chart generates and retains credentials for the bundled store.
   accessKeyExistingSecret: ""
@@ -312,15 +321,21 @@ seaweedfs:
   bootstrap:
     image:
       repository: public.ecr.aws/aws-cli/aws-cli
-      tag: "2.28.5"
+      tag: "2.28.5@sha256:e8f0e645303194054200380689603c0957c6e36de516e97f9d43bb2f98634e25"
       pullPolicy: IfNotPresent
 
 postgresql:
   enabled: true
   image:
     repository: postgres
-    tag: "18"
+    # -- Tag pinned to the multi-arch index digest; Renovate (helm-values) keeps both current.
+    tag: "18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336"
     pullPolicy: IfNotPresent
+  # -- Ingress NetworkPolicy on the bundled PostgreSQL: only hibou server and worker pods reach 5432. Restricts traffic within the release only, so on by default.
+  networkPolicy:
+    enabled: true
+    # -- Extra `from` peers (e.g. a backup or admin tool).
+    extraFrom: []
   auth:
     # Provide an existing Secret containing key: url (full postgres:// connection string).
     # When postgresql.enabled=true, the same Secret must also contain key: password
@@ -362,7 +377,14 @@ cnpg:
     instances: 1
     image:
       repository: ghcr.io/cloudnative-pg/postgresql
-      tag: "18.0"
+      tag: "18.0@sha256:f06cae6ae14e2f101392130dce800b504bf9c5110b5db5fc0266782464882dbb"
+    # -- Ingress NetworkPolicy on the CNPG instances: 5432 from hibou pods and the cluster's own pods, 8000 (instance manager) from the operator. Opt-in: the operator must be reachable or it loses track of the cluster.
+    networkPolicy:
+      enabled: false
+      # -- `from` peers for the operator. Empty uses this release's CNPG subchart pods (cnpg.operator.enabled); required otherwise, e.g. a namespaceSelector for cnpg-system.
+      operatorFrom: []
+      # -- Extra `from` peers for 5432.
+      extraFrom: []
     storage:
       size: 10Gi
       # -- StorageClass name. Leave empty for default.
@@ -401,8 +423,13 @@ trivy:
   image:
     repository: aquasec/trivy
     # -- Pinned: trivy server and the CLI clients must stay protocol-compatible, and latest is not reproducible.
-    tag: "0.72.0"
+    tag: "0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f"
     pullPolicy: IfNotPresent
+  # -- Ingress NetworkPolicy on the bundled Trivy server: only hibou server and worker pods reach 4954. Restricts traffic within the release only, so on by default.
+  networkPolicy:
+    enabled: true
+    # -- Extra `from` peers.
+    extraFrom: []
   cache:
     # -- Cap on the vulnerability DB cache. Trivy re-downloads a ~1 GB DB on a
     # schedule; without a bound it grows into the node's ephemeral storage and

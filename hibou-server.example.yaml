@@ -155,14 +155,17 @@ epss:
   url: ""
 
 # Prometheus /metrics (ADR-039). Served on its own port (not forwarded by your
-# ingress) by default. port: 0 serves it on the application port, which
-# anything that can reach hibou can read: outside development that is refused
-# unless a bearer token is set.
+# ingress) by default. Outside development, startup is refused when /metrics
+# would be readable without a token: on the application port (port: 0), or on
+# a dedicated port bound to a non-loopback host. Set a token, or set
+# require_token: false only when the metrics port is firewalled from anything
+# untrusted (e.g. a NetworkPolicy, or a host firewall).
 metrics:
   enabled: true  # false serves /metrics nowhere
   port: 9090
+  bearer_token_file: /run/secrets/hibou-metrics-token  # wins over bearer_token
   # bearer_token: ""
-  # bearer_token_file: /run/secrets/hibou-metrics-token  # wins over bearer_token
+  # require_token: false
 
 # Storage usage sampler (ADR-039): Postgres sizes/health and the artifact
 # ledger, exported on /metrics. Usage only, no prices: join cost outside hibou.

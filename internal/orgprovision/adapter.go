@@ -92,3 +92,8 @@ func (a *StoreAdapter) DeleteForgeOrgAdminsByAccount(ctx context.Context, provid
 func (a *StoreAdapter) ListOrganizations(ctx context.Context) ([]store.Organization, error) {
 	return a.queries.ListOrganizations(ctx)
 }
+
+// ListOrgAdminIdentities lists the forge identities of an org's admins.
+func (a *StoreAdapter) ListOrgAdminIdentities(ctx context.Context, orgID uuid.UUID) ([]store.OrgAdminIdentity, error) {
+	return a.queries.ListOrgAdminIdentities(ctx, orgID)
+}

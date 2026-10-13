@@ -64,14 +64,35 @@ func (a *StoreAdapter) ListStaleForgeOrgMemberships(ctx context.Context, staleBe
 	return a.queries.ListStaleForgeOrgMemberships(ctx, staleBefore, limit)
 }
 
-// ListForgeOrgMemberLogins lists org-wide forge members with a known login.
-func (a *StoreAdapter) ListForgeOrgMemberLogins(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error) {
-	return a.queries.ListForgeOrgMemberLogins(ctx, orgID, limit)
+// ListForgeOrgMemberForgeIDs lists org-wide forge members' immutable forge ids.
+func (a *StoreAdapter) ListForgeOrgMemberForgeIDs(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error) {
+	return a.queries.ListForgeOrgMemberForgeIDs(ctx, orgID, limit)
+}
+
+// ListUngrantedLateRepoMembers lists members recorded as org-wide with no
+// grant on a repository enrolled after their verdict.
+func (a *StoreAdapter) ListUngrantedLateRepoMembers(ctx context.Context, limit int) ([]store.LateRepoGrantCandidate, error) {
+	return a.queries.ListUngrantedLateRepoMembers(ctx, limit)
+}
+
+// SetForgeOrgMemberRepoScoped records that the forge withholds repositories.
+func (a *StoreAdapter) SetForgeOrgMemberRepoScoped(ctx context.Context, orgID, userID uuid.UUID) error {
+	return a.queries.SetForgeOrgMemberRepoScoped(ctx, orgID, userID)
 }
 
 // TouchForgeOrgMember records a forge membership confirmation.
 func (a *StoreAdapter) TouchForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID) error {
 	return a.queries.TouchForgeOrgMember(ctx, orgID, userID)
+}
+
+// MarkForgeOrgMemberRevalidationAttempted records an undecided re-check.
+func (a *StoreAdapter) MarkForgeOrgMemberRevalidationAttempted(ctx context.Context, orgID, userID uuid.UUID) error {
+	return a.queries.MarkForgeOrgMemberRevalidationAttempted(ctx, orgID, userID)
+}
+
+// CountOrgAdmins counts an org's admins, whatever their source.
+func (a *StoreAdapter) CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int, error) {
+	return a.queries.CountOrgAdmins(ctx, orgID)
 }
 
 // RemoveForgeOrgAccess drops a forge membership and its repository grants.

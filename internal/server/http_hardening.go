@@ -19,8 +19,8 @@ import (
 )
 
 // Route classes the hardening middleware treat differently. Matched on the
-// raw path because the body limit and connection deadlines run before chi
-// has resolved a route.
+// escaped path (routePath) because the body limit and connection deadlines
+// run before chi has resolved a route, and chi routes on the escaped form.
 const (
 	apiPrefix         = "/api/v1/"
 	uploadPath        = "/api/v1/upload"
@@ -31,9 +31,27 @@ const (
 	webhooksPrefix    = "/api/v1/webhooks/"
 	binPrefix         = "/api/v1/bin/"
 	orgsPrefix        = "/api/v1/orgs/"
-	// downloadWriteTimeout bounds how long a slow reader may hold a download.
+	// downloadWriteTimeout bounds how long a slow reader may hold an
+	// authenticated download.
 	downloadWriteTimeout = time.Hour
+	// binDownloadWriteTimeout bounds the anonymous CLI binary download: about
+	// 85 KB/s for a 50 MB binary, and short enough that anonymous slow
+	// readers cannot pin connections for an hour each.
+	binDownloadWriteTimeout = 10 * time.Minute
+	// uploadMinBodyRate is the slowest upload body the read deadline allows
+	// for: the deadline is Content-Length at this rate, at least
+	// uploadMinReadBudget, at most http.upload_read_timeout.
+	uploadMinBodyRate   = 64 << 10
+	uploadMinReadBudget = time.Minute
 )
+
+// routePath is the path the hardening middleware classify a request by: the
+// escaped path, which is what chi matches routes on. Classifying on the
+// decoded r.URL.Path let an encoded slash ("acme%2Fsnapshots%2Fx%2Ffiles")
+// pick the limits of a route other than the one chi then serves.
+func routePath(r *http.Request) string {
+	return r.URL.EscapedPath()
+}
 
 func isSBOMComparePath(path string) bool {
 	return path == toolSBOMCompare || (strings.HasPrefix(path, orgsPrefix) && strings.HasSuffix(path, "/sbom/compare"))
@@ -143,7 +161,7 @@ func (s *Server) bodyLimitFor(path string) int64 {
 func (s *Server) bodyLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil && r.Body != http.NoBody {
-			limit := s.bodyLimitFor(r.URL.Path)
+			limit := s.bodyLimitFor(routePath(r))
 			if r.ContentLength > limit {
 				api.JSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
 				return
@@ -154,22 +172,27 @@ func (s *Server) bodyLimitMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// connectionDeadlineMiddleware adjusts the server-wide read/write deadlines
-// for routes that need a different budget: websockets live for hours,
-// uploads read up to max.upload.size, downloads stream to slow clients.
+// connectionDeadlineMiddleware adjusts the server-wide write deadline for
+// download routes, which stream to slow clients. Nothing here runs after
+// authentication, so nothing here may lift a deadline for an anonymous
+// caller beyond a bounded download: the websocket clears its deadlines in
+// its handler once the session is validated (ws.HTTPHandler), and an upload
+// gets its read budget once admitted to a slot (uploadConcurrencyMiddleware).
+// A websocket handshake carries no body; one that does is refused, so the
+// handshake cannot be used to trickle a body under the relaxed deadlines.
 func (s *Server) connectionDeadlineMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		controller := http.NewResponseController(w)
 		now := time.Now()
-		path := r.URL.Path
+		path := routePath(r)
 		switch {
 		case path == websocketPath:
-			// The hijacked connection keeps whatever deadline is set now.
-			_ = controller.SetReadDeadline(time.Time{})
-			_ = controller.SetWriteDeadline(time.Time{})
-		case path == uploadPath:
-			_ = controller.SetReadDeadline(now.Add(s.limits.HTTP.UploadReadTimeout))
-			_ = controller.SetWriteDeadline(now.Add(s.limits.HTTP.UploadReadTimeout + s.limits.HTTP.WriteTimeout))
+			if r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
+				api.JSONError(w, http.StatusBadRequest, "a websocket handshake carries no body")
+				return
+			}
+		case strings.HasPrefix(path, binPrefix):
+			_ = controller.SetWriteDeadline(now.Add(binDownloadWriteTimeout))
 		case isDownloadPath(path):
 			_ = controller.SetWriteDeadline(now.Add(downloadWriteTimeout))
 		}
@@ -177,12 +200,29 @@ func (s *Server) connectionDeadlineMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// uploadReadBudget is how long an admitted upload of contentLength bytes may
+// take to arrive: at uploadMinBodyRate, at least uploadMinReadBudget, at most
+// http.upload_read_timeout.
+func uploadReadBudget(contentLength int64, ceiling time.Duration) time.Duration {
+	budget := uploadMinReadBudget
+	if seconds := contentLength / uploadMinBodyRate; seconds > int64(budget/time.Second) {
+		if seconds >= int64(ceiling/time.Second) {
+			return ceiling
+		}
+		budget = time.Duration(seconds) * time.Second
+	}
+	if budget > ceiling {
+		return ceiling
+	}
+	return budget
+}
+
 // requestTimeoutMiddleware bounds an ordinary API request's context, so a
 // slow query or forge call is cancelled instead of holding a connection and a
 // pool slot. Long-running routes are exempt (isLongRunningPath).
 func (s *Server) requestTimeoutMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isLongRunningPath(r.URL.Path) || s.limits.HTTP.RequestTimeout <= 0 {
+		if isLongRunningPath(routePath(r)) || s.limits.HTTP.RequestTimeout <= 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -210,7 +250,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		if hsts {
 			header.Set("Strict-Transport-Security", "max-age=31536000")
 		}
-		switch path := r.URL.Path; {
+		switch path := routePath(r); {
 		case strings.HasPrefix(path, swaggerDocsPrefix):
 			header.Set("Content-Security-Policy", swaggerContentSecurityPolicy)
 		case strings.HasPrefix(path, apiPrefix) || path == "/metrics":
@@ -256,6 +296,9 @@ type rateLimiters struct {
 	// user-code lookups per minute per signed-in user.
 	deviceCode   *ipRateLimiter
 	deviceLookup *ipRateLimiter
+	// authFailure counts bearer tokens that authenticate nothing, per client
+	// IP, with the rate_limit.auth bucket (authFailureGate).
+	authFailure *ipRateLimiter
 }
 
 func newRateLimiters(ctx context.Context, cfg config.RateLimitConfig) rateLimiters {
@@ -273,6 +316,7 @@ func newRateLimiters(ctx context.Context, cfg config.RateLimitConfig) rateLimite
 		anonymous:    build(cfg.Anonymous),
 		deviceCode:   newIPRateLimiter(ctx, 10.0/60, 10),
 		deviceLookup: newIPRateLimiter(ctx, 10.0/60, 10),
+		authFailure:  build(cfg.Auth),
 	}
 }
 
@@ -295,11 +339,12 @@ func principalRateKey(r *http.Request) string {
 	if user := UserFromContext(r.Context()); user != nil {
 		return "user:" + user.ID.String()
 	}
-	return "ip:" + requestClientIP(r)
+	return ipRateKey(r)
 }
 
+// ipRateKey keys a bucket by client IPv4 address or IPv6 /64.
 func ipRateKey(r *http.Request) string {
-	return "ip:" + requestClientIP(r)
+	return "ip:" + rateLimitIPKey(requestClientIP(r))
 }
 
 // rateLimitMiddleware answers 429 with Retry-After once a key's bucket is
@@ -309,10 +354,7 @@ func rateLimitMiddleware(limiter *ipRateLimiter, key func(*http.Request) string)
 		if limiter == nil {
 			return next
 		}
-		retryAfter := "1"
-		if limiter.rate > 0 && float64(limiter.rate) < 1 {
-			retryAfter = strconv.Itoa(int(math.Ceil(1 / float64(limiter.rate))))
-		}
+		retryAfter := strconv.Itoa(retryAfterSeconds(limiter))
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !limiter.getLimiter(key(r)).Allow() {
 				w.Header().Set("Retry-After", retryAfter)
@@ -324,17 +366,60 @@ func rateLimitMiddleware(limiter *ipRateLimiter, key func(*http.Request) string)
 	}
 }
 
+// authFailureGate runs before SessionAuth on the authenticated API. Every
+// bearer token is looked up by hash, and the principal-keyed limits only
+// apply once a token resolves, so random tokens would reach the database
+// unthrottled. A client IP whose bearer tokens failed more than the
+// rate_limit.auth bucket allows is refused before the lookup; requests
+// without an Authorization header (browsers) are never held back here.
+func (s *Server) authFailureGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limiter := s.rateLimiters.authFailure
+		if limiter != nil && r.Header.Get("Authorization") != "" && limiter.getLimiter(ipRateKey(r)).Tokens() < 1 {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(limiter)))
+			api.JSONError(w, http.StatusTooManyRequests, "too many failed authentication attempts, retry later")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authFailureCount runs right after SessionAuth and charges a bearer token
+// that authenticated nothing to its client IP (authFailureGate).
+func (s *Server) authFailureCount(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if limiter := s.rateLimiters.authFailure; limiter != nil && r.Header.Get("Authorization") != "" && !s.hasPrincipal(r) {
+			limiter.getLimiter(ipRateKey(r)).Allow()
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func retryAfterSeconds(limiter *ipRateLimiter) int {
+	if limiter.rate > 0 && float64(limiter.rate) < 1 {
+		return int(math.Ceil(1 / float64(limiter.rate)))
+	}
+	return 1
+}
+
 // uploadConcurrencyMiddleware holds at most upload.max_concurrent uploads in
 // flight per replica: each one buffers its decoded artifact several times
 // over, so the cap is what keeps a burst of CI jobs from exhausting memory.
-// Before queueing, the caller must be a principal able to upload somewhere
+// An upload must announce its size (Content-Length, else 411). Before
+// queueing, the caller must be a principal able to upload somewhere
 // (uploadAdmission), and one principal or org holds at most
-// upload.max_concurrent_per_{principal,org} uploads, so a single tenant
-// cannot take every slot. A request waits up to upload.queue_wait for its
-// slots, then gets 503; once admitted, a body slower than
+// upload.max_concurrent_per_{principal,org} uploads, never every slot
+// (uploadKeyLimit), so a single tenant cannot take them all. A request
+// waits up to upload.queue_wait for its slots, then gets 429. Only once
+// admitted to a slot does the body get its read budget (uploadReadBudget,
+// instead of http.read_timeout), and a body slower than
 // upload.min_throughput_* is cut off (uploadThroughputGuard).
 func (s *Server) uploadConcurrencyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength < 0 {
+			api.JSONError(w, http.StatusLengthRequired, "uploads must send Content-Length")
+			return
+		}
 		keys, ok := s.uploadAdmission(w, r)
 		if !ok {
 			return
@@ -345,7 +430,7 @@ func (s *Server) uploadConcurrencyMiddleware(next http.Handler) http.Handler {
 		if !acquired {
 			if !cancelled {
 				w.Header().Set("Retry-After", "30")
-				api.JSONError(w, http.StatusServiceUnavailable, "too many uploads in flight for this principal or organization, retry later")
+				api.JSONError(w, http.StatusTooManyRequests, "too many uploads in flight for this principal or organization, retry later")
 			}
 			return
 		}
@@ -353,13 +438,22 @@ func (s *Server) uploadConcurrencyMiddleware(next http.Handler) http.Handler {
 		select {
 		case s.uploadSlots <- struct{}{}:
 			defer func() { <-s.uploadSlots }()
+			controller := http.NewResponseController(w)
+			budget := uploadReadBudget(r.ContentLength, s.limits.HTTP.UploadReadTimeout)
+			now := time.Now()
+			_ = controller.SetReadDeadline(now.Add(budget))
+			_ = controller.SetWriteDeadline(now.Add(budget + s.limits.HTTP.WriteTimeout))
 			guard := newUploadThroughputGuard(w, r.Body, s.limits.Upload.MinThroughputBytes, s.limits.Upload.MinThroughputWindow)
+			// Once the body is in, processing is bounded by the write
+			// deadline; an expiring read deadline would cancel the request
+			// context through the server's background read.
+			guard.onEOF = func() { _ = controller.SetReadDeadline(time.Now().Add(s.limits.HTTP.WriteTimeout)) }
 			defer guard.stop()
 			r.Body = guard
 			next.ServeHTTP(w, r)
 		case <-timer.C:
 			w.Header().Set("Retry-After", "30")
-			api.JSONError(w, http.StatusServiceUnavailable, "upload capacity reached, retry later")
+			api.JSONError(w, http.StatusTooManyRequests, "upload capacity reached, retry later")
 		case <-r.Context().Done():
 		}
 	})

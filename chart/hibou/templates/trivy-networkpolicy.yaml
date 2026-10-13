@@ -1,0 +1,26 @@
+{{- if and .Values.trivy.enabled .Values.trivy.networkPolicy.enabled }}
+# The bundled Trivy server admits only hibou server and worker pods (plus
+# trivy.networkPolicy.extraFrom). Rendered independently of
+# hibou.networkPolicy.enabled: it restricts ingress within the release only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.fullname" . }}-trivy
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: trivy
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 4954
+          protocol: TCP
+      from:
+        {{- include "hibou.componentPeer" (dict "root" . "components" (list "server" "worker")) | nindent 8 }}
+        {{- with .Values.trivy.networkPolicy.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

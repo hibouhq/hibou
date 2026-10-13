@@ -73,8 +73,13 @@ type StaleForgeOrgMembership struct {
 	OrgProvider       string
 	OrgSlug           string
 	ForgeAccountLogin string
-	UserProvider      string
-	ForgeLogin        string
+	// ForgeAccountID is the immutable forge account the org is bound to;
+	// empty for legacy orgs that were never bound.
+	ForgeAccountID string
+	UserProvider   string
+	// UserForgeID is the user's immutable forge id (users.provider_id).
+	UserForgeID string
+	ForgeLogin  string
 }
 
 // ListStaleForgeOrgMemberships lists forge memberships not confirmed since
@@ -98,17 +103,19 @@ func (q *Queries) ListStaleForgeOrgMemberships(ctx context.Context, staleBefore 
 			OrgProvider:       row.OrgProvider,
 			OrgSlug:           row.OrgSlug,
 			ForgeAccountLogin: row.ForgeAccountLogin.String,
+			ForgeAccountID:    row.ForgeAccountID.String,
 			UserProvider:      row.UserProvider,
+			UserForgeID:       row.UserProviderID,
 			ForgeLogin:        row.ForgeLogin.String,
 		})
 	}
 	return out, nil
 }
 
-// ListForgeOrgMemberLogins maps org-wide forge members with a known login to
-// that login, most recently confirmed first.
-func (q *Queries) ListForgeOrgMemberLogins(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error) {
-	rows, err := q.db.ListForgeOrgMemberLogins(ctx, dbgen.ListForgeOrgMemberLoginsParams{
+// ListForgeOrgMemberForgeIDs maps org-wide forge members with a known login
+// to their immutable forge user id, most recently confirmed first.
+func (q *Queries) ListForgeOrgMemberForgeIDs(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error) {
+	rows, err := q.db.ListForgeOrgMemberForgeIDs(ctx, dbgen.ListForgeOrgMemberForgeIDsParams{
 		OrgID:   orgID,
 		MaxRows: int32(min(max(limit, 0), math.MaxInt32)), // #nosec G115 -- clamped to the int32 range
 	})
@@ -117,14 +124,65 @@ func (q *Queries) ListForgeOrgMemberLogins(ctx context.Context, orgID uuid.UUID,
 	}
 	out := make(map[uuid.UUID]string, len(rows))
 	for _, row := range rows {
-		out[row.UserID] = row.ForgeLogin
+		out[row.UserID] = row.ProviderID
 	}
 	return out, nil
+}
+
+// LateRepoGrantCandidate is a forge member recorded as org-wide with no grant
+// on a repository enrolled after their verdict.
+type LateRepoGrantCandidate struct {
+	OrgID          uuid.UUID
+	UserID         uuid.UUID
+	Role           string
+	OrgProvider    string
+	ForgeAccountID string
+	UserProvider   string
+	UserForgeID    string
+	RepoID         uuid.UUID
+	RepoSlug       string
+}
+
+// ListUngrantedLateRepoMembers lists up to limit such member/repository
+// pairs, in random order.
+func (q *Queries) ListUngrantedLateRepoMembers(ctx context.Context, limit int) ([]LateRepoGrantCandidate, error) {
+	rows, err := q.db.ListUngrantedLateRepoMembers(ctx, int32(min(max(limit, 0), math.MaxInt32))) // #nosec G115 -- clamped to the int32 range
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LateRepoGrantCandidate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, LateRepoGrantCandidate{
+			OrgID:          row.OrgID,
+			UserID:         row.UserID,
+			Role:           row.Role,
+			OrgProvider:    row.OrgProvider,
+			ForgeAccountID: row.ForgeAccountID.String,
+			UserProvider:   row.UserProvider,
+			UserForgeID:    row.UserProviderID,
+			RepoID:         row.RepoID,
+			RepoSlug:       row.RepoSlug,
+		})
+	}
+	return out, nil
+}
+
+// SetForgeOrgMemberRepoScoped records that the forge withheld a repository
+// from a forge member.
+func (q *Queries) SetForgeOrgMemberRepoScoped(ctx context.Context, orgID, userID uuid.UUID) error {
+	return q.db.SetForgeOrgMemberRepoScoped(ctx, dbgen.SetForgeOrgMemberRepoScopedParams{OrgID: orgID, UserID: userID})
 }
 
 // TouchForgeOrgMember marks a forge membership as confirmed now.
 func (q *Queries) TouchForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID) error {
 	return q.db.TouchForgeOrgMember(ctx, dbgen.TouchForgeOrgMemberParams{OrgID: orgID, UserID: userID})
+}
+
+// MarkForgeOrgMemberRevalidationAttempted records that re-validation looked
+// at a membership without confirming it, so the row leaves the batch until
+// the next re-validation window.
+func (q *Queries) MarkForgeOrgMemberRevalidationAttempted(ctx context.Context, orgID, userID uuid.UUID) error {
+	return q.db.MarkForgeOrgMemberRevalidationAttempted(ctx, dbgen.MarkForgeOrgMemberRevalidationAttemptedParams{OrgID: orgID, UserID: userID})
 }
 
 // RemoveForgeOrgAccess drops a forge membership and the forge repository
@@ -249,6 +307,25 @@ func (q *Queries) ListForgeOrgMembershipsByUser(ctx context.Context, userID uuid
 	}
 
 	return memberships, nil
+}
+
+// OrgAdminIdentity is the forge identity of an org admin.
+type OrgAdminIdentity struct {
+	Provider   string
+	ProviderID string
+}
+
+// ListOrgAdminIdentities lists the forge identities of an org's admins.
+func (q *Queries) ListOrgAdminIdentities(ctx context.Context, orgID uuid.UUID) ([]OrgAdminIdentity, error) {
+	rows, err := q.db.ListOrgAdminIdentities(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OrgAdminIdentity, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, OrgAdminIdentity{Provider: row.Provider, ProviderID: row.ProviderID})
+	}
+	return out, nil
 }
 
 func (q *Queries) CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int, error) {

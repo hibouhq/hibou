@@ -76,6 +76,7 @@ func TestNormalizeCreateScope(t *testing.T) {
 		{name: "missing org", raw: `{"repos":{"mode":"all"},"permissions":{"coverage":"read"}}`, wantErr: "requires an organization"},
 		{name: "repo list with no repos", raw: `{"org":"acme","repos":{"mode":"list"},"permissions":{"coverage":"read"}}`, wantErr: "requires at least one repository"},
 		{name: "no permissions", raw: `{"org":"acme","repos":{"mode":"all"},"permissions":{"coverage":"none"}}`, wantErr: "requires at least one permission"},
+		{name: "provider-qualified org", raw: `{"org":"github/acme","repos":{"mode":"all"},"permissions":{"uploads":"write"}}`, wantErr: `slug (e.g. "acme")`},
 	}
 
 	for _, tc := range tests {
@@ -127,6 +128,7 @@ func TestNormalizeOrgScope(t *testing.T) {
 		{name: "no permissions", raw: `{"org":"acme","repos":{"mode":"all"},"permissions":{}}`, wantErr: "at least one permission"},
 		{name: "empty repo list", raw: `{"org":"acme","repos":{"mode":"list"},"permissions":{"coverage":"read"}}`, wantErr: "at least one repository"},
 		{name: "malformed", raw: `{"org":`, wantErr: "invalid token scope"},
+		{name: "membership-wide selector", raw: `{"orgs":{"mode":"memberships"},"repos":{"mode":"all"},"permissions":{"coverage":"read"}}`, wantErr: "cannot use an orgs selector"},
 	}
 
 	for _, tc := range tests {

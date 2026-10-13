@@ -12,6 +12,12 @@ ARG BASE_IMAGE=hibou-base:latest
 ARG INCLUDE_EXTRA_CLI_BINARIES=false
 # renovate: datasource=github-releases depName=betterleaks/betterleaks extractVersion=^v(?<version>.+)$
 ARG BETTERLEAKS_VERSION=1.7.1
+# SHA-256 of the linux release archives for BETTERLEAKS_VERSION, from the
+# release's checksums.txt (cross-checked against the GitHub asset digests).
+# A version bump without updating both fails the build instead of trusting a
+# checksum fetched next to the archive.
+ARG BETTERLEAKS_SHA256_AMD64=48d9ae267b46677c9943cf9291bed682ed7b37b5b2c6ffbdea47a155495e5dcc
+ARG BETTERLEAKS_SHA256_ARM64=c350f1c94c7187f81a8900aa17b50ee868fdc72e89dac849d68d757754665721
 
 # --- Runtime (Wolfi-based, reproducible, 0 CVE) ---
 # Built from apko.yaml. CI publishes a multi-arch base image and passes BASE_IMAGE.
@@ -21,21 +27,26 @@ FROM ${BASE_IMAGE} AS runtime
 
 # betterleaks is not packaged in wolfi (unlike gitleaks, which comes from
 # apko.yaml), so it ships from its GitHub release, verified against the
-# release's checksums.txt. It needs no shell at runtime (pure go-git), which is
-# why it — and not trufflehog — is the verification engine we ship.
+# per-arch SHA-256 pinned above. It needs no shell at runtime (pure go-git),
+# which is why it — and not trufflehog — is the verification engine we ship.
 # Checksum-verified content keeps the layer stable across rebuilds despite the
 # network fetch.
 # Pinned to the multi-arch index digest; Renovate keeps the tag and digest current.
 FROM alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS betterleaks
 ARG TARGETARCH
 ARG BETTERLEAKS_VERSION
+ARG BETTERLEAKS_SHA256_AMD64
+ARG BETTERLEAKS_SHA256_ARM64
 RUN set -eux; \
 	apk add --no-cache curl; \
-	arch="$(echo "${TARGETARCH}" | sed 's/amd64/x64/')"; \
+	case "${TARGETARCH}" in \
+		amd64) arch=x64; sum="${BETTERLEAKS_SHA256_AMD64}" ;; \
+		arm64) arch=arm64; sum="${BETTERLEAKS_SHA256_ARM64}" ;; \
+		*) echo "unsupported TARGETARCH ${TARGETARCH}" >&2; exit 1 ;; \
+	esac; \
 	asset="betterleaks_${BETTERLEAKS_VERSION}_linux_${arch}.tar.gz"; \
 	curl -fsSLO "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${asset}"; \
-	curl -fsSL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/checksums.txt" \
-		| grep " ${asset}\$" | sha256sum -c -; \
+	echo "${sum}  ${asset}" | sha256sum -c -; \
 	tar -xzf "${asset}" -C /usr/local/bin betterleaks; \
 	/usr/local/bin/betterleaks version
 

@@ -37,7 +37,24 @@ SELECT EXISTS (
     FROM org_members om
     WHERE om.org_id = $1
       AND om.user_id = $2
-      AND om.repo_scoped
+      AND (
+          om.repo_scoped
+          OR (
+              om.source = 'forge'
+              AND om.role IN ('viewer', 'developer')
+              AND om.repo_scope_at IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM repositories r
+                  WHERE r.org_id = om.org_id
+                    AND r.created_at > om.repo_scope_at
+                    AND NOT EXISTS (
+                        SELECT 1 FROM user_repo_access ura
+                        WHERE ura.user_id = om.user_id AND ura.repo_id = r.id
+                    )
+              )
+          )
+      )
 )::boolean AS repo_scoped
 `
 
@@ -49,7 +66,10 @@ type IsRepoScopedOrgMemberParams struct {
 // Recorded by the permission sync (org_members.repo_scoped). A scoped member
 // sees exactly their user_repo_access rows, so a repository enrolled after the
 // last sync, or the deletion of their only granted repository, leaves them
-// with less, never with the whole organization.
+// with less, never with the whole organization. A forge viewer/developer
+// recorded as org-wide becomes scoped once a repository enrolled after their
+// verdict (repo_scope_at) has no grant of theirs: the forge never said they
+// may see it.
 func (q *Queries) IsRepoScopedOrgMember(ctx context.Context, arg IsRepoScopedOrgMemberParams) (bool, error) {
 	row := q.db.QueryRowContext(ctx, isRepoScopedOrgMember, arg.OrgID, arg.UserID)
 	var repo_scoped bool
@@ -63,16 +83,35 @@ FROM org_members om
 JOIN repositories repo ON repo.org_id = om.org_id
 WHERE repo.id = $1
   AND (
-      NOT om.repo_scoped
-      OR EXISTS (
+      EXISTS (
           SELECT 1 FROM user_repo_access ura
           WHERE ura.user_id = om.user_id AND ura.repo_id = repo.id
+      )
+      OR (
+          NOT om.repo_scoped
+          AND NOT (
+              om.source = 'forge'
+              AND om.role IN ('viewer', 'developer')
+              AND om.repo_scope_at IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM repositories r
+                  WHERE r.org_id = om.org_id
+                    AND r.created_at > om.repo_scope_at
+                    AND NOT EXISTS (
+                        SELECT 1 FROM user_repo_access g
+                        WHERE g.user_id = om.user_id AND g.repo_id = r.id
+                    )
+              )
+          )
       )
   )
 `
 
 // Org members who may see a repository, for targeting live events.
-// Repository-scoped members are included only with a grant on it.
+// Repository-scoped members are included only with a grant on it, and so
+// are forge viewers/developers whose verdict predates a repository they hold
+// no grant on (see IsRepoScopedOrgMember).
 func (q *Queries) ListRepoAudienceUserIDs(ctx context.Context, repoID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.QueryContext(ctx, listRepoAudienceUserIDs, repoID)
 	if err != nil {

@@ -288,8 +288,10 @@ func repoDerivedOrgLevel(level string) bool {
 // Admins never are. A person the forge did not confirm as an org member is.
 // A confirmed member is scoped when an enrolled repository is missing from
 // their grants: the forge itself withheld it (no base permission). The
-// verdict is stored, so a repository enrolled later stays invisible to a
-// scoped member until a sync grants it.
+// verdict is stored with the time it was reached (org_members.repo_scope_at),
+// so a repository enrolled later stays invisible to any viewer/developer —
+// scoped or recorded as org-wide — holding no grant on it, until a sync
+// grants it.
 func (s *Service) repoScoped(ctx context.Context, orgID uuid.UUID, role string, confirmedMember bool, granted map[uuid.UUID]bool) (bool, error) {
 	if role != "viewer" && role != "developer" {
 		return false, nil
@@ -445,11 +447,16 @@ func roleRank(role string) int {
 // the row is kept so an operator can see what was suspended and why, and restore
 // it without re-deriving the decision.
 func (s *Service) suspendLocalGrants(ctx context.Context, userID, orgID uuid.UUID, priorRole, newRole string) {
-	reason := fmt.Sprintf("forge role changed from %s to %s", priorRole, newRole)
+	s.suspendLocalGrantsWithReason(ctx, userID, orgID, fmt.Sprintf("forge role changed from %s to %s", priorRole, newRole))
+}
+
+// suspendLocalGrantsWithReason is suspendLocalGrants with the recorded reason
+// spelled out by the caller.
+func (s *Service) suspendLocalGrantsWithReason(ctx context.Context, userID, orgID uuid.UUID, reason string) {
 	suspended, err := s.store.SuspendLocalRoles(ctx, userID, orgID, reason)
 	if err != nil {
 		s.log.Warn().Err(err).Str("user_id", userID.String()).Str("org_id", orgID.String()).
-			Msg("failed to suspend local role grants after a forge downgrade")
+			Msg("failed to suspend local role grants after the forge narrowed a standing")
 		return
 	}
 	for _, grant := range suspended {

@@ -230,6 +230,12 @@ func normalizeOrgScope(raw json.RawMessage, org *store.Organization) (json.RawMe
 	if err != nil {
 		return nil, fmt.Errorf("invalid token scope: %w", err)
 	}
+	// An org-owned token belongs to one org. A membership-wide selector
+	// (ADR-043, user login tokens only) would otherwise survive next to the
+	// rewritten org below and reach every org the minting user belongs to.
+	if scope.Orgs != nil {
+		return nil, errors.New("org-owned tokens cannot use an orgs selector (membership-wide scopes are for personal login tokens only); set org to this organization instead")
+	}
 	if scope.Org != "" && scope.Org != org.Slug {
 		return nil, fmt.Errorf("token scope must target this organization (%s)", org.Slug)
 	}

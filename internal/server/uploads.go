@@ -776,13 +776,18 @@ func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID
 }
 
 // storableArtifactContent is what gets persisted for an uploaded artifact.
-// SARIF loses its region snippets first: secret scanners put the matched
-// secret there verbatim, and nothing downstream reads them.
+// SARIF is always re-encoded without its snippets and file contents first:
+// secret scanners put the matched secret there verbatim, and nothing
+// downstream reads them. SARIF over sarif.MaxDocumentSize (what the parser
+// reads) is refused.
 func storableArtifactContent(kind string, content []byte) ([]byte, error) {
 	if !strings.EqualFold(strings.TrimSpace(kind), "sarif") {
 		return content, nil
 	}
 	stripped, err := sarif.StripSnippets(content)
+	if errors.Is(err, sarif.ErrDocumentTooLarge) {
+		return nil, errBadRequest(err.Error())
+	}
 	if err != nil {
 		return nil, errBadRequest("invalid SARIF document")
 	}

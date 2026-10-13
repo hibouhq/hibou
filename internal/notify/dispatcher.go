@@ -214,7 +214,7 @@ func (d *Dispatcher) handleEvent(_ context.Context, eventType events.Type, rawPa
 		integrationPayload.Metadata["integration_id"] = integration.ID.String()
 		integrationPayload.Metadata["integration_name"] = integration.Name
 		integrationPayload.Metadata["integration_type"] = integration.IntegrationType
-		config, err := Secrets().OpenConfig(integration.Config)
+		config, err := Secrets().OpenConfig(IntegrationSealContext(integration), integration.Config)
 		if err != nil {
 			d.recordDelivery(ctx, integration, sender, integrationPayload, time.Now().UTC(), err)
 			continue
@@ -270,7 +270,7 @@ func (d *Dispatcher) Replay(ctx context.Context, integration dbgen.Integration, 
 	payload.Metadata["integration_id"] = integration.ID.String()
 	payload.Metadata["integration_name"] = integration.Name
 	payload.Metadata["integration_type"] = integration.IntegrationType
-	config, err := Secrets().OpenConfig(integration.Config)
+	config, err := Secrets().OpenConfig(IntegrationSealContext(integration), integration.Config)
 	if err != nil {
 		return err
 	}
@@ -363,6 +363,15 @@ func (d *Dispatcher) selectIntegrationsForRules(payload Payload, integrations []
 		return integrations
 	}
 
+	for _, rule := range rules {
+		if ruleHasSecretSelector(rule) {
+			d.log.Warn().
+				Str("org_id", payload.OrgID.String()).
+				Str("rule_id", rule.ID.String()).
+				Msg("notification rule selects integrations by a credential field; that field is ignored — edit the rule to use integration_id")
+		}
+	}
+
 	selected := make([]dbgen.Integration, 0, len(integrations))
 	matchedRuleNames := make([]string, 0, len(rules))
 	for _, integration := range integrations {
@@ -397,36 +406,56 @@ func (d *Dispatcher) selectIntegrationsForRules(payload Payload, integrations []
 	return selected
 }
 
+// RuleIntegrationIDKey in a rule's destination_config selects one
+// integration by id.
+const RuleIntegrationIDKey = "integration_id"
+
+// ruleMatchesIntegration selects integrations by type and by the rule's
+// non-secret destination_config fields. Credential fields are never compared:
+// a rule that could match on an integration's webhook URL or password would
+// tell an admin (through dry-run or deliveries) whether a guess was right,
+// for a value the API keeps write-only. New rules cannot carry them
+// (ValidateRuleDestinationConfig); in rules stored before that, they are
+// ignored.
 func ruleMatchesIntegration(rule dbgen.NotificationRule, integration dbgen.Integration) bool {
 	if !strings.EqualFold(string(rule.DestinationType), integration.IntegrationType) {
 		return false
 	}
-	// Both sides may hold sealed secret fields (a rule can select by webhook
-	// URL); ciphertexts are randomized, so compare the opened values. A config
-	// that cannot be opened matches nothing.
-	ruleConfig, err := Secrets().OpenConfig(rule.DestinationConfig)
-	if err != nil {
-		return false
-	}
-	openedConfig, err := Secrets().OpenConfig(integration.Config)
-	if err != nil {
-		return false
-	}
-	return destinationConfigMatches(ruleConfig, openedConfig)
+	return destinationConfigMatches(rule.DestinationConfig, integration)
 }
 
-func destinationConfigMatches(ruleConfig, integrationConfig json.RawMessage) bool {
+func destinationConfigMatches(ruleConfig json.RawMessage, integration dbgen.Integration) bool {
 	ruleValues := decodeRuleMap(ruleConfig)
 	if len(ruleValues) == 0 {
 		return true
 	}
-	integrationValues := decodeRuleMap(integrationConfig)
+	integrationValues := decodeRuleMap(integration.Config)
 	for key, value := range ruleValues {
+		if IsSecretConfigKey(key) {
+			continue
+		}
+		if key == RuleIntegrationIDKey {
+			if configScalar(value) != integration.ID.String() {
+				return false
+			}
+			continue
+		}
 		if !valuesEqual(value, integrationValues[key]) {
 			return false
 		}
 	}
 	return true
+}
+
+// ruleHasSecretSelector reports a legacy rule that names a credential field
+// (now ignored for matching).
+func ruleHasSecretSelector(rule dbgen.NotificationRule) bool {
+	for key := range decodeRuleMap(rule.DestinationConfig) {
+		if IsSecretConfigKey(key) {
+			return true
+		}
+	}
+	return false
 }
 
 func ruleConditionsMatch(raw json.RawMessage, payload Payload) bool {

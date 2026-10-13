@@ -171,3 +171,39 @@ func TestLoadFirstLocationPinsAPIHost(t *testing.T) {
 		t.Error("expected same-origin locations_url to match")
 	}
 }
+
+// The forge token goes only to https clone URLs; plain http is allowed for a
+// development instance (local forge) only.
+func TestGitAuthEnvRefusesPlainHTTPOutsideDevelopment(t *testing.T) {
+	t.Cleanup(func() {
+		devMu.Lock()
+		devSet, devOn = false, false
+		devMu.Unlock()
+	})
+	SetDevelopment(false)
+	if env, err := gitAuthEnv("http://forge.internal/acme/repo.git", "tok"); err == nil || env != nil {
+		t.Fatalf("http clone URL got the token outside development: %v, %v", env, err)
+	}
+	if _, err := gitAuthEnv("HTTP://forge.internal/acme/repo.git", "tok"); err == nil {
+		t.Fatal("upper-case HTTP scheme got the token outside development")
+	}
+	if env, err := gitAuthEnv("https://forge.internal/acme/repo.git", "tok"); err != nil || len(env) == 0 {
+		t.Fatalf("https clone URL refused: %v, %v", env, err)
+	}
+	SetDevelopment(true)
+	if env, err := gitAuthEnv("http://localhost:3000/acme/repo.git", "tok"); err != nil || len(env) == 0 {
+		t.Fatalf("development http clone URL refused: %v, %v", env, err)
+	}
+
+	devMu.Lock()
+	devSet = false
+	devMu.Unlock()
+	t.Setenv("HIBOU_DEVELOPMENT", "false")
+	if _, err := gitAuthEnv("http://forge.internal/acme/repo.git", "tok"); err == nil {
+		t.Fatal("env HIBOU_DEVELOPMENT=false allowed http")
+	}
+	t.Setenv("HIBOU_DEVELOPMENT", "true")
+	if _, err := gitAuthEnv("http://forge.internal/acme/repo.git", "tok"); err != nil {
+		t.Fatalf("env HIBOU_DEVELOPMENT=true refused http: %v", err)
+	}
+}

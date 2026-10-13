@@ -6,12 +6,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/config"
@@ -184,8 +187,8 @@ func TestUploadConcurrencyMiddlewareRefusesWhenFull(t *testing.T) {
 	// Another org's token: only the global cap is in the way.
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, serviceUploadRequest(uuid.New(), uuid.New(), nil))
-	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Retry-After") == "" {
-		t.Fatalf("second upload = %d (Retry-After %q), want 503 with Retry-After", recorder.Code, recorder.Header().Get("Retry-After"))
+	if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") == "" {
+		t.Fatalf("second upload = %d (Retry-After %q), want 429 with Retry-After", recorder.Code, recorder.Header().Get("Retry-After"))
 	}
 	close(release)
 	if got := <-done; got != http.StatusAccepted {
@@ -216,8 +219,10 @@ func TestRequestTimeoutMiddlewareExemptsLongRoutes(t *testing.T) {
 	}
 }
 
-// The server-wide write timeout must not cut a websocket or a download, and
-// must still cut everything else.
+// The server-wide write timeout must not cut a download, and must still cut
+// everything else, the websocket handshake included: that one lifts its
+// deadlines in ws.HTTPHandler once the session is validated, never here
+// before authentication.
 func TestConnectionDeadlineMiddlewareLiftsWriteTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -239,8 +244,8 @@ func TestConnectionDeadlineMiddlewareLiftsWriteTimeout(t *testing.T) {
 		body, err := io.ReadAll(resp.Body)
 		return string(body), err
 	}
-	if body, err := get(websocketPath); err != nil || body != "late" {
-		t.Fatalf("websocket path: body %q err %v, want the late write delivered", body, err)
+	if body, err := get(websocketPath); err == nil && body == "late" {
+		t.Fatal("websocket path: the write timeout must apply until the handler validated the session")
 	}
 	if body, err := get("/api/v1/bin/linux/amd64"); err != nil || body != "late" {
 		t.Fatalf("download path: body %q err %v, want the late write delivered", body, err)
@@ -312,5 +317,246 @@ func TestCoalescingRunnerCollapsesConcurrentRequests(t *testing.T) {
 	}
 	if got := runs.Load(); got != 2 {
 		t.Fatalf("runs = %d, want 2 (the first plus one coalesced follow-up)", got)
+	}
+}
+
+// A websocket handshake carries no body: one that does could trickle it to
+// hold a connection open, and is refused before any handler runs.
+func TestConnectionDeadlineMiddlewareRefusesWebsocketBody(t *testing.T) {
+	t.Parallel()
+
+	srv := newHardeningTestServer(config.Config{})
+	handler := srv.connectionDeadlineMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	serve := func(request *http.Request) int {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	if got := serve(httptest.NewRequest(http.MethodGet, websocketPath, nil)); got != http.StatusSwitchingProtocols {
+		t.Fatalf("bodiless handshake = %d, want passed through", got)
+	}
+	if got := serve(httptest.NewRequest(http.MethodGet, websocketPath, strings.NewReader("x"))); got != http.StatusBadRequest {
+		t.Fatalf("handshake with Content-Length = %d, want 400", got)
+	}
+	chunked := httptest.NewRequest(http.MethodGet, websocketPath, io.MultiReader(strings.NewReader("x")))
+	chunked.ContentLength = -1
+	chunked.TransferEncoding = []string{"chunked"}
+	if got := serve(chunked); got != http.StatusBadRequest {
+		t.Fatalf("chunked handshake = %d, want 400", got)
+	}
+}
+
+// Route classes are decided on the escaped path chi routes on: an encoded
+// slash or letter cannot borrow the limits of another route.
+func TestHardeningClassifiesEscapedPath(t *testing.T) {
+	t.Parallel()
+
+	srv := newHardeningTestServer(config.Config{MaxUploadSize: 4 << 20})
+	var hasDeadline atomic.Bool
+	timeouts := srv.requestTimeoutMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, ok := r.Context().Deadline()
+		hasDeadline.Store(ok)
+	}))
+	encodedDownload := "/api/v1/orgs/github/acme%2Fsnapshots%2Fx%2Ffiles/y"
+	timeouts.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, encodedDownload, nil))
+	if !hasDeadline.Load() {
+		t.Error("encoded slashes made an ordinary route look like a long-running download")
+	}
+
+	limited := srv.bodyLimitMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	recorder := httptest.NewRecorder()
+	limited.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/%75pload", bytes.NewReader(make([]byte, 2<<20))))
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("encoded /upload = %d, want the default 1 MB cap (chi does not route it to /upload)", recorder.Code)
+	}
+}
+
+// IPv6 clients share a bucket per /64 (every address of which they can use);
+// IPv4 clients are keyed per address.
+func TestRateLimitIPKey(t *testing.T) {
+	t.Parallel()
+
+	for host, want := range map[string]string{
+		"203.0.113.7":          "203.0.113.7",
+		"::ffff:203.0.113.7":   "203.0.113.7",
+		"2001:db8:1:2:aaaa::1": "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::9": "2001:db8:1:2::/64",
+		"fe80::1%eth0":         "fe80::/64",
+		"not-an-ip":            "not-an-ip",
+	} {
+		if got := rateLimitIPKey(host); got != want {
+			t.Errorf("rateLimitIPKey(%q) = %q, want %q", host, got, want)
+		}
+	}
+	a := httptest.NewRequest(http.MethodGet, "/", nil)
+	a.RemoteAddr = "[2001:db8::1]:1234"
+	b := httptest.NewRequest(http.MethodGet, "/", nil)
+	b.RemoteAddr = "[2001:db8::ffff:2]:1234"
+	if ipRateKey(a) != ipRateKey(b) || principalRateKey(a) != ipRateKey(a) {
+		t.Errorf("same /64 keyed apart: %q vs %q", ipRateKey(a), ipRateKey(b))
+	}
+}
+
+// The bucket map is capped: past it, new keys share one overflow bucket, so
+// rotating addresses neither grows memory nor buys fresh bursts. Idle
+// buckets are swept.
+func TestIPRateLimiterCapsKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	limiter := newIPRateLimiterWithCap(ctx, 1, 1, rateLimiterShards)
+	for i := 0; i < 10*rateLimiterShards; i++ {
+		limiter.getLimiter("ip:" + strconv.Itoa(i))
+	}
+	if got := limiter.size(); got > rateLimiterShards {
+		t.Fatalf("limiter holds %d keys, want at most %d", got, rateLimiterShards)
+	}
+	overflowed := 0
+	for i := 10 * rateLimiterShards; i < 20*rateLimiterShards; i++ {
+		if limiter.getLimiter("ip:"+strconv.Itoa(i)) == limiter.overflow {
+			overflowed++
+		}
+	}
+	if overflowed != 10*rateLimiterShards {
+		t.Fatalf("%d of %d new keys got the overflow bucket, want all", overflowed, 10*rateLimiterShards)
+	}
+	limiter.sweep(time.Now().Add(rateLimitIdleTTL + time.Second))
+	if got := limiter.size(); got != 0 {
+		t.Fatalf("idle buckets left after sweep: %d", got)
+	}
+}
+
+// http.forwarded_hops=0 ignores X-Forwarded-For: a client that reaches hibou
+// directly cannot choose its IP.
+func TestForwardedHopsZeroIgnoresXFF(t *testing.T) {
+	t.Parallel()
+
+	for hops, want := range map[int]string{0: "198.51.100.1", 1: "203.0.113.9", 2: "192.0.2.4"} {
+		router := chi.NewRouter()
+		configureRouterWithHops(router, zerolog.New(io.Discard), hops)
+		router.Get("/ip", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, requestClientIP(r))
+		})
+		request := httptest.NewRequest(http.MethodGet, "/ip", nil)
+		request.RemoteAddr = "198.51.100.1:5555"
+		request.Header.Set("X-Forwarded-For", "192.0.2.4, 203.0.113.9")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if got := recorder.Body.String(); got != want {
+			t.Errorf("forwarded_hops=%d: client IP %q, want %q", hops, got, want)
+		}
+	}
+}
+
+// Random bearer tokens are throttled per client IP before the token lookup;
+// requests that authenticate are not charged, and requests without a token
+// (browsers behind the same NAT) are never held back by the gate.
+func TestAuthFailureGateThrottlesBadTokensPerIP(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := newHardeningTestServer(config.Config{})
+	srv.rateLimiters.authFailure = newIPRateLimiter(ctx, 0.01, 3)
+	var lookups atomic.Int32
+	// Stands in for SessionAuth: "good" resolves to a user.
+	fakeAuth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			lookups.Add(1)
+			if r.Header.Get("Authorization") == "Bearer good" {
+				r = r.WithContext(auth.WithUser(r.Context(), &store.User{ID: uuid.New()}))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	handler := srv.authFailureGate(fakeAuth(srv.authFailureCount(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))))
+	call := func(remote, token string) int {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+		request.RemoteAddr = remote
+		if token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	for i := 0; i < 5; i++ {
+		if got := call("203.0.113.7:1", "good"); got != http.StatusNoContent {
+			t.Fatalf("valid token %d = %d, want 204 (successes are not charged)", i, got)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		call("203.0.113.7:1", "random"+strconv.Itoa(i))
+	}
+	before := lookups.Load()
+	if got := call("203.0.113.7:1", "random-again"); got != http.StatusTooManyRequests {
+		t.Fatalf("bad token past the budget = %d, want 429", got)
+	}
+	if lookups.Load() != before {
+		t.Fatal("a throttled token still reached the lookup")
+	}
+	if got := call("203.0.113.7:1", ""); got != http.StatusNoContent {
+		t.Fatalf("request without a token from the same IP = %d, want passed through", got)
+	}
+	if got := call("198.51.100.2:1", "random"); got != http.StatusNoContent {
+		t.Fatalf("other IP = %d, want its own budget", got)
+	}
+}
+
+// Uploads must announce their size; the read budget follows it.
+func TestUploadRequiresContentLengthAndBudgetsByIt(t *testing.T) {
+	t.Parallel()
+
+	srv := newHardeningTestServer(config.Config{})
+	srv.uploadSlots = make(chan struct{}, 3)
+	handler := srv.uploadConcurrencyMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	request := serviceUploadRequest(uuid.New(), uuid.New(), io.MultiReader(strings.NewReader("{}")))
+	request.ContentLength = -1
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusLengthRequired {
+		t.Fatalf("upload without Content-Length = %d, want 411", recorder.Code)
+	}
+
+	ceiling := 15 * time.Minute
+	for length, want := range map[int64]time.Duration{
+		0:                 time.Minute,
+		1 << 20:           time.Minute,
+		64 << 10 * 120:    2 * time.Minute,
+		64 << 10 * 100000: ceiling,
+	} {
+		if got := uploadReadBudget(length, ceiling); got != want {
+			t.Errorf("uploadReadBudget(%d) = %s, want %s", length, got, want)
+		}
+	}
+	if got := uploadReadBudget(10<<20, 30*time.Second); got != 30*time.Second {
+		t.Errorf("budget above a short upload_read_timeout = %s, want the timeout", got)
+	}
+}
+
+// One principal or org never holds every global slot.
+func TestUploadKeyLimitLeavesASlot(t *testing.T) {
+	t.Parallel()
+
+	srv := newHardeningTestServer(config.Config{})
+	for slots, want := range map[int]int{1: 5, 2: 1, 3: 2, 6: 5, 10: 5} {
+		srv.uploadSlots = make(chan struct{}, slots)
+		if got := srv.uploadKeyLimit(5); got != want {
+			t.Errorf("%d slots: limit 5 -> %d, want %d", slots, got, want)
+		}
 	}
 }

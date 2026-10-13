@@ -146,3 +146,42 @@ func TestRevokeSessionsRunsHooks(t *testing.T) {
 		t.Fatal("RevokeSessions without queries must fail before running hooks")
 	}
 }
+
+// perOrgProvider answers membership per org: a 404 ("not a member") or an
+// error (no installation token, a 302, a 5xx).
+type perOrgProvider struct {
+	forge.Provider
+	errs map[string]error
+}
+
+func (p *perOrgProvider) Installations(context.Context) ([]forge.Installation, error) {
+	return []forge.Installation{{AccountName: "a"}, {AccountName: "b"}}, nil
+}
+
+func (p *perOrgProvider) IsOrgMember(_ context.Context, _ *oauth2.Token, _, org string) (bool, error) {
+	return false, p.errs[org]
+}
+
+// A denial needs a definitive 404 from every allowed org. One org that could
+// not answer keeps the grace window open.
+func TestUserAllowedKeepsGraceUnlessEveryOrgSaysNo(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	stale := time.Now().Add(-48 * time.Hour)
+	user := &store.User{ID: uuid.New(), Provider: "github", ProviderID: "1", ForgeLogin: "dev", SignInAllowedAt: &stale}
+
+	partial := New(Config{AllowedOrgs: []string{"a", "b"}, Providers: map[string]forge.Provider{
+		"github": &perOrgProvider{errs: map[string]error{"b": errors.New("no installation token for b")}},
+	}}, nil)
+	if !partial.UserAllowed(ctx, user) {
+		t.Error("one unanswerable org must keep the grace window, not deny")
+	}
+
+	definitive := New(Config{AllowedOrgs: []string{"a", "b"}, Providers: map[string]forge.Provider{
+		"github": &perOrgProvider{},
+	}}, nil)
+	if definitive.UserAllowed(ctx, user) {
+		t.Error("every allowed org answering \"not a member\" must deny")
+	}
+}

@@ -412,3 +412,44 @@ func TestParsersKeepOnlyAllowlistedMetadata(t *testing.T) {
 		t.Fatal("allowlisted fields were dropped")
 	}
 }
+
+// A dedicated HIBOU_SECRET_HASH_KEY decouples secret_hash from the session
+// secret: rotating the session secret then leaves hashes unchanged.
+func TestHashSecretPrefersDedicatedKey(t *testing.T) {
+	t.Cleanup(func() {
+		pepperMu.Lock()
+		hashKey, hashKeySet, sessionSecret, sessionSecretSet, pepperValue = "", false, "", false, nil
+		pepperMu.Unlock()
+	})
+	SetHashKey("")
+	SetHashPepperSource("session-one")
+	sessionOne := HashSecret("AKIAIOSFODNN7EXAMPLE")
+	SetHashPepperSource("session-two")
+	if HashSecret("AKIAIOSFODNN7EXAMPLE") == sessionOne {
+		t.Fatal("without a dedicated key the session secret must key the hash")
+	}
+
+	SetHashKey("dedicated-key")
+	withKey := HashSecret("AKIAIOSFODNN7EXAMPLE")
+	SetHashPepperSource("session-three")
+	if HashSecret("AKIAIOSFODNN7EXAMPLE") != withKey {
+		t.Fatal("rotating the session secret changed the hash despite a dedicated key")
+	}
+	if withKey == sessionOne {
+		t.Fatal("dedicated key ignored")
+	}
+	// Setting the dedicated key to the current session secret keeps hashes.
+	SetHashKey("session-one")
+	if HashSecret("AKIAIOSFODNN7EXAMPLE") != sessionOne {
+		t.Fatal("a dedicated key equal to the old session secret must keep the old hashes")
+	}
+
+	// Without SetHashKey, the environment variable is read.
+	pepperMu.Lock()
+	hashKey, hashKeySet, pepperValue = "", false, nil
+	pepperMu.Unlock()
+	t.Setenv(SecretHashKeyEnv, "dedicated-key")
+	if HashSecret("AKIAIOSFODNN7EXAMPLE") != withKey {
+		t.Fatal(SecretHashKeyEnv + " not used as the pepper source")
+	}
+}

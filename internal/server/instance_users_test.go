@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/audit"
 	internalauth "github.com/hibouhq/hibou/internal/auth"
@@ -103,5 +105,84 @@ func TestAnonymizeUser(t *testing.T) {
 
 	if rec := callAnonymize(t, srv, admin, "00000000-0000-0000-0000-000000000001"); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown user status = %d, want 404", rec.Code)
+	}
+}
+
+// Anonymization keeps the org's CI keys working (their creator is detached,
+// as on user deletion), clears the forge login and allowlist confirmation,
+// drops the removed memberships' RBAC roles and runs the session revoke hooks
+// (which close websockets). It is refused while the user is an org's last
+// admin.
+func TestAnonymizeUserKeepsOrgKeysAndRefusesLastAdmin(t *testing.T) {
+	srv, org, admin, member := newDiscoveryTestServer(t)
+	srv.cfg.InstanceAdmins = []string{strings.ToLower("github:" + admin.ProviderID)}
+	ctx := context.Background()
+	enforcer, err := rbac.New(srv.db)
+	if err != nil {
+		t.Skipf("rbac enforcer unavailable: %v", err)
+	}
+	srv.enforcer = enforcer
+	srv.authMgr = internalauth.New(internalauth.Config{SessionSecret: "test-session-secret"}, srv.queries)
+	var hooked []string
+	srv.authMgr.AddRevokeHook(func(userID uuid.UUID) { hooked = append(hooked, userID.String()) })
+
+	if err := enforcer.AddRoleForUserInOrg(member.ID, "viewer", org.ID); err != nil {
+		t.Fatalf("AddRoleForUserInOrg: %v", err)
+	}
+	if err := srv.queries.SetUserForgeLogin(ctx, member.ID, "octo-member"); err != nil {
+		t.Fatalf("SetUserForgeLogin: %v", err)
+	}
+	now := time.Now()
+	if err := srv.queries.SetUserSignInAllowedAt(ctx, member.ID, &now); err != nil {
+		t.Fatalf("SetUserSignInAllowedAt: %v", err)
+	}
+	orgKeyHash := uniqueName(t, "anon-org-key-hash")
+	if _, err := srv.queries.CreateAPIKey(ctx, member.ID, "ci", orgKeyHash, json.RawMessage(`{}`), nil, "org", &org.ID, ""); err != nil {
+		t.Fatalf("CreateAPIKey(org): %v", err)
+	}
+
+	// The member is the only admin of a second org: refused, with its name.
+	solo, err := srv.queries.CreateOrganization(ctx, uniqueName(t, "solo-org"), uniqueName(t, "solo-org"), "Solo", "github")
+	if err != nil {
+		t.Fatalf("CreateOrganization: %v", err)
+	}
+	if err := srv.queries.AddOrgMember(ctx, solo.ID, member.ID, "admin"); err != nil {
+		t.Fatalf("AddOrgMember: %v", err)
+	}
+	rec := callAnonymize(t, srv, admin, member.ID.String())
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), solo.Name) {
+		t.Fatalf("last admin status = %d (%s), want 409 naming %s", rec.Code, rec.Body.String(), solo.Name)
+	}
+	if after, _ := srv.queries.GetUserByID(ctx, member.ID); after == nil || after.Email == "" {
+		t.Fatal("a refused anonymization changed the user")
+	}
+
+	if err := srv.queries.AddOrgMember(ctx, solo.ID, admin.ID, "admin"); err != nil {
+		t.Fatalf("AddOrgMember(second admin): %v", err)
+	}
+	rec = callAnonymize(t, srv, admin, member.ID.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("anonymize status = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	after, err := srv.queries.GetUserByID(ctx, member.ID)
+	if err != nil || after == nil {
+		t.Fatalf("GetUserByID after: %v", err)
+	}
+	if after.ForgeLogin != "" || after.SignInAllowedAt != nil {
+		t.Fatalf("forge login %q / signin_allowed_at %v survive anonymization", after.ForgeLogin, after.SignInAllowedAt)
+	}
+	key, err := srv.queries.GetAPIKeyByHash(ctx, orgKeyHash)
+	if err != nil || key == nil {
+		t.Fatalf("org key after anonymize: %v, %v", key, err)
+	}
+	if err := internalauth.ValidateAPIKey(key, time.Now()); err != nil {
+		t.Fatalf("org-owned CI key stopped working: %v", err)
+	}
+	if roles := enforcer.GetRolesForUserInOrg(member.ID, org.ID); len(roles) != 0 {
+		t.Fatalf("RBAC org roles survive anonymization: %v", roles)
+	}
+	if len(hooked) != 1 || hooked[0] != member.ID.String() {
+		t.Fatalf("revoke hooks ran for %v, want the anonymized user once", hooked)
 	}
 }

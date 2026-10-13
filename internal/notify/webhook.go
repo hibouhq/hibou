@@ -10,11 +10,51 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/hibouhq/hibou/internal/version"
 )
 
 type WebhookSender struct{ client *http.Client }
+
+// Webhook signature headers (sent when the integration has a secret):
+//
+//	X-Hibou-Timestamp:     unix seconds at signing time
+//	X-Hibou-Signature-256: sha256=hex(HMAC-SHA256(secret, timestamp + "." + body))
+//	X-Hibou-Signature:     sha256=hex(HMAC-SHA256(secret, body))   (deprecated)
+//
+// Receivers should verify X-Hibou-Signature-256 and refuse a timestamp more
+// than a few minutes from their clock: that bounds replay of a captured
+// delivery. X-Hibou-Signature signs the body alone (replayable forever) and
+// is kept only so existing receivers keep working.
+const (
+	WebhookTimestampHeader       = "X-Hibou-Timestamp"
+	WebhookSignatureHeader       = "X-Hibou-Signature-256"
+	LegacyWebhookSignatureHeader = "X-Hibou-Signature"
+)
+
+// webhookNow is the signing clock; tests replace it.
+var webhookNow = time.Now
+
+// WebhookSignature returns the X-Hibou-Signature-256 value for a body sent at
+// timestamp (unix seconds, as in X-Hibou-Timestamp).
+func WebhookSignature(secret []byte, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(timestamp))
+	_, _ = mac.Write([]byte("."))
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func signWebhookRequest(req *http.Request, secret, body []byte, now time.Time) {
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	req.Header.Set(WebhookTimestampHeader, timestamp)
+	req.Header.Set(WebhookSignatureHeader, WebhookSignature(secret, timestamp, body))
+	legacy := hmac.New(sha256.New, secret)
+	_, _ = legacy.Write(body)
+	req.Header.Set(LegacyWebhookSignatureHeader, "sha256="+hex.EncodeToString(legacy.Sum(nil)))
+}
 
 func (s *WebhookSender) Type() string { return "webhook" }
 
@@ -37,11 +77,7 @@ func (s *WebhookSender) Send(ctx context.Context, p Payload) error {
 		return fmt.Errorf("build webhook request: %w", transportError(err))
 	}
 	if secret != "" {
-		mac := hmac.New(sha256.New, []byte(secret))
-		if _, err := mac.Write(body); err != nil {
-			return fmt.Errorf("sign webhook payload: %w", err)
-		}
-		req.Header.Set("X-Hibou-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		signWebhookRequest(req, []byte(secret), body, webhookNow())
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Hibou-Event", p.EventType)

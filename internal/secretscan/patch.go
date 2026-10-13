@@ -99,38 +99,85 @@ type addedLine struct {
 
 // addedLinesByFile extracts the + lines of a unified diff, keyed by new-file
 // path, with their new-file line numbers.
+//
+// Hunk bodies are delimited by the line counts of their @@ header, so an
+// added line whose content starts with "++ " (a "+++ b/decoy" diff line) is
+// an added line, not a file header that would move the following lines,
+// secret included, to another file or drop them. Outside a hunk, "+++ " is a
+// header only right after a "--- " line.
 func addedLinesByFile(patch []byte) (map[string][]addedLine, error) {
 	files := make(map[string][]addedLine)
 	currentPath := ""
 	newLine := 0
-	inHunk := false
+	oldLeft, newLeft := 0, 0
+	afterMinusHeader := false
 
 	for _, rawLine := range strings.Split(string(patch), "\n") {
+		if oldLeft > 0 || newLeft > 0 {
+			if consumed := consumeHunkLine(rawLine, &oldLeft, &newLeft); consumed != hunkLineOther {
+				if consumed == hunkLineAdded && currentPath != "" {
+					files[currentPath] = append(files[currentPath], addedLine{number: newLine, text: rawLine[1:]})
+				}
+				if consumed == hunkLineAdded || consumed == hunkLineContext {
+					newLine++
+				}
+				continue
+			}
+			// Not a hunk line: the hunk was shorter than announced (a
+			// truncated diff). What follows is header material.
+			oldLeft, newLeft = 0, 0
+		}
 		switch {
-		case strings.HasPrefix(rawLine, "+++ "):
+		case strings.HasPrefix(rawLine, "--- "):
+			afterMinusHeader = true
+			continue
+		case strings.HasPrefix(rawLine, "+++ ") && afterMinusHeader:
 			currentPath = parseDiffPath(strings.TrimPrefix(rawLine, "+++ "))
-			inHunk = false
 		case strings.HasPrefix(rawLine, "@@"):
-			start, err := parseHunkNewStart(rawLine)
+			start, oldCount, newCount, err := parseHunkHeader(rawLine)
 			if err != nil {
 				return nil, err
 			}
 			newLine = start
-			inHunk = true
-		case !inHunk || currentPath == "":
-			// File headers, mode lines, binary notices.
-		case strings.HasPrefix(rawLine, "+"):
-			files[currentPath] = append(files[currentPath], addedLine{number: newLine, text: rawLine[1:]})
-			newLine++
-		case strings.HasPrefix(rawLine, "-"):
-			// Removed line: no new-file line consumed.
-		case strings.HasPrefix(rawLine, `\`):
-			// "\ No newline at end of file"
+			oldLeft, newLeft = oldCount, newCount
 		default:
-			newLine++
+			// diff --git, index, mode lines, binary notices.
 		}
+		afterMinusHeader = false
 	}
 	return files, nil
+}
+
+type hunkLine int
+
+const (
+	hunkLineOther hunkLine = iota
+	hunkLineAdded
+	hunkLineRemoved
+	hunkLineContext
+	hunkLineMarker
+)
+
+// consumeHunkLine classifies one line of a hunk body and counts it against
+// the lines the @@ header announced.
+func consumeHunkLine(line string, oldLeft, newLeft *int) hunkLine {
+	switch {
+	case strings.HasPrefix(line, "+") && *newLeft > 0:
+		*newLeft--
+		return hunkLineAdded
+	case strings.HasPrefix(line, "-") && *oldLeft > 0:
+		*oldLeft--
+		return hunkLineRemoved
+	case strings.HasPrefix(line, `\`):
+		// "\ No newline at end of file"
+		return hunkLineMarker
+	case (line == "" || strings.HasPrefix(line, " ")) && *oldLeft > 0 && *newLeft > 0:
+		// Context; some tools strip the space of an empty context line.
+		*oldLeft--
+		*newLeft--
+		return hunkLineContext
+	}
+	return hunkLineOther
 }
 
 func parseDiffPath(raw string) string {
@@ -138,37 +185,61 @@ func parseDiffPath(raw string) string {
 	if raw == "/dev/null" {
 		return ""
 	}
-	raw = strings.TrimPrefix(raw, "b/")
-	// git quotes paths with special characters.
+	// git quotes paths with special characters, prefix included:
+	// "b/dir/na\"me". Unquote first, then drop the prefix.
 	if unquoted, err := strconv.Unquote(raw); err == nil {
 		raw = unquoted
 	}
-	if strings.Contains(raw, "..") || strings.HasPrefix(raw, "/") {
+	raw = strings.TrimPrefix(raw, "b/")
+	if raw == "" || strings.Contains(raw, "..") || strings.HasPrefix(raw, "/") {
 		// A hostile patch must not escape the scratch dir.
 		return ""
 	}
 	return raw
 }
 
+// parseHunkNewStart returns the new-file start line of a hunk header.
 func parseHunkNewStart(header string) (int, error) {
-	// @@ -a,b +c,d @@ — c is the new-file start line.
-	plus := strings.Index(header, "+")
-	if plus < 0 {
-		return 0, fmt.Errorf("malformed hunk header %q", header)
+	start, _, _, err := parseHunkHeader(header)
+	return start, err
+}
+
+// parseHunkHeader reads "@@ -a[,b] +c[,d] @@": the new-file start line c and
+// the old and new line counts b and d (1 when omitted).
+func parseHunkHeader(header string) (start, oldCount, newCount int, err error) {
+	fields := strings.Fields(header)
+	if len(fields) < 3 || fields[0] != "@@" || !strings.HasPrefix(fields[1], "-") || !strings.HasPrefix(fields[2], "+") {
+		return 0, 0, 0, fmt.Errorf("malformed hunk header %q", header)
 	}
-	rest := header[plus+1:]
-	end := strings.IndexAny(rest, ", @")
-	if end < 0 {
-		end = len(rest)
-	}
-	start, err := strconv.Atoi(rest[:end])
+	_, oldCount, err = parseHunkRange(fields[1][1:])
 	if err != nil {
-		return 0, fmt.Errorf("malformed hunk header %q: %w", header, err)
+		return 0, 0, 0, fmt.Errorf("malformed hunk header %q: %w", header, err)
 	}
-	if start < 0 || start > math.MaxInt32 {
-		return 0, fmt.Errorf("hunk start out of range in %q", header)
+	start, newCount, err = parseHunkRange(fields[2][1:])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("malformed hunk header %q: %w", header, err)
 	}
-	return start, nil
+	if start > math.MaxInt32 {
+		return 0, 0, 0, fmt.Errorf("hunk start out of range in %q", header)
+	}
+	return start, oldCount, newCount, nil
+}
+
+// parseHunkRange reads "start[,count]".
+func parseHunkRange(value string) (int, int, error) {
+	startText, countText, hasCount := strings.Cut(value, ",")
+	start, err := strconv.Atoi(startText)
+	if err != nil || start < 0 {
+		return 0, 0, fmt.Errorf("bad range %q", value)
+	}
+	count := 1
+	if hasCount {
+		count, err = strconv.Atoi(countText)
+		if err != nil || count < 0 || count > math.MaxInt32 {
+			return 0, 0, fmt.Errorf("bad range %q", value)
+		}
+	}
+	return start, count, nil
 }
 
 // materializePatchFiles writes only each file's added lines, compactly, and

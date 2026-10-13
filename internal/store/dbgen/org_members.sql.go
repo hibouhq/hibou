@@ -87,6 +87,56 @@ func (q *Queries) GetOrgMemberRole(ctx context.Context, arg GetOrgMemberRolePara
 	return role, err
 }
 
+const listForgeOrgMemberForgeIDs = `-- name: ListForgeOrgMemberForgeIDs :many
+SELECT om.user_id, u.provider_id
+FROM org_members om
+JOIN organizations o ON o.id = om.org_id
+JOIN users u ON u.id = om.user_id
+WHERE om.org_id = $1
+  AND om.source = 'forge'
+  AND NOT om.repo_scoped
+  AND u.provider = o.provider
+  AND COALESCE(u.forge_login, '') <> ''
+ORDER BY om.synced_at DESC NULLS LAST
+LIMIT $2
+`
+
+type ListForgeOrgMemberForgeIDsParams struct {
+	OrgID   uuid.UUID `json:"org_id"`
+	MaxRows int32     `json:"max_rows"`
+}
+
+type ListForgeOrgMemberForgeIDsRow struct {
+	UserID     uuid.UUID `json:"user_id"`
+	ProviderID string    `json:"provider_id"`
+}
+
+// Org-wide forge members with a known login, most recently confirmed first,
+// by immutable forge user id: the re-validation loop asks the forge about one
+// of them before trusting a "not a member" answer about anyone else.
+func (q *Queries) ListForgeOrgMemberForgeIDs(ctx context.Context, arg ListForgeOrgMemberForgeIDsParams) ([]ListForgeOrgMemberForgeIDsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listForgeOrgMemberForgeIDs, arg.OrgID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListForgeOrgMemberForgeIDsRow{}
+	for rows.Next() {
+		var i ListForgeOrgMemberForgeIDsRow
+		if err := rows.Scan(&i.UserID, &i.ProviderID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listForgeOrgMemberIDs = `-- name: ListForgeOrgMemberIDs :many
 SELECT user_id
 FROM org_members
@@ -116,54 +166,6 @@ func (q *Queries) ListForgeOrgMemberIDs(ctx context.Context, orgID uuid.UUID) ([
 	return items, nil
 }
 
-const listForgeOrgMemberLogins = `-- name: ListForgeOrgMemberLogins :many
-SELECT om.user_id, u.forge_login::text AS forge_login
-FROM org_members om
-JOIN users u ON u.id = om.user_id
-WHERE om.org_id = $1
-  AND om.source = 'forge'
-  AND NOT om.repo_scoped
-  AND COALESCE(u.forge_login, '') <> ''
-ORDER BY om.synced_at DESC NULLS LAST
-LIMIT $2
-`
-
-type ListForgeOrgMemberLoginsParams struct {
-	OrgID   uuid.UUID `json:"org_id"`
-	MaxRows int32     `json:"max_rows"`
-}
-
-type ListForgeOrgMemberLoginsRow struct {
-	UserID     uuid.UUID `json:"user_id"`
-	ForgeLogin string    `json:"forge_login"`
-}
-
-// Org-wide forge members with a known login, most recently confirmed first:
-// the re-validation loop asks the forge about one of them before trusting a
-// "not a member" answer about anyone else.
-func (q *Queries) ListForgeOrgMemberLogins(ctx context.Context, arg ListForgeOrgMemberLoginsParams) ([]ListForgeOrgMemberLoginsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listForgeOrgMemberLogins, arg.OrgID, arg.MaxRows)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListForgeOrgMemberLoginsRow{}
-	for rows.Next() {
-		var i ListForgeOrgMemberLoginsRow
-		if err := rows.Scan(&i.UserID, &i.ForgeLogin); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listOrgAdminIDs = `-- name: ListOrgAdminIDs :many
 SELECT user_id
 FROM org_members
@@ -183,6 +185,43 @@ func (q *Queries) ListOrgAdminIDs(ctx context.Context, orgID uuid.UUID) ([]uuid.
 			return nil, err
 		}
 		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrgAdminIdentities = `-- name: ListOrgAdminIdentities :many
+SELECT u.provider, u.provider_id
+FROM org_members om
+JOIN users u ON u.id = om.user_id
+WHERE om.org_id = $1 AND om.role = 'admin'
+ORDER BY om.created_at ASC
+`
+
+type ListOrgAdminIdentitiesRow struct {
+	Provider   string `json:"provider"`
+	ProviderID string `json:"provider_id"`
+}
+
+// The forge identities (immutable provider ids) of an org's admins.
+func (q *Queries) ListOrgAdminIdentities(ctx context.Context, orgID uuid.UUID) ([]ListOrgAdminIdentitiesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOrgAdminIdentities, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrgAdminIdentitiesRow{}
+	for rows.Next() {
+		var i ListOrgAdminIdentitiesRow
+		if err := rows.Scan(&i.Provider, &i.ProviderID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -264,14 +303,15 @@ func (q *Queries) ListOrgMembers(ctx context.Context, arg ListOrgMembersParams) 
 
 const listStaleForgeOrgMemberships = `-- name: ListStaleForgeOrgMemberships :many
 SELECT om.org_id, om.user_id, om.role, om.repo_scoped, om.synced_at,
-    o.provider AS org_provider, o.slug AS org_slug, o.forge_account_login,
-    u.provider AS user_provider, u.forge_login
+    o.provider AS org_provider, o.slug AS org_slug, o.forge_account_login, o.forge_account_id,
+    u.provider AS user_provider, u.provider_id AS user_provider_id, u.forge_login
 FROM org_members om
 JOIN organizations o ON o.id = om.org_id
 JOIN users u ON u.id = om.user_id
 WHERE om.source = 'forge'
   AND (om.synced_at IS NULL OR om.synced_at < $1)
-ORDER BY om.synced_at ASC NULLS FIRST
+  AND (om.revalidation_attempted_at IS NULL OR om.revalidation_attempted_at < $1)
+ORDER BY COALESCE(om.revalidation_attempted_at, om.synced_at) ASC NULLS FIRST
 LIMIT $2
 `
 
@@ -289,12 +329,15 @@ type ListStaleForgeOrgMembershipsRow struct {
 	OrgProvider       string         `json:"org_provider"`
 	OrgSlug           string         `json:"org_slug"`
 	ForgeAccountLogin sql.NullString `json:"forge_account_login"`
+	ForgeAccountID    sql.NullString `json:"forge_account_id"`
 	UserProvider      string         `json:"user_provider"`
+	UserProviderID    string         `json:"user_provider_id"`
 	ForgeLogin        sql.NullString `json:"forge_login"`
 }
 
 // Forge-synced memberships not confirmed since stale_before, oldest first, for
-// the membership re-validation loop.
+// the membership re-validation loop. Rows the loop already attempted since
+// stale_before are left out, so undecidable rows cannot starve the rest.
 func (q *Queries) ListStaleForgeOrgMemberships(ctx context.Context, arg ListStaleForgeOrgMembershipsParams) ([]ListStaleForgeOrgMembershipsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStaleForgeOrgMemberships, arg.StaleBefore, arg.MaxRows)
 	if err != nil {
@@ -313,7 +356,9 @@ func (q *Queries) ListStaleForgeOrgMemberships(ctx context.Context, arg ListStal
 			&i.OrgProvider,
 			&i.OrgSlug,
 			&i.ForgeAccountLogin,
+			&i.ForgeAccountID,
 			&i.UserProvider,
+			&i.UserProviderID,
 			&i.ForgeLogin,
 		); err != nil {
 			return nil, err
@@ -327,6 +372,95 @@ func (q *Queries) ListStaleForgeOrgMemberships(ctx context.Context, arg ListStal
 		return nil, err
 	}
 	return items, nil
+}
+
+const listUngrantedLateRepoMembers = `-- name: ListUngrantedLateRepoMembers :many
+SELECT om.org_id, om.user_id, om.role,
+    o.provider AS org_provider, o.forge_account_id,
+    u.provider AS user_provider, u.provider_id AS user_provider_id,
+    r.id AS repo_id, r.slug AS repo_slug
+FROM org_members om
+JOIN organizations o ON o.id = om.org_id
+JOIN users u ON u.id = om.user_id
+JOIN repositories r ON r.org_id = om.org_id AND r.created_at > om.repo_scope_at
+WHERE om.source = 'forge'
+  AND om.role IN ('viewer', 'developer')
+  AND NOT om.repo_scoped
+  AND om.repo_scope_at IS NOT NULL
+  AND COALESCE(o.forge_account_id, '') <> ''
+  AND COALESCE(u.forge_login, '') <> ''
+  AND NOT EXISTS (
+      SELECT 1 FROM user_repo_access ura
+      WHERE ura.user_id = om.user_id AND ura.repo_id = r.id
+  )
+ORDER BY random()
+LIMIT $1
+`
+
+type ListUngrantedLateRepoMembersRow struct {
+	OrgID          uuid.UUID      `json:"org_id"`
+	UserID         uuid.UUID      `json:"user_id"`
+	Role           string         `json:"role"`
+	OrgProvider    string         `json:"org_provider"`
+	ForgeAccountID sql.NullString `json:"forge_account_id"`
+	UserProvider   string         `json:"user_provider"`
+	UserProviderID string         `json:"user_provider_id"`
+	RepoID         uuid.UUID      `json:"repo_id"`
+	RepoSlug       string         `json:"repo_slug"`
+}
+
+// Forge viewers/developers recorded as org-wide who hold no grant on a
+// repository enrolled after their verdict (repo_scope_at). Until the forge is
+// asked, IsRepoScopedOrgMember scopes them; the permission sync asks with the
+// installation token and grants the repository or records the scope. Random
+// order: pairs the forge cannot answer must not starve the rest.
+func (q *Queries) ListUngrantedLateRepoMembers(ctx context.Context, maxRows int32) ([]ListUngrantedLateRepoMembersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUngrantedLateRepoMembers, maxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUngrantedLateRepoMembersRow{}
+	for rows.Next() {
+		var i ListUngrantedLateRepoMembersRow
+		if err := rows.Scan(
+			&i.OrgID,
+			&i.UserID,
+			&i.Role,
+			&i.OrgProvider,
+			&i.ForgeAccountID,
+			&i.UserProvider,
+			&i.UserProviderID,
+			&i.RepoID,
+			&i.RepoSlug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markForgeOrgMemberRevalidationAttempted = `-- name: MarkForgeOrgMemberRevalidationAttempted :exec
+UPDATE org_members
+SET revalidation_attempted_at = NOW()
+WHERE org_id = $1 AND user_id = $2 AND source = 'forge'
+`
+
+type MarkForgeOrgMemberRevalidationAttemptedParams struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) MarkForgeOrgMemberRevalidationAttempted(ctx context.Context, arg MarkForgeOrgMemberRevalidationAttemptedParams) error {
+	_, err := q.db.ExecContext(ctx, markForgeOrgMemberRevalidationAttempted, arg.OrgID, arg.UserID)
+	return err
 }
 
 const pruneForgeOrgMembers = `-- name: PruneForgeOrgMembers :exec
@@ -376,6 +510,23 @@ func (q *Queries) RemoveOrgMember(ctx context.Context, arg RemoveOrgMemberParams
 	return err
 }
 
+const setForgeOrgMemberRepoScoped = `-- name: SetForgeOrgMemberRepoScoped :exec
+UPDATE org_members
+SET repo_scoped = true
+WHERE org_id = $1 AND user_id = $2 AND source = 'forge'
+`
+
+type SetForgeOrgMemberRepoScopedParams struct {
+	OrgID  uuid.UUID `json:"org_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// The forge withheld a repository from this member: record the verdict.
+func (q *Queries) SetForgeOrgMemberRepoScoped(ctx context.Context, arg SetForgeOrgMemberRepoScopedParams) error {
+	_, err := q.db.ExecContext(ctx, setForgeOrgMemberRepoScoped, arg.OrgID, arg.UserID)
+	return err
+}
+
 const touchForgeOrgMember = `-- name: TouchForgeOrgMember :exec
 UPDATE org_members
 SET synced_at = NOW()
@@ -393,12 +544,14 @@ func (q *Queries) TouchForgeOrgMember(ctx context.Context, arg TouchForgeOrgMemb
 }
 
 const upsertForgeOrgMember = `-- name: UpsertForgeOrgMember :exec
-INSERT INTO org_members (org_id, user_id, role, source, synced_at, repo_scoped)
-VALUES ($1, $2, $3, 'forge', NOW(), $4)
+INSERT INTO org_members (org_id, user_id, role, source, synced_at, repo_scoped, repo_scope_at)
+VALUES ($1, $2, $3, 'forge', NOW(), $4, NOW() - interval '1 hour')
 ON CONFLICT (org_id, user_id) DO UPDATE
 SET role = EXCLUDED.role,
         synced_at = NOW(),
-        repo_scoped = EXCLUDED.repo_scoped
+        repo_scoped = EXCLUDED.repo_scoped,
+        repo_scope_at = EXCLUDED.repo_scope_at,
+        revalidation_attempted_at = NULL
 WHERE org_members.source = 'forge'
 `
 
@@ -411,6 +564,11 @@ type UpsertForgeOrgMemberParams struct {
 
 // repo_scoped is the sync's verdict that the forge grants this person
 // specific repositories rather than the organization (outside collaborators).
+// repo_scope_at dates that verdict: repositories enrolled after it count
+// only through a grant (IsRepoScopedOrgMember). It is set an hour early so
+// a repository enrolled while the sync ran is never mistaken for one it saw;
+// the margin costs nothing, since such a repository matters only when the
+// member holds no grant on it.
 func (q *Queries) UpsertForgeOrgMember(ctx context.Context, arg UpsertForgeOrgMemberParams) error {
 	_, err := q.db.ExecContext(ctx, upsertForgeOrgMember,
 		arg.OrgID,
@@ -424,7 +582,7 @@ func (q *Queries) UpsertForgeOrgMember(ctx context.Context, arg UpsertForgeOrgMe
 const upsertOrgMemberRole = `-- name: UpsertOrgMemberRole :exec
 INSERT INTO org_members (org_id, user_id, role)
 VALUES ($1, $2, $3)
-ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, source = 'invite', synced_at = NULL, repo_scoped = false
+ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, source = 'invite', synced_at = NULL, repo_scoped = false, repo_scope_at = NULL
 `
 
 type UpsertOrgMemberRoleParams struct {

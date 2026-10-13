@@ -135,6 +135,12 @@ func normalizeCreateScope(raw json.RawMessage, userID uuid.UUID) (json.RawMessag
 	if strings.TrimSpace(scope.Org) == "" {
 		return nil, errors.New("token scope requires an organization")
 	}
+	// Scopes match the organization by its bare slug. A provider-qualified
+	// "github/acme" used to be stored as-is and minted a token that matched
+	// nothing; refuse it so the caller learns which form to send.
+	if !api.IsValidSlug(scope.Org) {
+		return nil, fmt.Errorf("token scope organization must be the organization slug (e.g. %q), not %q", lastPathSegment(scope.Org), scope.Org)
+	}
 	if scope.Repos.Mode == apitoken.RepoList && len(scope.Repos.Slugs) == 0 {
 		return nil, errors.New("token scope requires at least one repository, or repos.mode=all")
 	}
@@ -450,4 +456,13 @@ func scopeAuditSummary(apiKey *store.APIKey) string {
 		org = "(memberships)"
 	}
 	return fmt.Sprintf("org=%s repos=%s %s", org, repos, strings.Join(grants, ","))
+}
+
+// lastPathSegment suggests the slug part of a provider-qualified "provider/slug".
+func lastPathSegment(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), "/")
+	if i := strings.LastIndex(value, "/"); i >= 0 {
+		return value[i+1:]
+	}
+	return value
 }

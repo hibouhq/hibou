@@ -173,7 +173,7 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	r := chi.NewRouter()
 	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
 	limits := effectiveLimits(cfg.Limits)
-	configureRouter(r, log, trustedProxyClientIP(limits.HTTP.TrustedProxyHeader, limits.HTTP.TrustedProxyCIDRs))
+	configureRouterWithHops(r, log, limits.HTTP.ForwardedHops, trustedProxyClientIP(limits.HTTP.TrustedProxyHeader, limits.HTTP.TrustedProxyCIDRs))
 	if db != nil {
 		store.ConfigurePool(db, store.PoolConfig{
 			MaxOpenConns:    limits.DB.MaxOpenConns,
@@ -228,10 +228,21 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	return s, nil
 }
 
-// configureRouter installs the base middleware. clientIP, when non-nil,
-// refines the client IP right after X-Forwarded-For (http.trusted_proxy_*).
+// configureRouter installs the base middleware for one trusted proxy hop.
 func configureRouter(r chi.Router, log zerolog.Logger, clientIP ...func(http.Handler) http.Handler) {
-	r.Use(middleware.ClientIPFromXFFTrustedProxies(1))
+	configureRouterWithHops(r, log, 1, clientIP...)
+}
+
+// configureRouterWithHops installs the base middleware. The client IP is the
+// X-Forwarded-For entry forwardedHops from the right (http.forwarded_hops),
+// or the TCP peer when forwardedHops is 0. clientIP, when non-nil, refines it
+// right after (http.trusted_proxy_*).
+func configureRouterWithHops(r chi.Router, log zerolog.Logger, forwardedHops int, clientIP ...func(http.Handler) http.Handler) {
+	if forwardedHops > 0 {
+		r.Use(middleware.ClientIPFromXFFTrustedProxies(forwardedHops))
+	} else {
+		r.Use(middleware.ClientIPFromRemoteAddr)
+	}
 	for _, mw := range clientIP {
 		if mw != nil {
 			r.Use(mw)
@@ -338,6 +349,11 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	// Secret-finding hashes are keyed, so they cannot be brute-forced from
 	// the API or linked across instances.
 	secretscan.SetHashPepperSource(cfg.SessionSecret)
+	// A dedicated key (HIBOU_SECRET_HASH_KEY) takes precedence, so rotating
+	// the session secret does not re-key finding hashes.
+	secretscan.SetHashKey(cfg.SecretHashKey)
+	// Forge tokens only go to http:// clone URLs in development.
+	secretscan.SetDevelopment(cfg.IsDevelopment())
 	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, cfg.BaseURL, log,
 		&notify.SlackSender{},
 		&notify.TeamsSender{},
@@ -549,7 +565,11 @@ func (s *Server) routes(siteFS fs.FS) {
 		})
 
 		r.Group(func(r chi.Router) {
+			// Failed bearer tokens are throttled per client IP before the
+			// token lookup (authFailureGate), counted right after it.
+			r.Use(s.authFailureGate)
 			r.Use(auth.SessionAuth(s.authMgr, s.queries))
+			r.Use(s.authFailureCount)
 			// Cookie-authenticated writes only: bearer requests and safe
 			// methods pass straight through.
 			r.Use(s.csrfProtection)

@@ -376,3 +376,31 @@ Settings › API Keys.
 2. **Multi-org users.** Membership-wide token (§4).
 3. **Admin controls.** Per-org policy `allow` / `read_only` / `deny` (§4).
 4. **Default expiry.** 90 days for both presets.
+
+## Security hardening (2026-10-13)
+
+A security review after the first implementation tightened the flow. The wire
+API of `/auth/device/code` and `/auth/device/token` is unchanged.
+
+- **No one-click approval from a link.** `/device?user_code=…` no longer looks
+  the code up. The user types the code their own device shows, and it must
+  match the link; the page states *"Only approve if you started this sign-in
+  yourself on this device."* The device name is labelled as reported by the
+  device (unverified), and the requester IP as best effort. This supersedes §3
+  item 2.
+- **Presets can only go down.** The page offers the requested preset and lower
+  ones (`read-only` < `cli`); approve refuses a higher preset with 400. The page
+  preselects `read-only` unless the request came from `hibou-cli`. IDE clients
+  still default to `read-only`.
+- **Key cap at mint time.** The per-user API key cap is re-checked inside the
+  transaction that mints the key, under a per-user advisory lock. Over the cap,
+  the request is spent and the poll gets `access_denied`.
+- **User-code guessing.** Failed lookups, approvals and denials are limited per
+  client IP (30 per minute) and globally (300 per minute, per replica), then
+  429 with `Retry-After` until the window ends. This limit is always on,
+  whatever `rate_limit.enabled` says (supersedes the brute-force row of §7).
+- **Org-owned tokens** refuse an `orgs` selector: membership-wide scopes are for
+  personal login tokens only.
+- **Not done: session recency.** Approving does not yet require a recently
+  issued session. The session cookie carries its issue time, but `internal/auth`
+  does not expose it; adding an accessor there is the follow-up.

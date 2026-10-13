@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hibouhq/hibou/internal/planpath"
 	"github.com/hibouhq/hibou/internal/scancatalog"
 )
 
@@ -384,18 +385,11 @@ func matchingExclusion(file string, exclusions []OwnerExclusion) (OwnerExclusion
 
 // safeRoot reports whether a module root may become a scanner target: the
 // CLI passes targets to scanners as arguments, so a root that reads as an
-// option ("-…", "--exclude=*") or climbs out of the checkout ("..") is
-// dropped rather than planned (Q14).
+// option ("-…", "--exclude=*"), is absolute, or climbs out of the checkout
+// ("..") is dropped rather than planned (Q14). It is the same check the CLI
+// applies before running a plan (planpath), so nothing planned is refused.
 func safeRoot(root string) bool {
-	if root == "" || strings.HasPrefix(root, "-") || strings.HasPrefix(root, "/") {
-		return false
-	}
-	for _, segment := range strings.Split(root, "/") {
-		if segment == ".." {
-			return false
-		}
-	}
-	return true
+	return planpath.Valid(root)
 }
 
 func underPath(file, dir string) bool {

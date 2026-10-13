@@ -306,7 +306,13 @@ func (m *Manager) SetSessionCookie(w http.ResponseWriter, user *store.User) {
 		return
 	}
 
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	m.setSessionCookieAt(w, user, time.Now())
+}
+
+// setSessionCookieAt issues the session cookie as if signed at issued; tests
+// use it to build aged sessions.
+func (m *Manager) setSessionCookieAt(w http.ResponseWriter, user *store.User, issued time.Time) {
+	timestamp := strconv.FormatInt(issued.Unix(), 10)
 	userID := user.ID.String()
 	epoch := strconv.FormatInt(user.SessionEpoch, 10)
 	signature := m.sign(userID, epoch, timestamp)
@@ -322,6 +328,35 @@ func (m *Manager) SetSessionCookie(w http.ResponseWriter, user *store.User) {
 		MaxAge:   int(sessionMaxAge.Seconds()),
 		Expires:  time.Now().Add(sessionMaxAge),
 	})
+}
+
+// SessionIssuedAt reports when the request's session cookie was signed, after
+// verifying the signature. Sensitive actions (approving a long-lived device
+// token) use it to demand a recent sign-in; it does not check the epoch, so
+// callers must also have authenticated the session normally.
+func (m *Manager) SessionIssuedAt(r *http.Request) (time.Time, error) {
+	cookie, err := r.Cookie(m.cookieName(sessionCookieName))
+	if err != nil {
+		return time.Time{}, err
+	}
+	parts := strings.Split(cookie.Value, "|")
+	if len(parts) != 4 {
+		return time.Time{}, errors.New("invalid session cookie format")
+	}
+	decoded := make([][]byte, len(parts))
+	for i, part := range parts {
+		if decoded[i], err = hex.DecodeString(part); err != nil {
+			return time.Time{}, fmt.Errorf("decode session cookie: %w", err)
+		}
+	}
+	if !hmac.Equal(decoded[3], m.sign(string(decoded[0]), string(decoded[1]), string(decoded[2]))) {
+		return time.Time{}, errors.New("invalid session signature")
+	}
+	issuedAt, err := strconv.ParseInt(string(decoded[2]), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse session timestamp: %w", err)
+	}
+	return time.Unix(issuedAt, 0), nil
 }
 
 func (m *Manager) GetSessionUser(r *http.Request, queries *store.Queries) (*store.User, error) {

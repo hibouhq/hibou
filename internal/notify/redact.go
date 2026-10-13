@@ -1,8 +1,10 @@
 package notify
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -61,25 +63,58 @@ func RedactURL(raw string) string {
 // error message. Applied to whatever a sender returned before it is logged
 // or audited, whatever wrapped it.
 func scrubSecrets(message string, config map[string]any) string {
+	for _, form := range secretForms(config) {
+		message = strings.ReplaceAll(message, form, "[redacted]")
+	}
+	return message
+}
+
+// secretForms lists every spelling of the config's secrets that may surface
+// in an error: verbatim, URL-escaped, base64 (SMTP AUTH LOGIN sends each
+// credential base64-encoded; AUTH PLAIN sends base64("\x00user\x00password")),
+// and for URLs the scheme-less tail, query, path and userinfo. Longest
+// first, so a longer form is replaced before a shorter one breaks it up.
+func secretForms(config map[string]any) []string {
+	seen := map[string]bool{}
+	forms := make([]string, 0, 16)
+	add := func(form string, minLen int) {
+		if len(form) < minLen || seen[form] {
+			return
+		}
+		seen[form] = true
+		forms = append(forms, form)
+	}
+	encodings := []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding}
+	addEncoded := func(raw string) {
+		for _, encoding := range encodings {
+			add(encoding.EncodeToString([]byte(raw)), 4)
+		}
+	}
 	for _, secret := range secretValues(config) {
-		message = strings.ReplaceAll(message, secret, "[redacted]")
-		// A URL may also appear escaped or without its scheme.
+		add(secret, 1)
+		add(url.QueryEscape(secret), 1)
+		add(url.PathEscape(secret), 1)
+		addEncoded(secret)
+		// A URL may also appear without its scheme, or in parts.
 		if parsed, err := url.Parse(secret); err == nil && parsed.Host != "" {
-			if tail := strings.TrimPrefix(secret, parsed.Scheme+"://"); len(tail) >= 4 {
-				message = strings.ReplaceAll(message, tail, "[redacted]")
-			}
-			if parsed.RawQuery != "" {
-				message = strings.ReplaceAll(message, parsed.RawQuery, "[redacted]")
-			}
+			add(strings.TrimPrefix(secret, parsed.Scheme+"://"), 4)
+			add(parsed.RawQuery, 1)
 			if len(parsed.Path) > 1 {
-				message = strings.ReplaceAll(message, parsed.Path, "/[redacted]")
+				add(parsed.Path, 2)
+				add(parsed.EscapedPath(), 2)
 			}
 			if parsed.User != nil {
-				message = strings.ReplaceAll(message, parsed.User.String(), "[redacted]")
+				add(parsed.User.String(), 1)
 			}
 		}
 	}
-	return message
+	if password := configString(config, "smtp_password"); password != "" {
+		username := configString(config, "smtp_username")
+		addEncoded("\x00" + username + "\x00" + password)
+		addEncoded(username + "\x00" + username + "\x00" + password)
+	}
+	sort.SliceStable(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
+	return forms
 }
 
 // sanitizeDeliveryError returns an error safe to log and audit.

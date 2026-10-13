@@ -363,18 +363,38 @@ func TestRepoScopedCollaboratorSeesOnlyGrantedRepositories(t *testing.T) {
 		t.Errorf("collaborator on org-wide view = %d, want 403", got)
 	}
 
-	// A repository enrolled after the member's last sync stays visible: only a
-	// gap the forge already answered marks someone as repository-scoped.
+	// A repository enrolled after the forge member's last sync is not visible
+	// through that snapshot: until the forge grants it (the permission sync
+	// asks), the member sees only their granted repositories. Invited members
+	// are org-wide by definition.
 	f.addRepo(t, "newer")
-	for name, user := range map[string]*store.User{"forge member": member, "invited member": invited} {
-		for _, slug := range []string{"granted", "secret", "newer"} {
-			if got := f.repoStatus(user, http.MethodGet, slug); got != http.StatusOK {
-				t.Errorf("%s on %s = %d, want 200", name, slug, got)
-			}
+	for _, slug := range []string{"granted", "secret", "newer"} {
+		if got := f.repoStatus(invited, http.MethodGet, slug); got != http.StatusOK {
+			t.Errorf("invited member on %s = %d, want 200", slug, got)
 		}
-		if got := f.orgStatus(user, http.MethodGet); got != http.StatusOK {
-			t.Errorf("%s on org-wide view = %d, want 200", name, got)
+	}
+	if got := f.orgStatus(invited, http.MethodGet); got != http.StatusOK {
+		t.Errorf("invited member on org-wide view = %d, want 200", got)
+	}
+	for _, slug := range []string{"granted", "secret"} {
+		if got := f.repoStatus(member, http.MethodGet, slug); got != http.StatusOK {
+			t.Errorf("forge member on %s = %d, want 200", slug, got)
 		}
+	}
+	if got := f.repoStatus(member, http.MethodGet, "newer"); got != http.StatusNotFound {
+		t.Errorf("forge member on a repo enrolled after sync = %d, want 404 until the forge grants it", got)
+	}
+	if got := f.orgStatus(member, http.MethodGet); got != http.StatusForbidden {
+		t.Errorf("forge member on org-wide view with an unsettled repo = %d, want 403", got)
+	}
+	if err := f.srv.queries.UpsertForgeUserRepoAccess(context.Background(), member.ID, f.repo["newer"].ID, "viewer"); err != nil {
+		t.Fatalf("grant newer: %v", err)
+	}
+	if got := f.repoStatus(member, http.MethodGet, "newer"); got != http.StatusOK {
+		t.Errorf("forge member on newer after the grant = %d, want 200", got)
+	}
+	if got := f.orgStatus(member, http.MethodGet); got != http.StatusOK {
+		t.Errorf("forge member on org-wide view after the grant = %d, want 200", got)
 	}
 	if got := f.repoStatus(collaborator, http.MethodGet, "newer"); got != http.StatusNotFound {
 		t.Errorf("collaborator on a repo enrolled after sync = %d, want 404", got)

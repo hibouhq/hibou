@@ -57,6 +57,13 @@ type HTTPLimitsConfig struct {
 	// TrustedProxyCIDRs (http.trusted_proxy_cidrs, comma-separated) are the
 	// CDN egress ranges allowed to set TrustedProxyHeader. Required with it.
 	TrustedProxyCIDRs []netip.Prefix
+	// ForwardedHops (http.forwarded_hops) is the number of reverse proxies
+	// in front of hibou that append to X-Forwarded-For. The client IP is the
+	// entry that many positions from the right. 1 (the default) fits one
+	// ingress; 0 ignores X-Forwarded-For and uses the TCP peer. With 1 or
+	// more, a client reaching hibou without passing the proxy chooses its own
+	// IP (rate limits, audit log, webhook allowlists).
+	ForwardedHops int
 }
 
 // RateLimitConfig is a token bucket per principal (API key, else user, else
@@ -127,8 +134,9 @@ func setLimitsDefaults(v *viper.Viper) {
 	v.SetDefault("upload.processing_concurrency", 2)
 	v.SetDefault("upload.max_concurrent_per_principal", 2)
 	v.SetDefault("upload.max_concurrent_per_org", 2)
-	v.SetDefault("upload.min_throughput_bytes", int64(16<<10))
-	v.SetDefault("upload.min_throughput_window", "30s")
+	v.SetDefault("upload.min_throughput_bytes", int64(64<<10))
+	v.SetDefault("upload.min_throughput_window", "10s")
+	v.SetDefault("http.forwarded_hops", 1)
 	v.SetDefault("http.trusted_proxy_header", "")
 	v.SetDefault("http.trusted_proxy_cidrs", "")
 }
@@ -191,6 +199,10 @@ func loadLimits(v *viper.Viper) (LimitsConfig, error) {
 	}
 	cfg.HTTP.TrustedProxyHeader = proxyHeader
 	cfg.HTTP.TrustedProxyCIDRs = proxyCIDRs
+	cfg.HTTP.ForwardedHops = v.GetInt("http.forwarded_hops")
+	if cfg.HTTP.ForwardedHops < 0 || cfg.HTTP.ForwardedHops > maxForwardedHops {
+		return LimitsConfig{}, fmt.Errorf("parsing http.forwarded_hops: must be between 0 and %d", maxForwardedHops)
+	}
 
 	cfg.RateLimit.Enabled = v.GetBool("rate_limit.enabled")
 	buckets := map[string]*RateLimitBucket{
@@ -209,6 +221,9 @@ func loadLimits(v *viper.Viper) (LimitsConfig, error) {
 	}
 	return cfg, nil
 }
+
+// maxForwardedHops bounds http.forwarded_hops; real chains are 1–3 deep.
+const maxForwardedHops = 10
 
 // loadTrustedProxy reads http.trusted_proxy_header and its CIDRs. A header
 // without CIDRs would let any client choose its own IP, so it is refused.

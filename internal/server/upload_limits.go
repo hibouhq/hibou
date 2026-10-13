@@ -134,7 +134,12 @@ func countTextArtifactItems(format string, content []byte) int {
 // must be a principal that can upload somewhere: a token whose scope grants
 // uploads:write, and a user who belongs to at least one organization. It
 // returns the in-flight keys the upload counts against: the user (whatever
-// token they use) or the service token, plus the org of a service token.
+// token they use) or the service token, plus its organizations: the org of a
+// service token, every org of a user (the target org is only known once the
+// body is read), so an org's users and service tokens share
+// upload.max_concurrent_per_org.
+//
+// The limits are clamped below the global slot count (uploadKeyLimit).
 func (s *Server) uploadAdmission(w http.ResponseWriter, r *http.Request) ([]inFlightKey, bool) {
 	if !s.hasPrincipal(r) {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
@@ -143,15 +148,16 @@ func (s *Server) uploadAdmission(w http.ResponseWriter, r *http.Request) ([]inFl
 	if !s.enforceTokenCapability(w, r, apitoken.CapUploads, apitoken.AccessWrite, "", "") {
 		return nil, false
 	}
-	perPrincipal := s.limits.Upload.MaxConcurrentPerPrincipal
+	perPrincipal := s.uploadKeyLimit(s.limits.Upload.MaxConcurrentPerPrincipal)
+	perOrg := s.uploadKeyLimit(s.limits.Upload.MaxConcurrentPerOrg)
 	if tokenAuth := auth.TokenAuthFromContext(r.Context()); tokenAuth.IsServicePrincipal() {
 		return []inFlightKey{
 			{key: "key:" + tokenAuth.KeyID.String(), limit: perPrincipal},
-			{key: "org:" + tokenAuth.OwnerID.String(), limit: s.limits.Upload.MaxConcurrentPerOrg},
+			{key: "org:" + tokenAuth.OwnerID.String(), limit: perOrg},
 		}, true
 	}
 	user := UserFromContext(r.Context())
-	orgs, _, err := s.queries.ListOrganizationsByUser(r.Context(), user.ID, 1, 0)
+	orgs, _, err := s.queries.ListOrganizationsByUser(r.Context(), user.ID, maxUploadOrgKeys, 0)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to check organization membership")
 		return nil, false
@@ -160,7 +166,29 @@ func (s *Server) uploadAdmission(w http.ResponseWriter, r *http.Request) ([]inFl
 		api.JSONError(w, http.StatusForbidden, "uploading requires membership of an organization")
 		return nil, false
 	}
-	return []inFlightKey{{key: "user:" + user.ID.String(), limit: perPrincipal}}, true
+	keys := make([]inFlightKey, 0, len(orgs)+1)
+	keys = append(keys, inFlightKey{key: "user:" + user.ID.String(), limit: perPrincipal})
+	for _, org := range orgs {
+		keys = append(keys, inFlightKey{key: "org:" + org.ID.String(), limit: perOrg})
+	}
+	return keys, true
+}
+
+// maxUploadOrgKeys bounds the org counters one user upload takes.
+const maxUploadOrgKeys = 50
+
+// uploadKeyLimit keeps a per-principal or per-org limit below the number of
+// global upload slots, so one principal or org always leaves a slot to
+// everyone else (with a single slot there is nothing to leave).
+func (s *Server) uploadKeyLimit(limit int) int {
+	slots := s.limits.Upload.MaxConcurrent
+	if s.uploadSlots != nil {
+		slots = cap(s.uploadSlots)
+	}
+	if slots > 1 && limit > slots-1 {
+		return slots - 1
+	}
+	return limit
 }
 
 // errUploadTooSlow fails the body read of an upload that stalled or trickled
@@ -180,6 +208,9 @@ type uploadThroughputGuard struct {
 	tooSlow atomic.Bool
 	done    chan struct{}
 	once    sync.Once
+	// onEOF, when set, runs once the whole body has been read.
+	onEOF  func()
+	eofRan sync.Once
 }
 
 func newUploadThroughputGuard(w http.ResponseWriter, body io.ReadCloser, minBytes int64, window time.Duration) *uploadThroughputGuard {
@@ -226,6 +257,9 @@ func (g *uploadThroughputGuard) Read(p []byte) (int, error) {
 	}
 	if err == io.EOF {
 		g.stop()
+		if g.onEOF != nil {
+			g.eofRan.Do(g.onEOF)
+		}
 	}
 	return n, err
 }

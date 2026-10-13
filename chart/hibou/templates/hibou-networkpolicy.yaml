@@ -28,6 +28,10 @@ spec:
     - ports:
         - port: http
           protocol: TCP
+        {{- if ne (include "hibou.mcpPort" .) "0" }}
+        - port: {{ include "hibou.mcpPort" . }}
+          protocol: TCP
+        {{- end }}
     {{- end }}
     # /metrics only from the configured scrapers.
     - ports:
@@ -37,6 +41,9 @@ spec:
         {{- toYaml .Values.hibou.metrics.networkPolicy.from | nindent 8 }}
 {{- end }}
 {{- if .Values.hibou.networkPolicy.enabled }}
+{{- if and .Values.hibou.metrics.podMonitor.enabled (not .Values.hibou.metrics.networkPolicy.enabled) }}
+{{- fail "hibou.metrics.podMonitor is enabled but hibou.networkPolicy.enabled denies the metrics port to every peer: also enable hibou.metrics.networkPolicy with `from` matching your Prometheus pods" }}
+{{- end }}
 ---
 # Default deny for hibou pods: only the ingress controller reaches the
 # application port; egress is limited to DNS, the in-namespace backing
@@ -63,6 +70,18 @@ spec:
           protocol: TCP
       from:
         {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- if ne (include "hibou.mcpPort" .) "0" }}
+    # MCP listener (plain HTTP): only from mcpFrom, by default this namespace.
+    - ports:
+        - port: {{ include "hibou.mcpPort" . }}
+          protocol: TCP
+      from:
+        {{- with .Values.hibou.networkPolicy.mcpFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
     {{- end }}
   egress:
     # DNS, to the cluster resolver in any namespace.

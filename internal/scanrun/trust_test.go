@@ -190,3 +190,21 @@ func TestSpotBugsModuleMustStayUnderSourceRoot(t *testing.T) {
 		t.Fatalf("Run = %v", err)
 	}
 }
+
+// The CLI and the planner share one validator (planpath): backslashes and
+// drive letters are refused here exactly as the server refuses to plan them.
+func TestValidatePlanPathsSharedValidator(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidatePlanPaths([]string{".", "java", "web/app"}, []string{"node_modules"}); err != nil {
+		t.Fatalf("safe paths refused: %v", err)
+	}
+	for _, unsafe := range []string{`a\..\..\etc`, `a\b`, "C:/Windows", "/etc", "-x", "a/../b", ""} {
+		if err := ValidatePlanPaths([]string{unsafe}, nil); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("target %q = %v, want ErrUnsafePath", unsafe, err)
+		}
+		if err := ValidatePlanPaths(nil, []string{unsafe}); !errors.Is(err, ErrUnsafePath) {
+			t.Errorf("exclusion %q = %v, want ErrUnsafePath", unsafe, err)
+		}
+	}
+}

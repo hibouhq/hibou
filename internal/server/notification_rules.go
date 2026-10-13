@@ -101,18 +101,16 @@ func (s *Server) handleCreateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// A rule's destination_config only selects integrations, and never by a
+	// credential field (that would be a guessing oracle), so it holds no
+	// secret to seal.
 	destinationConfig := defaultRawJSON(input.DestinationConfig, "{}")
-	if err := notify.ValidateNewConfig(destinationConfig); err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid destination_config: "+err.Error())
-		return
-	}
-	sealed, err := notify.Secrets().SealConfig(destinationConfig)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to create notification rule")
+	if err := notify.ValidateRuleDestinationConfig(destinationConfig); err != nil {
+		writeConfigMergeError(w, "destination_config", "failed to create notification rule", err)
 		return
 	}
 
-	rule, err := s.queries.CreateNotificationRule(r.Context(), org.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, sealed, input.Enabled)
+	rule, err := s.queries.CreateNotificationRule(r.Context(), org.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, destinationConfig, input.Enabled)
 	if err != nil {
 		if isUniqueViolation(err) {
 			api.JSONError(w, http.StatusBadRequest, "notification rule name already exists in this organization")
@@ -196,6 +194,10 @@ func (s *Server) handleDryRunNotificationRule(w http.ResponseWriter, r *http.Req
 
 	input, destinationType, ok := decodeDryRunNotificationRuleRequest(w, r)
 	if !ok {
+		return
+	}
+	if err := notify.ValidateRuleDestinationConfig(defaultRawJSON(input.DestinationConfig, "{}")); err != nil {
+		writeConfigMergeError(w, "destination_config", "failed to preview notification rule", err)
 		return
 	}
 
@@ -370,18 +372,15 @@ func (s *Server) handleUpdateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	merged, err := notify.MergeConfig(rule.DestinationConfig, defaultRawJSON(input.DestinationConfig, "{}"))
-	if err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid destination_config: "+err.Error())
-		return
-	}
-	sealed, err := notify.Secrets().SealConfig(merged)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to update notification rule")
+	// No credential field, not even a masked one kept from a rule written
+	// before they were refused: the update replaces destination_config.
+	destinationConfig := defaultRawJSON(input.DestinationConfig, "{}")
+	if err := notify.ValidateRuleDestinationConfig(destinationConfig); err != nil {
+		writeConfigMergeError(w, "destination_config", "failed to update notification rule", err)
 		return
 	}
 
-	updated, err := s.queries.UpdateNotificationRule(r.Context(), rule.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, sealed, input.Enabled)
+	updated, err := s.queries.UpdateNotificationRule(r.Context(), rule.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, destinationConfig, input.Enabled)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to update notification rule")
 		return
@@ -392,7 +391,7 @@ func (s *Server) handleUpdateNotificationRule(w http.ResponseWriter, r *http.Req
 	}
 
 	changed := audit.ChangedFields(*rule, *updated, "destination_config", "updated_at", "created_at")
-	for _, key := range notify.Secrets().ChangedConfigFields(rule.DestinationConfig, updated.DestinationConfig) {
+	for _, key := range notify.Secrets().ChangedConfigFields(notify.NotificationRuleSealContext(*rule), rule.DestinationConfig, updated.DestinationConfig) {
 		changed = append(changed, "destination_config."+key)
 	}
 	s.auditOrgConfig(r, org.ID, audit.ActionNotificationRuleUpdate, "notification_rule", updated.ID.String(), map[string]any{

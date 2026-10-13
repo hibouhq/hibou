@@ -60,35 +60,79 @@ const secretHashPepperLabel = "hibou/secret-hash/v1"
 // defaultPepperSource keys development instances that set no secret.
 const defaultPepperSource = "hibou-development-secret-hash-pepper"
 
+// SecretHashKeyEnv names the dedicated secret-hash key. When set it is the
+// pepper source; otherwise the session secret is (SetHashPepperSource).
+const SecretHashKeyEnv = "HIBOU_SECRET_HASH_KEY" // #nosec G101 -- an environment variable name, not a credential
+
 var (
-	pepperMu     sync.RWMutex
-	pepperValue  []byte
-	pepperLoaded sync.Once
+	pepperMu sync.RWMutex
+	// pepperValue caches the derived pepper; nil means "derive on next use".
+	pepperValue []byte
+	// hashKey is the dedicated key set by SetHashKey; hashKeySet records
+	// that the caller decided (an empty key then means "use the fallback").
+	hashKey    string
+	hashKeySet bool
+	// sessionSecret is the fallback source set by SetHashPepperSource.
+	sessionSecret    string
+	sessionSecretSet bool
 )
 
-// SetHashPepperSource derives the secret-hash pepper from an instance secret
-// (the session secret: present and shared by every replica in production).
-// Call it at startup; without a call the pepper is derived from
-// HIBOU_SESSION_SECRET. Changing the source changes every new secret_hash,
-// and with it the fingerprint of findings that have no line number.
-func SetHashPepperSource(secret string) {
-	pepperLoaded.Do(func() {})
+// SetHashKey installs the dedicated secret-hash key (config secret_hash.key /
+// HIBOU_SECRET_HASH_KEY). A non-empty key takes precedence over the session
+// secret, so the session secret can be rotated without changing secret_hash
+// values. Call it at startup.
+func SetHashKey(key string) {
 	pepperMu.Lock()
-	pepperValue = derivePepper(secret)
+	hashKey, hashKeySet = strings.TrimSpace(key), true
+	pepperValue = nil
+	pepperMu.Unlock()
+}
+
+// SetHashPepperSource sets the fallback pepper source: an instance secret
+// (the session secret: present and shared by every replica in production),
+// used when no dedicated key is configured. Call it at startup; without a
+// call the fallback is HIBOU_SESSION_SECRET.
+//
+// Whichever source is in effect, changing it changes every new secret_hash,
+// and with it the fingerprint of findings that have no line number: those
+// reappear as new findings once, and the old ones resolve.
+func SetHashPepperSource(secret string) {
+	pepperMu.Lock()
+	sessionSecret, sessionSecretSet = secret, true
+	pepperValue = nil
 	pepperMu.Unlock()
 }
 
 func hashPepper() []byte {
-	pepperLoaded.Do(func() {
-		pepperMu.Lock()
-		if pepperValue == nil {
-			pepperValue = derivePepper(os.Getenv("HIBOU_SESSION_SECRET"))
-		}
-		pepperMu.Unlock()
-	})
 	pepperMu.RLock()
-	defer pepperMu.RUnlock()
+	value := pepperValue
+	pepperMu.RUnlock()
+	if value != nil {
+		return value
+	}
+	pepperMu.Lock()
+	defer pepperMu.Unlock()
+	if pepperValue == nil {
+		pepperValue = derivePepper(pepperSourceLocked())
+	}
 	return pepperValue
+}
+
+// pepperSourceLocked picks the dedicated key (SetHashKey, else the
+// environment), then the session secret (SetHashPepperSource, else the
+// environment).
+func pepperSourceLocked() string {
+	key := hashKey
+	if !hashKeySet {
+		key = strings.TrimSpace(os.Getenv(SecretHashKeyEnv))
+	}
+	if key != "" {
+		return key
+	}
+	if sessionSecretSet {
+		return sessionSecret
+	}
+	return os.Getenv("HIBOU_SESSION_SECRET")
 }
 
 func derivePepper(secret string) []byte {

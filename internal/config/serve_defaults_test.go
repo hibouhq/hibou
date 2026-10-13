@@ -27,8 +27,14 @@ func TestLoadSecureServeDefaults(t *testing.T) {
 		t.Error("auto.provision.orgs default on, want off")
 	}
 	upload := cfg.Limits.Upload
-	if upload.MaxConcurrentPerPrincipal != 2 || upload.MaxConcurrentPerOrg != 2 || upload.MinThroughputBytes != 16<<10 || upload.MinThroughputWindow != 30*time.Second {
-		t.Errorf("upload limits = %+v, want per-principal/org 2, 16 KiB per 30s", upload)
+	if upload.MaxConcurrentPerPrincipal != 2 || upload.MaxConcurrentPerOrg != 2 || upload.MinThroughputBytes != 64<<10 || upload.MinThroughputWindow != 10*time.Second {
+		t.Errorf("upload limits = %+v, want per-principal/org 2, 64 KiB per 10s", upload)
+	}
+	if cfg.Limits.HTTP.ForwardedHops != 1 {
+		t.Errorf("http.forwarded_hops = %d, want 1 (one ingress)", cfg.Limits.HTTP.ForwardedHops)
+	}
+	if !cfg.Metrics.RequireToken {
+		t.Error("metrics.require_token default off, want on")
 	}
 	if cfg.Limits.HTTP.TrustedProxyHeader != "" || len(cfg.Limits.HTTP.TrustedProxyCIDRs) != 0 {
 		t.Errorf("trusted proxy on by default: %+v", cfg.Limits.HTTP)
@@ -148,5 +154,84 @@ func TestValidateServeRefusesNonHTTPSCVEFeedRemote(t *testing.T) {
 		if err := cfg.ValidateServe(zerolog.Nop()); err != nil {
 			t.Errorf("remote %q refused: %v", remote, err)
 		}
+	}
+}
+
+// http.forwarded_hops: 0 (TCP peer only) up to a bounded chain.
+func TestLoadForwardedHops(t *testing.T) {
+	t.Setenv("HIBOU_HTTP_FORWARDED_HOPS", "0")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("forwarded_hops=0: %v", err)
+	}
+	if cfg.Limits.HTTP.ForwardedHops != 0 {
+		t.Fatalf("forwarded_hops = %d, want 0", cfg.Limits.HTTP.ForwardedHops)
+	}
+	for _, bad := range []string{"-1", "11"} {
+		t.Setenv("HIBOU_HTTP_FORWARDED_HOPS", bad)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "http.forwarded_hops") {
+			t.Errorf("forwarded_hops=%s: err = %v, want refused", bad, err)
+		}
+	}
+}
+
+// A dedicated metrics listener on every interface needs a bearer token
+// outside development, unless metrics.require_token=false says the port is
+// isolated (the Helm chart's pod port without a token).
+func TestValidateServeMetricsListenerExposure(t *testing.T) {
+	base := Config{BaseURL: "https://hibou.example.com", Metrics: MetricsConfig{Enabled: true, Port: 9090, RequireToken: true}}
+	for _, host := range []string{"0.0.0.0", "::", "", "10.1.2.3"} {
+		cfg := base
+		cfg.Host = host
+		if err := cfg.ValidateServe(zerolog.Nop()); err == nil || !strings.Contains(err.Error(), "metrics") {
+			t.Errorf("host %q without token: err = %v, want refused", host, err)
+		}
+	}
+	for _, host := range []string{"127.0.0.1", "::1", "[::1]", "localhost"} {
+		cfg := base
+		cfg.Host = host
+		if err := cfg.ValidateServe(zerolog.Nop()); err != nil {
+			t.Errorf("loopback host %q refused: %v", host, err)
+		}
+	}
+	withToken := base
+	withToken.Host = "0.0.0.0"
+	withToken.Metrics.BearerToken = "t"
+	if err := withToken.ValidateServe(zerolog.Nop()); err != nil {
+		t.Errorf("token-protected listener refused: %v", err)
+	}
+	optOut := base
+	optOut.Host = "0.0.0.0"
+	optOut.Metrics.RequireToken = false
+	if err := optOut.ValidateServe(zerolog.Nop()); err != nil {
+		t.Errorf("metrics.require_token=false refused: %v", err)
+	}
+	dev := base
+	dev.Host = "0.0.0.0"
+	dev.Development = true
+	if err := dev.ValidateServe(zerolog.Nop()); err != nil {
+		t.Errorf("development refused: %v", err)
+	}
+
+	t.Setenv("HIBOU_METRICS_REQUIRE_TOKEN", "false")
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Metrics.RequireToken {
+		t.Error("HIBOU_METRICS_REQUIRE_TOKEN=false not honoured")
+	}
+}
+
+// The Helm chart opts out of the metrics token check through this variable
+// when no token secret is configured; dogfood's startup depends on it.
+func TestMetricsRequireTokenFromEnv(t *testing.T) {
+	t.Setenv("HIBOU_METRICS_REQUIRE_TOKEN", "false")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Metrics.RequireToken {
+		t.Fatal("HIBOU_METRICS_REQUIRE_TOKEN=false was not applied")
 	}
 }

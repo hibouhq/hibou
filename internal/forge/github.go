@@ -259,7 +259,9 @@ func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref 
 	if err != nil {
 		return nil, err
 	}
-	g.authorizeForOwner(ctx, request, owner)
+	if err := g.authorizeForOwner(ctx, request, owner); err != nil {
+		return nil, err
+	}
 
 	var payload githubContentFile
 	status, err := g.doWithStatus(request, &payload)
@@ -298,7 +300,9 @@ func (g *GitHub) ListTree(ctx context.Context, owner, repo, ref string) (*TreeLi
 	if err != nil {
 		return nil, err
 	}
-	g.authorizeForOwner(ctx, request, owner)
+	if err := g.authorizeForOwner(ctx, request, owner); err != nil {
+		return nil, err
+	}
 
 	var payload struct {
 		Tree []struct {
@@ -671,35 +675,33 @@ func (g *GitHub) AccountLogin(ctx context.Context, token *oauth2.Token) (string,
 // (Organization → Members: read, already required); the user's consent is not
 // widened. Without an installation on org (or without App credentials) the
 // user's own token is asked, which needs read:org on an OAuth App token
-// (WithOrgMembershipScope). Any doubt answers false: the allowlist fails closed.
+// (WithOrgMembershipScope).
+//
+// (false, nil) is a definitive "not a member": a 404 to an authenticated
+// request. Everything else — no credential at all, a token that could not be
+// minted, GitHub's 302 to the public-members list (the requester cannot see
+// the member list), any other status — is an error: callers that revoke on
+// "not a member" must never act on an answer nobody was authorized to give.
 func (g *GitHub) IsOrgMember(ctx context.Context, token *oauth2.Token, login, org string) (bool, error) {
 	login, org = strings.TrimSpace(login), strings.TrimSpace(org)
 	if login == "" || org == "" {
-		return false, nil
+		return false, errors.New("org membership check needs a login and an org")
 	}
+	hasUserToken := token != nil && token.AccessToken != ""
 	if g.isAppMode() {
-		path := "/orgs/" + url.PathEscape(org) + "/members/" + url.PathEscape(login)
-		request, err := g.newRequest(ctx, http.MethodGet, path, nil)
-		if err != nil {
-			return false, err
+		installationToken, err := g.cachedInstallationToken(ctx, org)
+		if err == nil && installationToken != "" {
+			return g.orgMemberStatus(ctx, installationToken, org, login)
 		}
-		g.authorizeForOwner(ctx, request, org)
-		if request.Header.Get("Authorization") != "" {
-			status, err := g.doWithStatus(request, nil)
-			if status == http.StatusNoContent {
-				return true, nil
+		if !hasUserToken {
+			if err == nil {
+				err = errors.New("empty installation token")
 			}
-			if status == http.StatusNotFound || status == http.StatusFound {
-				return false, nil
-			}
-			if err != nil {
-				return false, err
-			}
-			return false, nil
+			return false, fmt.Errorf("org membership of %q: no installation token for %q: %w", login, org, err)
 		}
 	}
-	if token == nil || token.AccessToken == "" {
-		return false, nil
+	if !hasUserToken {
+		return false, fmt.Errorf("org membership of %q in %q: no credential to ask with", login, org)
 	}
 	request, err := g.newRequest(ctx, http.MethodGet, "/user/memberships/orgs/"+url.PathEscape(org), nil)
 	if err != nil {
@@ -1193,7 +1195,9 @@ func (g *GitHub) doJSONOwner(ctx context.Context, owner, method, path string, bo
 	if err != nil {
 		return err
 	}
-	g.authorizeForOwner(ctx, request, owner)
+	if err := g.authorizeForOwner(ctx, request, owner); err != nil {
+		return err
+	}
 	return g.do(request, out)
 }
 
@@ -1303,7 +1307,9 @@ func (g *GitHub) lookupContentSHA(ctx context.Context, owner, repo, filePath, re
 	if err != nil {
 		return "", err
 	}
-	g.authorizeForOwner(ctx, request, owner)
+	if err := g.authorizeForOwner(ctx, request, owner); err != nil {
+		return "", err
+	}
 
 	var payload githubContentFile
 	status, err := g.doWithStatus(request, &payload)

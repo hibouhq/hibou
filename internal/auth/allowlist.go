@@ -129,7 +129,10 @@ func (m *Manager) evaluateAllowlist(ctx context.Context, user *store.User, now t
 		}
 	}
 	if definitive {
-		// Every allowed org answered "not a member".
+		// Every allowed org answered "not a member": the forge's (false, nil)
+		// is a 404 to the installation token's request. A token that could
+		// not be minted, a 302 or any other status is an error above and
+		// keeps the grace window instead.
 		m.recordAllowed(ctx, user, nil)
 		return false
 	}

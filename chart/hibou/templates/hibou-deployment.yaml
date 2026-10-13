@@ -47,6 +47,11 @@ spec:
               containerPort: {{ include "hibou.metricsPort" . }}
               protocol: TCP
             {{- end }}
+            {{- if ne (include "hibou.mcpPort" .) "0" }}
+            - name: mcp
+              containerPort: {{ include "hibou.mcpPort" . }}
+              protocol: TCP
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "hibou.fullname" . }}

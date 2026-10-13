@@ -230,6 +230,12 @@ start when:
   (`metrics.port: 0` and no `metrics.bearer_token`). `/metrics` now defaults
   to its own port, `9090`, as in the chart. Scrapers that read it on the
   application port must move to `:9090` or send the token.
+- the dedicated metrics port listens on a non-loopback address (`host`
+  defaults to `0.0.0.0`) without `metrics.bearer_token(_file)`. Set a token,
+  bind `host` to loopback, or, when the port is unreachable from untrusted
+  networks (a Kubernetes pod port the ingress does not forward, ideally with
+  `hibou.metrics.networkPolicy`), opt out with `metrics.require_token: false`
+  (`HIBOU_METRICS_REQUIRE_TOKEN=false`).
 
 Defaults that changed for self-hosting:
 
@@ -238,6 +244,7 @@ Defaults that changed for self-hosting:
 | `mcp.enabled` (`HIBOU_MCP_ENABLED`) | value of `development` | Plain HTTP on `mcp.port` (8081), all interfaces |
 | `api.docs.enabled` (`HIBOU_API_DOCS_ENABLED`) | value of `development` | Swagger UI at `/api/v1/docs` (inline script, relaxed CSP); 404 when off |
 | `metrics.port` (`HIBOU_METRICS_PORT`) | `9090` | `0` = application port, needs a bearer token outside development |
+| `metrics.require_token` (`HIBOU_METRICS_REQUIRE_TOKEN`) | `true` | `false` lets the metrics port listen on all interfaces without a token |
 | Chart `hibou.image.tag` | chart `appVersion` | Was `latest` |
 | Chart `trivy.image.tag` | `0.72.0` | Was `latest`; Trivy and PostgreSQL now run non-root with a read-only root filesystem |
 | Chart `hibou.autoProvisionOrgs` | `false` | When on, installing the forge App on any account creates an org; pair it with a sign-in allowlist |
@@ -252,20 +259,45 @@ empty.
 
 ### Uploads
 
-`POST /api/v1/upload` is admitted before it waits for one of
-`upload.max_concurrent` slots (default 3 per replica) only when the caller can
-upload somewhere: an API token with `uploads:write`, or a user who belongs to
-an organization. One user or API key holds at most
-`upload.max_concurrent_per_principal` uploads (default 2), and the org-owned
-tokens of one org `upload.max_concurrent_per_org` together (default 2); the
-rest wait up to `upload.queue_wait` and then get 503 with `Retry-After`. Once
-admitted, a body that delivers less than `upload.min_throughput_bytes` (16 KiB)
-in any `upload.min_throughput_window` (30s) is cut off.
+`POST /api/v1/upload` must send `Content-Length` (411 otherwise; the hibou
+CLI and `curl --data-binary @file` do). It is admitted before it waits for one
+of `upload.max_concurrent` slots (default 3 per replica) only when the caller
+can upload somewhere: an API token with `uploads:write`, or a user who belongs
+to an organization. One user or API key holds at most
+`upload.max_concurrent_per_principal` uploads (default 2), and one org
+`upload.max_concurrent_per_org` (default 2) across its service tokens and its
+members (a user's upload counts against each of their orgs, since the target
+org is only known from the body). Both are lowered to `upload.max_concurrent`
+− 1 when set higher, so one principal or org always leaves a slot free. The
+rest wait up to `upload.queue_wait` and then get 429 with `Retry-After` (the
+CLI retries). Until admitted to a slot the request is under
+`http.read_timeout`; once admitted, the body gets `Content-Length` at
+64 KiB/s, at least 60s and at most `http.upload_read_timeout` (15m), and a
+body that delivers less than `upload.min_throughput_bytes` (64 KiB) in any
+`upload.min_throughput_window` (10s) is cut off.
+
+The websocket (`/api/v1/ws`) lifts the server read/write timeouts only after
+its session is validated, and a handshake with a body is refused (400). The
+anonymous CLI download (`/api/v1/bin/…`) may take 10 minutes; authenticated
+file downloads one hour.
 
 ### Client IP behind a CDN
 
-Hibou takes the client IP from the last `X-Forwarded-For` hop, which is what
-your ingress saw. Behind a CDN that hop is a CDN edge, so every client shares
+Hibou takes the client IP from `X-Forwarded-For`, `http.forwarded_hops`
+(`HIBOU_HTTP_FORWARDED_HOPS`, default `1`) entries from the right: with one
+ingress that is the address the ingress saw. Set it to the number of proxies
+that append to the header, or to `0` when nothing sits in front of hibou
+(the TCP peer is used and `X-Forwarded-For` is ignored). With `1` or more,
+anyone who can reach hibou without passing the proxy (a NodePort, the pod IP,
+a second listener) chooses their own IP for rate limits, the audit log and
+webhook IP allowlists: keep the application port reachable only through the
+proxy, or use `0`.
+
+Rate-limit buckets are per IPv4 address and per IPv6 /64. A client IP whose
+bearer tokens fail authentication more than `rate_limit.auth` allows gets 429
+before the token is looked up; requests without a token are not affected.
+
+Behind a CDN, the hop your ingress saw is a CDN edge, so every client shares
 its rate-limit bucket, audit IP and webhook IP-allowlist verdict. Set:
 
 | Setting | Env | Chart |
@@ -310,16 +342,51 @@ lists lose their Hibou membership.
 
 ### Integration secrets at rest
 
-Integration and notification-rule secrets (webhook URLs, signing secrets,
-SMTP passwords, tokens) are write-only through the API: responses show
-`"***"`, and an update that omits or echoes `"***"` keeps the stored value.
+Integration secrets (webhook URLs, signing secrets, SMTP passwords, tokens)
+are write-only through the API: responses show `"***"`, and an update that
+omits or echoes `"***"` keeps the stored value — except when the update
+changes where those secrets are sent. Changing `smtp_host`, `smtp_port` or
+`smtp_username` of an email integration, or `url` / `webhook_url` of a
+webhook, Slack, Teams or Discord integration, while keeping another stored
+secret is refused with HTTP 422 (`re-enter <field> when changing
+<destination>`): send the secret again, or `""` to clear it.
+
+Notification-rule `destination_config` only selects integrations, by
+non-secret fields or by `integration_id`. Credential fields (`url`,
+`webhook_url`, `secret`, `smtp_password`, `password`, `token`, `api_key`) are
+refused there with HTTP 422, including in dry-run, so a rule cannot be used
+to test guesses of an integration's secrets. Rules stored before this check
+keep working, but their credential fields are ignored for matching (logged
+as a warning); edit them to use `integration_id`.
 
 Set `HIBOU_ENCRYPTION_KEY` (`encryption.key`) to a base64 32-byte key
-(`openssl rand -base64 32`) to seal them with AES-GCM in the database.
-Existing plaintext values stay readable and are sealed on their next update.
-Keep the key with your other secrets: losing it makes sealed values
-unreadable, and those integrations must be re-entered. A malformed key
-refuses startup.
+(`openssl rand -base64 32`) to seal them with AES-GCM in the database. Sealed
+values (`enc:v2:`) are bound to their organization, row and field: copied
+into another row they do not decrypt. Values sealed by earlier versions
+(`enc:v1:`) and plaintext values stay readable and are re-sealed on their
+next update. Keep the key with your other secrets: losing it makes sealed
+values unreadable, and those integrations must be re-entered. A malformed
+key refuses startup.
+
+Generic webhook deliveries from an integration with a `secret` carry
+`X-Hibou-Timestamp` (unix seconds) and `X-Hibou-Signature-256:
+sha256=<hex HMAC-SHA256(secret, timestamp + "." + body)>`. Receivers should
+verify that signature and reject timestamps more than a few minutes old,
+which bounds replay of a captured delivery. The older
+`X-Hibou-Signature: sha256=<hex HMAC-SHA256(secret, body)>` is still sent for
+existing receivers but does not protect against replay; it is deprecated.
+
+### Secret-finding hashes
+
+Secret findings store a keyed hash (HMAC-SHA256) of the secret, never the
+secret. The key comes from `HIBOU_SECRET_HASH_KEY` (`secret_hash.key`) when
+set, otherwise it is derived from `HIBOU_SESSION_SECRET`. Use the same value
+on every replica and worker. Changing the key in effect — or the session
+secret while `HIBOU_SECRET_HASH_KEY` is unset — changes the hash, and with
+it the fingerprint of secret findings that have no line number: they are
+reported once as new findings and the previous ones resolve. To rotate the
+session secret without that, first set `HIBOU_SECRET_HASH_KEY` to the
+current session secret value, then rotate the session secret.
 
 Per-account caps: 10 organizations created, 50 API keys (personal and
 org-requested together), 100 saved search presets per surface (HTTP 422, or
@@ -489,6 +556,43 @@ jobs:
 3. Push a commit: trigger the security scan workflow on `ubuntu-latest`
 4. Check Hibou UI: findings appear in the repo Weaknesses tab
 5. Test block: `curl -X POST https://hibou.example.com/api/v1/webhooks/github` from your machine returns 403 if your IP is not in GitHub ranges
+
+## Upgrade Notes
+
+### Sign-in allowlist: every user signs in once (03e6042 and later)
+
+With `auth.allowed_orgs` or `auth.allowed_users` configured, the allowlist is
+also enforced after sign-in, on sessions, API keys and MCP (see "Restricting
+sign-in"). That check uses the forge login recorded at sign-in, which users who
+last signed in before this version do not have yet. Until they sign in once
+through the web UI, their existing sessions, API keys (CI uploads included) and
+MCP clients are refused. After upgrading, ask every user to sign in once, and
+check CI tokens owned by users who rarely use the UI. `allowed_users` entries
+of the form `provider:id` match without a recorded login.
+
+### Helm chart: NetworkPolicies on the bundled services
+
+The chart now renders ingress NetworkPolicies for the bundled SeaweedFS
+(always), PostgreSQL and Trivy (`postgresql.networkPolicy.enabled`,
+`trivy.networkPolicy.enabled`, both default `true`), independent of
+`hibou.networkPolicy.enabled`. Only hibou server and worker pods (and the
+SeaweedFS bucket job) are admitted. Anything else that connects to them, such
+as a backup job or an admin tool, must be listed in
+`<service>.networkPolicy.extraFrom`. The SeaweedFS policy closes the S3
+gateway's gRPC port (8333+10000), which accepts unauthenticated IAM updates
+and cannot be bound to loopback separately; it is effective only with a CNI
+that enforces NetworkPolicy.
+
+Other chart changes in the same release:
+
+- Bundled images default to `tag@sha256:digest`. Overriding only `tag` with a
+  plain tag drops the digest pin.
+- `hibou.mcp.port` (default 8081) is exposed as the `mcp` container port. With
+  `hibou.networkPolicy.enabled`, it is admitted from
+  `hibou.networkPolicy.mcpFrom` (default: the release namespace).
+- `hibou.networkPolicy.enabled` with `hibou.metrics.podMonitor.enabled` now
+  fails to render unless `hibou.metrics.networkPolicy` is enabled too, because
+  the default-deny policy would otherwise block every scrape.
 
 ## Resource Requirements
 

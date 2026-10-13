@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -89,13 +90,17 @@ func (s *Server) handleCreateIntegration(w http.ResponseWriter, r *http.Request)
 		api.JSONError(w, http.StatusBadRequest, "invalid config: "+err.Error())
 		return
 	}
-	sealed, err := notify.Secrets().SealConfig(config)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to create integration")
-		return
+	// Sealed secrets are bound to the row id, which exists only after the
+	// insert: create the row disabled and without its secrets, then store
+	// them sealed for that row. A failure in between removes the row.
+	codec := notify.Secrets()
+	sealAfterInsert := codec.Encrypts() && notify.ConfigHasSecrets(config)
+	initialConfig := config
+	if sealAfterInsert {
+		initialConfig = notify.WithoutSecrets(config)
 	}
 
-	integration, err := s.queries.CreateIntegration(r.Context(), org.ID, input.Name, string(integrationType), sealed, input.Enabled)
+	integration, err := s.queries.CreateIntegration(r.Context(), org.ID, input.Name, string(integrationType), initialConfig, input.Enabled && !sealAfterInsert)
 	if err != nil {
 		if isUniqueViolation(err) {
 			api.JSONError(w, http.StatusBadRequest, "integration name already exists in this organization")
@@ -103,6 +108,19 @@ func (s *Server) handleCreateIntegration(w http.ResponseWriter, r *http.Request)
 		}
 		api.JSONError(w, http.StatusInternalServerError, "failed to create integration")
 		return
+	}
+	if sealAfterInsert {
+		sealed, sealErr := codec.SealConfig(notify.IntegrationSealContext(*integration), config)
+		var updated *store.Integration
+		if sealErr == nil {
+			updated, sealErr = s.queries.UpdateIntegration(r.Context(), integration.ID, integration.Name, sealed, input.Enabled)
+		}
+		if sealErr != nil || updated == nil {
+			_ = s.queries.DeleteIntegration(r.Context(), integration.ID)
+			api.JSONError(w, http.StatusInternalServerError, "failed to create integration")
+			return
+		}
+		integration = updated
 	}
 
 	s.auditOrgConfig(r, org.ID, audit.ActionIntegrationCreate, "integration", integration.ID.String(), map[string]any{
@@ -315,13 +333,16 @@ func (s *Server) handleUpdateIntegration(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Secret fields are write-only: omitted or masked ones keep the stored
-	// value, so a client can round-trip what GET returned.
-	merged, err := notify.MergeConfig(integration.Config, defaultRawJSON(input.Config, "{}"))
+	// value, so a client can round-trip what GET returned — unless the update
+	// moves the destination those secrets are sent to (422).
+	codec := notify.Secrets()
+	sealContext := notify.IntegrationSealContext(*integration)
+	merged, err := codec.MergeConfig(integration.IntegrationType, sealContext, integration.Config, defaultRawJSON(input.Config, "{}"))
 	if err != nil {
-		api.JSONError(w, http.StatusBadRequest, "invalid config: "+err.Error())
+		writeConfigMergeError(w, "config", "failed to update integration", err)
 		return
 	}
-	sealed, err := notify.Secrets().SealConfig(merged)
+	sealed, err := codec.SealConfig(sealContext, merged)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to update integration")
 		return
@@ -457,10 +478,28 @@ func redactIntegrationConfig(integration dbgen.Integration, includeConfig bool) 
 // plus "config.<key>" for each config entry, secrets included by name only.
 func integrationChangedFields(before, after dbgen.Integration) []string {
 	changed := audit.ChangedFields(before, after, "config", "updated_at", "created_at", "last_success_at", "last_failure_at", "failure_count")
-	for _, key := range notify.Secrets().ChangedConfigFields(before.Config, after.Config) {
+	for _, key := range notify.Secrets().ChangedConfigFields(notify.IntegrationSealContext(before), before.Config, after.Config) {
 		changed = append(changed, "config."+key)
 	}
 	return changed
+}
+
+// writeConfigMergeError maps a config merge/validation failure to a status:
+// 422 for a secret that must be re-entered or a credential used as a rule
+// selector, 500 when stored secrets cannot be opened, 400 otherwise.
+func writeConfigMergeError(w http.ResponseWriter, field, internalMessage string, err error) {
+	var reenter *notify.ReenterSecretError
+	var selector *notify.RuleSecretSelectorError
+	switch {
+	case errors.As(err, &reenter):
+		api.JSONError(w, http.StatusUnprocessableEntity, field+": "+reenter.Error())
+	case errors.As(err, &selector):
+		api.JSONError(w, http.StatusUnprocessableEntity, selector.Error())
+	case errors.Is(err, notify.ErrSealedWithoutKey):
+		api.JSONError(w, http.StatusInternalServerError, internalMessage+": "+err.Error())
+	default:
+		api.JSONError(w, http.StatusBadRequest, "invalid "+field+": "+err.Error())
+	}
 }
 
 // auditOrgConfig records an org configuration change, attributed to the

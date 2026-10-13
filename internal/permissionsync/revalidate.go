@@ -2,12 +2,14 @@ package permissionsync
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/oauth2"
 
+	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -16,18 +18,26 @@ import (
 // their role, and their API keys, until they signed in again — which they
 // have no reason to do. The loop below asks the forge again with the App's
 // installation token, the only credential the server holds.
+//
+// It is never destructive on uncertainty. A membership is removed only after
+// a definitive "not a member" (a 404) given by the installation token of the
+// account the org is bound to by immutable id, and only once that same token
+// has confirmed some other member afterwards. Anything it cannot verify —
+// repository collaborators, users with no recorded forge login, orgs never
+// bound to an account id, accounts the App is not installed on — is counted
+// and logged, never expired.
 const (
 	// DefaultRevalidationInterval is how often RunRevalidation wakes up.
 	DefaultRevalidationInterval = time.Hour
 	// revalidateAfter is how long a confirmation stands before it is asked
-	// again.
-	revalidateAfter = 12 * time.Hour
-	// unverifiableMaxAge bounds memberships the forge cannot be asked about
-	// with the App token (repository collaborators, users with no recorded
-	// login, accounts the App is not installed on): they expire unless a
-	// sign-in re-syncs them first, which restores them.
-	unverifiableMaxAge = 30 * 24 * time.Hour
-	revalidationBatch  = 200
+	// again; rows the loop could not decide on wait as long.
+	revalidateAfter   = 12 * time.Hour
+	revalidationBatch = 200
+	// lateRepoInterval is how often repositories enrolled after members'
+	// last sync are settled with the forge; until then those members see
+	// only the repositories they hold grants on.
+	lateRepoInterval = 5 * time.Minute
+	lateRepoBatch    = 500
 	// controlSample is how many confirmed members are asked about before a
 	// "not a member" answer is trusted: a broken installation token reads
 	// as "nobody is a member", which must not empty an org.
@@ -38,20 +48,48 @@ const (
 // implements it; a Store without it skips re-validation.
 type RevalidationStore interface {
 	ListStaleForgeOrgMemberships(ctx context.Context, staleBefore time.Time, limit int) ([]store.StaleForgeOrgMembership, error)
-	ListForgeOrgMemberLogins(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error)
+	ListForgeOrgMemberForgeIDs(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error)
 	TouchForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID) error
+	MarkForgeOrgMemberRevalidationAttempted(ctx context.Context, orgID, userID uuid.UUID) error
+	CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int, error)
 	RemoveForgeOrgAccess(ctx context.Context, orgID, userID uuid.UUID) error
 }
 
-// OrgMembershipChecker is implemented by forges that answer "is login a
-// member of org" (GitHub). A nil token makes the forge use the App's
-// installation token on org.
-type OrgMembershipChecker interface {
-	IsOrgMember(ctx context.Context, token *oauth2.Token, login, org string) (bool, error)
+// MembershipVerifierSource is implemented by forges that verify org
+// membership with an installation token bound to an immutable account id
+// (GitHub App mode).
+type MembershipVerifierSource interface {
+	OrgMembershipVerifiers(ctx context.Context) (map[string]forge.OrgMembershipVerifier, error)
 }
 
-// RunRevalidation re-validates stale forge memberships every interval until
-// ctx ends.
+// loadVerifiers lists each provider's installations once. A provider that
+// cannot verify maps to nil; a listing error is returned, never read as
+// "installed nowhere".
+func (s *Service) loadVerifiers(ctx context.Context, providers []string) (map[string]map[string]forge.OrgMembershipVerifier, error) {
+	verifiers := make(map[string]map[string]forge.OrgMembershipVerifier, len(providers))
+	for _, providerID := range providers {
+		if _, loaded := verifiers[providerID]; loaded {
+			continue
+		}
+		var byAccount map[string]forge.OrgMembershipVerifier
+		if source, ok := s.forges[providerID].(MembershipVerifierSource); ok {
+			loaded, err := source.OrgMembershipVerifiers(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("list %s installations: %w", providerID, err)
+			}
+			byAccount = loaded
+			if byAccount == nil {
+				byAccount = map[string]forge.OrgMembershipVerifier{}
+			}
+		}
+		verifiers[providerID] = byAccount
+	}
+	return verifiers, nil
+}
+
+// RunRevalidation re-validates stale forge memberships every interval, and
+// settles repositories enrolled after members' last sync every
+// lateRepoInterval, until ctx ends.
 func (s *Service) RunRevalidation(ctx context.Context, interval time.Duration) {
 	if s == nil {
 		return
@@ -61,23 +99,38 @@ func (s *Service) RunRevalidation(ctx context.Context, interval time.Duration) {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lateRepos := time.NewTicker(lateRepoInterval)
+	defer lateRepos.Stop()
 	for {
+		s.runLateRepoGrants(ctx)
 		if err := s.RevalidateMemberships(ctx, time.Now()); err != nil && ctx.Err() == nil {
 			s.log.Warn().Err(err).Msg("forge membership re-validation failed")
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-lateRepos.C:
+				s.runLateRepoGrants(ctx)
+			case <-ticker.C:
+				break wait
+			}
 		}
+	}
+}
+
+func (s *Service) runLateRepoGrants(ctx context.Context) {
+	if err := s.GrantLateRepositories(ctx); err != nil && ctx.Err() == nil {
+		s.log.Warn().Err(err).Msg("settling repositories enrolled after the last sync failed")
 	}
 }
 
 // RevalidateMemberships re-asks the forge about forge-synced memberships not
 // confirmed for revalidateAfter. Confirmed members are touched; members the
-// forge says left lose the membership, its repository grants, RBAC role and
-// local grants; memberships the forge cannot be asked about expire after
-// unverifiableMaxAge.
+// forge definitively says left lose the membership, its repository grants
+// and RBAC role, and their local grants are suspended. A failure to list the
+// App's installations aborts the run before anything is decided.
 func (s *Service) RevalidateMemberships(ctx context.Context, now time.Time) error {
 	if s == nil || s.store == nil {
 		return nil
@@ -92,54 +145,89 @@ func (s *Service) RevalidateMemberships(ctx context.Context, now time.Time) erro
 	}
 	byOrg := make(map[uuid.UUID][]store.StaleForgeOrgMembership)
 	order := make([]uuid.UUID, 0)
+	providers := make([]string, 0, 1)
 	for _, membership := range stale {
 		if _, seen := byOrg[membership.OrgID]; !seen {
 			order = append(order, membership.OrgID)
+			providers = append(providers, membership.OrgProvider)
 		}
 		byOrg[membership.OrgID] = append(byOrg[membership.OrgID], membership)
 	}
-	installed := map[string]map[string]string{}
+	verifiers, err := s.loadVerifiers(ctx, providers)
+	if err != nil {
+		revalidationOutcomes.WithLabelValues("aborted").Inc()
+		return err
+	}
 	for _, orgID := range order {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		s.revalidateOrg(ctx, rs, byOrg[orgID], installed, now)
+		memberships := byOrg[orgID]
+		s.revalidateOrg(ctx, rs, memberships, verifiers[memberships[0].OrgProvider])
 	}
 	return nil
 }
 
-func (s *Service) revalidateOrg(ctx context.Context, rs RevalidationStore, memberships []store.StaleForgeOrgMembership, installed map[string]map[string]string, now time.Time) {
+func (s *Service) revalidateOrg(ctx context.Context, rs RevalidationStore, memberships []store.StaleForgeOrgMembership, verifiers map[string]forge.OrgMembershipVerifier) {
 	first := memberships[0]
-	account := strings.TrimSpace(first.ForgeAccountLogin)
-	if account == "" {
-		// Legacy orgs predating the recorded login: the slug provisioning
-		// derived from it. A slug that is not the login reads as "not
-		// installed", and the memberships age out like unverifiable ones.
-		account = strings.TrimSpace(first.OrgSlug)
+	accountID := strings.TrimSpace(first.ForgeAccountID)
+	var verifier forge.OrgMembershipVerifier
+	reason := ""
+	switch {
+	case verifiers == nil:
+		reason = "forge_cannot_verify"
+	case accountID == "":
+		// Never resolved by login: a renamed-then-re-registered login
+		// would answer for the org.
+		reason = "org_not_bound"
+	default:
+		if verifier = verifiers[accountID]; verifier == nil {
+			reason = "not_installed"
+		}
 	}
-	checker, checkable := s.forges[first.OrgProvider].(OrgMembershipChecker)
-	checkable = checkable && account != "" && s.accountInstalled(ctx, first.OrgProvider, account, installed)
+	if reason != "" {
+		for _, membership := range memberships {
+			s.unverifiable(ctx, rs, membership, reason)
+		}
+		s.log.Info().Str("org_id", first.OrgID.String()).Str("reason", reason).Int("memberships", len(memberships)).
+			Msg("forge memberships could not be re-verified; keeping them")
+		return
+	}
 
-	confirmed := false
 	var gone []store.StaleForgeOrgMembership
+	confirmed := make([]string, 0, len(memberships))
 	for _, membership := range memberships {
-		if membership.RepoScoped || !checkable || strings.TrimSpace(membership.ForgeLogin) == "" {
-			if membership.SyncedAt == nil || now.Sub(*membership.SyncedAt) > unverifiableMaxAge {
-				s.removeMembership(ctx, rs, membership, "membership could not be re-verified with the forge")
-			}
+		forgeID := strings.TrimSpace(membership.UserForgeID)
+		switch {
+		case membership.RepoScoped:
+			s.unverifiable(ctx, rs, membership, "repo_scoped")
+			continue
+		case strings.TrimSpace(membership.ForgeLogin) == "":
+			// Signed in before logins were recorded: never acted on.
+			s.unverifiable(ctx, rs, membership, "no_forge_login")
+			continue
+		case forgeID == "" || !strings.EqualFold(membership.UserProvider, membership.OrgProvider):
+			s.unverifiable(ctx, rs, membership, "provider_mismatch")
 			continue
 		}
-		member, err := checker.IsOrgMember(ctx, nil, membership.ForgeLogin, account)
+		member, err := verifier.IsMember(ctx, forgeID)
+		if errors.Is(err, forge.ErrMembershipUnsupported) {
+			s.unverifiable(ctx, rs, membership, "personal_account")
+			continue
+		}
 		if err != nil {
 			s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
-				Msg("forge membership re-check failed; keeping the membership for now")
+				Msg("forge membership re-check failed; keeping the membership")
+			revalidationOutcomes.WithLabelValues("error").Inc()
+			s.markAttempted(ctx, rs, membership)
 			continue
 		}
 		if !member {
 			gone = append(gone, membership)
 			continue
 		}
-		confirmed = true
+		revalidationOutcomes.WithLabelValues("confirmed").Inc()
+		confirmed = append(confirmed, forgeID)
 		if err := rs.TouchForgeOrgMember(ctx, membership.OrgID, membership.UserID); err != nil {
 			s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Msg("failed to record a forge membership confirmation")
 		}
@@ -147,71 +235,105 @@ func (s *Service) revalidateOrg(ctx context.Context, rs RevalidationStore, membe
 	if len(gone) == 0 {
 		return
 	}
-	if !confirmed {
-		confirmed = s.forgeConfirmsAnyMember(ctx, rs, checker, first.OrgID, account, gone)
-	}
-	if !confirmed {
-		s.log.Warn().Str("org_id", first.OrgID.String()).Str("account", account).Int("unconfirmed", len(gone)).
-			Msg("the forge confirmed no member of this org; not trusting its \"not a member\" answers")
+	if !s.forgeConfirmsAnyMember(ctx, rs, verifier, first.OrgID, gone, confirmed) {
+		s.log.Warn().Str("org_id", first.OrgID.String()).Str("account", verifier.AccountLogin()).Int("unconfirmed", len(gone)).
+			Msg("the forge confirmed no member of this org after its \"not a member\" answers; not trusting them")
+		for _, membership := range gone {
+			revalidationOutcomes.WithLabelValues("control_failed").Inc()
+			s.markAttempted(ctx, rs, membership)
+		}
 		return
 	}
 	for _, membership := range gone {
-		s.removeMembership(ctx, rs, membership, "no longer a member of the forge organization")
+		s.removeDeparted(ctx, rs, membership)
 	}
 }
 
-// forgeConfirmsAnyMember is the positive control: some other org-wide member
-// must still read as a member before anyone is removed.
-func (s *Service) forgeConfirmsAnyMember(ctx context.Context, rs RevalidationStore, checker OrgMembershipChecker, orgID uuid.UUID, account string, gone []store.StaleForgeOrgMembership) bool {
-	excluded := make(map[uuid.UUID]bool, len(gone))
+// forgeConfirmsAnyMember is the positive control, asked with the verifier's
+// token after every negative answer: some other org-wide member must still
+// read as a member. Members confirmed earlier in this run are asked first,
+// then the most recently confirmed ones on record. Everyone is named by
+// immutable forge id.
+func (s *Service) forgeConfirmsAnyMember(ctx context.Context, rs RevalidationStore, verifier forge.OrgMembershipVerifier, orgID uuid.UUID, gone []store.StaleForgeOrgMembership, confirmed []string) bool {
+	excluded := make(map[string]bool, len(gone))
+	excludedIDs := make(map[uuid.UUID]bool, len(gone))
 	for _, membership := range gone {
-		excluded[membership.UserID] = true
+		excluded[strings.TrimSpace(membership.UserForgeID)] = true
+		excludedIDs[membership.UserID] = true
 	}
-	controls, err := rs.ListForgeOrgMemberLogins(ctx, orgID, controlSample+len(gone))
-	if err != nil {
-		s.log.Warn().Err(err).Str("org_id", orgID.String()).Msg("failed to list control members")
-		return false
-	}
-	asked := 0
-	for userID, login := range controls {
-		if excluded[userID] || asked >= controlSample {
-			continue
+	candidates := make([]string, 0, controlSample)
+	seen := map[string]bool{}
+	add := func(forgeID string) {
+		forgeID = strings.TrimSpace(forgeID)
+		if forgeID == "" || excluded[forgeID] || seen[forgeID] || len(candidates) >= controlSample {
+			return
 		}
-		asked++
-		if member, err := checker.IsOrgMember(ctx, nil, login, account); err == nil && member {
+		seen[forgeID] = true
+		candidates = append(candidates, forgeID)
+	}
+	for _, forgeID := range confirmed {
+		add(forgeID)
+	}
+	if len(candidates) < controlSample {
+		controls, err := rs.ListForgeOrgMemberForgeIDs(ctx, orgID, controlSample+len(gone))
+		if err != nil {
+			s.log.Warn().Err(err).Str("org_id", orgID.String()).Msg("failed to list control members")
+		}
+		for userID, forgeID := range controls {
+			if !excludedIDs[userID] {
+				add(forgeID)
+			}
+		}
+	}
+	for _, forgeID := range candidates {
+		if member, err := verifier.IsMember(ctx, forgeID); err == nil && member {
 			return true
 		}
 	}
 	return false
 }
 
-// accountInstalled reports whether the App is installed on account, so that
-// the membership check runs with the installation token. Without it GitHub
-// falls back to the (absent) user token and answers "not a member" for
-// everyone.
-func (s *Service) accountInstalled(ctx context.Context, providerID, account string, cache map[string]map[string]string) bool {
-	ids, seen := cache[providerID]
-	if !seen {
-		if resolver, ok := s.forges[providerID].(AccountIDResolver); ok {
-			loaded, err := resolver.InstallationAccountIDs(ctx)
-			if err != nil {
-				s.log.Warn().Err(err).Str("provider", providerID).Msg("failed to list installed forge accounts")
-			}
-			ids = loaded
+// removeDeparted removes a membership the forge definitively says ended.
+// The org's last admin is never removed: an org nobody administers cannot
+// be repaired from inside Hibou. Local grants are suspended, not revoked,
+// so an operator can restore them if the forge answer was wrong.
+func (s *Service) removeDeparted(ctx context.Context, rs RevalidationStore, membership store.StaleForgeOrgMembership) {
+	if roleRank(membership.Role) >= roleRank("admin") {
+		admins, err := rs.CountOrgAdmins(ctx, membership.OrgID)
+		if err != nil || admins <= 1 {
+			s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
+				Msg("the forge says the org's last admin left; keeping the membership for an operator to resolve")
+			revalidationOutcomes.WithLabelValues("last_admin_kept").Inc()
+			s.markAttempted(ctx, rs, membership)
+			return
 		}
-		cache[providerID] = ids
 	}
-	return ids[normalizeAccessKey(account)] != ""
-}
-
-func (s *Service) removeMembership(ctx context.Context, rs RevalidationStore, membership store.StaleForgeOrgMembership, reason string) {
 	if err := rs.RemoveForgeOrgAccess(ctx, membership.OrgID, membership.UserID); err != nil {
 		s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
 			Msg("failed to remove a forge membership")
+		s.markAttempted(ctx, rs, membership)
 		return
 	}
+	revalidationOutcomes.WithLabelValues("removed").Inc()
 	s.removeOrgRole(membership.UserID, membership.Role, membership.OrgID)
-	s.revokeLocalGrants(ctx, membership.UserID, membership.OrgID)
+	s.suspendLocalGrantsWithReason(ctx, membership.UserID, membership.OrgID, "no longer a member of the forge organization")
 	s.log.Info().Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
-		Str("role", membership.Role).Str("reason", reason).Msg("removed a forge membership")
+		Str("role", membership.Role).Msg("removed a forge membership the forge says ended")
+}
+
+// unverifiable counts a membership the forge cannot be asked about and keeps
+// it. It used to expire after 30 days, which removed collaborators and
+// every pre-login-tracking user on a timer, not on evidence.
+func (s *Service) unverifiable(ctx context.Context, rs RevalidationStore, membership store.StaleForgeOrgMembership, reason string) {
+	revalidationOutcomes.WithLabelValues("unverifiable_" + reason).Inc()
+	s.log.Debug().Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
+		Str("reason", reason).Msg("forge membership cannot be re-verified; keeping it")
+	s.markAttempted(ctx, rs, membership)
+}
+
+func (s *Service) markAttempted(ctx context.Context, rs RevalidationStore, membership store.StaleForgeOrgMembership) {
+	if err := rs.MarkForgeOrgMemberRevalidationAttempted(ctx, membership.OrgID, membership.UserID); err != nil {
+		s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
+			Msg("failed to record a re-validation attempt")
+	}
 }

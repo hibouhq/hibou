@@ -104,9 +104,11 @@ HELM_ARGS=(
   --namespace "$NAMESPACE"
   --values "$VALUES"
   --set-string "hibou.image.tag=${VERSION}"
-  # Not in values-dogfood.yaml; drop these and the image reverts.
+  # Not in values-dogfood.yaml; drop these and the image reverts on charts
+  # published before the default was fixed. Keep the tag in the digest-pinned
+  # form of chart/hibou/values.yaml (seaweedfs.image.tag), or the pin is lost.
   --set seaweedfs.image.repository=chrislusf/seaweedfs
-  --set-string seaweedfs.image.tag=4.34
+  --set-string "seaweedfs.image.tag=4.34@sha256:6620371e8af8282056685c652d4637265698c9e2c2d59f9594e6ac333ad6c634"
   --wait --timeout 6m
 )
 

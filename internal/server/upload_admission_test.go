@@ -47,7 +47,7 @@ func TestUploadConcurrencyMiddlewareAdmitsBeforeQueueing(t *testing.T) {
 	t.Parallel()
 
 	srv := newHardeningTestServer(config.Config{Limits: config.LimitsConfig{Upload: config.UploadLimitsConfig{QueueWait: 20 * time.Millisecond}}})
-	// No free slot: anything admitted would wait and get 503.
+	// No free slot: anything admitted would wait and get 429.
 	srv.uploadSlots = make(chan struct{})
 	handler := srv.uploadConcurrencyMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -69,8 +69,8 @@ func TestUploadConcurrencyMiddlewareAdmitsBeforeQueueing(t *testing.T) {
 
 	allowed := httptest.NewRecorder()
 	handler.ServeHTTP(allowed, serviceUploadRequest(uuid.New(), uuid.New(), nil))
-	if allowed.Code != http.StatusServiceUnavailable {
-		t.Fatalf("admitted upload with no slot = %d, want 503", allowed.Code)
+	if allowed.Code != http.StatusTooManyRequests {
+		t.Fatalf("admitted upload with no slot = %d, want 429", allowed.Code)
 	}
 }
 
@@ -103,13 +103,13 @@ func TestUploadConcurrencyMiddlewareCapsPerPrincipalAndOrg(t *testing.T) {
 	go func() { held <- serve(serviceUploadRequest(keyA, org, nil)) }()
 	<-entered
 
-	if got := serve(serviceUploadRequest(keyA, org, nil)); got != http.StatusServiceUnavailable {
-		t.Fatalf("second upload by the same token = %d, want 503", got)
+	if got := serve(serviceUploadRequest(keyA, org, nil)); got != http.StatusTooManyRequests {
+		t.Fatalf("second upload by the same token = %d, want 429", got)
 	}
 	go func() { held <- serve(serviceUploadRequest(keyB, org, nil)) }()
 	<-entered
-	if got := serve(serviceUploadRequest(uuid.New(), org, nil)); got != http.StatusServiceUnavailable {
-		t.Fatalf("third upload for the same org = %d, want 503", got)
+	if got := serve(serviceUploadRequest(uuid.New(), org, nil)); got != http.StatusTooManyRequests {
+		t.Fatalf("third upload for the same org = %d, want 429", got)
 	}
 
 	// Another tenant still gets through.
@@ -298,7 +298,8 @@ func TestSwaggerDocsFollowConfig(t *testing.T) {
 }
 
 // A signed-in user queues for an upload slot only as a member of some org;
-// their uploads count against one key whatever token they use.
+// their uploads count against one key whatever token they use, and against
+// their org, shared with its other users and its service tokens.
 func TestUploadAdmissionRequiresOrgMembership(t *testing.T) {
 	fixture := newAuthzFixture(t)
 	member := fixture.invitedUser(t, "developer")
@@ -326,7 +327,7 @@ func TestUploadAdmissionRequiresOrgMembership(t *testing.T) {
 		t.Fatalf("user without an org = %d, want 403", code)
 	}
 	code, keys := admit(asUser(member))
-	if code != http.StatusOK || len(keys) != 1 || keys[0].key != "user:"+member.ID.String() {
-		t.Fatalf("member = %d %+v, want admitted under the user key", code, keys)
+	if code != http.StatusOK || len(keys) != 2 || keys[0].key != "user:"+member.ID.String() || keys[1].key != "org:"+fixture.org.ID.String() {
+		t.Fatalf("member = %d %+v, want admitted under the user key and the org key", code, keys)
 	}
 }

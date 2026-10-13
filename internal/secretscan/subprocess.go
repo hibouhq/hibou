@@ -7,7 +7,9 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // Subprocesses (git, gitleaks, trufflehog, betterleaks) parse attacker-
@@ -64,12 +66,43 @@ func gitAuthEnv(cloneURL, token string) ([]string, error) {
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 		return nil, errors.New("token-authenticated clone requires an http(s) clone URL")
 	}
+	// Over plain http the token would cross the network readable by anyone
+	// on the path; only a development instance (local forge) may do that.
+	if parsed.Scheme != "https" && !developmentMode() {
+		return nil, errors.New("refusing to send the forge token to a non-https clone URL (allowed only in development)")
+	}
 	credentials := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 	return []string{
 		"GIT_CONFIG_COUNT=1",
 		"GIT_CONFIG_KEY_0=http." + parsed.Scheme + "://" + parsed.Host + "/.extraHeader",
 		"GIT_CONFIG_VALUE_0=Authorization: Basic " + credentials,
 	}, nil
+}
+
+var (
+	devMu  sync.RWMutex
+	devSet bool
+	devOn  bool
+)
+
+// SetDevelopment records whether the instance runs in development mode
+// (config development / HIBOU_DEVELOPMENT). Without a call the environment
+// variable decides.
+func SetDevelopment(enabled bool) {
+	devMu.Lock()
+	devSet, devOn = true, enabled
+	devMu.Unlock()
+}
+
+func developmentMode() bool {
+	devMu.RLock()
+	set, on := devSet, devOn
+	devMu.RUnlock()
+	if set {
+		return on
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("HIBOU_DEVELOPMENT")))
+	return err == nil && enabled
 }
 
 // stripURLCredentials drops any userinfo from a clone URL so a token embedded

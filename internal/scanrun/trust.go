@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hibouhq/hibou/internal/planpath"
 	"github.com/hibouhq/hibou/internal/scancatalog"
 	"github.com/hibouhq/hibou/internal/scanplan"
 )
@@ -20,7 +21,7 @@ var ErrNotInEmbeddedCatalog = errors.New("not pinned by this CLI's embedded scan
 
 // ErrUnsafePath: a plan target or exclusion that could be read as an option
 // or escape the checkout.
-var ErrUnsafePath = errors.New("unsafe plan path")
+var ErrUnsafePath = planpath.ErrUnsafe
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -185,22 +186,7 @@ func ValidatePlanPaths(targets, exclusions []string) error {
 }
 
 func validatePlanPath(value string) error {
-	switch {
-	case value == "":
-		return fmt.Errorf("%w: empty", ErrUnsafePath)
-	case strings.ContainsRune(value, 0):
-		return fmt.Errorf("%w: NUL byte", ErrUnsafePath)
-	case strings.HasPrefix(value, "-"):
-		return fmt.Errorf("%w: starts with '-'", ErrUnsafePath)
-	case strings.HasPrefix(value, "/"), strings.HasPrefix(value, `\`), filepath.IsAbs(value), filepath.VolumeName(value) != "":
-		return fmt.Errorf("%w: absolute", ErrUnsafePath)
-	}
-	for _, segment := range strings.FieldsFunc(value, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if segment == ".." {
-			return fmt.Errorf("%w: '..' segment", ErrUnsafePath)
-		}
-	}
-	return nil
+	return planpath.Validate(value)
 }
 
 // withinRoot joins a validated module path to root and checks the result,

@@ -1617,14 +1617,16 @@ type NotificationRule struct {
 }
 
 type OrgMember struct {
-	OrgID      uuid.UUID    `json:"org_id"`
-	UserID     uuid.UUID    `json:"user_id"`
-	Role       string       `json:"role"`
-	CreatedAt  time.Time    `json:"created_at"`
-	Source     string       `json:"source"`
-	SyncedAt   sql.NullTime `json:"synced_at"`
-	ExpiresAt  sql.NullTime `json:"expires_at"`
-	RepoScoped bool         `json:"repo_scoped"`
+	OrgID                   uuid.UUID    `json:"org_id"`
+	UserID                  uuid.UUID    `json:"user_id"`
+	Role                    string       `json:"role"`
+	CreatedAt               time.Time    `json:"created_at"`
+	Source                  string       `json:"source"`
+	SyncedAt                sql.NullTime `json:"synced_at"`
+	ExpiresAt               sql.NullTime `json:"expires_at"`
+	RepoScoped              bool         `json:"repo_scoped"`
+	RevalidationAttemptedAt sql.NullTime `json:"revalidation_attempted_at"`
+	RepoScopeAt             sql.NullTime `json:"repo_scope_at"`
 }
 
 type Organization struct {

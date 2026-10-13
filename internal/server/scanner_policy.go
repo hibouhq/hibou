@@ -14,6 +14,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/applicability"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/planpath"
 	"github.com/hibouhq/hibou/internal/scanpolicy"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -613,7 +614,7 @@ func (s *Server) handleCreateScopeOverride(w http.ResponseWriter, r *http.Reques
 // Override paths become scanner targets and exclusions on the CLI, so a
 // leading "-" (read as an option, Q14) and ".." are refused.
 func validScopeOverridePath(p string) bool {
-	return p != "" && p != "." && !strings.Contains(p, "..") && !strings.HasPrefix(p, "-") && len(p) <= 512
+	return p != "." && len(p) <= 512 && planpath.Valid(p)
 }
 
 // @Summary      Remove an owner scope refinement

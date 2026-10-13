@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -40,6 +41,7 @@ type Config struct {
 	MaxUploadSize     int64
 	SessionSecret     string
 	EncryptionKey     string // HIBOU_ENCRYPTION_KEY: optional base64 32-byte key sealing integration secrets at rest (notify.ParseEncryptionKey)
+	SecretHashKey     string // HIBOU_SECRET_HASH_KEY / secret_hash.key: optional key for secret-finding hashes (secretscan.SetHashKey); empty = derived from the session secret
 	AutoProvisionOrgs bool
 	// InstanceAdmins lists the emails of hibou instance administrators
 	// (HIBOU_INSTANCE_ADMINS, comma-separated, case-insensitive). Instance
@@ -125,6 +127,12 @@ type MetricsConfig struct {
 	// BearerToken, when set, is required as "Authorization: Bearer <token>".
 	// Loaded from metrics.bearer_token_file when that is set.
 	BearerToken string
+	// RequireToken (metrics.require_token, default true) refuses to start
+	// outside development when the dedicated metrics listener is bound to a
+	// non-loopback address without BearerToken. false is the explicit
+	// opt-out for a port that is network-isolated (Kubernetes pod port not
+	// forwarded by the ingress, NetworkPolicy).
+	RequireToken bool
 }
 
 // StorageUsageConfig drives the leader-locked storage sampler (ADR-039 §2).
@@ -385,6 +393,7 @@ func Load() (Config, error) {
 	v.SetDefault("metrics.port", 9090)
 	v.SetDefault("metrics.bearer_token", "")
 	v.SetDefault("metrics.bearer_token_file", "")
+	v.SetDefault("metrics.require_token", true)
 	v.SetDefault("storage_usage.enabled", true)
 	v.SetDefault("storage_usage.interval", "15m")
 	v.SetDefault("storage_usage.inventory.enabled", false)
@@ -557,6 +566,7 @@ func Load() (Config, error) {
 		MaxUploadSize:                v.GetInt64("max.upload.size"),
 		SessionSecret:                v.GetString("session.secret"),
 		EncryptionKey:                strings.TrimSpace(v.GetString("encryption.key")),
+		SecretHashKey:                strings.TrimSpace(v.GetString("secret_hash.key")),
 		AutoProvisionOrgs:            v.GetBool("auto.provision.orgs"),
 		InstanceAdmins:               ParseEmailList(v.GetString("instance.admins")),
 		InstanceAdminsFile:           strings.TrimSpace(v.GetString("instance.admins_file")),
@@ -685,6 +695,9 @@ func (c Config) ValidateServe(log zerolog.Logger) error {
 	if c.Metrics.Enabled && c.Metrics.Port == 0 && c.Metrics.BearerToken == "" {
 		problems = append(problems, "/metrics would be served unauthenticated on the application port; set metrics.port (default 9090) or metrics.bearer_token(_file), or metrics.enabled=false")
 	}
+	if c.Metrics.Enabled && c.Metrics.Port != 0 && c.Metrics.BearerToken == "" && c.Metrics.RequireToken && !isLoopbackBindHost(c.Host) {
+		problems = append(problems, fmt.Sprintf("/metrics would be served unauthenticated on %s (not loopback); set metrics.bearer_token(_file), bind host to loopback, or set metrics.require_token=false if the metrics port is unreachable from untrusted networks", c.MetricsListenAddr()))
+	}
 	if c.MCPEnabled && !c.IsDevelopment() {
 		log.Warn().Str("addr", c.MCPListenAddr()).Msg("MCP listener enabled (plain HTTP); keep mcp.port off the public network")
 	}
@@ -706,6 +719,17 @@ func (c Config) ValidateServe(log zerolog.Logger) error {
 		return nil
 	}
 	return errors.New("invalid server configuration: " + strings.Join(problems, "; "))
+}
+
+// isLoopbackBindHost reports whether a listen host only accepts local
+// connections. Empty, 0.0.0.0 and :: bind every interface.
+func isLoopbackBindHost(host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.Unmap().IsLoopback()
 }
 
 // parseAllowedOrigins normalizes allowed_origins entries to scheme://host
@@ -779,9 +803,10 @@ func (c Config) validateForges(log zerolog.Logger) error {
 
 func loadMetricsConfig(v *viper.Viper) (MetricsConfig, error) {
 	cfg := MetricsConfig{
-		Enabled:     v.GetBool("metrics.enabled"),
-		Port:        v.GetInt("metrics.port"),
-		BearerToken: strings.TrimSpace(v.GetString("metrics.bearer_token")),
+		Enabled:      v.GetBool("metrics.enabled"),
+		Port:         v.GetInt("metrics.port"),
+		BearerToken:  strings.TrimSpace(v.GetString("metrics.bearer_token")),
+		RequireToken: v.GetBool("metrics.require_token"),
 	}
 	if cfg.Port < 0 || cfg.Port > 65535 {
 		return MetricsConfig{}, errors.New("parsing metrics.port: must be between 0 and 65535")

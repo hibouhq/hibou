@@ -383,9 +383,12 @@ func (s *Service) installerTrustedByOrg(ctx context.Context, providerID, account
 
 // BackfillForgeAccountIDs binds orgs that predate account-id tracking (a
 // recorded login, no id) to the id their login maps to among the App's live
-// installations. Login-only orgs can be taken over by whoever registers a
-// renamed account's old login; running this at startup closes that window
-// for every account the App is still installed on.
+// installations — but only when that binding is corroborated: one of the
+// org's recorded admins, by immutable forge user id, administers that very
+// account according to its installation token. A login alone may have been
+// renamed away and re-registered by someone else; binding on it would hand
+// them the org. An uncorroborated org is logged and left unbound (it keeps
+// resolving by login, and membership re-validation leaves it alone).
 func (s *Service) BackfillForgeAccountIDs(ctx context.Context) error {
 	accounts, ok := s.store.(ForgeAccountStore)
 	if !ok {
@@ -415,6 +418,17 @@ func (s *Service) BackfillForgeAccountIDs(ctx context.Context) error {
 		if id == "" {
 			continue
 		}
+		corroborated, err := s.legacyBindingCorroborated(ctx, &org, id)
+		if err != nil {
+			s.log.Warn().Err(err).Str("org_id", org.ID.String()).Str("account", org.ForgeAccountLogin).
+				Msg("could not corroborate the forge account of a legacy org; leaving it unbound")
+			continue
+		}
+		if !corroborated {
+			s.log.Warn().Str("org_id", org.ID.String()).Str("account", org.ForgeAccountLogin).Str("account_id", id).
+				Msg("no admin of this legacy org administers the forge account its login now names; leaving it unbound")
+			continue
+		}
 		if err := accounts.SetOrganizationForgeAccount(ctx, org.ID, id, org.ForgeAccountLogin); err != nil {
 			if isUniqueViolation(err) {
 				s.log.Warn().Str("org_id", org.ID.String()).Str("account", org.ForgeAccountLogin).Msg("forge account id already bound to another org; leaving org unbound")
@@ -424,6 +438,50 @@ func (s *Service) BackfillForgeAccountIDs(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// AccountAdminVerifier confirms, with the installation token of the account
+// accountID, that the forge user userID (both immutable ids) administers it.
+type AccountAdminVerifier interface {
+	IsAccountAdmin(ctx context.Context, accountID, userID string) (bool, error)
+}
+
+// OrgAdminLister lists an org's admins by forge identity. StoreAdapter
+// implements it; without it no legacy org is ever bound.
+type OrgAdminLister interface {
+	ListOrgAdminIdentities(ctx context.Context, orgID uuid.UUID) ([]store.OrgAdminIdentity, error)
+}
+
+// legacyBindingCorroborated reports whether one of the org's recorded admins
+// administers the forge account accountID.
+func (s *Service) legacyBindingCorroborated(ctx context.Context, org *store.Organization, accountID string) (bool, error) {
+	verifier, ok := s.forges[org.Provider].(AccountAdminVerifier)
+	if !ok {
+		return false, nil
+	}
+	lister, ok := s.store.(OrgAdminLister)
+	if !ok {
+		return false, nil
+	}
+	admins, err := lister.ListOrgAdminIdentities(ctx, org.ID)
+	if err != nil {
+		return false, err
+	}
+	var lastErr error
+	for _, admin := range admins {
+		if !strings.EqualFold(strings.TrimSpace(admin.Provider), org.Provider) || strings.TrimSpace(admin.ProviderID) == "" {
+			continue
+		}
+		confirmed, err := verifier.IsAccountAdmin(ctx, accountID, admin.ProviderID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if confirmed {
+			return true, nil
+		}
+	}
+	return false, lastErr
 }
 
 func (s *Service) ClaimPendingAdmin(ctx context.Context, user *store.User) error {

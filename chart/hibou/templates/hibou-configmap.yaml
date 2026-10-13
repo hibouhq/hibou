@@ -11,6 +11,13 @@ data:
   HIBOU_LOG_FORMAT: {{ .Values.hibou.logging.format | quote }}
   HIBOU_METRICS_ENABLED: {{ .Values.hibou.metrics.enabled | quote }}
   HIBOU_METRICS_PORT: {{ include "hibou.metricsPort" . | quote }}
+  {{- if not .Values.hibou.metrics.auth.existingSecret }}
+  {{- /* The metrics port is never forwarded by the ingress; without a token it
+         is reachable from inside the cluster (limited by
+         hibou.metrics.networkPolicy). Opt out of the server's token check
+         explicitly so this is a visible, documented choice. */}}
+  HIBOU_METRICS_REQUIRE_TOKEN: "false"
+  {{- end }}
   HIBOU_STORAGE_USAGE_ENABLED: {{ .Values.hibou.storageUsage.enabled | quote }}
   HIBOU_STORAGE_USAGE_INTERVAL: {{ .Values.hibou.storageUsage.interval | quote }}
   HIBOU_STORAGE_USAGE_INVENTORY_ENABLED: {{ .Values.hibou.storageUsage.inventory.enabled | quote }}
@@ -32,6 +39,9 @@ data:
   HIBOU_CACHE_TTL: {{ .Values.hibou.advisory.cache.ttl | quote }}
   HIBOU_MAX_UPLOAD_SIZE: {{ .Values.hibou.maxUploadSize | quote }}
   HIBOU_MCP_ENABLED: {{ if hasKey .Values.hibou "mcp" }}{{ .Values.hibou.mcp.enabled | quote }}{{ else }}"false"{{ end }}
+  {{- if ne (include "hibou.mcpPort" .) "0" }}
+  HIBOU_MCP_PORT: {{ include "hibou.mcpPort" . | quote }}
+  {{- end }}
   HIBOU_API_DOCS_ENABLED: {{ dig "apiDocs" "enabled" false .Values.hibou | quote }}
   {{- with .Values.hibou.allowedOrigins }}
   HIBOU_ALLOWED_ORIGINS: {{ join "," . | quote }}

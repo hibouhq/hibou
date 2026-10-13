@@ -186,6 +186,37 @@ func TestSpotBugsAdapterNeedsCompiledClasses(t *testing.T) {
 	}
 }
 
+// The CLI's default source root is ".": the pom mvn reads must resolve from
+// the module directory it runs in, not from the source root a second time.
+func TestSpotBugsAdapterRelativeSourceRoot(t *testing.T) {
+	jar := []byte("findsecbugs")
+	bundle := filepath.Join(t.TempDir(), "fsb.jar")
+	_ = os.WriteFile(bundle, jar, 0o600)
+	entry := CatalogEntry{Scanner: scancatalog.Scanner{Engine: "spotbugs"}, Distributions: []ResolvedDistribution{
+		{Distribution: scancatalog.Distribution{Kind: "maven", Coordinates: "com.github.spotbugs:spotbugs-maven-plugin:4.9.3.0"}},
+		{Distribution: scancatalog.Distribution{Kind: "maven", Coordinates: "com.h3xstream.findsecbugs:findsecbugs-plugin:1.13.0"},
+			Location: &scancatalog.Location{URL: "file://" + filepath.ToSlash(bundle), SHA256: digestOf(jar)}},
+	}}
+	t.Chdir(t.TempDir())
+	_ = os.MkdirAll(filepath.Join("java", "target", "classes"), 0o750)
+	_ = os.WriteFile(filepath.Join("java", "pom.xml"), []byte("<project/>"), 0o600)
+	env := Environment{SourceRoot: ".", OutDir: t.TempDir(), Fetcher: &Fetcher{CacheDir: t.TempDir(), BundleDir: filepath.Dir(bundle)},
+		Command: func(_ context.Context, dir, _ string, args ...string) ([]byte, int, error) {
+			for i, arg := range args {
+				if arg == "-f" {
+					if _, err := os.Stat(filepath.Join(dir, args[i+1])); err != nil {
+						t.Fatalf("mvn in %s cannot read -f %s: %v", dir, args[i+1], err)
+					}
+				}
+			}
+			return nil, 0, os.WriteFile(filepath.Join(dir, "target", "spotbugsSarif.json"), []byte("{}"), 0o600)
+		}}
+	result, err := Run(context.Background(), scanplan.Job{ID: "sb", Targets: []string{"java"}}, entry, env)
+	if err != nil || len(result.SARIFPaths) != 1 {
+		t.Fatalf("Run = %+v, %v", result, err)
+	}
+}
+
 func TestFetchRefusesRedirectToUnapprovedHost(t *testing.T) {
 	payload := []byte("x")
 	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(payload) }))

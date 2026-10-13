@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -47,6 +49,123 @@ var deviceClients = map[string]struct {
 	devicelogin.ClientCLI:      {label: "hibou CLI", preset: apitoken.PresetCLI},
 	devicelogin.ClientVSCode:   {label: "VS Code extension", preset: apitoken.PresetReadOnly},
 	devicelogin.ClientIntelliJ: {label: "IntelliJ plugin", preset: apitoken.PresetReadOnly},
+}
+
+// devicePresetRank orders the presets by how much they let a token change:
+// read-only writes nothing, cli uploads. Approval may keep or lower the
+// requested preset, never raise it (a phished user who clicks through should at
+// worst hand out what the device asked for, and IDEs ask for read-only).
+var devicePresetRank = map[apitoken.Preset]int{
+	apitoken.PresetReadOnly: 0,
+	apitoken.PresetCLI:      1,
+}
+
+// devicePresetWithin reports whether approving `approved` stays within what
+// the device requested. Unknown presets are never within.
+func devicePresetWithin(approved, requested apitoken.Preset) bool {
+	a, okA := devicePresetRank[approved]
+	r, okR := devicePresetRank[requested]
+	return okA && okR && a <= r
+}
+
+// Failed user-code lookups are limited here, always on and independent of the
+// configurable rate limiter: user codes are short (8 characters), so guessing
+// one that a victim is about to approve must stay impractical even on
+// deployments with rate_limit.enabled=false.
+const (
+	deviceCodeFailureWindow    = time.Minute
+	deviceCodeFailuresPerIP    = 30
+	deviceCodeFailuresGlobal   = 300
+	deviceCodeFailureMapSweep  = time.Minute
+	deviceCodeLockedOutMessage = "too many invalid codes; wait a minute and try again"
+)
+
+type deviceFailureWindow struct {
+	start time.Time
+	count int
+}
+
+// deviceCodeLimiter counts failed user-code lookups per client IP and in
+// total over fixed one-minute windows. Once a window's cap is reached every
+// lookup, approval and denial from that IP (or from anyone, for the global
+// cap) is refused until the window ends, valid code or not, so a lockout
+// reveals nothing about which codes exist.
+type deviceCodeLimiter struct {
+	mu        sync.Mutex
+	now       func() time.Time
+	perIP     int
+	global    int
+	window    time.Duration
+	ips       map[string]*deviceFailureWindow
+	all       deviceFailureWindow
+	lastSweep time.Time
+}
+
+func newDeviceCodeLimiter(perIP, global int, window time.Duration) *deviceCodeLimiter {
+	return &deviceCodeLimiter{now: time.Now, perIP: perIP, global: global, window: window, ips: map[string]*deviceFailureWindow{}}
+}
+
+// deviceCodeGuard is process-wide: one server per process in production, and
+// the caps are per replica (a determined attacker spread over replicas gets
+// replicas x the global cap, still far below what 8-character codes need).
+var deviceCodeGuard = newDeviceCodeLimiter(deviceCodeFailuresPerIP, deviceCodeFailuresGlobal, deviceCodeFailureWindow)
+
+func (l *deviceCodeLimiter) current(w *deviceFailureWindow, now time.Time) int {
+	if now.Sub(w.start) >= l.window {
+		return 0
+	}
+	return w.count
+}
+
+// blocked reports whether the IP is locked out, and for how long.
+func (l *deviceCodeLimiter) blocked(ip string) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if l.current(&l.all, now) >= l.global {
+		return l.window - now.Sub(l.all.start), true
+	}
+	if w, ok := l.ips[ip]; ok && l.current(w, now) >= l.perIP {
+		return l.window - now.Sub(w.start), true
+	}
+	return 0, false
+}
+
+// fail records one failed lookup from ip.
+func (l *deviceCodeLimiter) fail(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if now.Sub(l.lastSweep) >= deviceCodeFailureMapSweep {
+		for key, w := range l.ips {
+			if now.Sub(w.start) >= l.window {
+				delete(l.ips, key)
+			}
+		}
+		l.lastSweep = now
+	}
+	bump := func(w *deviceFailureWindow) {
+		if now.Sub(w.start) >= l.window {
+			w.start, w.count = now, 0
+		}
+		w.count++
+	}
+	bump(&l.all)
+	w, ok := l.ips[ip]
+	if !ok {
+		w = &deviceFailureWindow{}
+		l.ips[ip] = w
+	}
+	bump(w)
+}
+
+func writeDeviceLockout(w http.ResponseWriter, retry time.Duration) {
+	seconds := int(retry.Round(time.Second) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	api.JSONError(w, http.StatusTooManyRequests, deviceCodeLockedOutMessage)
 }
 
 // deviceTokenName names the minted key after the client and the machine, so
@@ -333,6 +452,31 @@ func (s *Server) issueDeviceToken(w http.ResponseWriter, r *http.Request, reques
 		writeOAuthError(w, http.StatusBadRequest, devicelogin.ErrCodeExpired, "")
 		return
 	}
+	// Re-check the per-user key cap where the key is minted. Approval checks
+	// it too, but approvals are not mints: several requests approved while
+	// under the cap would otherwise all mint. The advisory lock serialises
+	// device mints for one user so two concurrent polls cannot both pass.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('device_api_key_quota:' || $1::text, 0))`, user.ID.String()); err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
+		return
+	}
+	count, err := qtx.CountAPIKeysCreatedByUser(ctx, user.ID)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
+		return
+	}
+	if count >= maxAPIKeysPerUser {
+		// Commit the consumption without a key: the request is spent, and
+		// the client gets access_denied (which every devicelogin client
+		// already handles) rather than a retryable error.
+		if err := tx.Commit(); err != nil {
+			writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
+			return
+		}
+		s.writeDeviceAuditLog(r, user, request, audit.ActionDeviceDeny, map[string]any{"reason": "api_key_limit"})
+		writeOAuthError(w, http.StatusBadRequest, devicelogin.ErrCodeAccessDenied, "API key limit reached: delete an unused key under Settings › API Keys, then sign in again")
+		return
+	}
 	rawKey, apiKey, err := mintUserAPIKey(ctx, qtx, user.ID, name, description, scopes, request.TokenExpiresAt)
 	if err != nil {
 		s.log.Error().Err(err).Str("device_authorization", request.ID.String()).Msg("mint device login token")
@@ -430,9 +574,18 @@ func (s *Server) requireDeviceSession(w http.ResponseWriter, r *http.Request) (*
 
 // loadLiveDeviceRequest resolves a typed user code to a pending request. A
 // malformed, unknown, expired or already-decided code all get the same 404.
+// Every miss counts against deviceCodeGuard; a locked-out caller gets 429
+// before the code is even looked at.
 func (s *Server) loadLiveDeviceRequest(w http.ResponseWriter, r *http.Request, rawCode string) (*store.DeviceAuthorization, string, bool) {
+	ip := requestClientIP(r)
+	if retry, locked := deviceCodeGuard.blocked(ip); locked {
+		s.log.Warn().Str("ip", ip).Msg("device login: user-code lookups locked out")
+		writeDeviceLockout(w, retry)
+		return nil, "", false
+	}
 	code, ok := apitoken.NormalizeUserCode(rawCode)
 	if !ok {
+		deviceCodeGuard.fail(ip)
 		api.JSONError(w, http.StatusNotFound, "this code is invalid or has expired")
 		return nil, "", false
 	}
@@ -442,6 +595,7 @@ func (s *Server) loadLiveDeviceRequest(w http.ResponseWriter, r *http.Request, r
 		return nil, "", false
 	}
 	if request == nil {
+		deviceCodeGuard.fail(ip)
 		api.JSONError(w, http.StatusNotFound, "this code is invalid or has expired")
 		return nil, "", false
 	}
@@ -493,8 +647,13 @@ func (s *Server) handleDeviceLookup(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Only the requested preset and lower ones are offered (and accepted by
+	// approve): the page can narrow what a device asked for, never widen it.
 	presets := make([]devicePresetView, 0, 2)
 	for _, preset := range []apitoken.Preset{apitoken.PresetCLI, apitoken.PresetReadOnly} {
+		if !devicePresetWithin(preset, apitoken.Preset(request.RequestedPreset)) {
+			continue
+		}
 		permissions, _ := preset.Permissions()
 		presets = append(presets, devicePresetView{Key: string(preset), Permissions: permissions})
 	}
@@ -519,6 +678,11 @@ func (s *Server) handleDeviceLookup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// deviceApproveMaxSessionAge bounds how old the approving browser session may
+// be. Approval mints a token valid for up to a year; a session left signed in
+// for days (or a stolen cookie) should not be enough to do that.
+const deviceApproveMaxSessionAge = 12 * time.Hour
+
 // @Summary      Approve a device login
 // @Description  Approve a pending device login with a preset and expiry (ADR-043). The client's next poll receives a membership-wide token. Browser session only.
 // @Tags         auth
@@ -533,6 +697,14 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireDeviceSession(w, r)
 	if !ok {
 		return
+	}
+	if s.authMgr != nil {
+		issued, err := s.authMgr.SessionIssuedAt(r)
+		if err != nil || time.Since(issued) > deviceApproveMaxSessionAge {
+			api.JSONError(w, http.StatusForbidden,
+				"sign out and sign in again to approve: approving a device needs a sign-in from the last 12 hours")
+			return
+		}
 	}
 	var input deviceDecisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -556,6 +728,13 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !devicePresetWithin(preset, apitoken.Preset(request.RequestedPreset)) {
+		api.JSONError(w, http.StatusBadRequest, "the device asked for "+request.RequestedPreset+" access; approval can keep or lower it, not raise it")
+		return
+	}
+	// Early answer for the page; issueDeviceToken re-checks under a lock at
+	// mint time, since several approved requests could otherwise each pass
+	// this check and mint past the cap.
 	if !s.checkAPIKeyQuota(w, r, user.ID) {
 		return
 	}

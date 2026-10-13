@@ -804,6 +804,16 @@ func (s *fakeStore) GetUserByProviderID(_ context.Context, provider, providerID 
 	return &clone, nil
 }
 
+func (s *fakeStore) ListOrgAdminIdentities(_ context.Context, orgID uuid.UUID) ([]store.OrgAdminIdentity, error) {
+	var out []store.OrgAdminIdentity
+	for _, user := range s.users {
+		if s.memberships[membershipKey(orgID, user.ID)] == "admin" {
+			out = append(out, store.OrgAdminIdentity{Provider: user.Provider, ProviderID: user.ProviderID})
+		}
+	}
+	return out, nil
+}
+
 func (s *fakeStore) addUser(provider, providerID string) *store.User {
 	user := &store.User{ID: uuid.New(), Provider: provider, ProviderID: providerID, Email: providerID + "@example.com", DisplayName: providerID}
 	s.users[userKey(provider, providerID)] = user

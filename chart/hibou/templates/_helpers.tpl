@@ -302,3 +302,24 @@ Usage: include "hibou.goMemLimit" (dict "resources" .Values.hibou.resources "per
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+NetworkPolicy `from` peer selecting this release's pods of the given components.
+Usage: include "hibou.componentPeer" (dict "root" . "components" (list "server" "worker"))
+*/}}
+{{- define "hibou.componentPeer" -}}
+- podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" .root | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: {{ toJson .components }}
+{{- end -}}
+
+{{/*
+The MCP listener port, or 0 when MCP is off.
+*/}}
+{{- define "hibou.mcpPort" -}}
+{{- if dig "mcp" "enabled" false .Values.hibou -}}{{ dig "mcp" "port" 8081 .Values.hibou | int }}{{- else -}}0{{- end -}}
+{{- end -}}

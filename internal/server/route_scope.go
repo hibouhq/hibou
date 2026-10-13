@@ -195,12 +195,12 @@ var routeScopes = map[string]routeScope{
 	"PUT " + orgRoute + "/members/{userID}/role": needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 	"DELETE " + orgRoute + "/members/{userID}":   needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 
-	// Triage. The decision endpoint additionally requires the cve-triager
-	// grant at request time — a token scope alone does not confer the ability
-	// to author advisory data for an org.
-	"GET " + orgRoute + "/triage/":                   needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
-	"GET " + orgRoute + "/triage/{itemID}":           needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
-	"POST " + orgRoute + "/triage/{itemID}/decision": needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
+	// CVE triage acts with instance-wide authority (it authors advisory data
+	// every org reads), which no API token may carry: browser sessions only,
+	// whatever an org-scoped token's grants say.
+	"GET " + orgRoute + "/triage/":                   sessionOnlyRoute(),
+	"GET " + orgRoute + "/triage/{itemID}":           sessionOnlyRoute(),
+	"POST " + orgRoute + "/triage/{itemID}/decision": sessionOnlyRoute(),
 
 	"GET " + orgRoute + "/integrations/":                        needsOrgWide(apitoken.CapAdmin, apitoken.AccessRead),
 	"POST " + orgRoute + "/integrations/":                       needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),

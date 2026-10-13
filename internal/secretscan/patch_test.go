@@ -143,3 +143,58 @@ func TestMaterializePatchFilesCapsBytes(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPatchTooLarge", err)
 	}
 }
+
+// An added line whose content is "++ b/decoy" shows in the diff as
+// "+++ b/decoy". Inside a hunk it is an added line: it must not switch the
+// current file, and the secret after it must stay attributed and scanned.
+func TestAddedLinesByFileDecoyHeaderInsideHunk(t *testing.T) {
+	patch := "diff --git a/app.env b/app.env\n" +
+		"--- a/app.env\n" +
+		"+++ b/app.env\n" +
+		"@@ -0,0 +1,3 @@\n" +
+		"+++ b/decoy\n" +
+		"+@@ -0,0 +1 @@\n" +
+		"+AWS_KEY=AKIAIOSFODNN7EXAMPLE\n"
+	files, err := addedLinesByFile([]byte(patch))
+	if err != nil {
+		t.Fatalf("addedLinesByFile: %v", err)
+	}
+	if _, ok := files["decoy"]; ok {
+		t.Fatalf("decoy header inside a hunk switched files: %#v", files)
+	}
+	lines := files["app.env"]
+	if len(lines) != 3 || lines[0].text != "++ b/decoy" || lines[2].text != "AWS_KEY=AKIAIOSFODNN7EXAMPLE" || lines[2].number != 3 {
+		t.Fatalf("app.env added lines = %#v, want all three with the secret on line 3", lines)
+	}
+}
+
+// Outside a hunk, "+++ " is a file header only right after "--- ".
+func TestAddedLinesByFilePlusHeaderNeedsMinusHeader(t *testing.T) {
+	patch := "--- a/real\n+++ b/real\n@@ -1 +1 @@\n-old\n+new\n+++ b/decoy\n@@ -5 +5,2 @@\n x\n+SECRET=1\n"
+	files, err := addedLinesByFile([]byte(patch))
+	if err != nil {
+		t.Fatalf("addedLinesByFile: %v", err)
+	}
+	if _, ok := files["decoy"]; ok {
+		t.Fatalf("lone +++ line switched files: %#v", files)
+	}
+	if lines := files["real"]; len(lines) != 2 || lines[1].text != "SECRET=1" || lines[1].number != 6 {
+		t.Fatalf("real added lines = %#v", lines)
+	}
+}
+
+// git quotes the whole path, b/ prefix included.
+func TestParseDiffPathQuotedPrefix(t *testing.T) {
+	for raw, want := range map[string]string{
+		`"b/dir/na\"me"`: `dir/na"me`,
+		`"b/tab\there"`:  "tab\there",
+		"b/plain":        "plain",
+		`"b/../escape"`:  "",
+		"/dev/null":      "",
+		`"b/"`:           "",
+	} {
+		if got := parseDiffPath(raw); got != want {
+			t.Errorf("parseDiffPath(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

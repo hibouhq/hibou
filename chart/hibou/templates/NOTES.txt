@@ -24,9 +24,46 @@ Restrict it unless this instance is meant to be public.
 NOTE: hibou.autoProvisionOrgs is on: installing the forge App on any account
 creates a Hibou organization for it.
 {{- end }}
+{{- $restricted := list }}
+{{- if .Values.seaweedfs.enabled }}{{ $restricted = append $restricted "SeaweedFS" }}{{ end }}
+{{- if and .Values.postgresql.enabled .Values.postgresql.networkPolicy.enabled }}{{ $restricted = append $restricted "PostgreSQL" }}{{ end }}
+{{- if and .Values.cnpg.cluster.enabled .Values.cnpg.cluster.networkPolicy.enabled }}{{ $restricted = append $restricted "CloudNativePG" }}{{ end }}
+{{- if and .Values.trivy.enabled .Values.trivy.networkPolicy.enabled }}{{ $restricted = append $restricted "Trivy" }}{{ end }}
+{{- $open := list }}
+{{- if and .Values.postgresql.enabled (not .Values.postgresql.networkPolicy.enabled) }}{{ $open = append $open "PostgreSQL" }}{{ end }}
+{{- if and .Values.cnpg.cluster.enabled (not .Values.cnpg.cluster.networkPolicy.enabled) }}{{ $open = append $open "CloudNativePG" }}{{ end }}
+{{- if and .Values.trivy.enabled (not .Values.trivy.networkPolicy.enabled) }}{{ $open = append $open "Trivy" }}{{ end }}
+{{- if $restricted }}
+
+NOTE: ingress NetworkPolicies admit only hibou pods to the bundled
+{{ join ", " $restricted }}. They take effect only with a CNI that enforces
+NetworkPolicy; the SeaweedFS one is also what keeps its unauthenticated S3 gRPC
+port (8333+10000) unreachable.
+{{- end }}
+{{- if $open }}
+
+WARNING: {{ join ", " $open }} accept(s) traffic from any pod in the cluster
+(its networkPolicy.enabled is false).
+{{- end }}
 {{- if not .Values.hibou.networkPolicy.enabled }}
 
-NOTE: hibou.networkPolicy.enabled is false, so hibou, PostgreSQL, SeaweedFS and
-Trivy accept traffic from any pod in the cluster. Enable it if your CNI
-enforces NetworkPolicy.
+NOTE: hibou.networkPolicy.enabled is false, so the hibou pods accept traffic
+from any pod and may reach any address. Enable it if your CNI enforces
+NetworkPolicy, after pointing hibou.networkPolicy.ingressFrom at your ingress
+controller (the default, kube-system, matches k3s Traefik only).
+{{- else if .Values.hibou.mcp.enabled }}
+
+NOTE: the MCP port {{ include "hibou.mcpPort" . }} is reachable from {{ if .Values.hibou.networkPolicy.mcpFrom }}hibou.networkPolicy.mcpFrom{{ else }}pods in namespace {{ .Release.Namespace }}{{ end }} only.
+{{- end }}
+{{- if and .Values.hibou.metrics.podMonitor.enabled .Values.hibou.metrics.networkPolicy.enabled }}
+
+NOTE: the PodMonitor scrapes only if your Prometheus pods match
+hibou.metrics.networkPolicy.from; otherwise its targets show as down.
+{{- end }}
+{{- if and .Values.hibou.metrics.enabled (not .Values.hibou.metrics.auth.existingSecret) }}
+
+NOTE: /metrics on port {{ include "hibou.metricsPort" . }} has no bearer token
+(hibou.metrics.auth.existingSecret is empty). It is not exposed by the ingress,
+but any pod in the cluster can read it unless hibou.metrics.networkPolicy (or
+hibou.networkPolicy) restricts it.
 {{- end }}

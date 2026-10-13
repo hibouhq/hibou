@@ -350,7 +350,7 @@ Controls in place:
 - Every tool the development container downloads is checked against a sha256 pinned in `.devcontainer/Dockerfile`, taken from the upstream's published checksums; a version bump without a matching checksum fails the build.
 - Renovate waits 3 days after a release before proposing it (npm, Go, GitHub Actions, container images), and GitHub Actions are pinned by commit SHA.
 - In CI, Actions runtime and OIDC tokens (`ACTIONS_*`) are not forwarded into the development container that runs `npm ci`, tests, and third-party tools; signing and attestation run on the runner host.
-- Releases publish `SHA256SUMS` for the CLI binaries, signed keyless with Sigstore, and GitHub build-provenance attestations for the binaries and the image. The image (release tags and `sha-*` builds of `main`) and the Helm chart OCI artifact are signed with cosign. Release assets are never overwritten.
+- Releases publish `SHA256SUMS` for the CLI binaries, signed keyless with Sigstore, and GitHub build-provenance attestations for the binaries and the image. The image (release tags and `sha-*` builds of `main`) and the Helm chart OCI artifact are signed with cosign. Release assets are never overwritten. Signing and attestations run only once the repository is public (see "Verifying releases").
 
 Recommended supply-chain controls for operators:
 
@@ -366,7 +366,7 @@ Recommended supply-chain controls for operators:
 
 ### Verifying releases
 
-Replace `X.Y.Z` with the release version. Keyless signatures are bound to this repository's CI workflow identity.
+Replace `X.Y.Z` with the release version. Keyless signatures and attestations are bound to this repository's CI workflow and to the ref it ran for: verify both, so a signature made by another workflow, a branch, or a different release tag is refused.
 
 ```bash
 # CLI binaries: verify the signed checksum list, then the binaries against it
@@ -374,23 +374,56 @@ gh release download vX.Y.Z -R hibouhq/hibou \
   -p 'hibou-linux-amd64' -p SHA256SUMS -p SHA256SUMS.sigstore.json
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v'
+  --certificate-identity 'https://github.com/hibouhq/hibou/.github/workflows/ci.yml@refs/tags/vX.Y.Z'
 sha256sum --ignore-missing -c SHA256SUMS
 
 # Build provenance (binaries and image)
-gh attestation verify hibou-linux-amd64 -R hibouhq/hibou
-gh attestation verify oci://ghcr.io/hibouhq/hibou:X.Y.Z -R hibouhq/hibou
+gh attestation verify hibou-linux-amd64 -R hibouhq/hibou \
+  --signer-workflow hibouhq/hibou/.github/workflows/ci.yml --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
+gh attestation verify oci://ghcr.io/hibouhq/hibou:X.Y.Z -R hibouhq/hibou \
+  --signer-workflow hibouhq/hibou/.github/workflows/ci.yml --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners
 
 # Container image and Helm chart signatures
 cosign verify ghcr.io/hibouhq/hibou:X.Y.Z \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v'
+  --certificate-identity 'https://github.com/hibouhq/hibou/.github/workflows/ci.yml@refs/tags/vX.Y.Z'
 cosign verify ghcr.io/hibouhq/charts/hibou:X.Y.Z \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v'
+  --certificate-identity 'https://github.com/hibouhq/hibou/.github/workflows/ci.yml@refs/tags/vX.Y.Z'
 ```
 
-Builds of `main` (`sha-*` image tags, `0.0.0-sha-*` charts) are signed by the same workflow with the identity suffix `@refs/heads/main`.
+A policy that should accept any release rather than one version (an admission controller, a mirror job) uses this anchored expression with `--certificate-identity-regexp`; an unanchored prefix such as `...@refs/tags/v` would also accept a tag like `v1-anything`:
+
+```text
+^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$
+```
+
+Builds of `main` (`sha-*` image tags, `0.0.0-sha-*` charts) are signed by the same workflow for `refs/heads/main`. Verify them by digest, the way they are deployed:
+
+```bash
+cosign verify ghcr.io/hibouhq/hibou@sha256:<digest> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity 'https://github.com/hibouhq/hibou/.github/workflows/ci.yml@refs/heads/main'
+gh attestation verify oci://ghcr.io/hibouhq/hibou@sha256:<digest> -R hibouhq/hibou \
+  --signer-workflow hibouhq/hibou/.github/workflows/ci.yml --source-ref refs/heads/main --deny-self-hosted-runners
+```
+
+The tag in the identity is only as trustworthy as the rules on who may create it. Required repository settings:
+
+- A tag ruleset on `refs/tags/v*` that restricts creation, update and deletion to release maintainers (no bypass for other roles), so only reviewed commits get a release identity.
+- Branch protection on `main` (required review and status checks), since `sha-*` builds are signed as `refs/heads/main`.
+
+Signing, attestations and Rekor entries are skipped while the repository is private: keyless signatures publish the signer identity to the public Rekor log. Until the repository is public, releases carry `SHA256SUMS` without `SHA256SUMS.sigstore.json`, and nothing above verifies.
+
+#### CI and release trust
+
+The CI job is a single job: the devcontainer runs dependency installs, tests and third-party tools, and the runner host keeps the OIDC token, signs and attests. What the host still takes from the workspace, and the limits:
+
+- Local actions (`uses: ./.github/actions/...`) are loaded from the workspace, which the devcontainer mounts read-write. The job records a hash manifest of `.github` and `.devcontainer` right after checkout, outside the workspace, and compares against it after every container step that precedes a local action; any change, added file or symlink fails the job. The check uses `find`/`sha256sum`, not git, because the container can also write `.git/config` (a `core.fsmonitor` command would run on the host's next `git status`).
+- The CLI the host runs for the Hibou upload, and the release binaries it checksums and publishes, are copied out of the workspace right after the build step, before later container steps, and `SHA256SUMS` is computed over those copies. The Hibou upload runs last, after every signing step.
+- `bake-metadata.json` and `chart-ref.txt`, written in the container, are read as data and must match a digest-reference pattern before anything is signed.
+- Residual risk: the devcontainer is privileged (docker-in-docker for the image build), and the runner user has passwordless sudo. Code that runs in the container, such as a compromised npm or Go dependency, can escape to the runner, bypass the manifest check, and read the job's OIDC request token, so it could obtain a signature or attestation under this workflow's identity for an artifact of its choosing. The checks above stop tampering through the workspace only. Verifying by digest (above) limits the damage to artifacts that an attacker actually got published; removing it requires building images without a privileged container, or moving signing to a separate job that never shares a runner with untrusted code.
+- The CLI uploaded to Hibou is built from this commit, so its own code runs on the host with the Hibou token and, in principle, the OIDC request token. It runs after signing, so it cannot change what was signed, but the same identity caveat applies.
 
 ## Residual Risks & Recommendations
 

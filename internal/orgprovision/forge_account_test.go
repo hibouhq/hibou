@@ -2,6 +2,7 @@ package orgprovision
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -13,8 +14,10 @@ import (
 // verifyingForge is a forge whose App API confirms installations.
 type verifyingForge struct {
 	fakeForgeProvider
-	accounts map[int64]*forge.InstallationAccount
-	lookups  int
+	accounts      map[int64]*forge.InstallationAccount
+	lookups       int
+	accountAdmins map[string]map[string]bool
+	adminErr      error
 }
 
 func (p *verifyingForge) GetInstallationAccount(_ context.Context, id int64) (*forge.InstallationAccount, error) {
@@ -192,17 +195,38 @@ func TestRecordInstallationDeletedRevokesBindings(t *testing.T) {
 	}
 }
 
+// accountAdmins answers IsAccountAdmin: account id -> admin forge user ids.
+func (p *verifyingForge) IsAccountAdmin(_ context.Context, accountID, userID string) (bool, error) {
+	if p.adminErr != nil {
+		return false, p.adminErr
+	}
+	return p.accountAdmins[accountID][userID], nil
+}
+
+// A legacy org is bound to the id its login now maps to only when one of its
+// recorded admins administers that account (by immutable user id); a login
+// re-registered by someone else, or an unanswerable check, leaves it unbound.
 func TestBackfillForgeAccountIDs(t *testing.T) {
 	t.Parallel()
 
 	st := newFakeStore()
 	legacy := st.addOrganization("github", "acme")
 	legacy.ForgeAccountLogin = "Acme"
+	owner := st.addUser("github", "owner-1")
+	st.memberships[membershipKey(legacy.ID, owner.ID)] = "admin"
+	hijacked := st.addOrganization("github", "renamed")
+	hijacked.ForgeAccountLogin = "renamed"
+	victim := st.addUser("github", "owner-2")
+	st.memberships[membershipKey(hijacked.ID, victim.ID)] = "admin"
 	manual := st.addOrganization("github", "manual")
-	svc, _ := newVerifyingService(st, map[int64]*forge.InstallationAccount{
+	svc, provider := newVerifyingService(st, map[int64]*forge.InstallationAccount{
 		7: {InstallationID: 7, AccountID: "42", AccountLogin: "acme"},
 		8: {InstallationID: 8, AccountID: "43", AccountLogin: "manual"},
+		9: {InstallationID: 9, AccountID: "44", AccountLogin: "renamed"},
 	})
+	// Account 44 now carries the "renamed" login, but the org's admin does
+	// not administer it: someone else registered the login.
+	provider.accountAdmins = map[string]map[string]bool{"42": {"owner-1": true}, "44": {"stranger": true}}
 
 	if err := svc.BackfillForgeAccountIDs(context.Background()); err != nil {
 		t.Fatalf("backfill: %v", err)
@@ -210,8 +234,27 @@ func TestBackfillForgeAccountIDs(t *testing.T) {
 	if legacy.ForgeAccountID != "42" {
 		t.Fatalf("legacy org id = %q, want 42", legacy.ForgeAccountID)
 	}
+	if hijacked.ForgeAccountID != "" {
+		t.Fatalf("org bound to a re-registered login's account %q", hijacked.ForgeAccountID)
+	}
 	if manual.ForgeAccountID != "" {
 		t.Fatal("orgs without a recorded login must not be bound by slug")
+	}
+
+	// A failing check is not corroboration.
+	st2 := newFakeStore()
+	org := st2.addOrganization("github", "acme")
+	org.ForgeAccountLogin = "acme"
+	admin := st2.addUser("github", "owner-1")
+	st2.memberships[membershipKey(org.ID, admin.ID)] = "admin"
+	svc2, provider2 := newVerifyingService(st2, map[int64]*forge.InstallationAccount{7: {InstallationID: 7, AccountID: "42", AccountLogin: "acme"}})
+	provider2.accountAdmins = map[string]map[string]bool{"42": {"owner-1": true}}
+	provider2.adminErr = errors.New("github down")
+	if err := svc2.BackfillForgeAccountIDs(context.Background()); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if org.ForgeAccountID != "" {
+		t.Fatal("bound a legacy org although the corroborating check failed")
 	}
 }
 
@@ -273,3 +316,6 @@ func TestAuthorizeForgeOrgCreationAccountReturnsBinding(t *testing.T) {
 		t.Fatalf("binding = %+v, want Acme/42", account)
 	}
 }
+
+// The GitHub forge corroborates legacy bindings in production.
+var _ AccountAdminVerifier = (*forge.GitHub)(nil)

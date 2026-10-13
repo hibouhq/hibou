@@ -13,6 +13,10 @@ func TestValidScopeOverridePath(t *testing.T) {
 		"-x":           false,
 		"--exclude=*":  false,
 		"src/-literal": true,
+		`a\..\b`:       false,
+		`a\b`:          false,
+		"C:/x":         false,
+		"a\x00b":       false,
 	} {
 		if got := validScopeOverridePath(path); got != want {
 			t.Errorf("validScopeOverridePath(%q) = %v, want %v", path, got, want)

@@ -60,6 +60,13 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
+		// The sign-in allowlist governs sockets like every other request:
+		// without this, a user it no longer admits kept a live socket until
+		// the first session re-check.
+		if !authMgr.UserAllowed(r.Context(), user) {
+			http.Error(w, "account is not allowed to sign in", http.StatusForbidden)
+			return
+		}
 		// Checked again atomically on registration; this one answers with a
 		// plain HTTP status before the upgrade in the common case.
 		if h.userConnectionCount(user.ID) >= maxConnectionsPerUser {
@@ -67,6 +74,10 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 			return
 		}
 
+		// Only now, with the session validated, may the connection outlive
+		// the server-wide read/write timeouts: the hijacked connection keeps
+		// whatever deadline is set at Accept. Liveness is keepAlive's job.
+		liftDeadlines(w)
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -101,6 +112,15 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 			h.handleClientMessage(ctx, client, msg)
 		}
 	}
+}
+
+// liftDeadlines clears the connection's read and write deadlines. Errors are
+// ignored: a writer without deadlines (tests, HTTP/2 without support) has
+// nothing to lift.
+func liftDeadlines(w http.ResponseWriter) {
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Time{})
+	_ = controller.SetWriteDeadline(time.Time{})
 }
 
 // sessionStillValid re-reads the user: a bumped session epoch means the

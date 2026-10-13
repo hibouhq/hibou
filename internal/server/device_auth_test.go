@@ -3,13 +3,20 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/hibouhq/hibou/internal/apitoken"
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/devicelogin"
@@ -34,8 +41,25 @@ func deviceJSON(t *testing.T, method, target string, body any) *http.Request {
 		}
 	}
 	req := httptest.NewRequest(method, target, bytes.NewReader(payload))
-	req.RemoteAddr = "203.0.113.7:4242"
+	req.RemoteAddr = "[" + deviceTestIP(t) + "]:4242"
 	return req
+}
+
+// deviceTestIPs gives each test its own requester address for the whole run.
+// Pending device logins persist in the shared test database and are capped
+// per IP, so a fixed address fills up across runs and tests start failing
+// with slow_down.
+var deviceTestIPs sync.Map
+
+func deviceTestIP(t *testing.T) string {
+	t.Helper()
+	if ip, ok := deviceTestIPs.Load(t.Name()); ok {
+		return ip.(string)
+	}
+	id := uuid.New()
+	ip := fmt.Sprintf("2001:db8:%x:%x::1", binary.BigEndian.Uint16(id[0:2]), binary.BigEndian.Uint16(id[2:4]))
+	actual, _ := deviceTestIPs.LoadOrStore(t.Name(), ip)
+	return actual.(string)
 }
 
 func asUser(req *http.Request, user *store.User) *http.Request {
@@ -108,7 +132,7 @@ func TestDeviceLoginApproveIssuesMembershipWideTokenOnce(t *testing.T) {
 	if err := json.Unmarshal(lookup.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
 	}
-	if view.Data.ClientName != "devbox[31m" || view.Data.RequesterIP != "203.0.113.7" || view.Data.RequestedPreset != "cli" {
+	if view.Data.ClientName != "devbox[31m" || view.Data.RequesterIP != deviceTestIP(t) || view.Data.RequestedPreset != "cli" {
 		t.Fatalf("lookup view = %+v", view.Data)
 	}
 	found := false
@@ -245,5 +269,216 @@ func TestSanitizeClientNameAndTokenName(t *testing.T) {
 	}
 	if got := deviceTokenName(devicelogin.ClientIntelliJ, ""); got != "IDE — IntelliJ on unknown device" {
 		t.Errorf("deviceTokenName = %q", got)
+	}
+}
+
+func TestDevicePresetWithin(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		approved, requested apitoken.Preset
+		want                bool
+	}{
+		{apitoken.PresetReadOnly, apitoken.PresetReadOnly, true},
+		{apitoken.PresetReadOnly, apitoken.PresetCLI, true},
+		{apitoken.PresetCLI, apitoken.PresetCLI, true},
+		{apitoken.PresetCLI, apitoken.PresetReadOnly, false},
+		{"admin", apitoken.PresetCLI, false},
+		{apitoken.PresetReadOnly, "", false},
+	}
+	for _, tc := range cases {
+		if got := devicePresetWithin(tc.approved, tc.requested); got != tc.want {
+			t.Errorf("devicePresetWithin(%q, %q) = %v, want %v", tc.approved, tc.requested, got, tc.want)
+		}
+	}
+}
+
+func TestDeviceApproveCannotRaiseRequestedPreset(t *testing.T) {
+	t.Parallel()
+	srv, _, admin, _ := newDeviceTestServer(t)
+
+	// IDE clients default to read-only.
+	auth := startDeviceLogin(t, srv, devicelogin.ClientVSCode, "")
+
+	lookup := httptest.NewRecorder()
+	srv.handleDeviceLookup(lookup, asUser(deviceJSON(t, http.MethodGet, "/api/v1/auth/device?user_code="+url.QueryEscape(auth.UserCode), nil), admin))
+	if lookup.Code != http.StatusOK {
+		t.Fatalf("lookup: %d %s", lookup.Code, lookup.Body.String())
+	}
+	var view struct {
+		Data deviceRequestView `json:"data"`
+	}
+	if err := json.Unmarshal(lookup.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Data.RequestedPreset != string(apitoken.PresetReadOnly) || len(view.Data.Presets) != 1 || view.Data.Presets[0].Key != string(apitoken.PresetReadOnly) {
+		t.Fatalf("IDE lookup offers %+v (requested %q), want read-only only", view.Data.Presets, view.Data.RequestedPreset)
+	}
+
+	raise := httptest.NewRecorder()
+	srv.handleDeviceApprove(raise, asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{UserCode: auth.UserCode, Preset: "cli"}), admin))
+	if raise.Code != http.StatusBadRequest {
+		t.Fatalf("approving cli for a read-only request = %d, want 400", raise.Code)
+	}
+
+	// A CLI request can be lowered to read-only.
+	cli := startDeviceLogin(t, srv, devicelogin.ClientCLI, "")
+	lower := httptest.NewRecorder()
+	srv.handleDeviceApprove(lower, asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{UserCode: cli.UserCode, Preset: "read-only"}), admin))
+	if lower.Code != http.StatusOK {
+		t.Fatalf("lowering cli to read-only = %d %s", lower.Code, lower.Body.String())
+	}
+	if code, body := pollDevice(t, srv, cli.DeviceCode, devicelogin.ClientCLI); code != http.StatusOK || body["preset"] != "read-only" {
+		t.Fatalf("poll after lowered approval = %d %v", code, body)
+	}
+}
+
+func TestDeviceTokenRechecksKeyQuotaAtMint(t *testing.T) {
+	t.Parallel()
+	srv, _, admin, _ := newDeviceTestServer(t)
+	ctx := context.Background()
+
+	scope, _ := apitoken.MembershipScope(admin.ID.String(), apitoken.PresetReadOnly)
+	scopes, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing, err := srv.queries.CountAPIKeysCreatedByUser(ctx, admin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := existing; i < maxAPIKeysPerUser-1; i++ {
+		if _, _, err := mintUserAPIKey(ctx, srv.queries, admin.ID, "filler", "", scopes, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Both approvals pass the approval-time check (one slot left)...
+	first := startDeviceLogin(t, srv, devicelogin.ClientCLI, "")
+	second := startDeviceLogin(t, srv, devicelogin.ClientCLI, "")
+	for _, a := range []devicelogin.Authorization{first, second} {
+		rec := httptest.NewRecorder()
+		srv.handleDeviceApprove(rec, asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{UserCode: a.UserCode, Preset: "cli"}), admin))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("approve: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// ...but only one may mint.
+	if code, body := pollDevice(t, srv, first.DeviceCode, devicelogin.ClientCLI); code != http.StatusOK {
+		t.Fatalf("first poll = %d %v", code, body)
+	}
+	if code, body := pollDevice(t, srv, second.DeviceCode, devicelogin.ClientCLI); code != http.StatusBadRequest || body["error"] != devicelogin.ErrCodeAccessDenied {
+		t.Fatalf("poll over the key cap = %d %v, want access_denied", code, body)
+	}
+	if code, body := pollDevice(t, srv, second.DeviceCode, devicelogin.ClientCLI); body["error"] != devicelogin.ErrCodeExpired {
+		t.Fatalf("poll after quota refusal = %d %v, want expired_token (request spent)", code, body)
+	}
+	count, err := srv.queries.CountAPIKeysCreatedByUser(ctx, admin.ID)
+	if err != nil || count != maxAPIKeysPerUser {
+		t.Fatalf("keys = %d (%v), want %d", count, err, maxAPIKeysPerUser)
+	}
+}
+
+func TestDeviceCodeLimiterLocksOutPerIPAndGlobally(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_700_000_000, 0)
+	l := newDeviceCodeLimiter(3, 5, time.Minute)
+	l.now = func() time.Time { return now }
+
+	for range 3 {
+		if _, locked := l.blocked("10.0.0.1"); locked {
+			t.Fatal("locked before the per-IP cap")
+		}
+		l.fail("10.0.0.1")
+	}
+	if retry, locked := l.blocked("10.0.0.1"); !locked || retry <= 0 || retry > time.Minute {
+		t.Fatalf("after 3 failures: locked=%v retry=%v, want locked", locked, retry)
+	}
+	if _, locked := l.blocked("10.0.0.2"); locked {
+		t.Fatal("another IP is locked before the global cap")
+	}
+
+	l.fail("10.0.0.2")
+	l.fail("10.0.0.3")
+	if _, locked := l.blocked("10.0.0.4"); !locked {
+		t.Fatal("global cap reached but a fresh IP is not locked")
+	}
+
+	now = now.Add(time.Minute)
+	if _, locked := l.blocked("10.0.0.1"); locked {
+		t.Fatal("lockout outlived its window")
+	}
+}
+
+func TestDeviceLookupLockoutAfterFailedCodes(t *testing.T) {
+	t.Parallel()
+	srv, _, admin, _ := newDeviceTestServer(t)
+	auth := startDeviceLogin(t, srv, devicelogin.ClientCLI, "")
+
+	fromIP := func(req *http.Request) *http.Request {
+		req.RemoteAddr = "198.51.100.77:5555" // own IP: the guard is process-wide
+		return req
+	}
+	for i := range deviceCodeFailuresPerIP {
+		rec := httptest.NewRecorder()
+		srv.handleDeviceLookup(rec, fromIP(asUser(deviceJSON(t, http.MethodGet, "/api/v1/auth/device?user_code=ZZZZ-ZZZ"+string(rune('A'+i%20)), nil), admin)))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("guess %d = %d, want 404", i, rec.Code)
+		}
+	}
+	// Locked out: even the right code, and approve/deny, get 429.
+	lookup := httptest.NewRecorder()
+	srv.handleDeviceLookup(lookup, fromIP(asUser(deviceJSON(t, http.MethodGet, "/api/v1/auth/device?user_code="+url.QueryEscape(auth.UserCode), nil), admin)))
+	if lookup.Code != http.StatusTooManyRequests || lookup.Header().Get("Retry-After") == "" {
+		t.Fatalf("lookup while locked = %d (Retry-After %q), want 429", lookup.Code, lookup.Header().Get("Retry-After"))
+	}
+	approve := httptest.NewRecorder()
+	srv.handleDeviceApprove(approve, fromIP(asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{UserCode: auth.UserCode, Preset: "cli"}), admin)))
+	if approve.Code != http.StatusTooManyRequests {
+		t.Fatalf("approve while locked = %d, want 429", approve.Code)
+	}
+	deny := httptest.NewRecorder()
+	srv.handleDeviceDeny(deny, fromIP(asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/deny", deviceDecisionRequest{UserCode: auth.UserCode}), admin)))
+	if deny.Code != http.StatusTooManyRequests {
+		t.Fatalf("deny while locked = %d, want 429", deny.Code)
+	}
+
+	// Other addresses are unaffected.
+	ok := httptest.NewRecorder()
+	srv.handleDeviceLookup(ok, asUser(deviceJSON(t, http.MethodGet, "/api/v1/auth/device?user_code="+url.QueryEscape(auth.UserCode), nil), admin))
+	if ok.Code != http.StatusOK {
+		t.Fatalf("lookup from another IP = %d, want 200", ok.Code)
+	}
+}
+
+// Approving mints a token valid for up to a year, so it needs a recent
+// sign-in: a session cookie older than deviceApproveMaxSessionAge (or none) is
+// refused, a fresh one is accepted.
+func TestDeviceApproveNeedsRecentSession(t *testing.T) {
+	srv, _, admin, _ := newDeviceTestServer(t)
+	srv.authMgr = internalauth.New(internalauth.Config{SessionSecret: "0123456789abcdef0123456789abcdef"}, nil)
+	authz := startDeviceLogin(t, srv, devicelogin.ClientCLI, "cli")
+
+	approve := func(withCookie bool) *httptest.ResponseRecorder {
+		req := asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{
+			UserCode: authz.UserCode, Preset: "cli",
+		}), admin)
+		if withCookie {
+			issued := httptest.NewRecorder()
+			srv.authMgr.SetSessionCookie(issued, admin)
+			for _, cookie := range issued.Result().Cookies() {
+				req.AddCookie(cookie)
+			}
+		}
+		rec := httptest.NewRecorder()
+		srv.handleDeviceApprove(rec, req)
+		return rec
+	}
+
+	if rec := approve(false); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "sign in again") {
+		t.Fatalf("approve without a verifiable session = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if rec := approve(true); rec.Code != http.StatusOK {
+		t.Fatalf("approve with a fresh session = %d %s, want 200", rec.Code, rec.Body.String())
 	}
 }

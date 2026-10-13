@@ -1,6 +1,7 @@
 package applicability
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hibouhq/hibou/internal/scancatalog"
@@ -155,12 +156,17 @@ func TestDetectDropsOptionLikeAndEscapingRoots(t *testing.T) {
 		"../up/pom.xml",
 		"java/pom.xml",
 		"java/src/App.java",
-	}, false, catalog(t), Overrides{ModuleRoots: []string{"-declared", "../escape", "ok"}})
+		`win\..\..\pom.xml`,
+		"C:/abs/pom.xml",
+	}, false, catalog(t), Overrides{ModuleRoots: []string{"-declared", "../escape", `back\slash`, "D:/drive", "ok"}})
 	for _, module := range result.Modules {
 		if !safeRoot(module.Root) {
 			t.Errorf("unsafe module root planned: %q", module.Root)
 		}
-		if module.Root == "-declared" || module.Root == "../escape" {
+		// The CLI refuses backslashes and drive letters (planpath); a root
+		// the server plans must never be one the CLI rejects.
+		if module.Root == "-declared" || module.Root == "../escape" || module.Root == `back\slash` || module.Root == "D:/drive" ||
+			strings.ContainsAny(module.Root, `\:`) {
 			t.Errorf("declared unsafe root kept: %q", module.Root)
 		}
 	}

@@ -169,8 +169,10 @@ func runSpotBugsMaven(ctx context.Context, job scanplan.Job, entry CatalogEntry,
 		if _, err := os.Stat(filepath.Join(moduleDir, "target", "classes")); err != nil {
 			return result, fmt.Errorf("%w: compile %s first (no target/classes): bytecode analysis needs the build's classes", ErrPrerequisite, module)
 		}
+		// mvn runs in moduleDir: a pom path joined to moduleDir would resolve
+		// twice when the source root is relative (the default ".").
 		args := []string{
-			"-B", "-q", "-f", filepath.Join(moduleDir, "pom.xml"), goal,
+			"-B", "-q", "-f", "pom.xml", goal,
 			"-Dspotbugs.sarifOutput=true", "-Dspotbugs.effort=Max", "-Dspotbugs.threshold=Low",
 			"-Dspotbugs.includeTests=false", "-Dspotbugs.failOnError=false",
 			"-Dspotbugs.pluginList=" + findSecBugs,

@@ -73,9 +73,36 @@ func NewWithOverrides(serverOverride, tokenOverride string) (*Client, error) {
 		Server: strings.TrimRight(server, "/"),
 		Token:  token,
 		HTTPClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:       30 * time.Second,
+			CheckRedirect: CheckRedirect,
 		},
 	}, nil
+}
+
+// maxRedirects matches net/http's default policy.
+const maxRedirects = 10
+
+// CheckRedirect is the redirect policy of a client that sends a bearer
+// token. net/http keeps the Authorization header on a same-host redirect,
+// even one from https to http, and a server (or whoever can answer for it)
+// could otherwise bounce the token to another host. While the request
+// carries Authorization, a redirect must stay on the same scheme-and-host
+// and must not downgrade https to http.
+func CheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	previous := via[len(via)-1]
+	if previous.Header.Get("Authorization") == "" && req.Header.Get("Authorization") == "" {
+		return nil
+	}
+	if strings.EqualFold(previous.URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("refusing redirect from %s to %s: it would send the API token over plain HTTP", previous.URL.Redacted(), req.URL.Redacted())
+	}
+	if !strings.EqualFold(previous.URL.Host, req.URL.Host) {
+		return fmt.Errorf("refusing redirect from %s to another host (%s) with the API token", previous.URL.Host, req.URL.Host)
+	}
+	return nil
 }
 
 // InsecureHTTPEnv set to "1" lets the CLI talk to a plain http:// server
@@ -147,8 +174,9 @@ func (c *Client) PostRaw(path string, contentType string, body io.Reader, out an
 	return c.doRequest(req, out)
 }
 
-// maxRetryAttempts bounds retries of a request the server shed with 429/503
-// (rate limit, upload concurrency limit). Each wait honours Retry-After.
+// maxRetryAttempts bounds retries of a request the server shed with 429 (rate
+// limit, upload concurrency limit), or with 503 for an idempotent method.
+// Each wait honours Retry-After.
 const maxRetryAttempts = 4
 
 // retrySleep is swapped by tests.
@@ -183,12 +211,29 @@ func (c *Client) do(method, path string, body any, out any) error {
 
 		err = c.doRequest(req, out)
 		var shed *shedError
-		if !errors.As(err, &shed) || attempt >= maxRetryAttempts {
+		if !errors.As(err, &shed) || attempt >= maxRetryAttempts || !retryable(method, shed.status) {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "server busy (%d), retrying in %s\n", shed.status, shed.wait)
 		retrySleep(shed.wait)
 	}
+}
+
+// retryable reports whether a shed request may be sent again. 429 means the
+// server refused it before doing anything. A 503 may come from a proxy after
+// the server acted on the request, so only idempotent methods repeat it: a
+// repeated POST could upload or trigger work twice.
+func retryable(method string, status int) bool {
+	switch status {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusServiceUnavailable:
+		switch method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+			return true
+		}
+	}
+	return false
 }
 
 // shedError is a 429/503 the server asked the client to retry later.

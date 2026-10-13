@@ -198,17 +198,23 @@ func (g *GitHub) cachedInstallationToken(ctx context.Context, owner string) (str
 }
 
 // authorizeForOwner attaches the owner's installation token when running in
-// App mode. Minting failures fall back to anonymous rather than erroring —
-// public repositories still work, just rate-limited.
-func (g *GitHub) authorizeForOwner(ctx context.Context, request *http.Request, owner string) {
+// App mode. A token that cannot be minted is an error, not an anonymous
+// request: an unauthenticated call sees only public data, and a caller that
+// reads its answer ("file not found", "not a member") would act on what it
+// was never allowed to see. Outside App mode the request stays as it is.
+func (g *GitHub) authorizeForOwner(ctx context.Context, request *http.Request, owner string) error {
 	if !g.isAppMode() || request == nil {
-		return
+		return nil
 	}
 	token, err := g.cachedInstallationToken(ctx, owner)
-	if err != nil || token == "" {
-		return
+	if err != nil {
+		return fmt.Errorf("installation token for %q: %w", owner, err)
+	}
+	if token == "" {
+		return fmt.Errorf("installation token for %q: empty token", owner)
 	}
 	request.Header.Set("Authorization", githubBearerPrefix+token)
+	return nil
 }
 
 // installationTokenForOwner mints an installation access token for the App
