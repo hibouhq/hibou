@@ -141,6 +141,36 @@
             </option>
           </select>
         </div>
+
+        <div class="flex items-start justify-between gap-6 py-3">
+          <div>
+            <div class="text-sm font-medium text-gray-200">
+              CLI and IDE login tokens
+            </div>
+            <p class="mt-0.5 text-xs text-gray-500">
+              Tokens from <code class="text-gray-400">hibou login</code> and the IDE extensions work in every
+              organization their owner belongs to, with that member's role. Read-only caps them at viewer here;
+              blocked makes this organization invisible to them. Tokens created under Settings › API Keys are
+              not affected.
+            </p>
+          </div>
+          <select
+            v-model="form.login_tokens"
+            aria-label="CLI and IDE login tokens"
+            class="h-8 shrink-0 rounded-md border border-surface-border bg-surface-overlay px-2 text-sm text-gray-200 focus:border-accent/50 focus:outline-none disabled:opacity-60"
+            :disabled="!isOrgAdmin"
+          >
+            <option value="allow">
+              Allowed
+            </option>
+            <option value="read_only">
+              Read-only
+            </option>
+            <option value="deny">
+              Blocked
+            </option>
+          </select>
+        </div>
       </div>
 
       <div
@@ -231,6 +261,7 @@ const form = reactive<OrgSettings>({
   vex_auto_propagate: false,
   vex_reachability_analysis: false,
   default_tlp_label: '',
+  login_tokens: 'allow',
 })
 
 const isDirty = computed(() => {
@@ -241,6 +272,7 @@ const isDirty = computed(() => {
   return current.vex_auto_propagate !== form.vex_auto_propagate
     || current.vex_reachability_analysis !== form.vex_reachability_analysis
     || current.default_tlp_label !== form.default_tlp_label
+    || current.login_tokens !== form.login_tokens
 })
 
 watch(

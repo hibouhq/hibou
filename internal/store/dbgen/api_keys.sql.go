@@ -94,6 +94,36 @@ func (q *Queries) DeleteAPIKey(ctx context.Context, arg DeleteAPIKeyParams) erro
 	return err
 }
 
+const deleteAPIKeyByID = `-- name: DeleteAPIKeyByID :one
+DELETE FROM api_keys
+WHERE id = $1 AND owner_type = 'user'
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description, approval_status, approved_by, approved_at
+`
+
+// A token revoking itself (ADR-043 §6, logout). Only user-owned keys: an
+// org-owned service principal is revoked by an org admin.
+func (q *Queries) DeleteAPIKeyByID(ctx context.Context, id uuid.UUID) (ApiKey, error) {
+	row := q.db.QueryRowContext(ctx, deleteAPIKeyByID, id)
+	var i ApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.KeyHash,
+		&i.Scopes,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.OwnerType,
+		&i.OwnerID,
+		&i.Description,
+		&i.ApprovalStatus,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
+	)
+	return i, err
+}
+
 const deleteAPIKeyByOrg = `-- name: DeleteAPIKeyByOrg :execrows
 DELETE FROM api_keys
 WHERE id = $1 AND owner_type = 'org' AND owner_id = $2

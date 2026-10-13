@@ -10,6 +10,13 @@ const router = createRouter({
       meta: { public: true },
     },
     {
+      // ADR-043: approve a `hibou login` / IDE sign-in. Signed-in only, outside
+      // the app shell so nothing distracts from the code to compare.
+      path: '/device',
+      name: 'device',
+      component: () => import('@/views/DeviceView.vue'),
+    },
+    {
       path: '/',
       component: () => import('@/layouts/AppLayout.vue'),
       children: [

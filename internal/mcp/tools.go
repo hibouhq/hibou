@@ -20,6 +20,7 @@ import (
 	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/license"
+	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/repoaccess"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -424,6 +425,10 @@ func (s *service) resolveOrgAndAuth(ctx context.Context, orgArg string) (*store.
 	}
 
 	role, err := s.store.GetOrgMemberRole(ctx, org.ID, user.ID)
+	if err == nil && tokenAuth.IsMembershipWide() {
+		// Same org policy as the HTTP API (ADR-043 §4).
+		role = rbac.CapRoleForLoginToken(role, rbac.LoginTokensPolicy(org.Settings))
+	}
 	if err != nil || role == "" {
 		return nil, repoaccess.Access{}, errNotFoundOrNoAccess
 	}

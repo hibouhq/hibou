@@ -81,14 +81,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawKey, err := apitoken.Generate()
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to generate API key")
-		return
-	}
-	keyHash := store.HashAPIKey(rawKey)
-
-	apiKey, err := s.queries.CreateAPIKey(r.Context(), user.ID, input.Name, keyHash, scopes, input.ExpiresAt, "user", &user.ID, input.Description)
+	rawKey, apiKey, err := mintUserAPIKey(r.Context(), s.queries, user.ID, input.Name, input.Description, scopes, input.ExpiresAt)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to create API key")
 		return
@@ -452,5 +445,9 @@ func scopeAuditSummary(apiKey *store.APIKey) string {
 		}
 	}
 	sort.Strings(grants)
-	return fmt.Sprintf("org=%s repos=%s %s", scope.Org, repos, strings.Join(grants, ","))
+	org := scope.Org
+	if scope.MembershipWide() {
+		org = "(memberships)"
+	}
+	return fmt.Sprintf("org=%s repos=%s %s", org, repos, strings.Join(grants, ","))
 }

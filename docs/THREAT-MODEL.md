@@ -125,6 +125,7 @@ TB-7  MCP clients <-> Dedicated MCP listener
 | S-4 | Webhook sender spoofing to fake push or PR events. | `/api/v1/webhooks/{provider}`, forge integrations | High | Medium | Provider-specific `ValidateWebhookPayload` enforces HMAC validation. Outside development, startup refuses a forge without `HIBOU_FORGE_N_WEBHOOK_SECRET` and a secret-less delivery fails closed. `webhookProtection` adds optional per-provider IP allowlisting and rate limiting. GitHub IPs auto-refresh every 6 hours from `/meta`. | `internal/server/ipallowlist.go` allows requests until the dynamic allowlist loads successfully, so first-start posture depends on webhook secret validation alone. Weak or reused webhook secrets weaken the check. |
 | S-5 | Forged upload identity by reusing a stolen CLI or CI API key to submit malicious findings under a legitimate repository. | Upload API, snapshots, audit trail | High | Medium | Uploads require bearer authentication and validate repository/ref payload structure before snapshot creation. Audit and snapshot lineage preserve actor association. | API keys are bearer-only; there is no request signing or workload identity binding. A compromised runner can impersonate the pipeline until key rotation. |
 | S-6 | Forged `hibou_session` and `hibou_oauth_state` cookies when `HIBOU_SESSION_SECRET` is left at the shipped default value `change-me-in-production`. Anyone who knows the default can mint valid cookies and bypass normal login. | Browser sessions, OAuth callback flow, auth middleware | Critical | Low | Cookies are HMAC-signed and time-bounded. Outside development mode, startup refuses an empty secret, the shipped default, or a secret shorter than 32 bytes. | A deployment run with `HIBOU_DEVELOPMENT` set still accepts the default; never expose development mode. A leaked secret must be rotated (rotation invalidates all sessions). |
+| S-7 | Device-code phishing ([ADR-043](adr/043-cli-browser-login-device-flow.md)): an attacker runs `hibou login` and sends a signed-in victim the `/device?user_code=…` link, hoping they approve and hand over a token. Relevant to OWASP A07:2021. | `/api/v1/auth/device/*`, `/device` page, API keys | High | Medium | Approval is an explicit click on a page that shows the code to compare, the requesting IP, device name and age, with a warning; nothing is auto-approved. Codes live 10 minutes. The token is user-owned, preset-scoped (no triage or admin), capped by the victim's role in each org, listed and revocable under Settings › API Keys, and its mint is audited (`device.approve`, `token.create` via `device_flow`). Orgs can cap login tokens at read-only or block them (`login_tokens` setting). Approval is session-only; a token can never approve a token. | Cannot be eliminated by design: a victim who approves without reading grants the attacker their read access and upload rights until revoked. |
 
 ### Tampering
 
@@ -269,6 +270,27 @@ Controls applied:
 - SSRF guard in `validateNotificationAddress()` blocking loopback, RFC1918, link-local, and `169.254.169.254`
 - Audit logs for delivered and failed attempts
 - Circuit-breaker and failure counters in dispatcher health logic
+
+### 6. Device Login Flow (ADR-043)
+
+```text
+CLI     -> POST /api/v1/auth/device/code {client_id, client_name, scope}
+Hibou   -> stores SHA-256 of device_code and user_code (10 min), returns both + /device URL from HIBOU_BASE_URL
+CLI     -> prints user_code and link; polls POST /api/v1/auth/device/token every 5 s
+Browser -> GET /device?user_code=… (session required; returns there after sign-in)
+        -> GET /api/v1/auth/device?user_code=… shows client, device, IP, age, orgs reached
+        -> POST /api/v1/auth/device/approve {user_code, preset, expires_at}
+CLI     -> next poll: row approved -> consumed and key hash stored in one transaction; raw token returned once
+```
+
+Controls applied:
+
+- Device code is 256-bit random and stored hashed; one successful exchange, replays get `expired_token`
+- User code: 8 characters from a 20-letter alphabet, 10-minute lifetime, lookups rate limited per user
+- Code requests rate limited per IP (10/min) and capped at 10 pending per IP; `slow_down` enforced server-side
+- Approve, deny and lookup are session-only routes (`routeScopes`), CSRF-protected
+- Raw token never stored or logged; minted user-owned and membership-wide, bounded per org by role and the `login_tokens` policy (`principalOrgRole`, MCP org resolution)
+- `hibou logout` revokes the token through `DELETE /api/v1/users/me/api-keys/current`, which reaches only the calling user-owned token
 
 ## Deployment-Specific Threats
 

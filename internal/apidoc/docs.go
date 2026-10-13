@@ -93,6 +93,225 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/device": {
+            "get": {
+                "description": "Show a pending device login to the signed-in user before they approve it (ADR-043). Browser session only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Look up a device login",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Code shown in the terminal (XXXX-XXXX)",
+                        "name": "user_code",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.deviceRequestView"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/device/approve": {
+            "post": {
+                "description": "Approve a pending device login with a preset and expiry (ADR-043). The client's next poll receives a membership-wide token. Browser session only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Approve a device login",
+                "parameters": [
+                    {
+                        "description": "Code, preset and expiry",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.deviceDecisionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/device/code": {
+            "post": {
+                "description": "RFC 8628 device authorization request (ADR-043). Returns a device code for the client to poll with and a user code to approve at verification_uri. Unauthenticated; the response is RFC 8628 JSON, not the api.Response envelope.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Start a device login",
+                "parameters": [
+                    {
+                        "description": "Client and requested preset",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.CodeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.Authorization"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/device/deny": {
+            "post": {
+                "description": "Deny a pending device login (ADR-043). The client's next poll gets access_denied. Browser session only.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Deny a device login",
+                "parameters": [
+                    {
+                        "description": "Code",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.deviceDecisionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/device/token": {
+            "post": {
+                "description": "RFC 8628 device access token request (ADR-043). Answers authorization_pending until the user approves, then returns a membership-wide API token exactly once. Unauthenticated; RFC 8628 JSON.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Poll a device login",
+                "parameters": [
+                    {
+                        "description": "Device code",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.TokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.Token"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/devicelogin.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "get": {
                 "description": "Redirects the caller to the selected OAuth provider login flow",
@@ -9448,6 +9667,43 @@ const docTemplate = `{
                 }
             }
         },
+        "/users/me/api-keys/current": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Delete the user-owned API key that authenticates this request (ADR-043 §6, used by ` + "`" + `hibou logout` + "`" + `). The only key-management action allowed with token auth; it can reach no other key.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "api-keys"
+                ],
+                "summary": "Revoke the calling token",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/users/me/api-keys/{keyID}": {
             "delete": {
                 "security": [
@@ -10035,6 +10291,19 @@ const docTemplate = `{
                 }
             }
         },
+        "apitoken.AccessLevel": {
+            "type": "string",
+            "enum": [
+                "none",
+                "read",
+                "write"
+            ],
+            "x-enum-varnames": [
+                "AccessNone",
+                "AccessRead",
+                "AccessWrite"
+            ]
+        },
         "auth.providerResponse": {
             "type": "object",
             "properties": {
@@ -10076,6 +10345,99 @@ const docTemplate = `{
                 "NotificationDestinationTypeEmail",
                 "NotificationDestinationTypeDiscord"
             ]
+        },
+        "devicelogin.Authorization": {
+            "type": "object",
+            "properties": {
+                "device_code": {
+                    "type": "string"
+                },
+                "expires_in": {
+                    "type": "integer"
+                },
+                "interval": {
+                    "type": "integer"
+                },
+                "user_code": {
+                    "type": "string"
+                },
+                "verification_uri": {
+                    "type": "string"
+                },
+                "verification_uri_complete": {
+                    "type": "string"
+                }
+            }
+        },
+        "devicelogin.CodeRequest": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "scope": {
+                    "description": "Scope is the requested preset (\"cli\" or \"read-only\"). The user can\nchange it on the approval page.",
+                    "type": "string"
+                }
+            }
+        },
+        "devicelogin.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "error_description": {
+                    "type": "string"
+                }
+            }
+        },
+        "devicelogin.Token": {
+            "type": "object",
+            "properties": {
+                "access_token": {
+                    "type": "string"
+                },
+                "expires_in": {
+                    "type": "integer"
+                },
+                "orgs": {
+                    "description": "Orgs is \"memberships\": the token works in every org the user belongs to.",
+                    "type": "string"
+                },
+                "preset": {
+                    "type": "string"
+                },
+                "token_id": {
+                    "type": "string"
+                },
+                "token_name": {
+                    "type": "string"
+                },
+                "token_type": {
+                    "type": "string"
+                },
+                "user": {
+                    "type": "string"
+                }
+            }
+        },
+        "devicelogin.TokenRequest": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "device_code": {
+                    "type": "string"
+                },
+                "grant_type": {
+                    "type": "string"
+                }
+            }
         },
         "orgprovision.OnboardableAccount": {
             "type": "object",
@@ -11396,6 +11758,104 @@ const docTemplate = `{
                 },
                 "status": {
                     "$ref": "#/definitions/store.DeploymentStatus"
+                }
+            }
+        },
+        "server.deviceDecisionRequest": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "preset": {
+                    "type": "string"
+                },
+                "user_code": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.deviceOrgReachView": {
+            "type": "object",
+            "properties": {
+                "effective_role": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "policy": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.devicePresetView": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string"
+                },
+                "permissions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/apitoken.AccessLevel"
+                    }
+                }
+            }
+        },
+        "server.deviceRequestView": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "client_label": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "default_expires_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "max_expires_at": {
+                    "type": "string"
+                },
+                "orgs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.deviceOrgReachView"
+                    }
+                },
+                "presets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.devicePresetView"
+                    }
+                },
+                "requested_preset": {
+                    "type": "string"
+                },
+                "requester_ip": {
+                    "type": "string"
+                },
+                "user_code": {
+                    "type": "string"
                 }
             }
         },

@@ -28,3 +28,30 @@ func TestCheckLoginServerURL(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeServerURL(t *testing.T) {
+	cases := map[string]string{
+		"hibouhq.com":                      "https://hibouhq.com",
+		"  hibouhq.com/  ":                 "https://hibouhq.com",
+		"https://hibou.example.com/":       "https://hibou.example.com",
+		"HTTPS://hibou.example.com/sub/":   "https://hibou.example.com/sub",
+		"http://localhost:8585":            "http://localhost:8585",
+		"localhost:8585":                   "http://localhost:8585",
+		"127.0.0.1:8585/":                  "http://127.0.0.1:8585",
+		"https://u:p@hibou.example/?x=1#y": "https://hibou.example",
+	}
+	for in, want := range cases {
+		got, err := normalizeServerURL(in)
+		if err != nil || got != want {
+			t.Errorf("normalizeServerURL(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "https://", "://nohost"} {
+		if got, err := normalizeServerURL(bad); err == nil {
+			t.Errorf("normalizeServerURL(%q) = %q, want error", bad, got)
+		}
+	}
+	if !sameServer("hibouhq.com", "https://HIBOUHQ.com/") {
+		t.Error("sameServer should ignore scheme default, case and trailing slash")
+	}
+}

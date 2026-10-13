@@ -61,6 +61,8 @@ const (
 	ActionTokenReject       = "token.reject"
 	ActionTokenRotate       = "token.rotate"
 	ActionTokenRevoke       = "token.revoke"
+	ActionDeviceApprove     = "device.approve"
+	ActionDeviceDeny        = "device.deny"
 	ActionRetentionArchive  = "retention.archive"
 	ActionRetentionPurge    = "retention.purge"
 

@@ -12,13 +12,14 @@ import (
 //
 // #nosec G101 -- these are advisory-lock names, not credentials.
 const (
-	LockAdvisoryScanPass = "hibou:advisory-scan-pass"
-	LockRetentionPass    = "hibou:retention-pass"
-	LockCVEFeedSweep     = "hibou:cve-feed-sweep"
-	LockKEVSync          = "hibou:kev-sync"
-	LockRatingsPass      = "hibou:ratings-pass"
-	LockEPSSSync         = "hibou:epss-sync"
-	LockStorageUsage     = "hibou:storage-usage"
+	LockAdvisoryScanPass  = "hibou:advisory-scan-pass"
+	LockRetentionPass     = "hibou:retention-pass"
+	LockCVEFeedSweep      = "hibou:cve-feed-sweep"
+	LockKEVSync           = "hibou:kev-sync"
+	LockRatingsPass       = "hibou:ratings-pass"
+	LockEPSSSync          = "hibou:epss-sync"
+	LockStorageUsage      = "hibou:storage-usage"
+	LockDeviceAuthCleanup = "hibou:device-auth-cleanup"
 )
 
 // WithLeaderLock runs fn only if this connection wins a Postgres session-level

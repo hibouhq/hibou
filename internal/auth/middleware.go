@@ -71,6 +71,13 @@ func (t *TokenAuth) IsServicePrincipal() bool {
 	return t != nil && t.OwnerType == "org"
 }
 
+// IsMembershipWide reports whether this is a user's device-login token that
+// reaches every org the user belongs to (ADR-043 §4). Its org access is the
+// user's role, capped by each org's login-token policy.
+func (t *TokenAuth) IsMembershipWide() bool {
+	return t != nil && t.Scoped && !t.IsServicePrincipal() && t.Scope.MembershipWide()
+}
+
 // ActsForOrg reports whether a service principal belongs to the given org.
 // False for user tokens — callers fall back to user membership then.
 func (t *TokenAuth) ActsForOrg(orgID uuid.UUID) bool {

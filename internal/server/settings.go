@@ -11,6 +11,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -18,6 +19,9 @@ type OrgSettings struct {
 	VEXAutoPropagate        bool   `json:"vex_auto_propagate"`
 	VEXReachabilityAnalysis bool   `json:"vex_reachability_analysis"`
 	DefaultTLPLabel         string `json:"default_tlp_label"`
+	// LoginTokens governs membership-wide device-login tokens in this org
+	// (ADR-043 §4): allow, read_only (role capped at viewer) or deny.
+	LoginTokens string `json:"login_tokens"`
 }
 
 func (s *Server) handleGetOrgSettings(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +94,10 @@ func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 			api.JSONError(w, http.StatusBadRequest, "invalid settings payload")
 			return
 		}
+		if errors.Is(err, errInvalidLoginTokens) {
+			api.JSONError(w, http.StatusBadRequest, "login_tokens must be one of allow, read_only, deny")
+			return
+		}
 		if errors.Is(err, errInvalidTLPLabel) {
 			api.JSONError(w, http.StatusBadRequest, "default_tlp_label must be empty or one of TLP:CLEAR, TLP:GREEN, TLP:AMBER, TLP:AMBER+STRICT, TLP:RED")
 			return
@@ -113,12 +121,14 @@ func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 var (
 	errInvalidOrgSettingsPatch = errors.New("invalid settings patch")
 	errInvalidTLPLabel         = errors.New("invalid tlp label")
+	errInvalidLoginTokens      = errors.New("invalid login tokens policy")
 )
 
 var orgSettingsPatchKeys = map[string]struct{}{
 	"vex_auto_propagate":        {},
 	"vex_reachability_analysis": {},
 	"default_tlp_label":         {},
+	"login_tokens":              {},
 }
 
 func mergeOrgSettingsPatch(existingRaw json.RawMessage, patch map[string]json.RawMessage) (OrgSettings, json.RawMessage, error) {
@@ -143,6 +153,16 @@ func mergeOrgSettingsPatch(existingRaw json.RawMessage, patch map[string]json.Ra
 	}
 	if !isValidTLPLabel(merged.DefaultTLPLabel) {
 		return OrgSettings{}, nil, errInvalidTLPLabel
+	}
+	if !isValidLoginTokens(merged.LoginTokens) {
+		return OrgSettings{}, nil, errInvalidLoginTokens
+	}
+	if _, ok := patch["login_tokens"]; ok {
+		normalized, err := json.Marshal(merged.LoginTokens)
+		if err != nil {
+			return OrgSettings{}, nil, err
+		}
+		existing["login_tokens"] = normalized
 	}
 	if _, ok := patch["default_tlp_label"]; ok || hasDefaultTLPLabel {
 		normalized, err := json.Marshal(merged.DefaultTLPLabel)
@@ -184,7 +204,27 @@ func parseOrgSettings(raw json.RawMessage) (OrgSettings, error) {
 		return OrgSettings{}, err
 	}
 	settings.DefaultTLPLabel = normalizeTLPLabel(settings.DefaultTLPLabel)
+	settings.LoginTokens = normalizeLoginTokens(settings.LoginTokens)
 	return settings, nil
+}
+
+// normalizeLoginTokens maps an unset policy to the default, allow. An
+// unrecognised stored value is kept so validation can reject it on write.
+func normalizeLoginTokens(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return rbac.LoginTokensAllow
+	}
+	return value
+}
+
+func isValidLoginTokens(value string) bool {
+	switch value {
+	case rbac.LoginTokensAllow, rbac.LoginTokensReadOnly, rbac.LoginTokensDeny:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeTLPLabel(value string) string {

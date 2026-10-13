@@ -69,7 +69,12 @@ const scopeIsUsable = computed(() => {
 const customExpiryValid = computed(() =>
   expiresInDays.value !== 'custom' || (customExpiryDate.value >= minExpiryDate.value))
 
-const canSubmit = computed(() => name.value.trim().length > 0 && scopeIsUsable.value && customExpiryValid.value && !submitting.value)
+// A device-login token (ADR-043) reaches every org its owner belongs to; its
+// scope is fixed by `hibou login`, so editing keeps it and changes only the
+// name, description and expiry.
+const editingMembershipWide = computed(() => editing.value !== null && isMembershipWide(editing.value))
+
+const canSubmit = computed(() => name.value.trim().length > 0 && (editingMembershipWide.value || scopeIsUsable.value) && customExpiryValid.value && !submitting.value)
 
 async function load() {
   loading.value = true
@@ -158,7 +163,7 @@ async function submit() {
       const body = {
         name: name.value.trim(),
         description: description.value.trim(),
-        scopes: scope.value,
+        scopes: editingMembershipWide.value ? undefined : scope.value,
         expires_at: expiryTimestamp(),
       }
       if (editing.value.owner_type === 'org' && org) {
@@ -263,6 +268,14 @@ function isMalformed(key: ApiKey): boolean {
   return Boolean(key.scopes) && usableScope(key) === null
 }
 
+function isMembershipWide(key: ApiKey): boolean {
+  return usableScope(key)?.orgs?.mode === 'memberships'
+}
+
+function scopeOrgLabel(key: ApiKey): string {
+  return isMembershipWide(key) ? 'all your orgs' : usableScope(key)?.org ?? ''
+}
+
 function scopeSummary(key: ApiKey): string {
   if (!key.scopes) return 'Unscoped — full account access'
 
@@ -274,7 +287,7 @@ function scopeSummary(key: ApiKey): string {
     .filter(([, level]) => level && level !== 'none')
     .map(([capability, level]) => `${capability}:${level}`)
     .sort()
-  return `${scopes.org} · ${repos} · ${grants.join(', ') || 'no permissions'}`
+  return `${scopeOrgLabel(key)} · ${repos} · ${grants.join(', ') || 'no permissions'}`
 }
 
 function isReadOnly(key: ApiKey): boolean {
@@ -495,7 +508,17 @@ void load()
         >
       </div>
 
-      <TokenScopeEditor v-model="scope" />
+      <p
+        v-if="editingMembershipWide"
+        class="rounded-lg border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-400"
+      >
+        Created by <code class="text-gray-300">hibou login</code>: works in every organization you belong to,
+        with fixed permissions. To change them, revoke this token and log in again.
+      </p>
+      <TokenScopeEditor
+        v-else
+        v-model="scope"
+      />
 
       <p
         v-if="formError"
@@ -677,7 +700,12 @@ void load()
                 v-if="usableScope(key)?.repos.mode === 'all'"
                 class="text-sm text-gray-300"
               >
-                All repositories in {{ usableScope(key)?.org }}, including ones enrolled later.
+                <template v-if="isMembershipWide(key)">
+                  Every repository you can see, in every organization you belong to — now and later.
+                </template>
+                <template v-else>
+                  All repositories in {{ usableScope(key)?.org }}, including ones enrolled later.
+                </template>
               </p>
               <ul
                 v-else

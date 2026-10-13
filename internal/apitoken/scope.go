@@ -87,11 +87,24 @@ func (r RepoSelector) Includes(slug string) bool {
 	return false
 }
 
-// Scope is the enforced authority of a token: one org, a repo selection, and a
-// per-capability access level.
+// OrgMode selects which orgs a token reaches when it does not name one.
+type OrgMode string
+
+// OrgMemberships reaches every org the owning user belongs to at request time
+// (ADR-043 §4). RBAC and the org's login-token policy bound each org.
+const OrgMemberships OrgMode = "memberships"
+
+type OrgSelector struct {
+	Mode OrgMode `json:"mode"`
+}
+
+// Scope is the enforced authority of a token: one org (or, for a device-login
+// token, the owner's memberships), a repo selection, and a per-capability
+// access level.
 type Scope struct {
 	Owner       Owner                      `json:"owner"`
 	Org         string                     `json:"org"`
+	Orgs        *OrgSelector               `json:"orgs,omitempty"`
 	Repos       RepoSelector               `json:"repos"`
 	Permissions map[Capability]AccessLevel `json:"permissions"`
 }
@@ -113,6 +126,17 @@ func Parse(data []byte) (Scope, error) {
 	}
 	if scope.Owner.Type != "" && scope.Owner.Type != OwnerUser && scope.Owner.Type != OwnerOrg {
 		return Scope{}, fmt.Errorf("unknown owner type %q", scope.Owner.Type)
+	}
+	if scope.Orgs != nil {
+		if scope.Orgs.Mode != OrgMemberships {
+			return Scope{}, fmt.Errorf("unknown organization mode %q", scope.Orgs.Mode)
+		}
+		if scope.Org != "" {
+			return Scope{}, errors.New("a membership-wide scope cannot also name an organization")
+		}
+		if scope.Owner.Type == OwnerOrg {
+			return Scope{}, errors.New("an org-owned token cannot be membership-wide")
+		}
 	}
 	for capability, level := range scope.Permissions {
 		if !isKnownCapability(capability) {
@@ -144,10 +168,23 @@ func (s Scope) level(capability Capability) AccessLevel {
 	return AccessNone
 }
 
+// MembershipWide reports whether the token reaches every org its owner belongs
+// to rather than one named org.
+func (s Scope) MembershipWide() bool {
+	return s.Orgs != nil && s.Orgs.Mode == OrgMemberships
+}
+
+// CoversOrg reports whether the scope reaches an org. An empty org skips the
+// check. A membership-wide scope covers every org: membership is RBAC's
+// question, answered per request.
+func (s Scope) CoversOrg(org string) bool {
+	return org == "" || s.MembershipWide() || s.Org == org
+}
+
 // Allows reports whether the scope grants `need` on `capability` for the given
 // org and repo. Empty org/repo skip that dimension of the check.
 func (s Scope) Allows(capability Capability, need AccessLevel, org, repoSlug string) bool {
-	if org != "" && s.Org != org {
+	if !s.CoversOrg(org) {
 		return false
 	}
 	if repoSlug != "" && !s.Repos.Includes(repoSlug) {
@@ -179,6 +216,9 @@ func (s Scope) IsReadOnly() bool {
 // (ADR-022 amendment): a non-admin widening an approved org token drops it
 // back to pending review.
 func (s Scope) Widens(next Scope) bool {
+	if next.MembershipWide() && !s.MembershipWide() {
+		return true
+	}
 	for capability, level := range next.Permissions {
 		if level.rank() > s.level(capability).rank() {
 			return true

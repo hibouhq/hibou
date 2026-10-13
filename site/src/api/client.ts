@@ -796,10 +796,14 @@ export interface InstanceJobsStats {
 
 export type InstanceJobsWindow = '1h' | '6h' | '24h' | '7d'
 
+// ADR-043 §4: how this org treats membership-wide CLI/IDE login tokens.
+export type LoginTokensPolicy = 'allow' | 'read_only' | 'deny'
+
 export interface OrgSettings {
   vex_auto_propagate: boolean
   vex_reachability_analysis: boolean
   default_tlp_label: string
+  login_tokens: LoginTokensPolicy
 }
 
 // Effective .hibou.yml configuration (or its DB-backed fallback) as the
@@ -971,11 +975,41 @@ export type TokenAccessLevel = 'none' | 'read' | 'write'
 export interface TokenScope {
   owner?: { type: 'user' | 'org'; id: string }
   org: string
+  // Set (and `org` empty) on a device-login token that reaches every org its
+  // owner belongs to (ADR-043 §4). Only `hibou login` mints these.
+  orgs?: { mode: 'memberships' }
   repos: { mode: 'all' | 'list'; slugs?: string[] }
   permissions: Partial<Record<TokenCapability, TokenAccessLevel>>
 }
 
 export type ApiKeyApprovalStatus = 'pending' | 'approved' | 'rejected'
+
+// ADR-043 device login, as the /device approval page sees it.
+export type DeviceLoginPreset = 'cli' | 'read-only'
+
+export interface DeviceLoginOrgReach {
+  provider: string
+  slug: string
+  name: string
+  role: string
+  policy: LoginTokensPolicy
+  effective_role: string
+}
+
+export interface DeviceLoginRequest {
+  user_code: string
+  client_id: string
+  client_label: string
+  client_name: string
+  requester_ip: string
+  created_at: string
+  expires_at: string
+  requested_preset: DeviceLoginPreset
+  presets: { key: DeviceLoginPreset; permissions: Partial<Record<TokenCapability, TokenAccessLevel>> }[]
+  orgs: DeviceLoginOrgReach[]
+  default_expires_at: string
+  max_expires_at: string
+}
 
 export type SearchPresetSurface = 'findings'
 
@@ -2091,6 +2125,24 @@ class ApiClient {
 
   listApiKeys() {
     return this.request<ApiResponse<ApiKey[]>>('/users/me/api-keys')
+  }
+
+  getDeviceLogin(userCode: string) {
+    return this.request<ApiResponse<DeviceLoginRequest>>(`/auth/device?user_code=${encodeURIComponent(userCode)}`)
+  }
+
+  approveDeviceLogin(body: { user_code: string; preset: DeviceLoginPreset; expires_at: string }) {
+    return this.request<ApiResponse<{ status: 'approved'; token_name: string }>>('/auth/device/approve', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  denyDeviceLogin(userCode: string) {
+    return this.request<ApiResponse<{ status: 'denied' }>>('/auth/device/deny', {
+      method: 'POST',
+      body: JSON.stringify({ user_code: userCode }),
+    })
   }
 
   createApiKey(body: { name: string; description?: string; scopes: TokenScope; expires_at: string }) {

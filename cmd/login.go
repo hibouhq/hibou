@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/cliclient"
 	"github.com/hibouhq/hibou/internal/cliconfig"
+	"github.com/hibouhq/hibou/internal/devicelogin"
 )
 
 var loginServer string
@@ -25,17 +29,27 @@ var loginToken string
 var loginSSO bool
 var loginTokenStdin bool
 var loginAllowInsecureHTTP bool
+var loginNoBrowser bool
+var loginPreset string
 
 var loginCmd = &cobra.Command{
-	Use:   "login",
+	Use:   "login [server-url]",
 	Short: "Authenticate with a Hibou server",
-	Long: `Log in to a Hibou server by providing the server URL and an API token.
+	Long: `Log in to a Hibou server.
 
-You can get an API token from the Hibou web UI under Settings > API Keys.
+In a terminal, hibou login shows a one-time code and a link. Open the link in
+a browser where you are signed in to Hibou, check the code, and approve: the
+CLI receives a token that works in every organization you belong to (ADR-043).
+It works over SSH and in containers too, since the browser can be anywhere.
+
+Scripts and CI pass an API token instead (create one under Settings > API Keys).
 
 Examples:
-  # Interactive login
-  hibou login
+  # Browser login
+  hibou login hibou.example.com
+
+  # Read-only token (no uploads)
+  hibou login hibou.example.com --scope read-only
 
   # Non-interactive: pipe the token (stays out of shell history)
   printf '%s' "$HIBOU_TOKEN" | hibou login --server https://hibou.example.com --token-stdin
@@ -43,19 +57,23 @@ Examples:
   # --token also works, but the token lands in your shell history
   hibou login --server https://hibou.example.com --token hb_xxxxx
 
-  # Open the browser to create a token interactively
-  hibou login --sso
-
 Environment variables:
   HIBOU_SERVER    Server URL
   HIBOU_TOKEN     API token`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := cliconfig.Load()
 		if err != nil {
 			cfg = cliconfig.Config{}
 		}
 
-		server := strings.TrimSpace(loginServer)
+		server := ""
+		if len(args) == 1 {
+			server = args[0]
+		}
+		if server == "" {
+			server = strings.TrimSpace(loginServer)
+		}
 		if server == "" {
 			server = strings.TrimSpace(os.Getenv("HIBOU_SERVER"))
 		}
@@ -72,28 +90,17 @@ Environment variables:
 		if server == "" {
 			return errors.New("server URL is required")
 		}
-		server = strings.TrimRight(server, "/")
+		server, err = normalizeServerURL(server)
+		if err != nil {
+			return err
+		}
 		if err := checkLoginServerURL(server, loginAllowInsecureHTTP); err != nil {
 			return err
 		}
 
-		if loginSSO {
-			settingsURL := server + "/settings"
-			if err := openBrowser(settingsURL); err != nil {
-				fmt.Printf("Open your browser to: %s\n", settingsURL)
-			} else {
-				fmt.Printf("Opened %s\n", settingsURL)
-			}
-			fmt.Println("1. Sign in with your SSO provider")
-			fmt.Println("2. Open Settings > API Keys")
-			fmt.Println("3. Create a new API key")
-			fmt.Printf("4. Run: hibou login --server %s --token <your-key>\n", server)
-			return nil
-		}
-
 		token := strings.TrimSpace(loginToken)
 		if token != "" {
-			fmt.Fprintln(os.Stderr, "warning: --token leaves the token in your shell history; prefer --token-stdin, HIBOU_TOKEN or the prompt")
+			fmt.Fprintln(os.Stderr, "warning: --token leaves the token in your shell history; prefer --token-stdin, HIBOU_TOKEN or browser login")
 		}
 		if token == "" && loginTokenStdin {
 			raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
@@ -105,6 +112,29 @@ Environment variables:
 		if token == "" {
 			token = strings.TrimSpace(os.Getenv("HIBOU_TOKEN"))
 		}
+
+		tokenID := ""
+		if token == "" && (stdinIsTerminal() || loginSSO) {
+			if err := probeHibouServer(server); err != nil {
+				return err
+			}
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+			defer stop()
+			issued, err := browserLogin(ctx, server)
+			switch {
+			case errors.Is(err, devicelogin.ErrUnsupported):
+				fmt.Fprintln(os.Stderr, "This server does not support browser login yet; paste an API token from Settings > API Keys.")
+			case err != nil:
+				return err
+			default:
+				token, tokenID = issued.AccessToken, issued.TokenID
+				fmt.Printf("\n✓ Approved: token %q · all your orgs · preset %s", issued.TokenName, issued.Preset)
+				if issued.ExpiresIn > 0 {
+					fmt.Printf(" · expires %s", time.Now().Add(time.Duration(issued.ExpiresIn)*time.Second).Format("2006-01-02"))
+				}
+				fmt.Println()
+			}
+		}
 		if token == "" {
 			fmt.Print("API token (input hidden): ")
 			read, err := readSecretLine()
@@ -115,7 +145,7 @@ Environment variables:
 			token = read
 		}
 		if token == "" {
-			return fmt.Errorf("API token is required — create one at %s/settings", server)
+			return fmt.Errorf("API token is required — create one at %s/settings/api-keys", server)
 		}
 
 		fmt.Print("Verifying credentials... ")
@@ -140,8 +170,18 @@ Environment variables:
 		}
 		fmt.Println("ok")
 
+		// A previous browser-login token for this server is replaced, not
+		// left valid on the server (ADR-043 §6). A pasted token may be in use
+		// elsewhere, so it is never revoked.
+		if cfg.TokenID != "" && cfg.Token != "" && cfg.Token != token && sameServer(cfg.Server, server) {
+			if err := revokeCurrentToken(server, cfg.Token); err == nil {
+				fmt.Println("Revoked the previous login token.")
+			}
+		}
+
 		cfg.Server = server
 		cfg.Token = token
+		cfg.TokenID = tokenID
 		if err := cliconfig.Save(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
 		}
@@ -155,9 +195,134 @@ Environment variables:
 func init() {
 	loginCmd.Flags().StringVar(&loginServer, "server", "", "Hibou server URL")
 	loginCmd.Flags().StringVar(&loginToken, "token", "", "API token")
-	loginCmd.Flags().BoolVar(&loginSSO, "sso", false, "Open the browser to complete SSO login and create an API token")
+	loginCmd.Flags().BoolVar(&loginSSO, "sso", false, "Use browser login")
+	_ = loginCmd.Flags().MarkDeprecated("sso", "browser login is now the default in a terminal")
 	loginCmd.Flags().BoolVar(&loginTokenStdin, "token-stdin", false, "Read the API token from standard input")
 	loginCmd.Flags().BoolVar(&loginAllowInsecureHTTP, "insecure-http", false, "Allow a plain http:// server that is not localhost (the token is sent in clear text)")
+	loginCmd.Flags().BoolVar(&loginNoBrowser, "no-browser", false, "Print the login link instead of offering to open a browser")
+	loginCmd.Flags().StringVar(&loginPreset, "scope", "cli", "Access to request: cli (upload, gates, read) or read-only")
+}
+
+// browserLogin runs the device flow (RFC 8628): show the code and link, offer
+// to open the browser, and wait for approval.
+func browserLogin(ctx context.Context, server string) (*devicelogin.Token, error) {
+	switch loginPreset {
+	case "cli", "read-only":
+	default:
+		return nil, fmt.Errorf("--scope must be cli or read-only, got %q", loginPreset)
+	}
+	hostname, _ := os.Hostname()
+	client := &devicelogin.Client{Server: server}
+	auth, err := client.RequestCode(ctx, devicelogin.Request{
+		ClientID:   devicelogin.ClientCLI,
+		ClientName: hostname,
+		Preset:     loginPreset,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	link := auth.VerificationURIComplete
+	if link == "" {
+		link = auth.VerificationURI
+	}
+	fmt.Printf("\n  One-time code:  %s\n\n", auth.UserCode)
+	fmt.Printf("Open %s\n", link)
+	if !loginNoBrowser {
+		fmt.Println("Press Enter to open it in your browser (Ctrl-C to cancel)…")
+		go func() {
+			if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
+				return
+			}
+			if err := openBrowser(link); err != nil {
+				fmt.Fprintln(os.Stderr, "Could not open a browser here; open the link above on any device.")
+			}
+		}()
+	}
+	fmt.Printf("Waiting for approval in the browser (expires in %d min)…\n", (auth.ExpiresIn+59)/60)
+
+	token, err := client.Poll(ctx, auth)
+	switch {
+	case errors.Is(err, devicelogin.ErrDenied):
+		return nil, errors.New("login was denied in the browser")
+	case errors.Is(err, devicelogin.ErrExpired):
+		return nil, errors.New("the code expired before it was approved; run hibou login again")
+	case errors.Is(err, context.Canceled):
+		return nil, errors.New("login cancelled")
+	}
+	return token, err
+}
+
+// normalizeServerURL accepts what people type ("hibou.example.com",
+// "https://hibou.example.com/") and returns scheme://host[/path] with no
+// trailing slash, query or fragment. Without a scheme it assumes https, or
+// http for a loopback host (a local dev server).
+func normalizeServerURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		scheme := "https://"
+		if parsed, err := url.Parse("//" + raw); err == nil && isLoopbackHost(parsed.Hostname()) {
+			scheme = "http://"
+		}
+		raw = scheme + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("invalid server URL %q: expected hibou.example.com or https://hibou.example.com", raw)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.RawQuery, parsed.Fragment, parsed.User = "", "", nil
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
+func sameServer(a, b string) bool {
+	na, errA := normalizeServerURL(a)
+	nb, errB := normalizeServerURL(b)
+	return errA == nil && errB == nil && strings.EqualFold(na, nb)
+}
+
+// probeHibouServer checks the URL answers like a hibou server before showing
+// a login code for it, so a typo fails with a clear message.
+func probeHibouServer(server string) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(server + "/api/v1/version") // #nosec G704 -- the server the user asked to log in to
+	if err != nil {
+		return fmt.Errorf("could not reach %s: %w", server, err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) != nil || len(body.Data) == 0 {
+		return fmt.Errorf("%s does not look like a hibou server (GET /api/v1/version answered HTTP %d)", server, resp.StatusCode)
+	}
+	return nil
+}
+
+// revokeCurrentToken asks the server to delete the token used to call it.
+func revokeCurrentToken(server, token string) error {
+	req, err := http.NewRequest(http.MethodDelete, server+"/api/v1/users/me/api-keys/current", nil) // #nosec G704 -- the configured hibou server
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req) // #nosec G704 -- the configured hibou server
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // checkLoginServerURL refuses to send a token over plain HTTP, except to a
@@ -186,7 +351,7 @@ func isLoopbackHost(host string) bool { return cliclient.IsLoopbackHost(host) }
 // terminal (stty, on Unix-like systems). Elsewhere, or when stdin is piped,
 // the line is read as is.
 func readSecretLine() (string, error) {
-	if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 && runtime.GOOS != "windows" {
+	if stdinIsTerminal() && runtime.GOOS != "windows" {
 		if err := runStty("-echo"); err == nil {
 			defer func() { _ = runStty("echo") }()
 		}

@@ -10,6 +10,7 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/auth"
+	"github.com/hibouhq/hibou/internal/rbac"
 )
 
 // scopeDenied writes the 403 for a token-scope denial, naming the missing
@@ -43,9 +44,10 @@ func requestTarget(org, repoSlug string) string {
 // org. A service principal (org-owned token, ADR-022) acting for THIS org is
 // an "admin" when its scope grants admin:write, otherwise a member-equivalent
 // "developer"; it has no role in any other org. Users resolve to their stored
-// membership role. Empty string = no access. The token scope is enforced
-// separately (route guard + capability checks) — this answers only the
-// membership/RBAC question the handlers ask.
+// membership role, capped by the org's login-token policy when the request
+// carries a membership-wide device-login token (ADR-043 §4). Empty string =
+// no access. The token scope is enforced separately (route guard + capability
+// checks) — this answers only the membership/RBAC question the handlers ask.
 func (s *Server) principalOrgRole(r *http.Request, orgID uuid.UUID) (string, error) {
 	if tokenAuth := auth.TokenAuthFromContext(r.Context()); tokenAuth.IsServicePrincipal() {
 		if !tokenAuth.ActsForOrg(orgID) {
@@ -61,7 +63,21 @@ func (s *Server) principalOrgRole(r *http.Request, orgID uuid.UUID) (string, err
 	if user == nil {
 		return "", nil
 	}
-	return s.queries.GetOrgMemberRole(r.Context(), orgID, user.ID)
+	role, err := s.queries.GetOrgMemberRole(r.Context(), orgID, user.ID)
+	if err != nil || role == "" {
+		return role, err
+	}
+	if tokenAuth := auth.TokenAuthFromContext(r.Context()); tokenAuth.IsMembershipWide() {
+		org, err := s.queries.GetOrganizationByID(r.Context(), orgID)
+		if err != nil {
+			return "", err
+		}
+		if org == nil {
+			return "", nil
+		}
+		return rbac.CapRoleForLoginToken(role, rbac.LoginTokensPolicy(org.Settings)), nil
+	}
+	return role, nil
 }
 
 // hasPrincipal reports whether the request carries any authenticated

@@ -59,7 +59,7 @@ func (rs routeScope) allows(scope apitoken.Scope, org, repoSlug string) bool {
 }
 
 func (rs routeScope) matchesResources(scope apitoken.Scope, org, repoSlug string) bool {
-	if org != "" && scope.Org != org {
+	if !scope.CoversOrg(org) {
 		return false
 	}
 	if rs.orgWide {
@@ -122,6 +122,12 @@ var routeScopes = map[string]routeScope{
 	"POST /api/v1/notifications/{id}/read":   sessionOnlyRoute(),
 	"POST /api/v1/notifications/read-all":    sessionOnlyRoute(),
 
+	// ADR-043: a token must never approve a token; the approval page is a
+	// browser session action. Revoking the calling token is the token's own.
+	"GET /api/v1/auth/device":                       sessionOnlyRoute(),
+	"POST /api/v1/auth/device/approve":              sessionOnlyRoute(),
+	"POST /api/v1/auth/device/deny":                 sessionOnlyRoute(),
+	"DELETE /api/v1/users/me/api-keys/current":      selfRoute(),
 	"POST /api/v1/users/me/api-keys/":               sessionOnlyRoute(),
 	"GET /api/v1/users/me/api-keys/":                sessionOnlyRoute(),
 	"PATCH /api/v1/users/me/api-keys/{keyID}":       sessionOnlyRoute(),

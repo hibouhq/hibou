@@ -1382,6 +1382,27 @@ type Deployment struct {
 	CreatedAt        time.Time        `json:"created_at"`
 }
 
+type DeviceAuthorization struct {
+	ID                  uuid.UUID      `json:"id"`
+	DeviceCodeHash      string         `json:"device_code_hash"`
+	UserCodeHash        string         `json:"user_code_hash"`
+	ClientID            string         `json:"client_id"`
+	ClientName          string         `json:"client_name"`
+	RequestedPreset     string         `json:"requested_preset"`
+	RequesterIp         string         `json:"requester_ip"`
+	RequesterUserAgent  string         `json:"requester_user_agent"`
+	Status              string         `json:"status"`
+	PollIntervalSeconds int32          `json:"poll_interval_seconds"`
+	ApprovedBy          uuid.NullUUID  `json:"approved_by"`
+	ApprovedPreset      sql.NullString `json:"approved_preset"`
+	TokenExpiresAt      sql.NullTime   `json:"token_expires_at"`
+	ApiKeyID            uuid.NullUUID  `json:"api_key_id"`
+	CreatedAt           time.Time      `json:"created_at"`
+	ExpiresAt           time.Time      `json:"expires_at"`
+	DecidedAt           sql.NullTime   `json:"decided_at"`
+	LastPolledAt        sql.NullTime   `json:"last_polled_at"`
+}
+
 type EpssCatalog struct {
 	ID           bool      `json:"id"`
 	ModelVersion string    `json:"model_version"`

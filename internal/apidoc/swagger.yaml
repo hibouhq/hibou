@@ -28,6 +28,16 @@ definitions:
       error:
         $ref: '#/definitions/api.Error'
     type: object
+  apitoken.AccessLevel:
+    enum:
+    - none
+    - read
+    - write
+    type: string
+    x-enum-varnames:
+    - AccessNone
+    - AccessRead
+    - AccessWrite
   auth.providerResponse:
     properties:
       id:
@@ -58,6 +68,70 @@ definitions:
     - NotificationDestinationTypeTeams
     - NotificationDestinationTypeEmail
     - NotificationDestinationTypeDiscord
+  devicelogin.Authorization:
+    properties:
+      device_code:
+        type: string
+      expires_in:
+        type: integer
+      interval:
+        type: integer
+      user_code:
+        type: string
+      verification_uri:
+        type: string
+      verification_uri_complete:
+        type: string
+    type: object
+  devicelogin.CodeRequest:
+    properties:
+      client_id:
+        type: string
+      client_name:
+        type: string
+      scope:
+        description: |-
+          Scope is the requested preset ("cli" or "read-only"). The user can
+          change it on the approval page.
+        type: string
+    type: object
+  devicelogin.ErrorResponse:
+    properties:
+      error:
+        type: string
+      error_description:
+        type: string
+    type: object
+  devicelogin.Token:
+    properties:
+      access_token:
+        type: string
+      expires_in:
+        type: integer
+      orgs:
+        description: 'Orgs is "memberships": the token works in every org the user
+          belongs to.'
+        type: string
+      preset:
+        type: string
+      token_id:
+        type: string
+      token_name:
+        type: string
+      token_type:
+        type: string
+      user:
+        type: string
+    type: object
+  devicelogin.TokenRequest:
+    properties:
+      client_id:
+        type: string
+      device_code:
+        type: string
+      grant_type:
+        type: string
+    type: object
   orgprovision.OnboardableAccount:
     properties:
       account:
@@ -964,6 +1038,70 @@ definitions:
         type: string
       status:
         $ref: '#/definitions/store.DeploymentStatus'
+    type: object
+  server.deviceDecisionRequest:
+    properties:
+      expires_at:
+        type: string
+      preset:
+        type: string
+      user_code:
+        type: string
+    type: object
+  server.deviceOrgReachView:
+    properties:
+      effective_role:
+        type: string
+      name:
+        type: string
+      policy:
+        type: string
+      provider:
+        type: string
+      role:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.devicePresetView:
+    properties:
+      key:
+        type: string
+      permissions:
+        additionalProperties:
+          $ref: '#/definitions/apitoken.AccessLevel'
+        type: object
+    type: object
+  server.deviceRequestView:
+    properties:
+      client_id:
+        type: string
+      client_label:
+        type: string
+      client_name:
+        type: string
+      created_at:
+        type: string
+      default_expires_at:
+        type: string
+      expires_at:
+        type: string
+      max_expires_at:
+        type: string
+      orgs:
+        items:
+          $ref: '#/definitions/server.deviceOrgReachView'
+        type: array
+      presets:
+        items:
+          $ref: '#/definitions/server.devicePresetView'
+        type: array
+      requested_preset:
+        type: string
+      requester_ip:
+        type: string
+      user_code:
+        type: string
     type: object
   server.effectiveConfigResponse:
     properties:
@@ -3738,6 +3876,153 @@ paths:
           schema:
             $ref: '#/definitions/api.Response'
       summary: Dev login
+      tags:
+      - auth
+  /auth/device:
+    get:
+      description: Show a pending device login to the signed-in user before they approve
+        it (ADR-043). Browser session only.
+      parameters:
+      - description: Code shown in the terminal (XXXX-XXXX)
+        in: query
+        name: user_code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.deviceRequestView'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Look up a device login
+      tags:
+      - auth
+  /auth/device/approve:
+    post:
+      consumes:
+      - application/json
+      description: Approve a pending device login with a preset and expiry (ADR-043).
+        The client's next poll receives a membership-wide token. Browser session only.
+      parameters:
+      - description: Code, preset and expiry
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.deviceDecisionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Approve a device login
+      tags:
+      - auth
+  /auth/device/code:
+    post:
+      consumes:
+      - application/json
+      description: RFC 8628 device authorization request (ADR-043). Returns a device
+        code for the client to poll with and a user code to approve at verification_uri.
+        Unauthenticated; the response is RFC 8628 JSON, not the api.Response envelope.
+      parameters:
+      - description: Client and requested preset
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/devicelogin.CodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/devicelogin.Authorization'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/devicelogin.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/devicelogin.ErrorResponse'
+      summary: Start a device login
+      tags:
+      - auth
+  /auth/device/deny:
+    post:
+      consumes:
+      - application/json
+      description: Deny a pending device login (ADR-043). The client's next poll gets
+        access_denied. Browser session only.
+      parameters:
+      - description: Code
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.deviceDecisionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      summary: Deny a device login
+      tags:
+      - auth
+  /auth/device/token:
+    post:
+      consumes:
+      - application/json
+      description: RFC 8628 device access token request (ADR-043). Answers authorization_pending
+        until the user approves, then returns a membership-wide API token exactly
+        once. Unauthenticated; RFC 8628 JSON.
+      parameters:
+      - description: Device code
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/devicelogin.TokenRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/devicelogin.Token'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/devicelogin.ErrorResponse'
+      summary: Poll a device login
       tags:
       - auth
   /auth/login:
@@ -9797,6 +10082,31 @@ paths:
       security:
       - BearerAuth: []
       summary: Rotate API key
+      tags:
+      - api-keys
+  /users/me/api-keys/current:
+    delete:
+      description: Delete the user-owned API key that authenticates this request (ADR-043
+        §6, used by `hibou logout`). The only key-management action allowed with token
+        auth; it can reach no other key.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Revoke the calling token
       tags:
       - api-keys
   /users/me/search-presets:

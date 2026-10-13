@@ -13,6 +13,10 @@ type Config struct {
 	Server string `yaml:"server,omitempty"`
 	Token  string `yaml:"token,omitempty"`
 	Org    string `yaml:"org,omitempty"`
+	// TokenID is set when Token came from browser login (ADR-043): logout and
+	// the next login revoke that token on the server. A token pasted by hand
+	// may be in use elsewhere, so it is only ever cleared locally.
+	TokenID string `yaml:"token_id,omitempty"`
 }
 
 // DefaultPath returns ~/.config/hibou/config.yaml.

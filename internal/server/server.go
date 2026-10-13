@@ -538,6 +538,10 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/auth/callback", s.handleAuthCallback)
 			r.Post("/auth/logout", auth.LogoutHandler(s.authMgr))
 			r.Post("/auth/dev-login", auth.DevLoginHandler(s.authMgr))
+			// ADR-043 device login: unauthenticated RFC 8628 endpoints the CLI
+			// and IDE clients call (no cookie, so CSRF passes them through).
+			r.With(rateLimitMiddleware(s.rateLimiters.deviceCode, ipRateKey)).Post("/auth/device/code", s.handleDeviceCode)
+			r.Post("/auth/device/token", s.handleDeviceToken)
 		})
 		r.Route("/webhooks/{provider}", func(r chi.Router) {
 			r.Use(s.webhookProtection)
@@ -556,6 +560,14 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Use(rateLimitMiddleware(s.rateLimiters.api, principalRateKey))
 			r.Use(s.requestTimeoutMiddleware)
 			r.Get("/users/me", s.handleGetMe)
+			// ADR-043 approval page: browser session only, user-code lookups
+			// limited per user.
+			r.Group(func(r chi.Router) {
+				r.Use(rateLimitMiddleware(s.rateLimiters.deviceLookup, principalRateKey))
+				r.Get("/auth/device", s.handleDeviceLookup)
+				r.Post("/auth/device/approve", s.handleDeviceApprove)
+				r.Post("/auth/device/deny", s.handleDeviceDeny)
+			})
 			// ADR-037: embedded MITRE catalog (reference data, no tenant data).
 			r.Get("/cwe", s.handleSearchCWECatalog)
 			r.Get("/scanner-catalog", s.handleGetScannerCatalog)
@@ -600,6 +612,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Route("/users/me/api-keys", func(r chi.Router) {
 				r.Post("/", s.handleCreateAPIKey)
 				r.Get("/", s.handleListAPIKeys)
+				r.Delete("/current", s.handleRevokeCurrentAPIKey)
 				r.Patch("/{keyID}", s.handleUpdateAPIKey)
 				r.Delete("/{keyID}", s.handleDeleteAPIKey)
 				r.Post("/{keyID}/rotate", s.handleRotateAPIKey)
@@ -867,6 +880,10 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 				s.log.Warn().Err(err).Msg("backfill forge account ids")
 			}
 		}()
+	}
+	if s.queries != nil {
+		loops = append(loops, "device_auth_cleanup")
+		go s.runDeviceAuthCleanupLoop(runtimeCtx)
 	}
 	if s.retentionWorker != nil && s.cfg.Background.RetentionEnabled {
 		loops = append(loops, "retention")

@@ -6,6 +6,11 @@ Accepted — implemented (2026-08). Token format, scope model, deny-by-default
 enforcement (HTTP + MCP), finding provenance, audit, partitioned audit
 retention, and the token-management UI (user- and org-owned) are all in place.
 
+Amended by [ADR-043 §4](043-cli-browser-login-device-flow.md) (2026-10-13):
+user-owned tokens minted by the device login flow may carry
+`orgs.mode = memberships` instead of a single `org`, bounded per org by the
+user's role and an org policy.
+
 ## Context
 
 API keys today are a single coarse capability. [`api_keys`](../../internal/store/migrations/00001_initial_schema.up.sql)

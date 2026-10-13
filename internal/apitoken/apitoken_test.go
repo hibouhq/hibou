@@ -1,6 +1,7 @@
 package apitoken
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -135,6 +136,9 @@ func TestParseRejectsUnknownScopeValues(t *testing.T) {
 		`{"permissions":{"coverage":"admin"}}`,
 		`{"repos":{"mode":"some"}}`,
 		`{"owner":{"type":"service"}}`,
+		`{"orgs":{"mode":"some"}}`,
+		`{"org":"acme","orgs":{"mode":"memberships"}}`,
+		`{"owner":{"type":"org","id":"acme"},"orgs":{"mode":"memberships"}}`,
 	} {
 		if _, err := Parse([]byte(scope)); err == nil {
 			t.Errorf("Parse(%s) error = nil, want error", scope)
@@ -191,5 +195,99 @@ func TestScopeWidens(t *testing.T) {
 	all := Scope{Repos: RepoSelector{Mode: RepoAll}, Permissions: base.Permissions}
 	if all.Widens(Scope{Repos: RepoSelector{Mode: RepoList, Slugs: []string{"anything"}}, Permissions: base.Permissions}) {
 		t.Errorf("all → list must not widen")
+	}
+}
+
+func TestMembershipWideScopeCoversEveryOrg(t *testing.T) {
+	scope, err := Parse([]byte(`{
+		"owner": {"type": "user", "id": "u1"},
+		"orgs": {"mode": "memberships"},
+		"repos": {"mode": "all"},
+		"permissions": {"uploads": "write", "vulnerabilities": "read"}
+	}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !scope.MembershipWide() {
+		t.Fatal("MembershipWide() = false, want true")
+	}
+	for _, org := range []string{"acme", "globex", ""} {
+		if !scope.Allows(CapUploads, AccessWrite, org, "api") {
+			t.Errorf("should allow uploads:write in %q", org)
+		}
+		if !scope.AllowsOrgWide(CapVulnerabilities, AccessRead, org) {
+			t.Errorf("should allow org-wide vulnerabilities:read in %q", org)
+		}
+	}
+	if scope.Allows(CapTriage, AccessWrite, "acme", "api") {
+		t.Fatal("membership-wide scope must still deny ungranted capabilities")
+	}
+
+	single, _ := Parse([]byte(`{"org":"acme","repos":{"mode":"all"},"permissions":{"uploads":"write"}}`))
+	if single.MembershipWide() || single.CoversOrg("globex") {
+		t.Fatal("a single-org scope must not cover another org")
+	}
+	if !single.Widens(scope) {
+		t.Fatal("single-org → membership-wide must widen")
+	}
+	if scope.Widens(single) {
+		t.Fatal("membership-wide → single-org must not widen")
+	}
+}
+
+func TestUserCodeRoundTrip(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		code, err := GenerateUserCode()
+		if err != nil {
+			t.Fatalf("GenerateUserCode: %v", err)
+		}
+		normalized, ok := NormalizeUserCode(strings.ToLower(FormatUserCode(code)))
+		if !ok || normalized != code {
+			t.Fatalf("NormalizeUserCode(Format(%q)) = %q, %v", code, normalized, ok)
+		}
+		seen[code] = true
+	}
+	if len(seen) < 195 {
+		t.Fatalf("only %d distinct codes in 200 draws", len(seen))
+	}
+	for _, bad := range []string{"", "BCDF-GHJ", "BCDF-GHJKL", "ABCD-EFGH", "BCDF-GHJ1", "BCDF_GHJK"} {
+		if _, ok := NormalizeUserCode(bad); ok {
+			t.Errorf("NormalizeUserCode(%q) accepted a malformed code", bad)
+		}
+	}
+	if got, _ := NormalizeUserCode(" bcdf ghjk "); got != "BCDFGHJK" {
+		t.Errorf("spaces and case should normalise, got %q", got)
+	}
+}
+
+func TestPresetsAndMembershipScope(t *testing.T) {
+	cli, ok := PresetCLI.Permissions()
+	if !ok || cli[CapUploads] != AccessWrite || cli[CapTriage] != "" || cli[CapAdmin] != "" {
+		t.Fatalf("cli preset = %v", cli)
+	}
+	readOnly, ok := PresetReadOnly.Permissions()
+	if !ok {
+		t.Fatal("read-only preset unknown")
+	}
+	ro := Scope{Permissions: readOnly}
+	if !ro.IsReadOnly() {
+		t.Fatal("read-only preset grants a write")
+	}
+	if _, ok := Preset("admin").Permissions(); ok {
+		t.Fatal("unknown preset accepted")
+	}
+
+	scope, ok := MembershipScope("u1", PresetCLI)
+	if !ok || !scope.MembershipWide() || scope.Repos.Mode != RepoAll || scope.Owner.Type != OwnerUser {
+		t.Fatalf("MembershipScope = %+v", scope)
+	}
+	raw, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(raw)
+	if err != nil || !parsed.MembershipWide() {
+		t.Fatalf("round trip: %v, %+v", err, parsed)
 	}
 }

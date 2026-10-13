@@ -111,3 +111,10 @@ ORDER BY expires_at ASC;
 SELECT count(*)
 FROM api_keys
 WHERE user_id = $1;
+
+-- name: DeleteAPIKeyByID :one
+-- A token revoking itself (ADR-043 §6, logout). Only user-owned keys: an
+-- org-owned service principal is revoked by an org admin.
+DELETE FROM api_keys
+WHERE id = $1 AND owner_type = 'user'
+RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created_at, owner_type, owner_id, description, approval_status, approved_by, approved_at;

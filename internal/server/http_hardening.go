@@ -251,6 +251,11 @@ type rateLimiters struct {
 	scan      *ipRateLimiter
 	auth      *ipRateLimiter
 	anonymous *ipRateLimiter
+	// deviceCode and deviceLookup are fixed ADR-043 limits, on whenever rate
+	// limiting is: 10 device-login codes per minute per client IP, and 10
+	// user-code lookups per minute per signed-in user.
+	deviceCode   *ipRateLimiter
+	deviceLookup *ipRateLimiter
 }
 
 func newRateLimiters(ctx context.Context, cfg config.RateLimitConfig) rateLimiters {
@@ -261,11 +266,13 @@ func newRateLimiters(ctx context.Context, cfg config.RateLimitConfig) rateLimite
 		return newIPRateLimiter(ctx, bucket.RPS, bucket.Burst)
 	}
 	return rateLimiters{
-		api:       build(cfg.API),
-		upload:    build(cfg.Upload),
-		scan:      build(cfg.Scan),
-		auth:      build(cfg.Auth),
-		anonymous: build(cfg.Anonymous),
+		api:          build(cfg.API),
+		upload:       build(cfg.Upload),
+		scan:         build(cfg.Scan),
+		auth:         build(cfg.Auth),
+		anonymous:    build(cfg.Anonymous),
+		deviceCode:   newIPRateLimiter(ctx, 10.0/60, 10),
+		deviceLookup: newIPRateLimiter(ctx, 10.0/60, 10),
 	}
 }
 

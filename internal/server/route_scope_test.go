@@ -35,6 +35,8 @@ var publicRoutes = map[string]struct{}{
 	"GET /api/v1/auth/callback":                    {},
 	"POST /api/v1/auth/logout":                     {},
 	"POST /api/v1/auth/dev-login":                  {},
+	"POST /api/v1/auth/device/code":                {},
+	"POST /api/v1/auth/device/token":               {},
 	"POST /api/v1/webhooks/{provider}/":            {},
 }
 
