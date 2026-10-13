@@ -19,20 +19,27 @@
         "mergeConfidence:all-badges",
         "github>hibouhq/hibou//renovate-presets/fix/openssf-merge-confidence-columns.json5",
     ],
+    // Top-level only: Renovate rejects these inside packageRules.
+    "stopUpdatingLabel": "renovate:stop-updating",
+    "rebaseLabel": "renovate:do-rebase",
+    "dependencyDashboardLabels": [
+        "dependencies",
+    ],
     "packageRules": [
         {
-            "description": "Define the label to make Renovate stop updating a PR.",
-            "stopUpdatingLabel": "renovate:stop-updating"
-        },
-        {
-            "description": "Define the label to make Renovate rebase a PR.",
-            "rebaseLabel": "renovate:do-rebase"
-        },
-        {
-            "description": "Define labels of the dependency dashboard issues.",
-            "dependencyDashboardLabels": [
-                "dependencies",
-            ]
+            "description": "Supply-chain cooldown: wait 3 days after a release (npm, Go modules and toolchain, GitHub Actions (github-tags) and releases, container images, Node) so a compromised or yanked version is caught before it is proposed.",
+            "matchDatasources": [
+                "npm",
+                "go",
+                "golang-version",
+                "github-tags",
+                "github-releases",
+                "github-digest",
+                "docker",
+                "node-version"
+            ],
+            "minimumReleaseAge": "3 days",
+            "internalChecksFilter": "strict"
         },
         {
             "description": "Add label major to PRs with major updates",

@@ -28,13 +28,11 @@ func (s *Server) handleGetRepoConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner, name, ok := s.boundRepoCoordinates(r.Context(), repo)
-	if !ok {
+	cfg, resolved, err := s.loadBoundRepoConfig(r.Context(), repo)
+	if !resolved {
 		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository coordinates")
 		return
 	}
-
-	cfg, err := s.repoConfigLoader.Load(r.Context(), repo.Provider, owner, name, repo.DefaultBranch)
 	if err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("load repo config")
 		api.JSONError(w, http.StatusBadGateway, "failed to load repository config")
@@ -99,7 +97,7 @@ func (s *Server) handleOnboardRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pr, err := s.onboardingSvc.CreateOnboardingPRForOrg(r.Context(), org, repo.Provider, owner, name, repo.DefaultBranch)
+	pr, err := s.onboardingSvc.CreateOnboardingPRForOrg(forgeOwnerContext(r.Context(), owner), org, repo.Provider, owner, name, repo.DefaultBranch)
 	if errors.Is(err, repoconfig.ErrForeignRepository) {
 		api.JSONError(w, http.StatusForbidden, err.Error())
 		return
@@ -154,12 +152,14 @@ func (s *Server) loadAuthorizedRepoWithUser(w http.ResponseWriter, r *http.Reque
 	return org, repo, user, true
 }
 
-func (s *Server) resolveRepoGateConfig(ctx context.Context, providerID, defaultBranch, candidatesA, candidatesB, candidatesC string, targetSnapshotID uuid.UUID) *delta.GateConfig {
+// resolveRepoGateConfig loads the repo-config gate matching the target
+// snapshot's ref. The repository is the one the target snapshot belongs to,
+// and the forge is only reached with owner-bound coordinates
+// (loadBoundRepoConfig): the coordinate arguments callers pass are ignored,
+// since a name or slug is tenant-editable and once let one org read another
+// org's config with its installation token.
+func (s *Server) resolveRepoGateConfig(ctx context.Context, _, _, _, _, _ string, targetSnapshotID uuid.UUID) *delta.GateConfig {
 	if s.repoConfigLoader == nil {
-		return nil
-	}
-	owner, name, ok := repoCoordinates(candidatesA, candidatesB, candidatesC)
-	if !ok {
 		return nil
 	}
 
@@ -171,14 +171,45 @@ func (s *Server) resolveRepoGateConfig(ctx context.Context, providerID, defaultB
 	if err != nil || targetRef == nil {
 		return nil
 	}
+	repo, err := s.queries.GetRepositoryByID(ctx, targetRef.RepoID)
+	if err != nil || repo == nil {
+		return nil
+	}
 
-	cfg, err := s.repoConfigLoader.Load(ctx, providerID, owner, name, defaultBranch)
+	cfg, resolved, err := s.loadBoundRepoConfig(ctx, repo)
+	if !resolved {
+		return nil
+	}
 	if err != nil {
-		s.log.Warn().Err(err).Str("provider", providerID).Str("owner", owner).Str("repo", name).Msg("failed to load repo config, falling back to DB gates")
+		s.log.Warn().Err(err).Str("provider", repo.Provider).Str("repo_id", repo.ID.String()).Msg("failed to load repo config, falling back to DB gates")
 		return nil
 	}
 
 	return matchedGateConfig(cfg, targetRef.Name)
+}
+
+// loadBoundRepoConfig loads a stored repository's config file from the forge.
+// resolved is false when the repository has no coordinates owned by its org's
+// forge account; nothing is fetched then. The forge context is bound to that
+// owner (forge.WithInstallationOwner), so an installation token for any other
+// account fails hard even if some code path below picks another owner.
+func (s *Server) loadBoundRepoConfig(ctx context.Context, repo *store.Repository) (*repoconfig.RepoConfig, bool, error) {
+	owner, name, ok := s.boundRepoCoordinates(ctx, repo)
+	if !ok {
+		return nil, false, nil
+	}
+	cfg, err := s.repoConfigLoader.Load(forgeOwnerContext(ctx, owner), repo.Provider, owner, name, repo.DefaultBranch)
+	return cfg, true, err
+}
+
+// forgeOwnerContext binds ctx to the top-level account of an owner already
+// checked against the org (boundRepoCoordinates).
+func forgeOwnerContext(ctx context.Context, owner string) context.Context {
+	account := strings.Trim(strings.TrimSpace(owner), "/")
+	if i := strings.Index(account, "/"); i >= 0 {
+		account = account[:i]
+	}
+	return forge.WithInstallationOwner(ctx, account)
 }
 
 func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.GateConfig {

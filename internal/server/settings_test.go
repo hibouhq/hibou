@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -64,9 +65,18 @@ func TestRedactIntegrationConfigForNonAdmin(t *testing.T) {
 		Enabled:         true,
 	}
 
+	// Secret fields are write-only even for admins (second pass Q3): the
+	// admin sees which keys are set, never their values.
 	adminVisible := redactIntegrationConfig(integration, true)
-	if string(adminVisible.Config) != string(integration.Config) {
-		t.Fatalf("expected admin config to remain unchanged, got %s", adminVisible.Config)
+	var adminConfig map[string]any
+	if err := json.Unmarshal(adminVisible.Config, &adminConfig); err != nil {
+		t.Fatalf("decode admin config: %v", err)
+	}
+	if adminConfig["url"] != "***" || adminConfig["secret"] != "***" {
+		t.Fatalf("expected admin config secrets to be masked, got %s", adminVisible.Config)
+	}
+	if strings.Contains(string(adminVisible.Config), "top-secret") {
+		t.Fatalf("admin config leaked the secret: %s", adminVisible.Config)
 	}
 
 	memberVisible := redactIntegrationConfig(integration, false)

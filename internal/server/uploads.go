@@ -24,6 +24,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/metrics"
+	"github.com/hibouhq/hibou/internal/sarif"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/vex"
@@ -529,7 +530,12 @@ func (s *Server) handleSARIFUpload(w http.ResponseWriter, r *http.Request, userI
 		}
 		planned, err := s.planJobDeclaration(r.Context(), repo, planID, strings.TrimSpace(input.PlanJobID), input.CommitSHA)
 		if err != nil {
-			api.JSONError(w, http.StatusBadRequest, "plan binding refused: "+err.Error())
+			if errors.Is(err, errPlanJobUnknown) || errors.Is(err, errPlanCommitDiffs) {
+				api.JSONError(w, http.StatusBadRequest, "plan binding refused: "+err.Error())
+				return false
+			}
+			s.log.Error().Err(err).Str("plan_id", planID.String()).Msg("resolve plan binding")
+			api.JSONError(w, http.StatusInternalServerError, "failed to resolve the plan binding")
 			return false
 		}
 		payload.declaration.Scope = planned.Scope
@@ -747,12 +753,18 @@ func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID
 			// Defensive only: server startup now fails if the configured artifact store cannot initialize.
 			return nil, errors.New("artifact store unavailable")
 		}
-		params := buildSnapshotArtifactParams(snapshotID, artifact.kind, artifact.format, artifact.tool, artifact.filename, artifact.content)
+		content, err := storableArtifactContent(artifact.kind, artifact.content)
+		if err != nil {
+			return nil, err
+		}
+		// The recorded sha256/size describe the bytes actually stored, so the
+		// download can be verified against them.
+		params := buildSnapshotArtifactParams(snapshotID, artifact.kind, artifact.format, artifact.tool, artifact.filename, content)
 		contentType := ""
 		if params.ContentType != nil {
 			contentType = *params.ContentType
 		}
-		if err := s.objStore.Put(ctx, params.ObjectKey, bytes.NewReader(artifact.content), contentType); err != nil {
+		if err := s.objStore.Put(ctx, params.ObjectKey, bytes.NewReader(content), contentType); err != nil {
 			return nil, err
 		}
 		artifactParams = &params
@@ -761,6 +773,20 @@ func (s *Server) advanceUploadSnapshot(ctx context.Context, snapshotID uuid.UUID
 		return nil, err
 	}
 	return s.loadSnapshotByID(ctx, snapshotID)
+}
+
+// storableArtifactContent is what gets persisted for an uploaded artifact.
+// SARIF loses its region snippets first: secret scanners put the matched
+// secret there verbatim, and nothing downstream reads them.
+func storableArtifactContent(kind string, content []byte) ([]byte, error) {
+	if !strings.EqualFold(strings.TrimSpace(kind), "sarif") {
+		return content, nil
+	}
+	stripped, err := sarif.StripSnippets(content)
+	if err != nil {
+		return nil, errBadRequest("invalid SARIF document")
+	}
+	return stripped, nil
 }
 
 func buildSnapshotArtifactParams(snapshotID uuid.UUID, kind, format, tool, filename string, content []byte) store.CreateSnapshotArtifactParams {
@@ -1688,12 +1714,16 @@ func (s *Server) writeUploadError(w http.ResponseWriter, err error) {
 		api.JSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	if ok := strings.Contains(err.Error(), "required"); ok {
-		api.JSONError(w, http.StatusBadRequest, err.Error())
+	// Untyped validation errors: only a bare "<field> is required" leaf is
+	// echoed. Anything else — wrapped driver, parser or storage errors that
+	// merely contain "invalid" — gets a generic message, never its text.
+	if message, ok := uploadRequiredFieldMessage(err); ok {
+		api.JSONError(w, http.StatusBadRequest, message)
 		return
 	}
 	if strings.Contains(err.Error(), "invalid") {
-		api.JSONError(w, http.StatusBadRequest, err.Error())
+		s.log.Debug().Err(err).Msg("upload rejected")
+		api.JSONError(w, http.StatusBadRequest, "invalid upload request")
 		return
 	}
 	if ok := errorAsNotFound(err, &notFound); ok {
@@ -1702,6 +1732,21 @@ func (s *Server) writeUploadError(w http.ResponseWriter, err error) {
 	}
 
 	api.JSONError(w, http.StatusInternalServerError, "failed to process upload")
+}
+
+// uploadRequiredFieldPattern matches the request-validation errors the
+// upload path builds itself ("commit_sha is required").
+var uploadRequiredFieldPattern = regexp.MustCompile(`^[a-z][a-z0-9_.]* is required$`)
+
+func uploadRequiredFieldMessage(err error) (string, bool) {
+	if errors.Unwrap(err) != nil {
+		return "", false
+	}
+	message := err.Error()
+	if !uploadRequiredFieldPattern.MatchString(message) {
+		return "", false
+	}
+	return message, true
 }
 
 func decodeUploadJSONBody(w http.ResponseWriter, r *http.Request, target any) bool {

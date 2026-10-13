@@ -1,0 +1,32 @@
+Hibou {{ .Chart.AppVersion }} is deployed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+{{- $baseURL := include "hibou.baseURL" . }}
+{{- if $baseURL }}
+
+URL: {{ $baseURL }}
+{{- end }}
+{{- if not $baseURL }}
+
+ERROR: no base URL. Set hibou.baseURL, or ingress.enabled with ingress.hostname.
+The server refuses to start without one.
+{{- else if hasPrefix "http://" $baseURL }}
+
+WARNING: the base URL is plain http, so session cookies are not marked Secure.
+Enable ingress.tls or set an https hibou.baseURL.
+{{- end }}
+{{- if and (empty .Values.hibou.auth.allowedOrgs) (empty .Values.hibou.auth.allowedUsers) }}
+
+WARNING: sign-in is open to every account of the configured forges
+(hibou.auth.allowedOrgs and hibou.auth.allowedUsers are both empty).
+Restrict it unless this instance is meant to be public.
+{{- end }}
+{{- if .Values.hibou.autoProvisionOrgs }}
+
+NOTE: hibou.autoProvisionOrgs is on: installing the forge App on any account
+creates a Hibou organization for it.
+{{- end }}
+{{- if not .Values.hibou.networkPolicy.enabled }}
+
+NOTE: hibou.networkPolicy.enabled is false, so hibou, PostgreSQL, SeaweedFS and
+Trivy accept traffic from any pod in the cluster. Enable it if your CNI
+enforces NetworkPolicy.
+{{- end }}

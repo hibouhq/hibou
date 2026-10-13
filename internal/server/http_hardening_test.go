@@ -83,7 +83,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 
 	spa := serve("https://hibou.example.com", "/orgs/github/acme")
 	csp := spa.Get("Content-Security-Policy")
-	for _, want := range []string{"frame-ancestors 'none'", "script-src 'self';", "object-src 'none'", "base-uri 'none'", "wss://hibou.example.com"} {
+	for _, want := range []string{"frame-ancestors 'none'", "script-src 'self';", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "wss://hibou.example.com"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("SPA CSP %q lacks %q", csp, want)
 		}
@@ -176,13 +176,14 @@ func TestUploadConcurrencyMiddlewareRefusesWhenFull(t *testing.T) {
 	done := make(chan int)
 	go func() {
 		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, uploadPath, nil))
+		handler.ServeHTTP(recorder, serviceUploadRequest(uuid.New(), uuid.New(), nil))
 		done <- recorder.Code
 	}()
 	<-entered
 
+	// Another org's token: only the global cap is in the way.
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, uploadPath, nil))
+	handler.ServeHTTP(recorder, serviceUploadRequest(uuid.New(), uuid.New(), nil))
 	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Retry-After") == "" {
 		t.Fatalf("second upload = %d (Retry-After %q), want 503 with Retry-After", recorder.Code, recorder.Header().Get("Retry-After"))
 	}

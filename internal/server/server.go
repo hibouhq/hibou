@@ -123,6 +123,8 @@ type Server struct {
 	// background coverage/test parsers they hand off to.
 	uploadSlots     chan struct{}
 	uploadWorkSlots chan struct{}
+	// uploadInFlight caps uploads per principal and per org.
+	uploadInFlight keyedInFlight
 	// orgComponentScanGate: one org-wide rescan at a time, then a cooldown.
 	orgComponentScanGate cooldownGate
 	// coverageRefreshRunner coalesces org scan-coverage refreshes.
@@ -170,8 +172,8 @@ const stalePendingInterval = 1 * time.Minute
 func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enforcer, authMgr *auth.Manager, forges map[string]forge.Provider, siteFS fs.FS) (*Server, error) {
 	r := chi.NewRouter()
 	lifecycleCtx, shutdownCancel := context.WithCancel(context.Background())
-	configureRouter(r, log)
 	limits := effectiveLimits(cfg.Limits)
+	configureRouter(r, log, trustedProxyClientIP(limits.HTTP.TrustedProxyHeader, limits.HTTP.TrustedProxyCIDRs))
 	if db != nil {
 		store.ConfigurePool(db, store.PoolConfig{
 			MaxOpenConns:    limits.DB.MaxOpenConns,
@@ -226,8 +228,15 @@ func New(cfg config.Config, log zerolog.Logger, db *sql.DB, enforcer *rbac.Enfor
 	return s, nil
 }
 
-func configureRouter(r chi.Router, log zerolog.Logger) {
+// configureRouter installs the base middleware. clientIP, when non-nil,
+// refines the client IP right after X-Forwarded-For (http.trusted_proxy_*).
+func configureRouter(r chi.Router, log zerolog.Logger, clientIP ...func(http.Handler) http.Handler) {
 	r.Use(middleware.ClientIPFromXFFTrustedProxies(1))
+	for _, mw := range clientIP {
+		if mw != nil {
+			r.Use(mw)
+		}
+	}
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log))
 	r.Use(middleware.Recoverer)
@@ -317,6 +326,18 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 		}
 	}
 	s.retentionWorker = retention.NewWorker(retention.NewStoreAdapter(s.queries), s.objStore, s.queries, s.bus, log, cfg.RetentionPolicy, cfg.UploadWindow)
+	// Integration secrets are sealed at rest when HIBOU_ENCRYPTION_KEY is
+	// set; a malformed key refuses startup rather than storing plaintext.
+	encryptionKey, err := notify.ParseEncryptionKey(cfg.EncryptionKey)
+	if err != nil {
+		return fmt.Errorf("encryption key: %w", err)
+	}
+	if err := notify.SetEncryptionKey(encryptionKey); err != nil {
+		return fmt.Errorf("encryption key: %w", err)
+	}
+	// Secret-finding hashes are keyed, so they cannot be brute-forced from
+	// the API or linked across instances.
+	secretscan.SetHashPepperSource(cfg.SessionSecret)
 	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, cfg.BaseURL, log,
 		&notify.SlackSender{},
 		&notify.TeamsSender{},
@@ -372,6 +393,11 @@ func configuredAdvisoryProviderNames(configured []string, built map[string]provi
 
 func initializeWebsocketFanout(s *Server, cfg config.Config, log zerolog.Logger) {
 	s.wsHub = ws.NewHub(log)
+	if s.authMgr != nil {
+		// Logout and revocation close the user's live sockets on this replica;
+		// others notice on their next session re-check.
+		s.authMgr.AddRevokeHook(s.wsHub.CloseUser)
+	}
 	dispatcher := ws.NewDispatcher(s.wsHub, log)
 	publisher, listener, bridgeActive := configureWebsocketBridge(s.db, cfg.DatabaseURL, dispatcher, log)
 	s.wsListener = listener
@@ -438,7 +464,9 @@ func configureForgeAllowlist(s *Server, fc config.ForgeConfig, log zerolog.Logge
 	}
 	cidrs := forgeDefaultCIDRs(fc, log)
 	if source != nil || len(cidrs) > 0 {
-		s.forgeIPAllowlists[fc.ID] = newForgeIPAllowlist(s.lifecycleCtx, log, source, cidrs)
+		allowlist := newForgeIPAllowlist(s.lifecycleCtx, log, source, cidrs)
+		allowlist.SetChangeHook(s.auditIPAllowlistChange(fc.ID))
+		s.forgeIPAllowlists[fc.ID] = allowlist
 	}
 }
 
@@ -491,9 +519,13 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/version", s.handleVersion)
 			r.Get("/schemas/hibou-config.schema.json", s.handleGetConfigSchema)
 			r.Get("/ws", s.wsHub.HTTPHandler(s.authMgr, s.queries))
-			r.Get("/docs/*", httpSwagger.Handler(
-				httpSwagger.URL("/api/v1/docs/doc.json"),
-			))
+			// Swagger UI ships an inline script and a CSP exception: only
+			// with api.docs.enabled (default: development).
+			if s.cfg.APIDocsEnabled {
+				r.Get("/docs/*", httpSwagger.Handler(
+					httpSwagger.URL("/api/v1/docs/doc.json"),
+				))
+			}
 			// Public: the login page shows announcement banners too.
 			r.Get("/instance/banners", s.handleListActiveBanners)
 		})
@@ -560,6 +592,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/instance/members", s.handleListInstanceMembers)
 			r.Post("/instance/members/grants", s.handleGrantLocalRole)
 			r.Post("/instance/members/revocations", s.handleRevokeLocalRole)
+			r.Post("/instance/users/{userID}/anonymize", s.handleAnonymizeUser)
 			r.Get("/notifications", s.notifySvc.HandleListNotifications)
 			r.Get("/notifications/unread-count", s.notifySvc.HandleUnreadCount)
 			r.Post("/notifications/{id}/read", s.notifySvc.HandleMarkRead)
@@ -821,6 +854,11 @@ func (s *Server) webhookProtection(next http.Handler) http.Handler {
 // bound to runtimeCtx.
 func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	loops := make([]string, 0, 10)
+	if s.permissionSyncSvc != nil {
+		// Removed forge members lose access without signing in again.
+		loops = append(loops, "membership_revalidation")
+		go s.permissionSyncSvc.RunRevalidation(runtimeCtx, permissionsync.DefaultRevalidationInterval)
+	}
 	if s.orgProvisionSvc != nil {
 		// Orgs bound by login only stay open to a forge-rename takeover until
 		// their immutable account id is recorded (security audit §3.3).

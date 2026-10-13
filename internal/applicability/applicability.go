@@ -146,26 +146,35 @@ func DetectWithOverrides(paths []string, truncated bool, catalog *scancatalog.Ca
 	moduleRoots := map[string]Module{}
 	for _, raw := range paths {
 		file := strings.TrimPrefix(path.Clean(raw), "./")
+		// An excluded path that could read as an option or climb out of the
+		// checkout is still left out of the kept files, but never becomes a
+		// scanner argument (safeRoot, Q14).
 		if exclusion, ok := matchingExclusion(file, excludedByOwner); ok {
-			excluded[exclusion.Path] = "owner: " + exclusion.Reason
+			if safeRoot(exclusion.Path) {
+				excluded[exclusion.Path] = "owner: " + exclusion.Reason
+			}
 			continue
 		}
 		if dir, reason, ok := excludedPrefix(file); ok {
-			excluded[dir] = reason
+			if safeRoot(dir) {
+				excluded[dir] = reason
+			}
 			continue
 		}
 		if strings.HasSuffix(file, ".min.js") {
-			excluded[file] = "minified bundle"
+			if safeRoot(file) {
+				excluded[file] = "minified bundle"
+			}
 			continue
 		}
 		base := path.Base(file)
-		if system, ok := manifests[base]; ok {
+		if system, ok := manifests[base]; ok && safeRoot(path.Dir(file)) {
 			root := path.Dir(file)
 			if _, seen := moduleRoots[root]; !seen || system != "node" {
 				moduleRoots[root] = Module{Root: root, BuildSystem: system, Manifest: file}
 			}
 		}
-		if strings.HasSuffix(base, ".csproj") {
+		if strings.HasSuffix(base, ".csproj") && safeRoot(path.Dir(file)) {
 			root := path.Dir(file)
 			moduleRoots[root] = Module{Root: root, BuildSystem: "dotnet", Manifest: file}
 		}
@@ -174,7 +183,7 @@ func DetectWithOverrides(paths []string, truncated bool, catalog *scancatalog.Ca
 	result.FileCount = len(kept)
 	for _, root := range overrides.ModuleRoots {
 		root = strings.TrimSuffix(strings.TrimPrefix(path.Clean(root), "./"), "/")
-		if _, detected := moduleRoots[root]; !detected && root != "" {
+		if _, detected := moduleRoots[root]; !detected && root != "" && safeRoot(root) {
 			moduleRoots[root] = Module{Root: root, BuildSystem: "declared", Manifest: ""}
 		}
 	}
@@ -371,6 +380,22 @@ func matchingExclusion(file string, exclusions []OwnerExclusion) (OwnerExclusion
 		}
 	}
 	return OwnerExclusion{}, false
+}
+
+// safeRoot reports whether a module root may become a scanner target: the
+// CLI passes targets to scanners as arguments, so a root that reads as an
+// option ("-…", "--exclude=*") or climbs out of the checkout ("..") is
+// dropped rather than planned (Q14).
+func safeRoot(root string) bool {
+	if root == "" || strings.HasPrefix(root, "-") || strings.HasPrefix(root, "/") {
+		return false
+	}
+	for _, segment := range strings.Split(root, "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func underPath(file, dir string) bool {

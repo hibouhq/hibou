@@ -2,11 +2,14 @@ package secretscan
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 )
 
 type trufflehogRow struct {
@@ -39,9 +42,109 @@ type trufflehogRow struct {
 	Meta map[string]any `json:"-"`
 }
 
+// HashSecret is the dedup digest stored as secret_hash: HMAC-SHA256 under an
+// instance pepper, so a leaked hash cannot be brute-forced offline against
+// candidate secrets (an unsalted SHA-256 of a low-entropy password or a
+// known-format token can). Every provider must hash the same bare bytes for
+// cross-tool dedup to work.
 func HashSecret(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
+	mac := hmac.New(sha256.New, hashPepper())
+	_, _ = mac.Write([]byte(value))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// secretHashPepperLabel domain-separates the pepper from every other use of
+// the instance secret it is derived from.
+const secretHashPepperLabel = "hibou/secret-hash/v1"
+
+// defaultPepperSource keys development instances that set no secret.
+const defaultPepperSource = "hibou-development-secret-hash-pepper"
+
+var (
+	pepperMu     sync.RWMutex
+	pepperValue  []byte
+	pepperLoaded sync.Once
+)
+
+// SetHashPepperSource derives the secret-hash pepper from an instance secret
+// (the session secret: present and shared by every replica in production).
+// Call it at startup; without a call the pepper is derived from
+// HIBOU_SESSION_SECRET. Changing the source changes every new secret_hash,
+// and with it the fingerprint of findings that have no line number.
+func SetHashPepperSource(secret string) {
+	pepperLoaded.Do(func() {})
+	pepperMu.Lock()
+	pepperValue = derivePepper(secret)
+	pepperMu.Unlock()
+}
+
+func hashPepper() []byte {
+	pepperLoaded.Do(func() {
+		pepperMu.Lock()
+		if pepperValue == nil {
+			pepperValue = derivePepper(os.Getenv("HIBOU_SESSION_SECRET"))
+		}
+		pepperMu.Unlock()
+	})
+	pepperMu.RLock()
+	defer pepperMu.RUnlock()
+	return pepperValue
+}
+
+func derivePepper(secret string) []byte {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		secret = defaultPepperSource
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(secretHashPepperLabel))
+	return mac.Sum(nil)
+}
+
+// safeMetadataKeys is the closed set of scanner report fields persisted into
+// a secret finding's metadata (ADR-010). Anything else — raw values (Raw,
+// RawV2, Match, Secret), structured secret material (SecretParts,
+// StructuredData, ExtraData), surrounding content (Line, Fragment,
+// MatchContext), commit messages, and every field a future scanner version
+// adds — is dropped: an allowlist cannot be outrun by a new field name.
+var safeMetadataKeys = map[string]bool{
+	// gitleaks / betterleaks
+	"RuleID":           true,
+	"Description":      true,
+	"File":             true,
+	"SymlinkFile":      true,
+	"StartLine":        true,
+	"EndLine":          true,
+	"StartColumn":      true,
+	"EndColumn":        true,
+	"Commit":           true,
+	"Date":             true,
+	"Entropy":          true,
+	"Tags":             true,
+	"Fingerprint":      true,
+	"Link":             true,
+	"ValidationStatus": true,
+	// trufflehog
+	"DetectorName":   true,
+	"DetectorType":   true,
+	"DecoderName":    true,
+	"Verified":       true,
+	"Redacted":       true,
+	"SourceMetadata": true,
+	"SourceID":       true,
+	"SourceType":     true,
+	"SourceName":     true,
+}
+
+// SafeMetadata keeps only the allowlisted report fields of a scanner row.
+func SafeMetadata(raw map[string]any) map[string]any {
+	safe := make(map[string]any, len(raw))
+	for key, value := range raw {
+		if safeMetadataKeys[key] {
+			safe[key] = value
+		}
+	}
+	return safe
 }
 
 func ComputeFingerprint(filePath string, startLine int32, secretHash string) string {
@@ -134,7 +237,7 @@ func ParseGitleaksReport(content []byte) ([]SecretFinding, error) {
 			CommitSHA:   strings.TrimSpace(row.Commit),
 			AuthorEmail: strings.TrimSpace(row.Email),
 			Verified:    false,
-			Metadata:    raw,
+			Metadata:    SafeMetadata(raw),
 		}
 		finding.Fingerprint = ComputeFingerprint(finding.FilePath, finding.StartLine, finding.SecretHash)
 		findings = append(findings, finding)
@@ -230,7 +333,7 @@ func decodeTruffleHogRow(raw map[string]any) (SecretFinding, bool, error) {
 		CommitSHA:   strings.TrimSpace(row.SourceMeta.Data.Git.Commit),
 		AuthorEmail: strings.TrimSpace(row.SourceMeta.Data.Git.Email),
 		Verified:    row.Verified,
-		Metadata:    raw,
+		Metadata:    SafeMetadata(raw),
 	}
 	finding.Fingerprint = ComputeFingerprint(finding.FilePath, finding.StartLine, finding.SecretHash)
 	return finding, true, nil

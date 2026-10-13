@@ -17,12 +17,15 @@ import (
 
 type Store interface {
 	GetOrganizationByProviderAndSlug(ctx context.Context, provider, slug string) (*store.Organization, error)
-	UpsertForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID, role string) error
+	// UpsertForgeOrgMember records a membership; repoScoped confines it to
+	// the user's repository grants.
+	UpsertForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID, role string, repoScoped bool) error
 	ListForgeOrgMembershipsByUser(ctx context.Context, userID uuid.UUID) ([]store.ForgeOrgMembership, error)
 	PruneForgeOrgMembersForUser(ctx context.Context, userID uuid.UUID, keepOrgIDs []uuid.UUID) error
 	GetRepositoryBySlug(ctx context.Context, orgID uuid.UUID, slug string) (*store.Repository, error)
 	UpsertForgeUserRepoAccess(ctx context.Context, userID, repoID uuid.UUID, role string) error
 	PruneForgeUserRepoAccess(ctx context.Context, userID uuid.UUID, keepRepoIDs []uuid.UUID) error
+	ListRepositoryIDsByOrg(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error)
 
 	// Operator-granted roles. The sync never creates these — it only reacts to
 	// the forge changing someone's standing underneath them.
@@ -102,6 +105,9 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 	ids.resolver, _ = provider.(AccountIDResolver)
 	desiredOrgRoles := make(map[uuid.UUID]string, len(access.Orgs))
 	desiredOrgOrder := make([]uuid.UUID, 0, len(access.Orgs))
+	// confirmedOrgs are the orgs the forge confirmed an org membership in, as
+	// opposed to an org level derived from repository grants alone.
+	confirmedOrgs := make(map[uuid.UUID]bool, len(access.Orgs))
 	for _, orgAccess := range access.Orgs {
 		accountKey := normalizeAccessKey(orgAccess.AccountLogin)
 		if accountKey == "" {
@@ -115,6 +121,12 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 		if !ok {
 			continue
 		}
+		// Recorded before the role mapping: GitHub's plain membership level
+		// ("read") maps to no org role, and such members reach the org through
+		// their repository grants below — still as confirmed members.
+		if !repoDerivedOrgLevel(orgAccess.Level) {
+			confirmedOrgs[org.ID] = true
+		}
 
 		enumRole := forge.RoleForTier(forge.MapForgeRole(providerID, orgAccess.Level))
 		if enumRole == "" {
@@ -126,43 +138,15 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 		desiredOrgRoles[org.ID] = strongerRole(desiredOrgRoles[org.ID], enumRole)
 	}
 
-	keptOrgIDs := make([]uuid.UUID, 0, len(desiredOrgOrder))
-	for _, orgID := range desiredOrgOrder {
-		role := desiredOrgRoles[orgID]
-		if role == "" {
-			continue
-		}
-		if err := s.store.UpsertForgeOrgMember(ctx, orgID, user.ID, role); err != nil {
-			return err
-		}
-		keptOrgIDs = append(keptOrgIDs, orgID)
-		priorRole := existingRoles[orgID]
-		if priorRole == role {
-			continue
-		}
-		if added := s.addOrgRole(user.ID, role, orgID); added && priorRole != "" && priorRole != role {
-			s.removeOrgRole(user.ID, priorRole, orgID)
-			// A downgrade says the person's standing changed, but not why: a
-			// narrowed remit and a team reorganisation look identical here.
-			// Keeping a privileged grant would leave a demoted admin authoring
-			// findings across every repository; revoking it would silently
-			// break a triage queue on a reorg. Suspension is safe in the
-			// meantime and recoverable in one click.
-			if roleRank(role) < roleRank(priorRole) {
-				s.suspendLocalGrants(ctx, user.ID, orgID, priorRole, role)
-			}
-		}
-	}
-
 	desiredRepoRoles := make(map[uuid.UUID]string, len(access.Repos))
 	desiredRepoOrder := make([]uuid.UUID, 0, len(access.Repos))
+	grantsByOrg := make(map[uuid.UUID]map[uuid.UUID]bool, 4)
 	// Orgs reachable only through repo-level access (outside collaborators,
 	// per-repo readers): they carry no org membership on the forge, so the
 	// org prune below must not evict them — that was the bug where invited
 	// readers lost the org from /orgs the moment THEY logged in, until the
 	// org-side sync re-added it.
 	repoOnlyOrgIDs := make([]uuid.UUID, 0, 4)
-	repoOrgSeen := make(map[uuid.UUID]struct{}, 4)
 	for _, repoAccess := range access.Repos {
 		// Resolved, not read from the org-loop's cache: a repo-only user
 		// (outside collaborator) has no entry in access.Orgs, so the cache is
@@ -195,14 +179,17 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 			desiredRepoOrder = append(desiredRepoOrder, repo.ID)
 		}
 		desiredRepoRoles[repo.ID] = strongerRole(desiredRepoRoles[repo.ID], enumRole)
-		if _, dup := repoOrgSeen[org.ID]; !dup {
-			repoOrgSeen[org.ID] = struct{}{}
+		if grantsByOrg[org.ID] == nil {
+			grantsByOrg[org.ID] = map[uuid.UUID]bool{}
 			if _, hasOrgRole := desiredOrgRoles[org.ID]; !hasOrgRole {
 				repoOnlyOrgIDs = append(repoOnlyOrgIDs, org.ID)
 			}
 		}
+		grantsByOrg[org.ID][repo.ID] = true
 	}
 
+	// Repository grants are written before the memberships that scope to
+	// them: a request in between sees fewer repositories, never more.
 	keptRepoIDs := make([]uuid.UUID, 0, len(desiredRepoOrder))
 	for _, repoID := range desiredRepoOrder {
 		role := desiredRepoRoles[repoID]
@@ -215,11 +202,47 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 		keptRepoIDs = append(keptRepoIDs, repoID)
 	}
 
+	keptOrgIDs := make([]uuid.UUID, 0, len(desiredOrgOrder)+len(repoOnlyOrgIDs))
+	for _, orgID := range desiredOrgOrder {
+		role := desiredOrgRoles[orgID]
+		if role == "" {
+			continue
+		}
+		scoped, err := s.repoScoped(ctx, orgID, role, confirmedOrgs[orgID], grantsByOrg[orgID])
+		if err != nil {
+			return err
+		}
+		if err := s.store.UpsertForgeOrgMember(ctx, orgID, user.ID, role, scoped); err != nil {
+			return err
+		}
+		keptOrgIDs = append(keptOrgIDs, orgID)
+		priorRole := existingRoles[orgID]
+		if priorRole == role {
+			continue
+		}
+		if added := s.addOrgRole(user.ID, role, orgID); added && priorRole != "" && priorRole != role {
+			s.removeOrgRole(user.ID, priorRole, orgID)
+			// A downgrade says the person's standing changed, but not why: a
+			// narrowed remit and a team reorganisation look identical here.
+			// Keeping a privileged grant would leave a demoted admin authoring
+			// findings across every repository; revoking it would silently
+			// break a triage queue on a reorg. Suspension is safe in the
+			// meantime and recoverable in one click.
+			if roleRank(role) < roleRank(priorRole) {
+				s.suspendLocalGrants(ctx, user.ID, orgID, priorRole, role)
+			}
+		}
+	}
+
 	// Repo-level access keeps the owning org visible as a viewer membership:
 	// without it the person can open their repos but the org never appears on
 	// /orgs, and the login prune would evict what the org-side sync granted.
 	for _, orgID := range repoOnlyOrgIDs {
-		if err := s.store.UpsertForgeOrgMember(ctx, orgID, user.ID, "viewer"); err != nil {
+		scoped, err := s.repoScoped(ctx, orgID, "viewer", confirmedOrgs[orgID], grantsByOrg[orgID])
+		if err != nil {
+			return err
+		}
+		if err := s.store.UpsertForgeOrgMember(ctx, orgID, user.ID, "viewer", scoped); err != nil {
 			return err
 		}
 		keptOrgIDs = append(keptOrgIDs, orgID)
@@ -246,6 +269,44 @@ func (s *Service) SyncUser(ctx context.Context, user *store.User, providerID str
 	}
 
 	return s.store.PruneForgeUserRepoAccess(ctx, user.ID, keptRepoIDs)
+}
+
+// repoDerivedOrgLevel reports an org level the forge derived from repository
+// grants rather than from an org membership: GitHub reports "push"/"pull"
+// for an installation account the user is not a member of (an outside
+// collaborator), and "read"/"admin" for a confirmed member.
+func repoDerivedOrgLevel(level string) bool {
+	switch normalizeAccessKey(level) {
+	case "push", "pull":
+		return true
+	default:
+		return false
+	}
+}
+
+// repoScoped decides whether a membership reaches specific repositories only.
+// Admins never are. A person the forge did not confirm as an org member is.
+// A confirmed member is scoped when an enrolled repository is missing from
+// their grants: the forge itself withheld it (no base permission). The
+// verdict is stored, so a repository enrolled later stays invisible to a
+// scoped member until a sync grants it.
+func (s *Service) repoScoped(ctx context.Context, orgID uuid.UUID, role string, confirmedMember bool, granted map[uuid.UUID]bool) (bool, error) {
+	if role != "viewer" && role != "developer" {
+		return false, nil
+	}
+	if !confirmedMember {
+		return true, nil
+	}
+	enrolled, err := s.store.ListRepositoryIDsByOrg(ctx, orgID)
+	if err != nil {
+		return false, err
+	}
+	for _, repoID := range enrolled {
+		if !granted[repoID] {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // resolveOrganization maps a forge account login to its Hibou org. The slug is

@@ -31,7 +31,7 @@ type APIKey struct {
 	// when the creator was deleted; org-owned keys keep working then.
 	UserID      *uuid.UUID      `json:"user_id,omitempty"`
 	Name        string          `json:"name"`
-	KeyHash     string          `json:"key_hash,omitempty"`
+	KeyHash     string          `json:"-"` // token verifier: never serialized
 	Scopes      json.RawMessage `json:"scopes"`
 	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
 	OwnerType   string          `json:"owner_type"`
@@ -48,6 +48,10 @@ type APIKey struct {
 	// the review UI must show who requested a pending token.
 	CreatedByDisplay string `json:"created_by_display,omitempty"`
 	User             *User  `json:"user,omitempty"`
+	// CreatorLeftOrg is set by the authentication lookup only: an org-owned
+	// key whose creator still exists but is no longer a member of the org.
+	// Whoever holds the secret left, so the key must stop authenticating.
+	CreatorLeftOrg bool `json:"-"`
 }
 
 // IsApproved reports whether the token may authenticate. Blank tolerates rows
@@ -433,7 +437,11 @@ func apiKeyWithUserFromRow(row dbgen.GetAPIKeyByHashRow) *APIKey {
 			ProviderID:  row.ProviderID.String,
 			CreatedAt:   row.UserCreatedAt.Time,
 			UpdatedAt:   row.UserUpdatedAt.Time,
+
+			ForgeLogin:      row.ForgeLogin.String,
+			SignInAllowedAt: timePtrFromNull(row.SigninAllowedAt),
 		}
 	}
+	key.CreatorLeftOrg = !row.CreatorMembershipValid
 	return key
 }

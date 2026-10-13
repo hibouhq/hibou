@@ -23,6 +23,12 @@ type User struct {
 	// SessionEpoch is signed into every session cookie; bumping it revokes
 	// all sessions issued before. Never serialized.
 	SessionEpoch int64 `json:"-"`
+	// ForgeLogin is the forge login seen at the last sign-in. Logins are
+	// renamable, so it is a name to ask the forge about, never identity.
+	ForgeLogin string `json:"-"`
+	// SignInAllowedAt is when the sign-in allowlist last admitted the user
+	// through org membership (nil: never, or since revoked).
+	SignInAllowedAt *time.Time `json:"-"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, email, displayName, provider, providerID string) (*User, error) {
@@ -109,8 +115,21 @@ func userFromRow(row dbgen.User) *User {
 		CreatedAt:   row.CreatedAt,
 		UpdatedAt:   row.UpdatedAt,
 
-		SessionEpoch: row.SessionEpoch,
+		SessionEpoch:    row.SessionEpoch,
+		ForgeLogin:      row.ForgeLogin.String,
+		SignInAllowedAt: timePtrFromNull(row.SigninAllowedAt),
 	}
+}
+
+// SetUserForgeLogin records the forge login seen at sign-in.
+func (q *Queries) SetUserForgeLogin(ctx context.Context, id uuid.UUID, login string) error {
+	return q.db.SetUserForgeLogin(ctx, dbgen.SetUserForgeLoginParams{ID: id, ForgeLogin: nullString(login)})
+}
+
+// SetUserSignInAllowedAt records when the sign-in allowlist last admitted the
+// user through org membership; nil clears it.
+func (q *Queries) SetUserSignInAllowedAt(ctx context.Context, id uuid.UUID, at *time.Time) error {
+	return q.db.SetUserSignInAllowedAt(ctx, dbgen.SetUserSignInAllowedAtParams{ID: id, AllowedAt: nullTimeFromPtr(at)})
 }
 
 // BumpUserSessionEpoch revokes every session issued to the user so far and

@@ -39,7 +39,8 @@ RUN set -eux; \
 	tar -xzf "${asset}" -C /usr/local/bin betterleaks; \
 	/usr/local/bin/betterleaks version
 
-FROM busybox:stable AS prep
+# Pinned to the multi-arch index digest; Renovate keeps the tag and digest current.
+FROM busybox:stable@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 AS prep
 ARG TARGETARCH
 
 ARG INCLUDE_EXTRA_CLI_BINARIES

@@ -114,35 +114,44 @@ func (q *Queries) DeleteAPIKeyByOrg(ctx context.Context, arg DeleteAPIKeyByOrgPa
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
 SELECT ak.id, ak.user_id, ak.name, ak.key_hash, ak.scopes, ak.expires_at, ak.owner_type, ak.owner_id, ak.description, ak.last_used_at, ak.created_at, ak.approval_status, ak.approved_by, ak.approved_at,
-    u.id AS actor_user_id, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at
+    u.id AS actor_user_id, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at,
+    u.forge_login, u.signin_allowed_at,
+    -- An org-owned key whose creator still exists but no longer belongs to
+    -- the org stops authenticating: the person who holds the secret left.
+    (ak.owner_type <> 'org' OR ak.user_id IS NULL OR u.id IS NULL OR EXISTS (
+        SELECT 1 FROM org_members om WHERE om.org_id = ak.owner_id AND om.user_id = ak.user_id
+    ))::boolean AS creator_membership_valid
 FROM api_keys ak
 LEFT JOIN users u ON u.id = ak.user_id
 WHERE ak.key_hash = $1
 `
 
 type GetAPIKeyByHashRow struct {
-	ID             uuid.UUID            `json:"id"`
-	UserID         uuid.NullUUID        `json:"user_id"`
-	Name           string               `json:"name"`
-	KeyHash        string               `json:"key_hash"`
-	Scopes         json.RawMessage      `json:"scopes"`
-	ExpiresAt      sql.NullTime         `json:"expires_at"`
-	OwnerType      string               `json:"owner_type"`
-	OwnerID        uuid.NullUUID        `json:"owner_id"`
-	Description    string               `json:"description"`
-	LastUsedAt     sql.NullTime         `json:"last_used_at"`
-	CreatedAt      time.Time            `json:"created_at"`
-	ApprovalStatus ApiKeyApprovalStatus `json:"approval_status"`
-	ApprovedBy     uuid.NullUUID        `json:"approved_by"`
-	ApprovedAt     sql.NullTime         `json:"approved_at"`
-	ActorUserID    uuid.NullUUID        `json:"actor_user_id"`
-	Email          sql.NullString       `json:"email"`
-	DisplayName    sql.NullString       `json:"display_name"`
-	AvatarUrl      sql.NullString       `json:"avatar_url"`
-	Provider       sql.NullString       `json:"provider"`
-	ProviderID     sql.NullString       `json:"provider_id"`
-	UserCreatedAt  sql.NullTime         `json:"user_created_at"`
-	UserUpdatedAt  sql.NullTime         `json:"user_updated_at"`
+	ID                     uuid.UUID            `json:"id"`
+	UserID                 uuid.NullUUID        `json:"user_id"`
+	Name                   string               `json:"name"`
+	KeyHash                string               `json:"key_hash"`
+	Scopes                 json.RawMessage      `json:"scopes"`
+	ExpiresAt              sql.NullTime         `json:"expires_at"`
+	OwnerType              string               `json:"owner_type"`
+	OwnerID                uuid.NullUUID        `json:"owner_id"`
+	Description            string               `json:"description"`
+	LastUsedAt             sql.NullTime         `json:"last_used_at"`
+	CreatedAt              time.Time            `json:"created_at"`
+	ApprovalStatus         ApiKeyApprovalStatus `json:"approval_status"`
+	ApprovedBy             uuid.NullUUID        `json:"approved_by"`
+	ApprovedAt             sql.NullTime         `json:"approved_at"`
+	ActorUserID            uuid.NullUUID        `json:"actor_user_id"`
+	Email                  sql.NullString       `json:"email"`
+	DisplayName            sql.NullString       `json:"display_name"`
+	AvatarUrl              sql.NullString       `json:"avatar_url"`
+	Provider               sql.NullString       `json:"provider"`
+	ProviderID             sql.NullString       `json:"provider_id"`
+	UserCreatedAt          sql.NullTime         `json:"user_created_at"`
+	UserUpdatedAt          sql.NullTime         `json:"user_updated_at"`
+	ForgeLogin             sql.NullString       `json:"forge_login"`
+	SigninAllowedAt        sql.NullTime         `json:"signin_allowed_at"`
+	CreatorMembershipValid bool                 `json:"creator_membership_valid"`
 }
 
 // LEFT JOIN: an org-owned key is a service principal (ADR-022) and must
@@ -174,6 +183,9 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 		&i.ProviderID,
 		&i.UserCreatedAt,
 		&i.UserUpdatedAt,
+		&i.ForgeLogin,
+		&i.SigninAllowedAt,
+		&i.CreatorMembershipValid,
 	)
 	return i, err
 }

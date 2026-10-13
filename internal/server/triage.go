@@ -66,8 +66,35 @@ type triageDecisionRequest struct {
 	Scope   string `json:"scope"`
 }
 
+// loadTriageOrg authorizes a CVE triage route. The queue, the advisory data a
+// decision authors and the candidate ranking are instance-wide, so they need
+// instance-wide authority — an instance admin or an instance-scoped
+// cve-triager — whichever org the URL names. An org-scoped grant does not
+// reach them: it would let one tenant write advisories every tenant reads.
+// The org only attributes the audit entry.
+func (s *Server) loadTriageOrg(w http.ResponseWriter, r *http.Request) (*store.Organization, bool) {
+	if !s.requireAuthenticated(w, r) {
+		return nil, false
+	}
+	if !s.canSeeInstanceInventory(r) {
+		api.JSONError(w, http.StatusForbidden,
+			"CVE triage requires instance-wide authority: an instance admin or the instance-scoped "+rbac.RoleCVETriager+" role")
+		return nil, false
+	}
+	org, err := s.resolveOrg(r)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load organization")
+		return nil, false
+	}
+	if org == nil {
+		api.JSONError(w, http.StatusNotFound, "organization not found")
+		return nil, false
+	}
+	return org, true
+}
+
 func (s *Server) handleListTriageQueue(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.loadAuthorizedOrg(r, w); !ok {
+	if _, ok := s.loadTriageOrg(w, r); !ok {
 		return
 	}
 	rows, err := s.queries.ListPendingTriage(r.Context(), 100)
@@ -98,8 +125,7 @@ func (s *Server) handleListTriageQueue(w http.ResponseWriter, r *http.Request) {
 // stops being worked and the feature fails on that alone — so the ranges, the
 // ranked candidates and any stored mapping all arrive together.
 func (s *Server) handleGetTriageItem(w http.ResponseWriter, r *http.Request) {
-	org, ok := s.loadAuthorizedOrg(r, w)
-	if !ok {
+	if _, ok := s.loadTriageOrg(w, r); !ok {
 		return
 	}
 	itemID, err := uuid.Parse(chi.URLParam(r, "itemID"))
@@ -146,7 +172,7 @@ func (s *Server) handleGetTriageItem(w http.ResponseWriter, r *http.Request) {
 		RecordUpdatedAt: nullTimeString(item.RecordUpdatedAt),
 		FirstSeenAt:     item.FirstSeenAt.UTC().Format("2006-01-02T15:04:05Z"),
 		Ranges:          ranges,
-		Candidates:      s.triageCandidates(r, org.ID, item.Label),
+		Candidates:      s.triageCandidates(r, item.Label),
 		Existing:        s.existingMapping(r, item.SubscriptionID),
 	}
 	api.JSON(w, http.StatusOK, detail)
@@ -156,26 +182,16 @@ func (s *Server) handleGetTriageItem(w http.ResponseWriter, r *http.Request) {
 // A failure here degrades the screen rather than breaking it: the triager can
 // still type a coordinate, and an empty list is honest.
 //
-// The triage queue is instance-wide but the page is reached through an org, and
-// any member of that org can open it. Component names are tenant data (an
-// internal package name is a dependency-confusion target), so the ranking is
-// limited to the org's own repositories unless the caller holds instance-wide
-// authority over advisory data.
-func (s *Server) triageCandidates(r *http.Request, orgID uuid.UUID, label string) []triageCandidate {
+// Component names are tenant data (an internal package name is a
+// dependency-confusion target); the ranking spans every org because only a
+// holder of instance-wide triage authority reaches it (loadTriageOrg).
+func (s *Server) triageCandidates(r *http.Request, label string) []triageCandidate {
 	pattern := "%" + strings.ReplaceAll(firstWord(label), "%", `\%`) + "%"
 	out := []triageCandidate{}
-	if s.canSeeInstanceInventory(r) {
-		rows, err := s.queries.ListTriageCandidates(r.Context(), pattern, 40)
-		if err != nil {
-			s.log.Warn().Err(err).Msg("failed to rank triage candidates")
-			return out
-		}
-		for _, row := range rows {
-			out = append(out, triageCandidate{Name: row.Name, Ecosystem: row.Ecosystem, Version: row.Version, RepoCount: row.RepoCount})
-		}
+	if !s.canSeeInstanceInventory(r) {
 		return out
 	}
-	rows, err := s.queries.ListTriageCandidatesForOrg(r.Context(), orgID, pattern, 40)
+	rows, err := s.queries.ListTriageCandidates(r.Context(), pattern, 40)
 	if err != nil {
 		s.log.Warn().Err(err).Msg("failed to rank triage candidates")
 		return out
@@ -203,32 +219,16 @@ func (s *Server) existingMapping(r *http.Request, subscriptionID uuid.UUID) []cv
 
 // handleDecideTriageItem records a decision and authors the advisory data.
 func (s *Server) handleDecideTriageItem(w http.ResponseWriter, r *http.Request) {
-	// Not loadAuthorizedOrg: its write gate keys on the base role, and triage
-	// is a local grant held independently of it (a viewer may be a triager).
-	// CanTriage below is the write check.
-	org, role, ok := s.loadOrgMembership(r, w)
+	// Authoring a mapping writes advisory data every org reads and creates
+	// findings on every repository using the package, so it takes the
+	// instance-scoped grant (or instance admin), never an org-scoped one.
+	org, ok := s.loadTriageOrg(w, r)
 	if !ok {
-		return
-	}
-	if !s.requireOrgWideAccess(w, r, org.ID, role) {
 		return
 	}
 	user := UserFromContext(r.Context())
 	if user == nil {
 		api.JSONError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	// Authoring a mapping creates findings on every repository using the
-	// package, so it is an explicit grant rather than anything a base role
-	// confers — see rbac.RoleCVETriager.
-	allowed, err := s.enforcer.CanTriage(user.ID, org.ID)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to check permissions")
-		return
-	}
-	if !allowed {
-		api.JSONError(w, http.StatusForbidden,
-			"authoring advisory data requires the "+rbac.RoleCVETriager+" role")
 		return
 	}
 

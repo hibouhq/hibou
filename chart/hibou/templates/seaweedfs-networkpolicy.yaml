@@ -1,0 +1,29 @@
+{{- if and .Values.seaweedfs.enabled .Values.hibou.networkPolicy.enabled }}
+# The bundled SeaweedFS S3 port admits only hibou pods and the bucket
+# bootstrap job. Master, volume and filer bind loopback (statefulset args);
+# this also closes the S3 gRPC port, which still listens on the pod IP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.fullname" . }}-seaweedfs
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: s3
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "hibou.selectorLabels" . | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [server, worker, seaweedfs-bootstrap]
+{{- end }}

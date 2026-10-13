@@ -39,6 +39,7 @@ type Config struct {
 	ShutdownTimeout   time.Duration
 	MaxUploadSize     int64
 	SessionSecret     string
+	EncryptionKey     string // HIBOU_ENCRYPTION_KEY: optional base64 32-byte key sealing integration secrets at rest (notify.ParseEncryptionKey)
 	AutoProvisionOrgs bool
 	// InstanceAdmins lists the emails of hibou instance administrators
 	// (HIBOU_INSTANCE_ADMINS, comma-separated, case-insensitive). Instance
@@ -54,6 +55,13 @@ type Config struct {
 	// Auth restricts who may sign in (allowlists). Empty lists keep sign-in
 	// open to any account of a configured forge.
 	Auth AuthConfig
+	// AllowedOrigins (allowed_origins / HIBOU_ALLOWED_ORIGINS, comma-separated)
+	// are origins the CSRF origin check accepts besides BaseURL's, each
+	// normalized to scheme://host[:port].
+	AllowedOrigins []string
+	// APIDocsEnabled (api.docs.enabled) serves Swagger UI at /api/v1/docs.
+	// Defaults to the value of development.
+	APIDocsEnabled bool
 	// CoverageStoreLines controls whether per-line coverage hit data is
 	// persisted on upload (powers line-level patch coverage). Defaults to
 	// true; set HIBOU_COVERAGE_STORE_LINES=false to opt out on very large
@@ -324,10 +332,10 @@ func Load() (Config, error) {
 	v.SetDefault("host", "0.0.0.0")
 	v.SetDefault("port", 8585)
 	v.SetDefault("development", false)
-	v.SetDefault("mcp.enabled", true)
 	v.SetDefault("mcp.port", 8081)
 	v.SetDefault("audit.retention_months", 0)
 	v.SetDefault("base.url", "")
+	v.SetDefault("allowed_origins", "")
 	v.SetDefault("database.url", "postgres://hibou:hibou@localhost:5432/hibou?sslmode=disable")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "console")
@@ -371,7 +379,10 @@ func Load() (Config, error) {
 	v.SetDefault("epss.url", "")
 	v.SetDefault("epss.interval", "24h")
 	v.SetDefault("metrics.enabled", true)
-	v.SetDefault("metrics.port", 0)
+	// A dedicated port keeps /metrics off whatever forwards the application
+	// port; 0 serves it there, which needs metrics.bearer_token outside
+	// development (ValidateServe).
+	v.SetDefault("metrics.port", 9090)
 	v.SetDefault("metrics.bearer_token", "")
 	v.SetDefault("metrics.bearer_token_file", "")
 	v.SetDefault("storage_usage.enabled", true)
@@ -407,6 +418,11 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("reading config file: %w", err)
 		}
 	}
+	// Defaults that follow development, so they need it read first. The MCP
+	// listener is plain HTTP on every interface; Swagger UI needs an inline
+	// script and a relaxed CSP. Both are opt-in outside development.
+	v.SetDefault("mcp.enabled", v.GetBool("development"))
+	v.SetDefault("api.docs.enabled", v.GetBool("development"))
 
 	cacheTTL, err := time.ParseDuration(v.GetString("cache.ttl"))
 	if err != nil {
@@ -505,6 +521,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	allowedOrigins, err := parseAllowedOrigins(v.GetStringSlice("allowed_origins"))
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Host:            v.GetString("host"),
@@ -513,6 +533,8 @@ func Load() (Config, error) {
 		MCPEnabled:      v.GetBool("mcp.enabled"),
 		MCPPort:         v.GetInt("mcp.port"),
 		BaseURL:         v.GetString("base.url"),
+		AllowedOrigins:  allowedOrigins,
+		APIDocsEnabled:  v.GetBool("api.docs.enabled"),
 		DatabaseURL:     v.GetString("database.url"),
 		LogLevel:        v.GetString("log.level"),
 		LogFormat:       v.GetString("log.format"),
@@ -534,6 +556,7 @@ func Load() (Config, error) {
 		ShutdownTimeout:              shutdownTimeout,
 		MaxUploadSize:                v.GetInt64("max.upload.size"),
 		SessionSecret:                v.GetString("session.secret"),
+		EncryptionKey:                strings.TrimSpace(v.GetString("encryption.key")),
 		AutoProvisionOrgs:            v.GetBool("auto.provision.orgs"),
 		InstanceAdmins:               ParseEmailList(v.GetString("instance.admins")),
 		InstanceAdminsFile:           strings.TrimSpace(v.GetString("instance.admins_file")),
@@ -644,6 +667,74 @@ func (c Config) ValidateStartup(log zerolog.Logger) error {
 	return c.validateForges(log)
 }
 
+// ValidateServe adds the checks that only concern the HTTP listeners of
+// `hibou serve`. Outside development it refuses an empty base.url (cookies
+// would lose Secure and the __Host- prefix, CSRF would have no origin) and a
+// /metrics on the application port without a bearer token. Development keeps
+// both, loudly.
+func (c Config) ValidateServe(log zerolog.Logger) error {
+	var problems []string
+	baseURL := strings.TrimSpace(c.BaseURL)
+	if baseURL == "" {
+		problems = append(problems, "base.url (HIBOU_BASE_URL) is empty; set it to the public URL users reach hibou at, e.g. https://hibou.example.com — without it session cookies are not Secure and lose the __Host- prefix")
+	} else if parsed, err := url.Parse(baseURL); err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		problems = append(problems, fmt.Sprintf("base.url (HIBOU_BASE_URL) %q is not an absolute http(s) URL", baseURL))
+	} else if parsed.Scheme == "http" {
+		log.Warn().Str("base_url", baseURL).Msg("base.url is plain http: session cookies are not marked Secure; use https outside a trusted network")
+	}
+	if c.Metrics.Enabled && c.Metrics.Port == 0 && c.Metrics.BearerToken == "" {
+		problems = append(problems, "/metrics would be served unauthenticated on the application port; set metrics.port (default 9090) or metrics.bearer_token(_file), or metrics.enabled=false")
+	}
+	if c.MCPEnabled && !c.IsDevelopment() {
+		log.Warn().Str("addr", c.MCPListenAddr()).Msg("MCP listener enabled (plain HTTP); keep mcp.port off the public network")
+	}
+	if remote := strings.TrimSpace(c.CVEFeed.Remote); remote != "" {
+		// The feed is cloned with git: a scheme check here fails a bad value
+		// at startup instead of at the first sweep (cvefeed checks it again).
+		parsed, err := url.Parse(remote)
+		if strings.HasPrefix(remote, "-") || err != nil || (parsed.Scheme != "https" && parsed.Scheme != "file") {
+			problems = append(problems, "cve_feed.remote must be an https:// (or file://) URL")
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	if c.IsDevelopment() {
+		for _, problem := range problems {
+			log.Warn().Msg("INSECURE (development only): " + problem + "; this is refused outside development")
+		}
+		return nil
+	}
+	return errors.New("invalid server configuration: " + strings.Join(problems, "; "))
+}
+
+// parseAllowedOrigins normalizes allowed_origins entries to scheme://host
+// (lower-case, path dropped) and refuses anything that is not an http(s)
+// origin, so a typo fails at startup instead of silently not matching.
+func parseAllowedOrigins(values []string) ([]string, error) {
+	var origins []string
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			parsed, err := url.Parse(part)
+			if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || strings.Trim(parsed.Path, "/") != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return nil, fmt.Errorf("parsing allowed_origins: %q is not an origin like https://hibou.example.com", part)
+			}
+			origin := strings.ToLower(parsed.Scheme + "://" + parsed.Host)
+			if _, dup := seen[origin]; dup {
+				continue
+			}
+			seen[origin] = struct{}{}
+			origins = append(origins, origin)
+		}
+	}
+	return origins, nil
+}
+
 func (c Config) validateSessionSecret(log zerolog.Logger) error {
 	secret := strings.TrimSpace(c.SessionSecret)
 	if secret != "" && secret != DefaultSessionSecret {
@@ -696,7 +787,7 @@ func loadMetricsConfig(v *viper.Viper) (MetricsConfig, error) {
 		return MetricsConfig{}, errors.New("parsing metrics.port: must be between 0 and 65535")
 	}
 	if cfg.Enabled && cfg.Port != 0 && (cfg.Port == v.GetInt("port") || (v.GetBool("mcp.enabled") && cfg.Port == v.GetInt("mcp.port"))) {
-		return MetricsConfig{}, errors.New("parsing metrics.port: must differ from port and mcp.port")
+		return MetricsConfig{}, fmt.Errorf("parsing metrics.port: %d must differ from port and mcp.port (set metrics.port, default 9090)", cfg.Port)
 	}
 	if path := strings.TrimSpace(v.GetString("metrics.bearer_token_file")); path != "" {
 		raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied config path

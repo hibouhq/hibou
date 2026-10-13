@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,12 +46,95 @@ func (q *Queries) UpsertOrgMemberRole(ctx context.Context, orgID, userID uuid.UU
 	})
 }
 
+// UpsertForgeOrgMember records an org-wide forge membership.
 func (q *Queries) UpsertForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID, role string) error {
+	return q.UpsertForgeOrgMemberScoped(ctx, orgID, userID, role, false)
+}
+
+// UpsertForgeOrgMemberScoped records a forge membership and whether the forge
+// grants it specific repositories only (repo_scoped): such a member sees
+// exactly their user_repo_access rows.
+func (q *Queries) UpsertForgeOrgMemberScoped(ctx context.Context, orgID, userID uuid.UUID, role string, repoScoped bool) error {
 	return q.db.UpsertForgeOrgMember(ctx, dbgen.UpsertForgeOrgMemberParams{
-		OrgID:  orgID,
-		UserID: userID,
-		Role:   role,
+		OrgID:      orgID,
+		UserID:     userID,
+		Role:       role,
+		RepoScoped: repoScoped,
 	})
+}
+
+// StaleForgeOrgMembership is a forge-synced membership due for re-validation.
+type StaleForgeOrgMembership struct {
+	OrgID             uuid.UUID
+	UserID            uuid.UUID
+	Role              string
+	RepoScoped        bool
+	SyncedAt          *time.Time
+	OrgProvider       string
+	OrgSlug           string
+	ForgeAccountLogin string
+	UserProvider      string
+	ForgeLogin        string
+}
+
+// ListStaleForgeOrgMemberships lists forge memberships not confirmed since
+// staleBefore, oldest first.
+func (q *Queries) ListStaleForgeOrgMemberships(ctx context.Context, staleBefore time.Time, limit int) ([]StaleForgeOrgMembership, error) {
+	rows, err := q.db.ListStaleForgeOrgMemberships(ctx, dbgen.ListStaleForgeOrgMembershipsParams{
+		StaleBefore: sql.NullTime{Time: staleBefore, Valid: true},
+		MaxRows:     int32(min(max(limit, 0), math.MaxInt32)), // #nosec G115 -- clamped to the int32 range
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StaleForgeOrgMembership, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, StaleForgeOrgMembership{
+			OrgID:             row.OrgID,
+			UserID:            row.UserID,
+			Role:              row.Role,
+			RepoScoped:        row.RepoScoped,
+			SyncedAt:          timePtrFromNull(row.SyncedAt),
+			OrgProvider:       row.OrgProvider,
+			OrgSlug:           row.OrgSlug,
+			ForgeAccountLogin: row.ForgeAccountLogin.String,
+			UserProvider:      row.UserProvider,
+			ForgeLogin:        row.ForgeLogin.String,
+		})
+	}
+	return out, nil
+}
+
+// ListForgeOrgMemberLogins maps org-wide forge members with a known login to
+// that login, most recently confirmed first.
+func (q *Queries) ListForgeOrgMemberLogins(ctx context.Context, orgID uuid.UUID, limit int) (map[uuid.UUID]string, error) {
+	rows, err := q.db.ListForgeOrgMemberLogins(ctx, dbgen.ListForgeOrgMemberLoginsParams{
+		OrgID:   orgID,
+		MaxRows: int32(min(max(limit, 0), math.MaxInt32)), // #nosec G115 -- clamped to the int32 range
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]string, len(rows))
+	for _, row := range rows {
+		out[row.UserID] = row.ForgeLogin
+	}
+	return out, nil
+}
+
+// TouchForgeOrgMember marks a forge membership as confirmed now.
+func (q *Queries) TouchForgeOrgMember(ctx context.Context, orgID, userID uuid.UUID) error {
+	return q.db.TouchForgeOrgMember(ctx, dbgen.TouchForgeOrgMemberParams{OrgID: orgID, UserID: userID})
+}
+
+// RemoveForgeOrgAccess drops a forge membership and the forge repository
+// grants in that org that came with it. Grants go first: a failure between
+// the two leaves a member with fewer repositories, never a grant without one.
+func (q *Queries) RemoveForgeOrgAccess(ctx context.Context, orgID, userID uuid.UUID) error {
+	if err := q.db.DeleteForgeUserRepoAccessInOrg(ctx, dbgen.DeleteForgeUserRepoAccessInOrgParams{UserID: userID, OrgID: orgID}); err != nil {
+		return err
+	}
+	return q.db.DeleteForgeOrgMember(ctx, dbgen.DeleteForgeOrgMemberParams{OrgID: orgID, UserID: userID})
 }
 
 func (q *Queries) RemoveOrgMember(ctx context.Context, orgID, userID uuid.UUID) error {

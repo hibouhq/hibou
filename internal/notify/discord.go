@@ -32,12 +32,12 @@ func (s *DiscordSender) Send(ctx context.Context, p Payload) error {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build discord request: %w", err)
+		return fmt.Errorf("build discord request: %w", transportError(err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClientWithDefault(s.client).Do(req)
 	if err != nil {
-		return fmt.Errorf("send discord webhook: %w", err)
+		return fmt.Errorf("send discord webhook: %w", transportError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

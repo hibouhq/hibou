@@ -18,6 +18,16 @@ spec:
         app.kubernetes.io/component: trivy
         {{- include "hibou.selectorLabels" . | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      # The trivy image runs as root by default; trivy server needs only its
+      # cache and a temp dir, both mounted below.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: trivy
           image: {{ printf "%s:%s" .Values.trivy.image.repository .Values.trivy.image.tag | quote }}
@@ -32,15 +42,25 @@ spec:
             # node ephemeral storage and is not bounded by anything.
             - name: TRIVY_CACHE_DIR
               value: /var/cache/trivy
+            - name: TMPDIR
+              value: /tmp
           ports:
             - name: http
               containerPort: 4954
               protocol: TCP
           resources:
             {{- toYaml .Values.trivy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: cache
               mountPath: /var/cache/trivy
+            - name: tmp
+              mountPath: /tmp
       volumes:
         # The Trivy DB is ~1 GB and is refreshed periodically. Unbounded, it
         # fills the node disk, trips DiskPressure and gets the whole namespace
@@ -48,4 +68,7 @@ spec:
         - name: cache
           emptyDir:
             sizeLimit: {{ .Values.trivy.cache.sizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
 {{- end }}

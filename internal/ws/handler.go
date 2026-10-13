@@ -28,6 +28,9 @@ const (
 	// dead peers; a peer that does not answer within pongTimeout is dropped.
 	pingInterval = 30 * time.Second
 	pongTimeout  = 10 * time.Second
+	// sessionRecheckInterval bounds how long a socket outlives its session
+	// (logout or revocation on another replica, allowlist removal).
+	sessionRecheckInterval = time.Minute
 )
 
 // HTTPHandler serves the websocket endpoint.
@@ -80,6 +83,9 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		go keepAlive(ctx, conn, pingInterval, pongTimeout)
+		go watchSession(ctx, conn, sessionRecheckInterval, func(ctx context.Context) bool {
+			return sessionStillValid(ctx, authMgr, queries, user)
+		})
 
 		for {
 			_, data, err := conn.Read(ctx)
@@ -93,6 +99,47 @@ func (h *Hub) HTTPHandler(authMgr *auth.Manager, queries *store.Queries) http.Ha
 			}
 
 			h.handleClientMessage(ctx, client, msg)
+		}
+	}
+}
+
+// sessionStillValid re-reads the user: a bumped session epoch means the
+// session that opened this socket was revoked. A failed read keeps the socket
+// (the next check retries); a missing user or an allowlist refusal closes it.
+func sessionStillValid(ctx context.Context, authMgr *auth.Manager, queries *store.Queries, opened *store.User) bool {
+	if queries == nil {
+		return true
+	}
+	current, err := queries.GetUserByID(ctx, opened.ID)
+	if err != nil {
+		return true
+	}
+	if current == nil || current.SessionEpoch != opened.SessionEpoch {
+		return false
+	}
+	return authMgr.UserAllowed(ctx, current)
+}
+
+// closer is the part of *websocket.Conn watchSession uses.
+type closer interface {
+	Close(code websocket.StatusCode, reason string) error
+}
+
+// watchSession closes the connection once valid reports false.
+func watchSession(ctx context.Context, conn closer, interval time.Duration, valid func(context.Context) bool) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !valid(ctx) {
+				if ctx.Err() == nil {
+					_ = conn.Close(websocket.StatusPolicyViolation, "session revoked")
+				}
+				return
+			}
 		}
 	}
 }

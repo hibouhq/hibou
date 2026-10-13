@@ -26,57 +26,37 @@ WHERE ura.user_id = sqlc.arg(user_id)
   AND r.org_id = sqlc.arg(org_id);
 
 -- name: IsRepoScopedOrgMember :one
--- A forge-synced non-admin membership is repo-scoped when the last sync gave
--- the user access to some of the org's repositories but not to one that was
--- already enrolled at that time: that is the forge saying "these repositories,
--- not the organization". Members whose sync covered every repository (the
--- forge's own org-wide read), invited members and admins are never scoped.
-WITH access AS (
-    SELECT ura.repo_id, COALESCE(ura.synced_at, ura.updated_at) AS seen_at
-    FROM user_repo_access ura
-    JOIN repositories r ON r.id = ura.repo_id
-    WHERE ura.user_id = sqlc.arg(user_id)
-      AND r.org_id = sqlc.arg(org_id)
-)
-SELECT (
-    EXISTS (
-        SELECT 1
-        FROM org_members om
-        WHERE om.org_id = sqlc.arg(org_id)
-          AND om.user_id = sqlc.arg(user_id)
-          AND om.source = 'forge'
-          AND om.role IN ('viewer', 'developer')
-    )
-    AND EXISTS (
-        SELECT 1
-        FROM repositories r
-        WHERE r.org_id = sqlc.arg(org_id)
-          AND r.created_at <= (SELECT MAX(seen_at) FROM access)
-          AND NOT EXISTS (SELECT 1 FROM access a WHERE a.repo_id = r.id)
-    )
+-- Recorded by the permission sync (org_members.repo_scoped). A scoped member
+-- sees exactly their user_repo_access rows, so a repository enrolled after the
+-- last sync, or the deletion of their only granted repository, leaves them
+-- with less, never with the whole organization.
+SELECT EXISTS (
+    SELECT 1
+    FROM org_members om
+    WHERE om.org_id = sqlc.arg(org_id)
+      AND om.user_id = sqlc.arg(user_id)
+      AND om.repo_scoped
 )::boolean AS repo_scoped;
 
+-- name: DeleteForgeUserRepoAccessInOrg :exec
+DELETE FROM user_repo_access ura
+USING repositories r
+WHERE r.id = ura.repo_id
+  AND ura.user_id = sqlc.arg(user_id)
+  AND r.org_id = sqlc.arg(org_id)
+  AND ura.source = 'forge';
+
 -- name: ListRepoAudienceUserIDs :many
--- Org members who may see a repository, for targeting live events. Repository
--- collaborators (forge viewer/developer memberships that carry per-repository
--- grants in this org) are included only with a grant on this repository. A
--- member whose sync predates the repository may be left out; live events are
--- best-effort and the page still polls, so erring narrow is the safe side.
+-- Org members who may see a repository, for targeting live events.
+-- Repository-scoped members are included only with a grant on it.
 SELECT om.user_id
 FROM org_members om
 JOIN repositories repo ON repo.org_id = om.org_id
 WHERE repo.id = sqlc.arg(repo_id)
   AND (
-      om.source <> 'forge'
-      OR om.role NOT IN ('viewer', 'developer')
+      NOT om.repo_scoped
       OR EXISTS (
           SELECT 1 FROM user_repo_access ura
           WHERE ura.user_id = om.user_id AND ura.repo_id = repo.id
-      )
-      OR NOT EXISTS (
-          SELECT 1
-          FROM user_repo_access ura
-          JOIN repositories other ON other.id = ura.repo_id
-          WHERE ura.user_id = om.user_id AND other.org_id = om.org_id
       )
   );

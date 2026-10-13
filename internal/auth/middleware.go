@@ -26,6 +26,14 @@ var ErrTokenScopeDenied = errors.New("token scope does not permit this action")
 // Approval errors (ADR-022 amendment) are deliberately specific: a pending
 // token is a real credential whose owner must ask an org admin to review it —
 // never let that read as a bad or revoked key.
+// ErrAccountNotAllowed refuses a session or user token whose account the
+// sign-in allowlist no longer admits.
+var ErrAccountNotAllowed = errors.New("this account is not allowed to use this instance")
+
+// ErrTokenCreatorLeftOrg refuses an org-owned token whose creator is no
+// longer a member of the org: they still hold the secret.
+var ErrTokenCreatorLeftOrg = errors.New("token was created by someone who is no longer a member of its organization: ask an org admin to issue a new one")
+
 var (
 	ErrTokenPendingApproval = errors.New("token pending approval: ask an org admin to review it in Settings → API keys")
 	ErrTokenRejected        = errors.New("token was rejected by an org admin: ask them to review it in Settings → API keys")
@@ -135,7 +143,8 @@ func SessionAuth(mgr *Manager, queries *store.Queries) func(http.Handler) http.H
 			ctx := r.Context()
 
 			if mgr != nil {
-				if user, err := mgr.GetSessionUser(r, queries); err == nil && user != nil {
+				// A session the allowlist no longer admits is no session.
+				if user, err := mgr.GetSessionUser(r, queries); err == nil && user != nil && mgr.UserAllowed(ctx, user) {
 					ctx = WithUser(ctx, user)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
@@ -143,10 +152,14 @@ func SessionAuth(mgr *Manager, queries *store.Queries) func(http.Handler) http.H
 			}
 
 			user, apiKey, err := authenticateBearerToken(r, queries)
+			if err == nil && apiKey != nil && !apiKey.IsOrgOwned() && !mgr.UserAllowed(ctx, user) {
+				err = ErrAccountNotAllowed
+			}
 			// A pending/rejected token is answered here with its specific
 			// message: the generic handler 401 would hide what the caller
 			// must do (ask an org admin to review the token).
-			if errors.Is(err, ErrTokenPendingApproval) || errors.Is(err, ErrTokenRejected) {
+			if errors.Is(err, ErrTokenPendingApproval) || errors.Is(err, ErrTokenRejected) ||
+				errors.Is(err, ErrTokenCreatorLeftOrg) || errors.Is(err, ErrAccountNotAllowed) {
 				api.JSONError(w, http.StatusUnauthorized, err.Error())
 				return
 			}
@@ -167,12 +180,15 @@ func SessionAuth(mgr *Manager, queries *store.Queries) func(http.Handler) http.H
 
 func (m *Manager) AuthenticateRequest(r *http.Request, queries *store.Queries) (*store.User, error) {
 	if m != nil {
-		if user, err := m.GetSessionUser(r, queries); err == nil && user != nil {
+		if user, err := m.GetSessionUser(r, queries); err == nil && user != nil && m.UserAllowed(r.Context(), user) {
 			return user, nil
 		}
 	}
 
-	user, _, err := authenticateBearerToken(r, queries)
+	user, apiKey, err := authenticateBearerToken(r, queries)
+	if err == nil && apiKey != nil && !apiKey.IsOrgOwned() && !m.UserAllowed(r.Context(), user) {
+		return nil, ErrAccountNotAllowed
+	}
 	return user, err
 }
 
@@ -198,22 +214,39 @@ func authenticateBearerToken(r *http.Request, queries *store.Queries) (*store.Us
 	if apiKey == nil {
 		return nil, nil, errors.New("invalid API key")
 	}
-	// A user-owned key whose creator is gone is dead. An org-owned key is a
-	// service principal (ADR-022) and outlives its creator by design.
-	if apiKey.User == nil && !apiKey.IsOrgOwned() {
-		return nil, nil, errors.New("invalid API key")
-	}
-	if err := approvalError(apiKey); err != nil {
+	if err := ValidateAPIKey(apiKey, time.Now()); err != nil {
 		return nil, nil, err
-	}
-	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
-		return nil, nil, errors.New("API key expired")
 	}
 	if err := TouchAPIKey(r.Context(), queries, apiKey); err != nil {
 		return nil, nil, err
 	}
 
 	return apiKey.User, apiKey, nil
+}
+
+// ValidateAPIKey decides whether a stored key may authenticate. Shared by the
+// HTTP middleware and the MCP transport so the two cannot drift.
+//
+// A user-owned key whose creator is gone is dead. An org-owned key is a
+// service principal (ADR-022) and outlives a deleted creator by design, but
+// not a creator who is still around and was removed from the org.
+func ValidateAPIKey(apiKey *store.APIKey, now time.Time) error {
+	if apiKey == nil {
+		return errors.New("invalid API key")
+	}
+	if apiKey.User == nil && !apiKey.IsOrgOwned() {
+		return errors.New("invalid API key")
+	}
+	if err := approvalError(apiKey); err != nil {
+		return err
+	}
+	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(now) {
+		return errors.New("API key expired")
+	}
+	if apiKey.IsOrgOwned() && apiKey.CreatorLeftOrg {
+		return ErrTokenCreatorLeftOrg
+	}
+	return nil
 }
 
 // lastUsedResolution bounds last_used_at write amplification: an agent polling

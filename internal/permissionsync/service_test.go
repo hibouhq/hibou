@@ -240,9 +240,10 @@ type fakeStore struct {
 }
 
 type membershipCall struct {
-	orgID  uuid.UUID
-	userID uuid.UUID
-	role   string
+	orgID      uuid.UUID
+	userID     uuid.UUID
+	role       string
+	repoScoped bool
 }
 
 type repoAccessCall struct {
@@ -256,9 +257,19 @@ func (f *fakeStore) GetOrganizationByProviderAndSlug(_ context.Context, provider
 	return f.orgsBySlug[provider+"/"+slug], nil
 }
 
-func (f *fakeStore) UpsertForgeOrgMember(_ context.Context, orgID, userID uuid.UUID, role string) error {
-	f.upsertOrgMembers = append(f.upsertOrgMembers, membershipCall{orgID: orgID, userID: userID, role: role})
+func (f *fakeStore) UpsertForgeOrgMember(_ context.Context, orgID, userID uuid.UUID, role string, repoScoped bool) error {
+	f.upsertOrgMembers = append(f.upsertOrgMembers, membershipCall{orgID: orgID, userID: userID, role: role, repoScoped: repoScoped})
 	return nil
+}
+
+func (f *fakeStore) ListRepositoryIDsByOrg(_ context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	for _, repo := range f.reposByOrgAndSlug {
+		if repo.OrgID == orgID {
+			ids = append(ids, repo.ID)
+		}
+	}
+	return ids, nil
 }
 
 func (f *fakeStore) ListForgeOrgMembershipsByUser(context.Context, uuid.UUID) ([]store.ForgeOrgMembership, error) {
@@ -536,5 +547,44 @@ func TestSyncUserRepoOnlyAccessKeepsOrgVisible(t *testing.T) {
 	}
 	if len(storeFake.upsertRepoAccess) != 1 || storeFake.upsertRepoAccess[0].role != "viewer" {
 		t.Fatalf("repo access upserts = %#v", storeFake.upsertRepoAccess)
+	}
+}
+
+// Q4: the sync records repo_scoped explicitly. A collaborator (org level
+// derived from repository grants) is scoped; a confirmed member whose grants
+// cover every enrolled repository is not; one missing a repository is.
+func TestSyncUserRecordsRepoScope(t *testing.T) {
+	t.Parallel()
+
+	org := testOrg("github", "acme")
+	alpha, beta := testRepo(org.ID, "alpha"), testRepo(org.ID, "beta")
+	repos := map[string]*store.Repository{repoKey(org.ID, "alpha"): alpha, repoKey(org.ID, "beta"): beta}
+	cases := []struct {
+		name   string
+		level  string
+		grants []string
+		scoped bool
+	}{
+		{"outside collaborator", "pull", []string{"alpha", "beta"}, true},
+		{"repository grants only, no org entry", "", []string{"alpha", "beta"}, true},
+		{"member with every repository", "read", []string{"alpha", "beta"}, false},
+		{"member without base permission", "read", []string{"alpha"}, true},
+	}
+	for _, tc := range cases {
+		storeFake := &fakeStore{orgsBySlug: map[string]*store.Organization{"github/acme": org}, reposByOrgAndSlug: repos}
+		access := forge.UserAccess{}
+		if tc.level != "" {
+			access.Orgs = []forge.UserOrgAccess{{AccountLogin: "acme", Level: tc.level}}
+		}
+		for _, name := range tc.grants {
+			access.Repos = append(access.Repos, forge.UserRepoAccess{AccountLogin: "acme", Name: name, Level: "pull"})
+		}
+		svc := NewService(storeFake, &fakeRBAC{}, map[string]forge.Provider{"github": fakeProvider{access: access}}, zerolog.Nop())
+		if err := svc.SyncUser(context.Background(), testUser(), "github", &oauth2.Token{AccessToken: "t"}); err != nil {
+			t.Fatalf("%s: SyncUser() error = %v", tc.name, err)
+		}
+		if len(storeFake.upsertOrgMembers) != 1 || storeFake.upsertOrgMembers[0].repoScoped != tc.scoped {
+			t.Errorf("%s: memberships = %+v, want repoScoped=%v", tc.name, storeFake.upsertOrgMembers, tc.scoped)
+		}
 	}
 }

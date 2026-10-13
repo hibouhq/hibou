@@ -1596,13 +1596,14 @@ type NotificationRule struct {
 }
 
 type OrgMember struct {
-	OrgID     uuid.UUID    `json:"org_id"`
-	UserID    uuid.UUID    `json:"user_id"`
-	Role      string       `json:"role"`
-	CreatedAt time.Time    `json:"created_at"`
-	Source    string       `json:"source"`
-	SyncedAt  sql.NullTime `json:"synced_at"`
-	ExpiresAt sql.NullTime `json:"expires_at"`
+	OrgID      uuid.UUID    `json:"org_id"`
+	UserID     uuid.UUID    `json:"user_id"`
+	Role       string       `json:"role"`
+	CreatedAt  time.Time    `json:"created_at"`
+	Source     string       `json:"source"`
+	SyncedAt   sql.NullTime `json:"synced_at"`
+	ExpiresAt  sql.NullTime `json:"expires_at"`
+	RepoScoped bool         `json:"repo_scoped"`
 }
 
 type Organization struct {
@@ -2026,15 +2027,17 @@ type TestReport struct {
 }
 
 type User struct {
-	ID           uuid.UUID      `json:"id"`
-	Email        string         `json:"email"`
-	DisplayName  string         `json:"display_name"`
-	AvatarUrl    sql.NullString `json:"avatar_url"`
-	Provider     string         `json:"provider"`
-	ProviderID   string         `json:"provider_id"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	SessionEpoch int64          `json:"session_epoch"`
+	ID              uuid.UUID      `json:"id"`
+	Email           string         `json:"email"`
+	DisplayName     string         `json:"display_name"`
+	AvatarUrl       sql.NullString `json:"avatar_url"`
+	Provider        string         `json:"provider"`
+	ProviderID      string         `json:"provider_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	SessionEpoch    int64          `json:"session_epoch"`
+	ForgeLogin      sql.NullString `json:"forge_login"`
+	SigninAllowedAt sql.NullTime   `json:"signin_allowed_at"`
 }
 
 type UserRepoAccess struct {

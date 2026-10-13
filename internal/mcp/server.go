@@ -32,6 +32,23 @@ type MCPStore interface {
 	ListAdvisoryCWEs(ctx context.Context, advisoryIDs []uuid.UUID) (map[uuid.UUID][]int, error)
 	GetAPIKeyByHash(ctx context.Context, hash string) (*store.APIKey, error)
 	UpdateAPIKeyLastUsed(ctx context.Context, id uuid.UUID) error
+	IsRepoScopedOrgMember(ctx context.Context, orgID, userID uuid.UUID) (bool, error)
+	ListUserRepoAccessInOrg(ctx context.Context, orgID, userID uuid.UUID) (map[uuid.UUID]string, error)
+}
+
+// HTTPOption configures the MCP HTTP transport.
+type HTTPOption func(*httpOptions)
+
+type httpOptions struct {
+	userAllowed func(ctx context.Context, user *store.User) bool
+}
+
+// WithUserAllowed gates user-owned keys on the sign-in allowlist, the same
+// check the HTTP API applies (auth.Manager.UserAllowed).
+func WithUserAllowed(allowed func(ctx context.Context, user *store.User) bool) HTTPOption {
+	return func(o *httpOptions) {
+		o.userAllowed = allowed
+	}
 }
 
 type contextKey string
@@ -77,13 +94,17 @@ const (
 	mcpMaxBodyBytes      = 1 << 20
 )
 
-func NewHTTPServer(mcpSrv *server.MCPServer, st MCPStore, port int, log zerolog.Logger) *server.StreamableHTTPServer {
+func NewHTTPServer(mcpSrv *server.MCPServer, st MCPStore, port int, log zerolog.Logger, opts ...HTTPOption) *server.StreamableHTTPServer {
 	_ = port
-	streamable, _ := newHTTPServer(mcpSrv, st, log)
+	streamable, _ := newHTTPServer(mcpSrv, st, log, opts...)
 	return streamable
 }
 
-func newHTTPServer(mcpSrv *server.MCPServer, st MCPStore, log zerolog.Logger) (*server.StreamableHTTPServer, *http.Server) {
+func newHTTPServer(mcpSrv *server.MCPServer, st MCPStore, log zerolog.Logger, opts ...HTTPOption) (*server.StreamableHTTPServer, *http.Server) {
+	options := httpOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
 	// mcp-go's default http.Server has no timeouts; supply our own and route
 	// the endpoint ourselves, as WithStreamableHTTPServer requires.
 	httpSrv := &http.Server{
@@ -94,7 +115,7 @@ func newHTTPServer(mcpSrv *server.MCPServer, st MCPStore, log zerolog.Logger) (*
 		MaxHeaderBytes:    mcpMaxHeaderBytes,
 	}
 	streamable := server.NewStreamableHTTPServer(mcpSrv,
-		server.WithHTTPContextFunc(authContextFunc(st, log)),
+		server.WithHTTPContextFunc(authContextFunc(st, log, options)),
 		server.WithEndpointPath(mcpEndpointPath),
 		server.WithStateLess(true),
 		server.WithStreamableHTTPServer(httpSrv),
@@ -105,7 +126,7 @@ func newHTTPServer(mcpSrv *server.MCPServer, st MCPStore, log zerolog.Logger) (*
 	return streamable, httpSrv
 }
 
-func authContextFunc(st MCPStore, log zerolog.Logger) server.HTTPContextFunc {
+func authContextFunc(st MCPStore, log zerolog.Logger, options httpOptions) server.HTTPContextFunc {
 	return func(ctx context.Context, r *http.Request) context.Context {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -122,16 +143,12 @@ func authContextFunc(st MCPStore, log zerolog.Logger) server.HTTPContextFunc {
 			log.Debug().Err(err).Msg("failed to load MCP API key")
 			return ctx
 		}
-		// Mirror the HTTP bearer path: a user-owned key needs a living
-		// creator, an org-owned key is a service principal (ADR-022) and
-		// authenticates without one; pending/rejected keys never do.
-		if apiKey == nil || (apiKey.User == nil && !apiKey.IsOrgOwned()) {
+		// The HTTP bearer path's own rules (living creator for user keys,
+		// approval, expiry, an org key's creator still in the org).
+		if apiKey == nil || auth.ValidateAPIKey(apiKey, time.Now()) != nil {
 			return ctx
 		}
-		if !apiKey.IsApproved() {
-			return ctx
-		}
-		if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
+		if !apiKey.IsOrgOwned() && options.userAllowed != nil && !options.userAllowed(ctx, apiKey.User) {
 			return ctx
 		}
 		if apiKey.LastUsedAt == nil || time.Since(*apiKey.LastUsedAt) >= 5*time.Minute {

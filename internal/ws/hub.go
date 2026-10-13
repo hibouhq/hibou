@@ -161,6 +161,25 @@ func (h *Hub) CloseAll(code websocket.StatusCode, reason string) {
 	}
 }
 
+// CloseUser closes every connection the user holds on this replica: their
+// sessions were revoked (logout, administrator cut-off). Connections on
+// other replicas notice within sessionRecheckInterval.
+func (h *Hub) CloseUser(userID uuid.UUID) {
+	h.mu.RLock()
+	clients := make([]*client, 0, len(h.byUser[userID]))
+	for c := range h.byUser[userID] {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	// Close waits for the peer's close frame; the caller (logout) must not.
+	for _, c := range clients {
+		go func(conn *websocket.Conn) {
+			_ = conn.Close(websocket.StatusPolicyViolation, "session revoked")
+		}(c.conn)
+	}
+}
+
 func (h *Hub) SendToUser(userID uuid.UUID, msg Message) {
 	payload, err := json.Marshal(msg)
 	if err != nil {

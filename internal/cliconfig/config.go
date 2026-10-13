@@ -42,7 +42,11 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config to disk, creating directories as needed.
+// Save writes the config to disk, creating directories as needed. The file
+// holds an API token, so it is always left mode 0600: the content goes to a
+// fresh 0600 temp file that replaces the target, which also tightens a
+// pre-existing file created with looser permissions (os.WriteFile keeps the
+// mode of an existing file) without ever writing the token into it.
 func Save(cfg Config) error {
 	path := DefaultPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -54,7 +58,25 @@ func Save(cfg Config) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
+
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 

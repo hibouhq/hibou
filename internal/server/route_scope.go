@@ -111,6 +111,7 @@ var routeScopes = map[string]routeScope{
 	"GET /api/v1/instance/members":                         sessionOnlyRoute(),
 	"POST /api/v1/instance/members/grants":                 sessionOnlyRoute(),
 	"POST /api/v1/instance/members/revocations":            sessionOnlyRoute(),
+	"POST /api/v1/instance/users/{userID}/anonymize":       sessionOnlyRoute(),
 	"GET /api/v1/instance/jobs/overview":                   sessionOnlyRoute(),
 	"GET /api/v1/instance/jobs/timeline":                   sessionOnlyRoute(),
 	"GET /api/v1/instance/jobs/stats":                      sessionOnlyRoute(),

@@ -124,7 +124,7 @@ func TestCheckSignInAllowed(t *testing.T) {
 	ctx := context.Background()
 	token := &oauth2.Token{AccessToken: "t"}
 	open := New(Config{}, nil)
-	if err := open.checkSignInAllowed(ctx, &loginOnlyProvider{login: "anyone"}, token); err != nil {
+	if _, _, err := open.checkSignInAllowed(ctx, &loginOnlyProvider{login: "anyone"}, token, "github", "1"); err != nil {
 		t.Fatalf("no allowlist must keep sign-in open, got %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestCheckSignInAllowed(t *testing.T) {
 		{"unlisted user on a forge without membership API", &loginOnlyProvider{login: "dev"}, false},
 	}
 	for _, tc := range cases {
-		err := mgr.checkSignInAllowed(ctx, tc.provider, token)
+		_, _, err := mgr.checkSignInAllowed(ctx, tc.provider, token, "github", "1")
 		if tc.allowed && err != nil {
 			t.Errorf("%s: refused: %v", tc.name, err)
 		}
@@ -177,20 +177,25 @@ func TestDevLoginEnabled(t *testing.T) {
 	}
 }
 
-// A12: the callback never echoes the underlying error.
+// A12: the callback never echoes the underlying error; the browser is sent
+// back to the login page with a fixed failure code.
 func TestWriteCallbackErrorIsGeneric(t *testing.T) {
 	t.Parallel()
 
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/callback?provider=github", nil)
 	recorder := httptest.NewRecorder()
-	WriteCallbackError(recorder, New(Config{}, nil), errors.New("exchange oauth code: oauth2: server response missing access_token secret-detail"))
-	if recorder.Code != http.StatusBadRequest || strings.Contains(recorder.Body.String(), "secret-detail") {
-		t.Fatalf("callback error leaked detail: %d %s", recorder.Code, recorder.Body.String())
+	WriteCallbackError(recorder, request, New(Config{}, nil), errors.New("exchange oauth code: oauth2: server response missing access_token secret-detail"))
+	if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != "/login?error=sign_in_failed" {
+		t.Fatalf("failed callback = %d %q, want 302 to /login?error=sign_in_failed", recorder.Code, recorder.Header().Get("Location"))
+	}
+	if strings.Contains(recorder.Body.String()+recorder.Header().Get("Location"), "secret-detail") {
+		t.Fatalf("callback error leaked detail: %s", recorder.Body.String())
 	}
 
 	recorder = httptest.NewRecorder()
-	WriteCallbackError(recorder, nil, ErrSignInNotAllowed)
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("not-allowed status = %d, want 403", recorder.Code)
+	WriteCallbackError(recorder, request, nil, ErrSignInNotAllowed)
+	if recorder.Code != http.StatusFound || recorder.Header().Get("Location") != "/login?error=not_allowed" {
+		t.Fatalf("not-allowed callback = %d %q, want 302 to /login?error=not_allowed", recorder.Code, recorder.Header().Get("Location"))
 	}
 }
 

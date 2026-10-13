@@ -69,6 +69,11 @@ func Run(ctx context.Context, job scanplan.Job, entry CatalogEntry, env Environm
 	if env.Command == nil {
 		env.Command = execCommand
 	}
+	// Defence in depth: Resolver already refused these, but Run must never
+	// pass a path that reads as an option or leaves the checkout.
+	if err := ValidatePlanPaths(job.Targets, job.Exclusions); err != nil {
+		return Result{}, fmt.Errorf("job %s: %w", job.ID, err)
+	}
 	switch entry.Engine {
 	case "opengrep":
 		return runOpenGrep(ctx, job, entry, env)
@@ -104,13 +109,17 @@ func runOpenGrep(ctx context.Context, job scanplan.Job, entry CatalogEntry, env 
 		return result, err
 	}
 	sarifPath := filepath.Join(env.OutDir, safeName(job.ID)+".sarif")
-	args := make([]string, 0, len(entry.Command.Args)+2*len(job.Exclusions)+len(job.Targets))
+	args := make([]string, 0, len(entry.Command.Args)+len(job.Exclusions)+len(job.Targets)+1)
 	for _, arg := range entry.Command.Args {
 		switch arg {
 		case "{targets}":
+			// "--exclude=<value>" keeps the value bound to its option, and
+			// "--" ends options before the positional targets (Q14): a
+			// module named "--exclude=*" must never reach opengrep as one.
 			for _, exclusion := range job.Exclusions {
-				args = append(args, "--exclude", exclusion)
+				args = append(args, "--exclude="+exclusion)
 			}
+			args = append(args, "--")
 			args = append(args, job.Targets...)
 		default:
 			arg = strings.ReplaceAll(arg, "{sarif}", sarifPath)
@@ -153,7 +162,10 @@ func runSpotBugsMaven(ctx context.Context, job scanplan.Job, entry CatalogEntry,
 	}
 	goal := plugin.Coordinates + ":spotbugs"
 	for index, module := range job.Targets {
-		moduleDir := filepath.Join(env.SourceRoot, filepath.FromSlash(module))
+		moduleDir, err := withinRoot(env.SourceRoot, module)
+		if err != nil {
+			return result, fmt.Errorf("spotbugs on %s: %w", module, err)
+		}
 		if _, err := os.Stat(filepath.Join(moduleDir, "target", "classes")); err != nil {
 			return result, fmt.Errorf("%w: compile %s first (no target/classes): bytecode analysis needs the build's classes", ErrPrerequisite, module)
 		}
@@ -196,8 +208,10 @@ func verifyMavenResolved(entry CatalogEntry, repository string) ([]string, error
 		if distribution.Kind != scancatalog.KindMaven || strings.Contains(distribution.Coordinates, "findsecbugs") {
 			continue
 		}
-		parts := strings.Split(distribution.Coordinates, ":")
-		jar := filepath.Join(append([]string{repository}, append(strings.Split(parts[0], "."), parts[1], parts[2], parts[1]+"-"+parts[2]+".jar")...)...)
+		jar, err := mavenJarPath(repository, distribution.Coordinates)
+		if err != nil {
+			return notes, err
+		}
 		digest, err := FileSHA256(jar)
 		if err != nil {
 			notes = append(notes, "not found in the local Maven repository, not verified: "+distribution.Coordinates)
@@ -208,6 +222,23 @@ func verifyMavenResolved(entry CatalogEntry, repository string) ([]string, error
 		}
 	}
 	return notes, nil
+}
+
+// mavenJarPath is where a group:artifact:version jar sits in a local Maven
+// repository. Malformed coordinates are an error, never a panic or a path
+// outside the repository.
+func mavenJarPath(repository, coordinates string) (string, error) {
+	parts := strings.Split(coordinates, ":")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("maven coordinates %q: want group:artifact:version", coordinates)
+	}
+	segments := append(strings.Split(parts[0], "."), parts[1], parts[2])
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." || strings.ContainsAny(segment, `/\`) || strings.HasPrefix(segment, "-") {
+			return "", fmt.Errorf("maven coordinates %q: invalid segment %q", coordinates, segment)
+		}
+	}
+	return filepath.Join(append([]string{repository}, append(segments, parts[1]+"-"+parts[2]+".jar")...)...), nil
 }
 
 func exitOutcome(codes map[string]string, code int) string {

@@ -1,7 +1,8 @@
 hibou:
   image:
     repository: ghcr.io/hibouhq/hibou
-    tag: latest
+    # -- Image tag. Empty uses the chart's appVersion, so a chart release always runs the server it was tested with.
+    tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
   # -- Delayed background loops for the primary deployment. Leave enabled for
@@ -96,8 +97,19 @@ hibou:
       ttl: "6h"
     osv:
       url: "https://api.osv.dev"
-  # -- Override the base URL. Auto-derived from ingress.hostname when ingress is enabled.
+  # -- Override the base URL. Auto-derived from ingress.hostname when ingress is enabled. Required: the server refuses to start without one (it signs Secure, __Host- cookies and checks request origins against it).
   baseURL: ""
+  # -- Extra origins (scheme://host[:port]) the CSRF check accepts besides baseURL, e.g. a second hostname for the same instance.
+  allowedOrigins: []
+  # -- Client IP behind a CDN in front of the ingress. When the peer the ingress saw is in cidrs, the IP in header is used for rate limits, audit logs and webhook IP allowlists. Leave header empty unless every listed range belongs to the CDN.
+  trustedProxy:
+    # -- e.g. CF-Connecting-IP
+    header: ""
+    # -- The CDN's egress ranges (e.g. https://www.cloudflare.com/ips/). Required with header.
+    cidrs: []
+  # -- Serve Swagger UI at /api/v1/docs (inline script, relaxed CSP). Off by default outside development.
+  apiDocs:
+    enabled: false
   # -- Maximum upload size in bytes (default 100 MiB).
   maxUploadSize: "104857600"
   # -- Mount the Kubernetes service account token into hibou pods. Hibou never calls the Kubernetes API, so the token would only help an attacker who reached code execution in the pod.
@@ -106,12 +118,12 @@ hibou:
   goMemLimitPercent: 80
   # -- MCP listener (plain HTTP on mcp.port, all interfaces). Disable unless an MCP client inside the cluster needs it.
   mcp:
-    enabled: true
+    enabled: false
   # -- Retention overrides passed to the server. Empty keeps the server default.
   retention:
     # -- "true" lets the retention worker delete expired data instead of only reporting it.
     autoPurge: ""
-  # -- Default-deny NetworkPolicy for hibou pods (server and workers). Off by default; needs a CNI that enforces NetworkPolicy. When on, only the listed traffic is allowed, and the metrics policy's open application-port rule is dropped.
+  # -- Default-deny NetworkPolicy for hibou pods (server and workers), plus an ingress policy on the bundled SeaweedFS that admits only hibou pods (and the bucket job) on the S3 port. Off by default because it needs a CNI that enforces NetworkPolicy; turn it on wherever the CNI does. When on, only the listed traffic is allowed, and the metrics policy's open application-port rule is dropped.
   networkPolicy:
     enabled: false
     # -- Peers allowed to reach the application port (8080), as NetworkPolicy `from` entries. Point it at the ingress controller's namespace.
@@ -160,9 +172,9 @@ hibou:
     maxUnavailable: ""
   # -- Auto-provision an organization when a forge app installation webhook is received.
   # When true, installing the GitHub/GitLab/Forgejo app on an account creates the matching
-  # Hibou org and grants the installer admin. Set false in multi-tenant deployments where
-  # app installs should not automatically create tenants.
-  autoProvisionOrgs: true
+  # Hibou org and grants the installer admin. Off by default: on a public App anyone could
+  # create a tenant. Enable it together with auth.allowedOrgs/allowedUsers.
+  autoProvisionOrgs: false
   # -- Restrict who may sign in. Empty lists keep sign-in open to every forge
   # account. A user is admitted when their login is in allowedUsers or they
   # are a member of one of allowedOrgs (GitHub only; checked with the App's
@@ -388,7 +400,8 @@ trivy:
   enabled: true
   image:
     repository: aquasec/trivy
-    tag: latest
+    # -- Pinned: trivy server and the CLI clients must stay protocol-compatible, and latest is not reproducible.
+    tag: "0.72.0"
     pullPolicy: IfNotPresent
   cache:
     # -- Cap on the vulnerability DB cache. Trivy re-downloads a ~1 GB DB on a

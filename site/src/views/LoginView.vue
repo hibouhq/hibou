@@ -7,6 +7,18 @@
       <p class="mb-6 text-center text-sm text-gray-400">
         Sign in to continue
       </p>
+      <div
+        v-if="signInError"
+        role="alert"
+        class="mb-6 rounded-md border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200"
+      >
+        <p class="font-medium">
+          {{ signInError.title }}
+        </p>
+        <p class="mt-1 text-red-300/80">
+          {{ signInError.detail }}
+        </p>
+      </div>
       <div class="space-y-3">
         <a
           v-for="provider in providers"
@@ -37,11 +49,31 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import { api, type AuthProvider } from '@/api/client'
 
 const providers = ref<AuthProvider[]>([])
+const route = useRoute()
+
+// The OAuth callback sends a failed sign-in back here with a fixed code. Only
+// known codes map to text; nothing from the URL is ever rendered.
+const signInErrors: Record<string, { title: string; detail: string }> = {
+  not_allowed: {
+    title: 'This account is not allowed to sign in here.',
+    detail: 'Sign-in on this instance is limited to approved users and organizations. Ask an administrator for access.',
+  },
+  sign_in_failed: {
+    title: 'Sign-in failed.',
+    detail: 'Please try again. If it keeps failing, contact an administrator.',
+  },
+}
+
+const signInError = computed(() => {
+  const code = route.query.error
+  return typeof code === 'string' ? signInErrors[code] ?? null : null
+})
 
 onMounted(async () => {
   try {

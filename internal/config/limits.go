@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -46,6 +48,15 @@ type HTTPLimitsConfig struct {
 	// (uploads, webhooks, SBOM compare) raise it explicitly.
 	MaxBodyBytes        int64
 	WebhookMaxBodyBytes int64
+	// TrustedProxyHeader (http.trusted_proxy_header, e.g. CF-Connecting-IP)
+	// names the header a CDN in front of the ingress puts the client IP in.
+	// It is read only when the peer the ingress saw is in TrustedProxyCIDRs,
+	// and then feeds rate limits, audit IPs and webhook IP allowlists. Empty
+	// (the default) keeps the X-Forwarded-For behaviour.
+	TrustedProxyHeader string
+	// TrustedProxyCIDRs (http.trusted_proxy_cidrs, comma-separated) are the
+	// CDN egress ranges allowed to set TrustedProxyHeader. Required with it.
+	TrustedProxyCIDRs []netip.Prefix
 }
 
 // RateLimitConfig is a token bucket per principal (API key, else user, else
@@ -75,6 +86,16 @@ type UploadLimitsConfig struct {
 	MaxItems int
 	// ProcessingConcurrency bounds the background coverage/test parsers.
 	ProcessingConcurrency int
+	// MaxConcurrentPerPrincipal caps the uploads one API key or user holds
+	// at once, and MaxConcurrentPerOrg those of one org's service tokens
+	// together, so a single tenant cannot take every MaxConcurrent slot.
+	MaxConcurrentPerPrincipal int
+	MaxConcurrentPerOrg       int
+	// MinThroughputBytes must arrive within every MinThroughputWindow once an
+	// upload holds a slot; a slower or idle body is cut off, so it cannot
+	// hold a slot for the whole http.upload_read_timeout.
+	MinThroughputBytes  int64
+	MinThroughputWindow time.Duration
 }
 
 func setLimitsDefaults(v *viper.Viper) {
@@ -104,6 +125,12 @@ func setLimitsDefaults(v *viper.Viper) {
 	v.SetDefault("upload.queue_wait", "30s")
 	v.SetDefault("upload.max_items", 200000)
 	v.SetDefault("upload.processing_concurrency", 2)
+	v.SetDefault("upload.max_concurrent_per_principal", 2)
+	v.SetDefault("upload.max_concurrent_per_org", 2)
+	v.SetDefault("upload.min_throughput_bytes", int64(16<<10))
+	v.SetDefault("upload.min_throughput_window", "30s")
+	v.SetDefault("http.trusted_proxy_header", "")
+	v.SetDefault("http.trusted_proxy_cidrs", "")
 }
 
 func loadLimits(v *viper.Viper) (LimitsConfig, error) {
@@ -117,6 +144,7 @@ func loadLimits(v *viper.Viper) (LimitsConfig, error) {
 	durations["http.write_timeout"] = &cfg.HTTP.WriteTimeout
 	durations["http.request_timeout"] = &cfg.HTTP.RequestTimeout
 	durations["upload.queue_wait"] = &cfg.Upload.QueueWait
+	durations["upload.min_throughput_window"] = &cfg.Upload.MinThroughputWindow
 	for key, target := range durations {
 		parsed, err := time.ParseDuration(v.GetString(key))
 		if err != nil {
@@ -136,20 +164,33 @@ func loadLimits(v *viper.Viper) (LimitsConfig, error) {
 	cfg.Upload.MaxConcurrent = v.GetInt("upload.max_concurrent")
 	cfg.Upload.MaxItems = v.GetInt("upload.max_items")
 	cfg.Upload.ProcessingConcurrency = v.GetInt("upload.processing_concurrency")
+	cfg.Upload.MaxConcurrentPerPrincipal = v.GetInt("upload.max_concurrent_per_principal")
+	cfg.Upload.MaxConcurrentPerOrg = v.GetInt("upload.max_concurrent_per_org")
+	cfg.Upload.MinThroughputBytes = v.GetInt64("upload.min_throughput_bytes")
 	for key, value := range map[string]int64{
-		"db.max_open_conns":             int64(cfg.DB.MaxOpenConns),
-		"db.max_idle_conns":             int64(cfg.DB.MaxIdleConns),
-		"http.max_header_bytes":         int64(cfg.HTTP.MaxHeaderBytes),
-		"http.max_body_bytes":           cfg.HTTP.MaxBodyBytes,
-		"http.webhook_max_body_bytes":   cfg.HTTP.WebhookMaxBodyBytes,
-		"upload.max_concurrent":         int64(cfg.Upload.MaxConcurrent),
-		"upload.max_items":              int64(cfg.Upload.MaxItems),
-		"upload.processing_concurrency": int64(cfg.Upload.ProcessingConcurrency),
+		"db.max_open_conns":                   int64(cfg.DB.MaxOpenConns),
+		"db.max_idle_conns":                   int64(cfg.DB.MaxIdleConns),
+		"http.max_header_bytes":               int64(cfg.HTTP.MaxHeaderBytes),
+		"http.max_body_bytes":                 cfg.HTTP.MaxBodyBytes,
+		"http.webhook_max_body_bytes":         cfg.HTTP.WebhookMaxBodyBytes,
+		"upload.max_concurrent":               int64(cfg.Upload.MaxConcurrent),
+		"upload.max_items":                    int64(cfg.Upload.MaxItems),
+		"upload.processing_concurrency":       int64(cfg.Upload.ProcessingConcurrency),
+		"upload.max_concurrent_per_principal": int64(cfg.Upload.MaxConcurrentPerPrincipal),
+		"upload.max_concurrent_per_org":       int64(cfg.Upload.MaxConcurrentPerOrg),
+		"upload.min_throughput_bytes":         cfg.Upload.MinThroughputBytes,
 	} {
 		if value < 1 {
 			return LimitsConfig{}, fmt.Errorf("parsing %s: must be at least 1", key)
 		}
 	}
+
+	proxyHeader, proxyCIDRs, err := loadTrustedProxy(v)
+	if err != nil {
+		return LimitsConfig{}, err
+	}
+	cfg.HTTP.TrustedProxyHeader = proxyHeader
+	cfg.HTTP.TrustedProxyCIDRs = proxyCIDRs
 
 	cfg.RateLimit.Enabled = v.GetBool("rate_limit.enabled")
 	buckets := map[string]*RateLimitBucket{
@@ -167,6 +208,33 @@ func loadLimits(v *viper.Viper) (LimitsConfig, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// loadTrustedProxy reads http.trusted_proxy_header and its CIDRs. A header
+// without CIDRs would let any client choose its own IP, so it is refused.
+func loadTrustedProxy(v *viper.Viper) (string, []netip.Prefix, error) {
+	header := strings.TrimSpace(v.GetString("http.trusted_proxy_header"))
+	var prefixes []netip.Prefix
+	for _, raw := range v.GetStringSlice("http.trusted_proxy_cidrs") {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			prefix, err := netip.ParsePrefix(part)
+			if err != nil {
+				return "", nil, fmt.Errorf("parsing http.trusted_proxy_cidrs: %q is not a CIDR", part)
+			}
+			prefixes = append(prefixes, prefix.Masked())
+		}
+	}
+	if header == "" && len(prefixes) > 0 {
+		return "", nil, errors.New("parsing http.trusted_proxy_cidrs: set http.trusted_proxy_header too, or remove the CIDRs")
+	}
+	if header != "" && len(prefixes) == 0 {
+		return "", nil, errors.New("parsing http.trusted_proxy_header: http.trusted_proxy_cidrs must list the proxy ranges allowed to set it")
+	}
+	return header, prefixes, nil
 }
 
 // DefaultLimits returns the limits a fresh install loads with.

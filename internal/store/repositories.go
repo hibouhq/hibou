@@ -166,6 +166,11 @@ func (q *Queries) RepositoryForgeOwner(ctx context.Context, provider, providerID
 	return strings.TrimSpace(inv.AccountLogin), nil
 }
 
+// ListRepositoryIDsByOrg lists the ids of every repository enrolled in an org.
+func (q *Queries) ListRepositoryIDsByOrg(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	return q.db.ListRepositoryIDsByOrg(ctx, orgID)
+}
+
 // ForgeOwnerBoundToOrg reports whether owner belongs to the forge account the
 // org is bound to. Callers check it before any forge call that mints an
 // installation token by owner on the org's behalf.

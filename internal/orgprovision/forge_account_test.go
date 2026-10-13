@@ -214,3 +214,62 @@ func TestBackfillForgeAccountIDs(t *testing.T) {
 		t.Fatal("orgs without a recorded login must not be bound by slug")
 	}
 }
+
+// S3: a legacy org (login recorded, no account id) whose login now resolves
+// to an account id we have never seen may only be adopted by the installer
+// already recorded for it — not by whoever registered the renamed login.
+func TestRecordInstallationLegacyOrgNeedsItsRecordedInstaller(t *testing.T) {
+	t.Parallel()
+
+	st := newFakeStore()
+	st.addUser("github", "installer-1")
+	org := st.addOrganization("github", "acme")
+	org.ForgeAccountLogin = "acme"
+	owner := st.addForgeOrgAdmin("github", "acme", "owner-1")
+	owner.OrgID = &org.ID
+	svc, _ := newVerifyingService(st, map[int64]*forge.InstallationAccount{
+		7: {InstallationID: 7, AccountID: "99", AccountLogin: "acme"},
+	})
+
+	if err := svc.RecordInstallation(context.Background(), "github", installed("created", "acme", 7)); err != nil {
+		t.Fatalf("record installation: %v", err)
+	}
+	if org.ForgeAccountID != "" {
+		t.Fatalf("legacy org adopted by an unrecorded installer: bound to %q", org.ForgeAccountID)
+	}
+	if len(st.memberships) != 0 {
+		t.Fatal("unrecorded installer gained membership")
+	}
+
+	ev := installed("created", "acme", 7)
+	ev.Sender.ProviderID = "owner-1"
+	st.addUser("github", "owner-1")
+	if err := svc.RecordInstallation(context.Background(), "github", ev); err != nil {
+		t.Fatalf("record owner installation: %v", err)
+	}
+	if org.ForgeAccountID != "99" {
+		t.Fatalf("recorded installer could not adopt the legacy org: id %q", org.ForgeAccountID)
+	}
+}
+
+// S3: POST /orgs binds the new org to the installed account it was
+// authorized against, id included.
+func TestAuthorizeForgeOrgCreationAccountReturnsBinding(t *testing.T) {
+	t.Parallel()
+
+	st := newFakeStore()
+	requester := st.addUser("github", "installer-1")
+	st.addForgeOrgAdmin("github", "Acme", "installer-1")
+	svc, provider := newVerifyingService(st, map[int64]*forge.InstallationAccount{
+		7: {InstallationID: 7, AccountID: "42", AccountLogin: "Acme"},
+	})
+	provider.installations = []forge.Installation{{ID: 7, AccountName: "Acme"}}
+
+	account, err := svc.AuthorizeForgeOrgCreationAccount(context.Background(), requester, "github", "acme")
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	if account.Login != "Acme" || account.ID != "42" {
+		t.Fatalf("binding = %+v, want Acme/42", account)
+	}
+}

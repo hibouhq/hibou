@@ -130,7 +130,8 @@ func (s *Server) handleUpdateTeamMemberRole(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := s.replaceTeamMemberRole(r.Context(), team.ID, memberUserID, role); err != nil {
+	previousRole, err := s.replaceTeamMemberRole(r.Context(), team.ID, memberUserID, role)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			api.JSONError(w, http.StatusNotFound, "member not found")
 			return
@@ -144,10 +145,11 @@ func (s *Server) handleUpdateTeamMemberRole(w http.ResponseWriter, r *http.Reque
 		ResourceType: "team",
 		ResourceID:   team.ID.String(),
 		Context: map[string]any{
-			"scope":   "team",
-			"team_id": team.ID.String(),
-			"user_id": memberUserID.String(),
-			"role":    role,
+			"scope":         "team",
+			"team_id":       team.ID.String(),
+			"user_id":       memberUserID.String(),
+			"role":          role,
+			"previous_role": previousRole,
 		},
 	})
 
@@ -185,27 +187,29 @@ func (s *Server) loadTeamAdminUser(r *http.Request, w http.ResponseWriter) (*sto
 	return org, team, UserFromContext(r.Context()), true
 }
 
-func (s *Server) replaceTeamMemberRole(ctx context.Context, teamID, userID uuid.UUID, role string) error {
+// replaceTeamMemberRole swaps a member's role and returns the previous one
+// for the audit record.
+func (s *Server) replaceTeamMemberRole(ctx context.Context, teamID, userID uuid.UUID, role string) (string, error) {
 	currentRole, err := s.queries.GetTeamMemberRole(ctx, teamID, userID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if currentRole == "" {
-		return sql.ErrNoRows
+		return "", sql.ErrNoRows
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	queries := s.queries.WithTx(tx)
 	if err := queries.RemoveTeamMember(ctx, teamID, userID); err != nil {
 		_ = tx.Rollback()
-		return err
+		return "", err
 	}
 	if err := queries.AddTeamMember(ctx, teamID, userID, role); err != nil {
 		_ = tx.Rollback()
-		return err
+		return "", err
 	}
-	return tx.Commit()
+	return currentRole, tx.Commit()
 }

@@ -701,14 +701,14 @@ func (s *Server) handleSecretScanCheck(w http.ResponseWriter, r *http.Request) {
 			FilePath:   finding.FilePath,
 			Line:       finding.StartLine,
 			SecretType: finding.SecretType,
-			SecretHash: finding.SecretHash,
 			Verified:   finding.Verified,
 		})
 	}
 	api.JSON(w, http.StatusOK, secretCheckResponse{Block: len(results) > 0, Findings: results})
 }
 
-// secretCheckFinding never carries the secret itself — hash only (ADR-010).
+// secretCheckFinding never carries the secret itself, nor its hash: the
+// pusher already has the secret, and a hash would only feed offline guessing.
 type secretCheckFinding struct {
 	Tool       string `json:"tool"`
 	RuleID     string `json:"rule_id"`
@@ -716,7 +716,6 @@ type secretCheckFinding struct {
 	FilePath   string `json:"file_path"`
 	Line       int32  `json:"line"`
 	SecretType string `json:"secret_type"`
-	SecretHash string `json:"secret_hash"`
 	Verified   bool   `json:"verified"`
 }
 

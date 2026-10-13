@@ -46,8 +46,11 @@ type Config struct {
 	// Development enables /auth/dev-login (only when no provider is
 	// configured either).
 	Development bool
-	// AllowedOrgs and AllowedUsers restrict sign-in; both empty keeps it
-	// open. Entries are compared case-insensitively.
+	// AllowedOrgs and AllowedUsers restrict sign-in and every later request
+	// (session or user API key); both empty keeps it open. Entries are
+	// compared case-insensitively. An AllowedUsers entry is a login or an
+	// immutable "provider:id" (e.g. "github:583231"); logins are renamable,
+	// so the id form is the safe one (see allowlist.go).
 	AllowedOrgs  []string
 	AllowedUsers []string
 	Log          zerolog.Logger
@@ -66,9 +69,11 @@ type orgMembershipChecker interface {
 
 // Manager handles authentication flows.
 type Manager struct {
-	cfg        Config
-	queries    *store.Queries
-	loginHooks []func(ctx context.Context, user *store.User, providerID string, token *oauth2.Token)
+	cfg         Config
+	queries     *store.Queries
+	loginHooks  []func(ctx context.Context, user *store.User, providerID string, token *oauth2.Token)
+	revokeHooks []func(userID uuid.UUID)
+	allow       allowlistCache
 }
 
 func New(cfg Config, queries *store.Queries) *Manager {
@@ -80,6 +85,15 @@ func (m *Manager) AddLoginHook(hook func(ctx context.Context, user *store.User, 
 		return
 	}
 	m.loginHooks = append(m.loginHooks, hook)
+}
+
+// AddRevokeHook registers a callback run after a user's sessions are revoked
+// (logout, administrator cut-off), e.g. to close their live websockets.
+func (m *Manager) AddRevokeHook(hook func(userID uuid.UUID)) {
+	if m == nil || hook == nil {
+		return
+	}
+	m.revokeHooks = append(m.revokeHooks, hook)
 }
 
 func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, providerID string) error {
@@ -159,7 +173,8 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 	}
 
 	// Before any user row exists: a refused account leaves nothing behind.
-	if err := m.checkSignInAllowed(r.Context(), provider, token); err != nil {
+	login, viaOrg, err := m.checkSignInAllowed(r.Context(), provider, token, provider.ID(), info.ProviderID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -183,6 +198,7 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 	if providerUser == nil {
 		return nil, errors.New("user disappeared during update")
 	}
+	m.recordSignIn(r.Context(), providerUser, login, viaOrg)
 
 	m.invokeLoginHooks(r.Context(), providerUser, provider.ID(), token)
 
@@ -190,32 +206,37 @@ func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*
 }
 
 // checkSignInAllowed enforces the sign-in allowlists: with either configured,
-// the account must be listed in AllowedUsers or be a member of an AllowedOrgs
-// org. A forge that cannot answer (no login, no membership API) is refused.
-func (m *Manager) checkSignInAllowed(ctx context.Context, provider forge.Provider, token *oauth2.Token) error {
-	if len(m.cfg.AllowedUsers) == 0 && len(m.cfg.AllowedOrgs) == 0 {
-		return nil
-	}
-	loginer, ok := provider.(accountLoginer)
-	if !ok {
-		return ErrSignInNotAllowed
-	}
-	login, err := loginer.AccountLogin(ctx, token)
-	if err != nil {
-		return fmt.Errorf("load provider account login: %w", err)
-	}
-	login = strings.TrimSpace(login)
-	if login == "" {
-		return ErrSignInNotAllowed
-	}
-	for _, allowed := range m.cfg.AllowedUsers {
-		if strings.EqualFold(strings.TrimSpace(allowed), login) {
-			return nil
+// the account must be listed in AllowedUsers (login or provider:id) or be a
+// member of an AllowedOrgs org. A forge that cannot answer (no login, no
+// membership API) is refused. It returns the account login (looked up even
+// without an allowlist, for later re-checks) and whether org membership is
+// what admitted the account.
+func (m *Manager) checkSignInAllowed(ctx context.Context, provider forge.Provider, token *oauth2.Token, providerName, providerUserID string) (string, bool, error) {
+	login, canName, err := accountLogin(ctx, provider, token)
+	if !m.Restricted() {
+		if err != nil {
+			m.cfg.Log.Warn().Err(err).Msg("could not load the forge login at sign-in")
 		}
+		return login, false, nil
+	}
+	if allowedUserEntry(m.cfg.AllowedUsers, providerName, providerUserID, "") {
+		return login, false, nil
+	}
+	if !canName {
+		return "", false, ErrSignInNotAllowed
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("load provider account login: %w", err)
+	}
+	if login == "" {
+		return "", false, ErrSignInNotAllowed
+	}
+	if allowedUserEntry(m.cfg.AllowedUsers, providerName, providerUserID, login) {
+		return login, false, nil
 	}
 	checker, ok := provider.(orgMembershipChecker)
 	if !ok {
-		return ErrSignInNotAllowed
+		return "", false, ErrSignInNotAllowed
 	}
 	for _, org := range m.cfg.AllowedOrgs {
 		member, err := checker.IsOrgMember(ctx, token, login, org)
@@ -224,10 +245,39 @@ func (m *Manager) checkSignInAllowed(ctx context.Context, provider forge.Provide
 			continue
 		}
 		if member {
-			return nil
+			return login, true, nil
 		}
 	}
-	return ErrSignInNotAllowed
+	// Say why, or an operator only sees users bounced with nothing logged. A
+	// GitHub App without Organization → Members: read sees only public
+	// memberships, which reads as "not a member" here.
+	m.cfg.Log.Info().Str("login", login).Strs("allowed_orgs", m.cfg.AllowedOrgs).
+		Msg("sign-in allowlist: refused, not a member of any allowed org (GitHub App needs Organization → Members: read to see private memberships)")
+	return "", false, ErrSignInNotAllowed
+}
+
+// recordSignIn stores what later requests are re-checked against: the forge
+// login, and when org membership last admitted the user.
+func (m *Manager) recordSignIn(ctx context.Context, user *store.User, login string, viaOrg bool) {
+	if m.queries == nil {
+		return
+	}
+	if login != "" {
+		if err := m.queries.SetUserForgeLogin(ctx, user.ID, login); err != nil {
+			m.cfg.Log.Warn().Err(err).Str("user_id", user.ID.String()).Msg("failed to record the forge login")
+		} else {
+			user.ForgeLogin = login
+		}
+	}
+	if viaOrg {
+		now := time.Now().UTC()
+		if err := m.queries.SetUserSignInAllowedAt(ctx, user.ID, &now); err != nil {
+			m.cfg.Log.Warn().Err(err).Str("user_id", user.ID.String()).Msg("failed to record the allowlist check")
+		} else {
+			user.SignInAllowedAt = &now
+		}
+	}
+	m.forgetAllowed(user.ID)
 }
 
 func (m *Manager) invokeLoginHooks(ctx context.Context, user *store.User, providerID string, token *oauth2.Token) {
@@ -360,8 +410,26 @@ func (m *Manager) RevokeSessions(ctx context.Context, userID uuid.UUID) error {
 	if m == nil || m.queries == nil {
 		return errors.New("queries not configured")
 	}
-	_, err := m.queries.BumpUserSessionEpoch(ctx, userID)
-	return err
+	if _, err := m.queries.BumpUserSessionEpoch(ctx, userID); err != nil {
+		return err
+	}
+	for _, hook := range m.revokeHooks {
+		hook(userID)
+	}
+	return nil
+}
+
+// HasSessionCookie reports whether the request carries a session cookie under
+// either name (Secure "__Host-" or plain). SessionAuth prefers a session
+// over a bearer token, so CSRF protection may only waive its checks when no
+// such cookie rides along.
+func HasSessionCookie(r *http.Request) bool {
+	for _, name := range []string{secureCookiePrefix + sessionCookieName, sessionCookieName} {
+		if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // cookieName returns the cookie name in use: "__Host-"-prefixed when cookies

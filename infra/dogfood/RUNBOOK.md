@@ -60,7 +60,7 @@ ssh-keygen -t ed25519 -C "hibou-dogfood" -f ~/.ssh/id_ed25519_hibou
 1. Prepare Terraform variables:
 
 ```bash
-cd /workspaces/new_project/infra/hetzner
+cd "$(git rev-parse --show-toplevel)/infra/hetzner"
 cp terraform.tfvars.example terraform.tfvars
 ```
 
@@ -114,7 +114,7 @@ kubectl rollout status deploy/cert-manager-cainjector -n cert-manager --timeout=
 2. Apply the ClusterIssuer after replacing the hostname placeholder email:
 
 ```bash
-sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/cluster-issuer.yaml | kubectl apply -f -
+sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" "$(git rev-parse --show-toplevel)/infra/dogfood/cluster-issuer.yaml" | kubectl apply -f -
 kubectl get clusterissuer letsencrypt-prod
 ```
 
@@ -142,9 +142,9 @@ kubectl create secret generic hibou-db-url \
 4. Install or upgrade Hibou:
 
 ```bash
-sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/values-dogfood.yaml > /tmp/hibou-values-dogfood.yaml
+sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" "$(git rev-parse --show-toplevel)/infra/dogfood/values-dogfood.yaml" > /tmp/hibou-values-dogfood.yaml
 
-helm upgrade --install hibou /workspaces/new_project/chart/hibou \
+helm upgrade --install hibou "$(git rev-parse --show-toplevel)/chart/hibou" \
   -n "$HIBOU_NAMESPACE" \
    -f /tmp/hibou-values-dogfood.yaml
 ```
@@ -301,9 +301,9 @@ kubectl create secret generic hibou-forge-github \
 9. Re-run the Helm upgrade:
 
 ```bash
-sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/values-dogfood.yaml > /tmp/hibou-values-dogfood.yaml
+sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" "$(git rev-parse --show-toplevel)/infra/dogfood/values-dogfood.yaml" > /tmp/hibou-values-dogfood.yaml
 
-helm upgrade --install hibou /workspaces/new_project/chart/hibou \
+helm upgrade --install hibou "$(git rev-parse --show-toplevel)/chart/hibou" \
   -n "$HIBOU_NAMESPACE" \
    -f /tmp/hibou-values-dogfood.yaml
 ```

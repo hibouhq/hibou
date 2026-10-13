@@ -22,6 +22,9 @@ import (
 // instance has only the former. The blobs land in a throwaway clone rather than
 // the sweep's 10 MB one, and closing the stream removes it.
 func (g *GitSource) Snapshot(ctx context.Context) (io.ReadCloser, string, time.Time, error) {
+	if err := validateRemote(g.remoteURL()); err != nil {
+		return nil, "", time.Time{}, err
+	}
 
 	// TMPDIR is the pod's size-limited scratch volume under Kubernetes.
 	dir, err := os.MkdirTemp("", "hibou-cve-seed-*")
@@ -33,8 +36,8 @@ func (g *GitSource) Snapshot(ctx context.Context) (io.ReadCloser, string, time.T
 	// `git archive` reads objects, so the ~3.2 GB working tree never exists.
 	for _, args := range [][]string{
 		{"init", "--quiet"},
-		{"remote", "add", "origin", g.remoteURL()},
-		{"fetch", "--quiet", "--depth", "1", "origin", defaultBranch},
+		{"remote", "add", "--", "origin", g.remoteURL()},
+		{"fetch", "--quiet", "--depth", "1", "--", "origin", defaultBranch},
 	} {
 		if err := stream.git(ctx, args...); err != nil {
 			_ = stream.Close()
@@ -63,9 +66,13 @@ func (g *GitSource) Snapshot(ctx context.Context) (io.ReadCloser, string, time.T
 		}
 	}
 
-	// #nosec G204 -- fixed arguments; commit is a validated hex SHA
-	archive := exec.CommandContext(ctx, "git", "-C", dir, "archive", "--format=tar", commit)
-	archive.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// commit is a validated hex SHA
+	archive, cleanupHome, err := gitCommand(ctx, "", "-C", dir, "archive", "--format=tar", commit)
+	if err != nil {
+		_ = stream.Close()
+		return nil, "", time.Time{}, err
+	}
+	stream.cleanupHome = cleanupHome
 	out, err := archive.StdoutPipe()
 	if err != nil {
 		_ = stream.Close()
@@ -90,6 +97,8 @@ type corpusStream struct {
 	cmd    *exec.Cmd
 	out    io.ReadCloser
 	stderr *strings.Builder
+	// cleanupHome removes the archive command's temporary git HOME.
+	cleanupHome func()
 }
 
 func (s *corpusStream) Read(p []byte) (int, error) {
@@ -111,6 +120,9 @@ func (s *corpusStream) Close() error {
 			err = fmt.Errorf("snapshot stream: %s", strings.TrimSpace(s.stderr.String()))
 		}
 	}
+	if s.cleanupHome != nil {
+		s.cleanupHome()
+	}
 	if removeErr := os.RemoveAll(s.dir); removeErr != nil && err == nil {
 		err = removeErr
 	}
@@ -119,9 +131,12 @@ func (s *corpusStream) Close() error {
 
 func (s *corpusStream) git(ctx context.Context, args ...string) error {
 	full := append([]string{"-C", s.dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...) // #nosec G204 -- fixed arguments built here
-	// A credential prompt would hang the sweep.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// Minimal environment: a credential prompt would hang the sweep.
+	cmd, cleanup, err := gitCommand(ctx, "", full...)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -131,8 +146,11 @@ func (s *corpusStream) git(ctx context.Context, args ...string) error {
 // output runs a read-only git command in the workspace and returns its stdout.
 func (s *corpusStream) output(ctx context.Context, args ...string) (string, error) {
 	full := append([]string{"-C", s.dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...) // #nosec G204 -- fixed arguments built here
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd, cleanup, err := gitCommand(ctx, "", full...)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
 	out, err := cmd.Output()
 	return string(out), err
 }

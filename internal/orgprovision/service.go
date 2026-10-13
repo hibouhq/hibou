@@ -230,7 +230,7 @@ func (s *Service) recordInstallationAccess(ctx context.Context, providerID strin
 		return nil
 	}
 
-	org, ok, err := s.resolveProvisionedOrg(ctx, providerID, verified)
+	org, ok, err := s.resolveProvisionedOrg(ctx, providerID, verified, installerID)
 	if err != nil || !ok {
 		return err
 	}
@@ -281,7 +281,7 @@ func (s *Service) recordInstallationAccess(ctx context.Context, providerID strin
 // already bound to a different account — a different id, a different exact
 // login (GitLab "acme_corp" vs "acme.corp"), or none of this account's admin
 // bindings — is never adopted.
-func (s *Service) resolveProvisionedOrg(ctx context.Context, providerID string, verified verifiedAccount) (*store.Organization, bool, error) {
+func (s *Service) resolveProvisionedOrg(ctx context.Context, providerID string, verified verifiedAccount, installerID string) (*store.Organization, bool, error) {
 	account := verified.login
 	if accounts, ok := s.store.(ForgeAccountStore); ok && verified.id != "" {
 		org, err := accounts.GetOrganizationByForgeAccountID(ctx, providerID, verified.id)
@@ -343,7 +343,42 @@ func (s *Service) resolveProvisionedOrg(ctx context.Context, providerID string, 
 		logForeign("not provisioning-owned")
 		return nil, false, nil
 	}
+	if verified.id != "" {
+		// A legacy org (login, no id) whose login now names an account id we
+		// have never seen: the original account may have been renamed and
+		// its login re-registered. Only someone the org already trusts may
+		// adopt it — the installer recorded for it, or one of its admins.
+		trusted, err := s.installerTrustedByOrg(ctx, providerID, account, installerID, org.ID)
+		if err != nil {
+			return nil, false, err
+		}
+		if !trusted {
+			logForeign("no account id recorded and the installer is not its recorded admin")
+			return nil, false, nil
+		}
+	}
 	return org, true, nil
+}
+
+// installerTrustedByOrg reports whether the installer already holds this org:
+// a forge-admin binding to it, or an admin membership in it.
+func (s *Service) installerTrustedByOrg(ctx context.Context, providerID, account, installerID string, orgID uuid.UUID) (bool, error) {
+	admin, err := s.store.GetForgeOrgAdmin(ctx, providerID, account, installerID)
+	if err != nil {
+		return false, err
+	}
+	if admin != nil && admin.OrgID != nil && *admin.OrgID == orgID {
+		return true, nil
+	}
+	user, err := s.store.GetUserByProviderID(ctx, providerID, installerID)
+	if err != nil || user == nil {
+		return false, err
+	}
+	role, err := s.store.GetOrgMemberRole(ctx, orgID, user.ID)
+	if err != nil {
+		return false, err
+	}
+	return role == "admin", nil
 }
 
 // BackfillForgeAccountIDs binds orgs that predate account-id tracking (a
@@ -429,42 +464,65 @@ func (s *Service) ClaimPendingAdmin(ctx context.Context, user *store.User) error
 }
 
 func (s *Service) AuthorizeForgeOrgCreation(ctx context.Context, requester *store.User, providerID, slug string) error {
+	_, err := s.AuthorizeForgeOrgCreationAccount(ctx, requester, providerID, slug)
+	return err
+}
+
+// ForgeAccount is the forge account a manually created org binds to.
+type ForgeAccount struct {
+	// Login is the installed account's login; empty when the provider is
+	// not configured (development), in which case nothing is bound.
+	Login string
+	// ID is the immutable account id, when the forge can tell.
+	ID string
+}
+
+// AuthorizeForgeOrgCreationAccount authorizes POST /orgs like
+// AuthorizeForgeOrgCreation and returns the installed account the new org
+// must be bound to. Binding at creation is what makes forge calls for the
+// org's repositories owner-checked from the first one (security audit §3.1)
+// and stops a later rename of the account from handing the org over (§3.3).
+func (s *Service) AuthorizeForgeOrgCreationAccount(ctx context.Context, requester *store.User, providerID, slug string) (ForgeAccount, error) {
 	provider := s.forges[strings.TrimSpace(providerID)]
 	if provider == nil {
-		return nil
+		return ForgeAccount{}, nil
 	}
 	if requester == nil || strings.TrimSpace(requester.ProviderID) == "" {
-		return ErrForgeOrgUnauthorized
+		return ForgeAccount{}, ErrForgeOrgUnauthorized
 	}
 	if !strings.EqualFold(strings.TrimSpace(requester.Provider), strings.TrimSpace(providerID)) {
-		return ErrForgeOrgUnauthorized
+		return ForgeAccount{}, ErrForgeOrgUnauthorized
 	}
 
 	installations, err := provider.Installations(ctx)
 	if err != nil {
-		return err
+		return ForgeAccount{}, err
 	}
 	matchedSlug := slugifyAccount(slug)
-	foundMatch := false
 	for _, installation := range installations {
 		if slugifyAccount(installation.AccountName) != matchedSlug {
 			continue
 		}
-		foundMatch = true
 		matchedAccount := strings.TrimSpace(installation.AccountName)
 
 		admin, err := s.store.GetForgeOrgAdmin(ctx, providerID, matchedAccount, requester.ProviderID)
 		if err != nil {
-			return err
+			return ForgeAccount{}, err
 		}
-		if admin != nil {
-			return nil
+		if admin == nil {
+			continue
 		}
+		account := ForgeAccount{Login: matchedAccount}
+		if resolver, ok := provider.(AccountIDResolver); ok {
+			ids, err := resolver.InstallationAccountIDs(ctx)
+			if err != nil {
+				return ForgeAccount{}, err
+			}
+			account.ID = ids[strings.ToLower(matchedAccount)]
+		}
+		return account, nil
 	}
-	if !foundMatch {
-		return ErrForgeOrgUnauthorized
-	}
-	return ErrForgeOrgUnauthorized
+	return ForgeAccount{}, ErrForgeOrgUnauthorized
 }
 
 func (s *Service) ListOnboardableAccounts(ctx context.Context, user *store.User) ([]OnboardableAccount, error) {

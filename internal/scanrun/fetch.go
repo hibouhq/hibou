@@ -31,6 +31,9 @@ var ErrDigestMismatch = errors.New("artifact sha256 does not match the catalog")
 type Fetcher struct {
 	CacheDir string
 	Client   *http.Client
+	// BundleDir is the imported offline bundle on this machine. file://
+	// locations are accepted only inside it; empty refuses them all.
+	BundleDir string
 }
 
 // upstreamRedirectHosts are where upstream release URLs legitimately
@@ -67,8 +70,9 @@ func redirectPolicy(source string) func(*http.Request, []*http.Request) error {
 // location already respects the distribution policy, so there is no
 // fallback anywhere here.
 func (f *Fetcher) Fetch(ctx context.Context, location scancatalog.Location, name string, executable bool) (string, error) {
-	if len(location.SHA256) != 64 {
-		return "", fmt.Errorf("artifact %s has no pinned sha256", name)
+	// The digest names a cache directory: validated before any filesystem use.
+	if !sha256Hex.MatchString(location.SHA256) {
+		return "", fmt.Errorf("artifact %s has no valid pinned sha256", name)
 	}
 	dir := filepath.Join(f.CacheDir, location.SHA256)
 	target := filepath.Join(dir, filepath.Base(name))
@@ -85,7 +89,11 @@ func (f *Fetcher) Fetch(ctx context.Context, location scancatalog.Location, name
 	var source io.ReadCloser
 	switch parsed.Scheme {
 	case "file":
-		file, err := os.Open(filepath.FromSlash(parsed.Path))
+		bundled, err := f.bundlePath(parsed)
+		if err != nil {
+			return "", err
+		}
+		file, err := os.Open(bundled) // #nosec G304 -- inside the operator's imported bundle directory
 		if err != nil {
 			return "", fmt.Errorf("offline bundle is missing %s: %w", name, err)
 		}
@@ -145,6 +153,34 @@ func (f *Fetcher) Fetch(ctx context.Context, location scancatalog.Location, name
 		return "", err
 	}
 	return target, nil
+}
+
+// bundlePath maps a file:// location to a path, refusing anything outside
+// the imported bundle directory (symbolic links resolved).
+func (f *Fetcher) bundlePath(parsed *url.URL) (string, error) {
+	if f.BundleDir == "" {
+		return "", errors.New("file:// artifact location refused: no offline bundle directory configured")
+	}
+	if parsed.Host != "" && parsed.Host != "localhost" {
+		return "", fmt.Errorf("file:// artifact location on host %q refused", parsed.Host)
+	}
+	path := filepath.Clean(filepath.FromSlash(parsed.Path))
+	root := filepath.Clean(f.BundleDir)
+	if !under(root, path) {
+		return "", fmt.Errorf("file:// artifact location %s is outside the offline bundle %s", path, root)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("offline bundle: %w", err)
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("offline bundle is missing %s: %w", filepath.Base(path), err)
+	}
+	if !under(realRoot, realPath) {
+		return "", fmt.Errorf("file:// artifact location %s resolves outside the offline bundle", path)
+	}
+	return realPath, nil
 }
 
 // FileSHA256 hashes a file (hex).

@@ -72,7 +72,7 @@ func TestExportThenImport(t *testing.T) {
 	}
 	// The imported store is what offline mode resolves to.
 	location, _ := scancatalog.DistributionConfig{Mode: scancatalog.ModeOffline, BundleDir: store}.Resolve(&catalog.Scanners[0], &catalog.Scanners[0].Distributions[0])
-	if _, err := (&scanrun.Fetcher{CacheDir: t.TempDir()}).Fetch(context.Background(), location, "tool", true); err != nil {
+	if _, err := (&scanrun.Fetcher{CacheDir: t.TempDir(), BundleDir: store}).Fetch(context.Background(), location, "tool", true); err != nil {
 		t.Fatalf("offline fetch from the imported store: %v", err)
 	}
 }
@@ -110,5 +110,71 @@ func TestImportRejects(t *testing.T) {
 	write(escape, Manifest{Artifacts: []Artifact{{ScannerID: "tool", Path: "../outside", SHA256: good.SHA256}}}, nil)
 	if _, err := Import(catalog, escape, t.TempDir()); err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("path traversal = %v", err)
+	}
+}
+
+// A bundle is plain files: a symbolic link (to an artifact, a directory, or
+// the manifest) could point the import at anything on the importing host.
+func TestImportRefusesSymlinks(t *testing.T) {
+	catalog := testCatalog("https://example.test")
+	payload := []byte("binary-linux-amd64")
+	good := Artifact{ScannerID: "tool", Path: "tool/1.0/tool_linux_x86", SHA256: digest(payload)}
+	manifest, _ := json.Marshal(Manifest{Artifacts: []Artifact{good}})
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "tool_linux_x86"), payload, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]func(dir string){
+		"file link": func(dir string) {
+			_ = os.MkdirAll(filepath.Join(dir, "tool", "1.0"), 0o750)
+			_ = os.Symlink(filepath.Join(elsewhere, "tool_linux_x86"), filepath.Join(dir, "tool", "1.0", "tool_linux_x86"))
+			_ = os.WriteFile(filepath.Join(dir, ManifestName), manifest, 0o640)
+		},
+		"directory link": func(dir string) {
+			_ = os.MkdirAll(filepath.Join(dir, "tool"), 0o750)
+			_ = os.Symlink(elsewhere, filepath.Join(dir, "tool", "1.0"))
+			_ = os.WriteFile(filepath.Join(dir, ManifestName), manifest, 0o640)
+		},
+		"manifest link": func(dir string) {
+			_ = os.MkdirAll(filepath.Join(dir, "tool", "1.0"), 0o750)
+			_ = os.WriteFile(filepath.Join(dir, "tool", "1.0", "tool_linux_x86"), payload, 0o640)
+			_ = os.WriteFile(filepath.Join(elsewhere, ManifestName), manifest, 0o640)
+			_ = os.Symlink(filepath.Join(elsewhere, ManifestName), filepath.Join(dir, ManifestName))
+		},
+	}
+	for name, build := range cases {
+		t.Run(name, func(t *testing.T) {
+			bundle := t.TempDir()
+			build(bundle)
+			store := t.TempDir()
+			if _, err := Import(catalog, bundle, store); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+				t.Fatalf("import with a %s = %v", name, err)
+			}
+			if entries, _ := os.ReadDir(store); len(entries) != 0 {
+				t.Fatalf("nothing may be imported: %v", entries)
+			}
+		})
+	}
+
+	// The same bundle without links imports, and the stored file is the
+	// verified one, read-only.
+	plain := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(plain, "tool", "1.0"), 0o750)
+	_ = os.WriteFile(filepath.Join(plain, "tool", "1.0", "tool_linux_x86"), payload, 0o640)
+	_ = os.WriteFile(filepath.Join(plain, ManifestName), manifest, 0o640)
+	store := t.TempDir()
+	if _, err := Import(catalog, plain, store); err != nil {
+		t.Fatal(err)
+	}
+	stored := filepath.Join(store, "tool", "1.0", "tool_linux_x86")
+	if got, _ := os.ReadFile(stored); string(got) != string(payload) {
+		t.Fatalf("stored = %q", got)
+	}
+	if info, _ := os.Stat(stored); info.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("stored artifact must be read-only: %v", info.Mode())
+	}
+	if entries, _ := os.ReadDir(store); len(entries) != 2 {
+		t.Fatalf("staging directory left behind: %v", entries)
 	}
 }

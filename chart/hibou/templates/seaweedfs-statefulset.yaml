@@ -41,7 +41,15 @@ spec:
             - -volume.max={{ .Values.seaweedfs.maxVolumes | default 10 }}
             - -s3
             - -s3.port=8333
-            - -ip.bind=0.0.0.0
+            # Only the S3 gateway listens on the pod IP. Master, volume and
+            # filer (unauthenticated HTTP/gRPC) advertise and bind loopback:
+            # the S3 gateway in this same process is their only client.
+            - -ip=127.0.0.1
+            - -ip.bind=127.0.0.1
+            - -s3.ip.bind=0.0.0.0
+            # The Iceberg REST catalog would otherwise listen on 8181 on all
+            # interfaces; hibou does not use it.
+            - -s3.port.iceberg=0
             - -s3.config=/etc/seaweedfs/s3-config.json
           ports:
             - name: s3

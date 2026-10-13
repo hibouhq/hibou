@@ -22,6 +22,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -141,10 +142,16 @@ jobs:
             set -euo pipefail
             repo="${REPO,,}"
 
-            # Publish apko base image
+            # Publish apko base image. The runtime image is built FROM the
+            # digest apko just pushed (its last stdout line), never from the
+            # mutable apko-base tag.
             echo "${GITHUB_TOKEN}" | apko login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            export BASE_IMAGE="ghcr.io/${repo}-cache:apko-base"
-            apko publish --lockfile apko.lock.json apko.yaml "${BASE_IMAGE}"
+            BASE_IMAGE="$(apko publish --lockfile apko.lock.json apko.yaml "ghcr.io/${repo}-cache:apko-base" | tail -n1)"
+            if [[ ! "${BASE_IMAGE}" =~ ^ghcr\.io/${repo}-cache@sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: apko publish did not print a digest reference: '${BASE_IMAGE}'"
+              exit 1
+            fi
+            export BASE_IMAGE
 
             # Start Docker daemon
             if ! docker info >/dev/null 2>&1; then
@@ -192,7 +199,9 @@ jobs:
               fi
             fi
 
-            docker buildx bake -f docker-bake.hcl
+            # The metadata file carries the pushed index digest, which the
+            # host signs and attests below.
+            docker buildx bake -f docker-bake.hcl --metadata-file bake-metadata.json
 
       - name: Check Hibou upload config
         id: hibou-ci
@@ -256,6 +265,68 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # --- Signing and provenance (host only: the OIDC token never enters the devcontainer) ---
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+
+      - name: Resolve image digest
+        if: github.event_name != 'pull_request'
+        id: image
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          digest="$(jq -r '.default["containerimage.digest"] // empty' bake-metadata.json)"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no image digest in bake-metadata.json"
+            exit 1
+          fi
+          echo "name=ghcr.io/${REPO,,}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      # Signs the pushed index: the release tags, or the sha-* tag on main.
+      - name: Sign image
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # GitHub artifact attestations require a public repository (or
+      # Enterprise Cloud): skipped while private instead of failing the build.
+      - name: Attest image provenance
+        if: github.event_name != 'pull_request' && !github.event.repository.private
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Checksum and sign release binaries
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum \
+            hibou-darwin-arm64 \
+            hibou-linux-amd64 \
+            hibou-linux-arm64 \
+            hibou-windows-amd64.exe \
+            hibou-windows-arm64.exe \
+            > SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+
+      - name: Attest release binaries provenance
+        if: github.event_name == 'release' && !github.event.repository.private
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      # No --clobber: a release's assets are immutable; re-running against a
+      # release that already has them fails instead of replacing them.
       - name: Upload release binaries
         if: github.event_name == 'release'
         env:
@@ -268,22 +339,8 @@ jobs:
             dist/hibou-linux-arm64 \
             dist/hibou-windows-amd64.exe \
             dist/hibou-windows-arm64.exe \
-            --clobber
-
-      - name: Install cosign
-        if: github.event_name == 'release'
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
-
-      - name: Sign image
-        if: github.event_name == 'release'
-        env:
-          REPO: ${{ github.repository }}
-          REF_NAME: ${{ github.event.release.tag_name }}
-        run: |
-          version="${REF_NAME#v}"
-          image="ghcr.io/${REPO,,}"
-          digest=$(docker buildx imagetools inspect "${image}:${version}" --format '{{.Manifest.Digest}}')
-          cosign sign --yes "${image}@${digest}"
+            dist/SHA256SUMS \
+            dist/SHA256SUMS.sigstore.json
 
       - name: Generate image SBOM
         if: github.event_name == 'release'
@@ -359,10 +416,12 @@ jobs:
               "${chart_name}" "${chart_version}" "${chart_desc}" "${chart_api}" "${app_version}" \
               > "${chart_tmpdir}/${config_file}"
 
-            # Push with oras: multiple tags + OCI annotations
-            (
+            # Push with oras: multiple tags + OCI annotations. The pushed
+            # manifest digest is handed to the host step that signs it.
+            chart_repo="ghcr.io/${repo_owner}/charts/${chart_name}"
+            chart_digest="$(
               cd "${chart_tmpdir}"
-              oras push "ghcr.io/${repo_owner}/charts/${chart_name}:${tags}" \
+              oras push "${chart_repo}:${tags}" --format go-template --template '{{.digest}}' \
                 --config "${config_file}:application/vnd.cncf.helm.config.v1+json" \
                 --annotation "org.opencontainers.image.source=https://github.com/hibouhq/hibou" \
                 --annotation "org.opencontainers.image.version=${app_version}" \
@@ -371,4 +430,18 @@ jobs:
                 --annotation "org.opencontainers.image.title=${chart_name}" \
                 --annotation "org.opencontainers.image.description=${chart_desc}" \
                 "${chart_file}:application/vnd.cncf.helm.chart.content.v1.tar+gzip"
-            )
+            )"
+            echo "${chart_repo}@${chart_digest}" > chart-ref.txt
+
+      - name: Sign Helm chart
+        if: github.event_name != 'pull_request'
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          ref="$(cat chart-ref.txt)"
+          if [[ ! "${ref}" =~ ^ghcr\.io/${REPO_OWNER,,}/charts/hibou@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::unexpected chart reference '${ref}'"
+            exit 1
+          fi
+          cosign sign --yes "${ref}"

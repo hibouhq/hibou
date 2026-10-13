@@ -475,6 +475,33 @@ func (q *Queries) ListRepositoriesForRetention(ctx context.Context) ([]ListRepos
 	return items, nil
 }
 
+const listRepositoryIDsByOrg = `-- name: ListRepositoryIDsByOrg :many
+SELECT id FROM repositories WHERE org_id = $1
+`
+
+func (q *Queries) ListRepositoryIDsByOrg(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.QueryContext(ctx, listRepositoryIDsByOrg, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRepositoryRetentionUsage = `-- name: ListRepositoryRetentionUsage :many
 SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories

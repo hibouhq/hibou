@@ -149,6 +149,12 @@
           rows="3"
           class="mt-1 w-full rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1.5 font-mono text-xs text-gray-100 focus:border-accent/50 focus:outline-none"
         />
+        <span
+          v-if="editing"
+          class="mt-1 block text-gray-500"
+        >
+          Secret values (URLs, secrets, passwords, tokens) are hidden as "***". Leave "***" to keep the stored value, or replace it to change it.
+        </span>
       </label>
       <label class="flex items-center gap-2 text-xs text-gray-300">
         <input

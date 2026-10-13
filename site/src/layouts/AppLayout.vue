@@ -381,11 +381,13 @@ import InstallCliModal from '@/components/InstallCliModal.vue'
 import NavigationDrawer, { type NavigationDrawerSection } from '@/components/NavigationDrawer.vue'
 import NotificationPanel from '@/components/NotificationPanel.vue'
 import SearchPalette from '@/components/SearchPalette.vue'
+import { useToast } from '@/composables/useToast'
 import { useAuthStore } from '@/stores/auth'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useOrgStore } from '@/stores/org'
 
 const authStore = useAuthStore()
+const toast = useToast()
 const notificationsStore = useNotificationsStore()
 const orgStore = useOrgStore()
 const route = useRoute()
@@ -697,7 +699,12 @@ function handleDocumentClick(event: MouseEvent) {
 
 async function handleLogout() {
   isUserMenuOpen.value = false
-  await authStore.logout()
+  try {
+    await authStore.logout()
+  } catch (error) {
+    toast.error('Logout failed — you are still signed in', error instanceof Error ? error.message : undefined)
+    return
+  }
   await router.push('/login')
 }
 

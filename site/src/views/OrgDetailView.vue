@@ -103,6 +103,7 @@ import { RouterLink, RouterView, useRoute } from 'vue-router'
 
 import { api, type OrgDashboard, type Organization, type SeverityCounts } from '@/api/client'
 import { visibleRepoTabCount } from '@/lib/repoTabs'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
@@ -126,13 +127,17 @@ const vulnTotal = computed(() => {
 })
 const componentsTotal = computed(() => dashboard.value?.totals.components_total ?? null)
 
+const auth = useAuthStore()
+
+// The CVE triage queue is instance-wide: only instance admins and
+// instance-scoped triagers can open it, so the tab is hidden for others.
 const tabs = computed(() => [
   { label: 'Overview', name: 'org-overview', icon: LayoutDashboard, count: null },
   { label: 'Vulnerabilities', name: 'org-vulnerabilities', icon: ShieldAlert, count: vulnTotal.value },
   { label: 'CWE', name: 'org-cwes', icon: Bug, count: null },
   { label: 'Dependencies', name: 'org-dependencies', icon: Package, count: componentsTotal.value },
   { label: 'Licenses', name: 'org-licenses', icon: Scale, count: null },
-  { label: 'Triage', name: 'org-triage', icon: ListChecks, count: null },
+  ...(auth.user?.can_triage_cves ? [{ label: 'Triage', name: 'org-triage', icon: ListChecks, count: null }] : []),
   { label: 'Scanners', name: 'org-scanners', icon: Radar, count: null },
   { label: 'Clients', name: 'org-clients', icon: Users, count: null },
   { label: 'Insights', name: 'org-insights', icon: LineChart, count: null },

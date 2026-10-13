@@ -747,7 +747,7 @@ func (s *Server) repoLicensePolicyStatus(r *http.Request, repo *store.Repository
 		status.Unreadable = true
 		return status
 	}
-	cfg, err := s.repoConfigLoader.Load(r.Context(), repo.Provider, owner, name, repo.DefaultBranch)
+	cfg, err := s.repoConfigLoader.Load(forgeOwnerContext(r.Context(), owner), repo.Provider, owner, name, repo.DefaultBranch)
 	if err != nil {
 		// One unreachable repository must not fail the whole report, but it must
 		// not be counted as compliant either.

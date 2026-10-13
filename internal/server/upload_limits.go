@@ -3,7 +3,17 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
+	"github.com/hibouhq/hibou/internal/auth"
 )
 
 // defaultUploadMaxItems applies when a Server is built without config.Load.
@@ -116,4 +126,119 @@ func countTextArtifactItems(format string, content []byte) int {
 		return 0
 	}
 	return bytes.Count(content, []byte(marker))
+}
+
+// uploadAdmission is what an upload must pass before it may queue for a
+// slot. The target org and repository are in the body, which is exactly what
+// a slot protects, so the full check stays in the handler; here the caller
+// must be a principal that can upload somewhere: a token whose scope grants
+// uploads:write, and a user who belongs to at least one organization. It
+// returns the in-flight keys the upload counts against: the user (whatever
+// token they use) or the service token, plus the org of a service token.
+func (s *Server) uploadAdmission(w http.ResponseWriter, r *http.Request) ([]inFlightKey, bool) {
+	if !s.hasPrincipal(r) {
+		api.JSONError(w, http.StatusUnauthorized, "authentication required")
+		return nil, false
+	}
+	if !s.enforceTokenCapability(w, r, apitoken.CapUploads, apitoken.AccessWrite, "", "") {
+		return nil, false
+	}
+	perPrincipal := s.limits.Upload.MaxConcurrentPerPrincipal
+	if tokenAuth := auth.TokenAuthFromContext(r.Context()); tokenAuth.IsServicePrincipal() {
+		return []inFlightKey{
+			{key: "key:" + tokenAuth.KeyID.String(), limit: perPrincipal},
+			{key: "org:" + tokenAuth.OwnerID.String(), limit: s.limits.Upload.MaxConcurrentPerOrg},
+		}, true
+	}
+	user := UserFromContext(r.Context())
+	orgs, _, err := s.queries.ListOrganizationsByUser(r.Context(), user.ID, 1, 0)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to check organization membership")
+		return nil, false
+	}
+	if len(orgs) == 0 {
+		api.JSONError(w, http.StatusForbidden, "uploading requires membership of an organization")
+		return nil, false
+	}
+	return []inFlightKey{{key: "user:" + user.ID.String(), limit: perPrincipal}}, true
+}
+
+// errUploadTooSlow fails the body read of an upload that stalled or trickled
+// below upload.min_throughput_bytes per upload.min_throughput_window.
+var errUploadTooSlow = errors.New("upload body arrived too slowly (upload.min_throughput_bytes per upload.min_throughput_window)")
+
+// uploadThroughputGuard wraps an upload body while it holds a slot. Every
+// window it checks the bytes read since the last check; when a read is
+// pending and fewer than minBytes arrived, it expires the connection's read
+// deadline, so a body that stalls or trickles fails instead of holding the
+// slot for the whole http.upload_read_timeout. A handler busy processing
+// (no read pending) is never cut off.
+type uploadThroughputGuard struct {
+	body    io.ReadCloser
+	read    atomic.Int64
+	pending atomic.Bool
+	tooSlow atomic.Bool
+	done    chan struct{}
+	once    sync.Once
+}
+
+func newUploadThroughputGuard(w http.ResponseWriter, body io.ReadCloser, minBytes int64, window time.Duration) *uploadThroughputGuard {
+	guard := &uploadThroughputGuard{body: body, done: make(chan struct{})}
+	if body == nil || body == http.NoBody || minBytes <= 0 || window <= 0 {
+		return guard
+	}
+	controller := http.NewResponseController(w)
+	go guard.watch(controller, minBytes, window)
+	return guard
+}
+
+func (g *uploadThroughputGuard) watch(controller *http.ResponseController, minBytes int64, window time.Duration) {
+	ticker := time.NewTicker(window)
+	defer ticker.Stop()
+	var last int64
+	for {
+		select {
+		case <-g.done:
+			return
+		case <-ticker.C:
+			read := g.read.Load()
+			if g.pending.Load() && read-last < minBytes {
+				g.tooSlow.Store(true)
+				// Unblocks the pending Read with a timeout error.
+				_ = controller.SetReadDeadline(time.Now())
+				return
+			}
+			last = read
+		}
+	}
+}
+
+func (g *uploadThroughputGuard) Read(p []byte) (int, error) {
+	if g.tooSlow.Load() {
+		return 0, errUploadTooSlow
+	}
+	g.pending.Store(true)
+	n, err := g.body.Read(p)
+	g.pending.Store(false)
+	g.read.Add(int64(n))
+	if err != nil && g.tooSlow.Load() {
+		return n, errUploadTooSlow
+	}
+	if err == io.EOF {
+		g.stop()
+	}
+	return n, err
+}
+
+func (g *uploadThroughputGuard) Close() error {
+	g.stop()
+	if g.body == nil {
+		return nil
+	}
+	return g.body.Close()
+}
+
+// stop ends the watchdog; idempotent.
+func (g *uploadThroughputGuard) stop() {
+	g.once.Do(func() { close(g.done) })
 }

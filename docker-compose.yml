@@ -1,3 +1,6 @@
+# DEVELOPMENT ONLY. Well-known credentials (hibou/hibou), Forgejo with open
+# registration and an unauthenticated Trivy server: never expose these.
+# Published ports bind 127.0.0.1 so they are reachable from this machine only.
 services:
   postgres:
     image: postgres:18
@@ -5,7 +8,7 @@ services:
     # default 100 connections trips "too many clients" flakes.
     command: postgres -c max_connections=300
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     environment:
       POSTGRES_USER: hibou
       POSTGRES_PASSWORD: hibou
@@ -23,8 +26,8 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     ports:
-      - '3030:3000'
-      - '2222:22'
+      - '127.0.0.1:3030:3000'
+      - '127.0.0.1:2222:22'
     environment:
       FORGEJO__database__DB_TYPE: sqlite3
       FORGEJO__server__ROOT_URL: http://localhost:3030
@@ -42,10 +45,10 @@ services:
       retries: 10
 
   trivy:
-    image: aquasec/trivy:latest
+    image: aquasec/trivy:0.72.0
     command: ['server', '--listen', '0.0.0.0:4954']
     ports:
-      - '4954:4954'
+      - '127.0.0.1:4954:4954'
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:4954/healthz']
       interval: 5s

@@ -182,7 +182,7 @@ func ParseBetterleaksReport(content []byte) ([]SecretFinding, error) {
 			CommitSHA:   strings.TrimSpace(row.Commit),
 			AuthorEmail: strings.TrimSpace(row.Email),
 			Verified:    verified,
-			Metadata:    raw,
+			Metadata:    SafeMetadata(raw),
 		}
 		finding.Fingerprint = ComputeFingerprint(finding.FilePath, finding.StartLine, finding.SecretHash)
 		findings = append(findings, finding)

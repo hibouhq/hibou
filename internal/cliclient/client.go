@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -48,6 +50,14 @@ func NewWithOverrides(serverOverride, tokenOverride string) (*Client, error) {
 		return nil, errors.New("no server configured — run 'hibou login' or set HIBOU_SERVER")
 	}
 
+	insecure := os.Getenv(InsecureHTTPEnv) == "1"
+	if err := CheckServerURL(server, insecure); err != nil {
+		return nil, err
+	}
+	if insecure && isPlainRemoteHTTP(server) {
+		fmt.Fprintf(os.Stderr, "warning: %s=1: sending the API token over plain HTTP to %s\n", InsecureHTTPEnv, server)
+	}
+
 	token := strings.TrimSpace(tokenOverride)
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("HIBOU_TOKEN"))
@@ -66,6 +76,44 @@ func NewWithOverrides(serverOverride, tokenOverride string) (*Client, error) {
 			Timeout: 30 * time.Second,
 		},
 	}, nil
+}
+
+// InsecureHTTPEnv set to "1" lets the CLI talk to a plain http:// server
+// that is not on loopback. The token then travels in clear text.
+const InsecureHTTPEnv = "HIBOU_INSECURE_HTTP"
+
+// CheckServerURL refuses to send a token over plain HTTP, except to a
+// loopback server (local development) or with an explicit opt-in (Q15).
+func CheckServerURL(server string, allowInsecure bool) error {
+	parsed, err := url.Parse(server)
+	if err != nil || parsed.Host == "" {
+		return fmt.Errorf("invalid server URL %q: expected https://host", server)
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if allowInsecure || IsLoopbackHost(parsed.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("refusing to send an API token over plain HTTP to %s: use https:// (or set %s=1 if you accept the risk)", parsed.Host, InsecureHTTPEnv)
+	default:
+		return fmt.Errorf("invalid server URL %q: scheme must be https", server)
+	}
+}
+
+// IsLoopbackHost reports whether host is localhost or a loopback IP.
+func IsLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isPlainRemoteHTTP(server string) bool {
+	parsed, err := url.Parse(server)
+	return err == nil && strings.EqualFold(parsed.Scheme, "http") && !IsLoopbackHost(parsed.Hostname())
 }
 
 // APIResponse is the standard envelope from the Hibou API.

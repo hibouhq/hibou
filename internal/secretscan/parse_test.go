@@ -1,6 +1,12 @@
 package secretscan
 
-import "testing"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestParseGitleaksReport(t *testing.T) {
 	content := []byte(`[
@@ -361,5 +367,48 @@ func TestSeverityFromTags(t *testing.T) {
 		if got := severityFromTags(tc.tags); got != tc.want {
 			t.Fatalf("%s: severityFromTags(%v) = %q, want %q", tc.name, tc.tags, got, tc.want)
 		}
+	}
+}
+
+// S3: secret_hash is keyed — a bare SHA-256 of a leaked value can be
+// brute-forced offline from the stored hash.
+func TestHashSecretIsKeyedNotPlainSHA256(t *testing.T) {
+	plain := sha256.Sum256([]byte("AKIAIOSFODNN7EXAMPLE"))
+	if HashSecret("AKIAIOSFODNN7EXAMPLE") == hex.EncodeToString(plain[:]) {
+		t.Fatal("HashSecret is an unsalted SHA-256")
+	}
+	first, again := HashSecret("a"), HashSecret("a")
+	if first != again || first == HashSecret("b") {
+		t.Fatal("HashSecret must be deterministic and value-dependent")
+	}
+	if derivePepper("one") == nil || hex.EncodeToString(derivePepper("one")) == hex.EncodeToString(derivePepper("two")) {
+		t.Fatal("the pepper must depend on its source secret")
+	}
+}
+
+// S3: only allowlisted report fields reach finding metadata; anything
+// unknown (SecretParts, ExtraData, a future field) is dropped.
+func TestParsersKeepOnlyAllowlistedMetadata(t *testing.T) {
+	gitleaks, err := ParseGitleaksReport([]byte(`[{"RuleID":"generic","File":"a.env","StartLine":1,"Secret":"s3cr3t-value","Match":"K=s3cr3t-value","Line":"K=s3cr3t-value","Message":"commit msg s3cr3t-value","NewField":"s3cr3t-value","Tags":["high"],"Commit":"abc"}]`))
+	if err != nil || len(gitleaks) != 1 {
+		t.Fatalf("gitleaks = %v, %v", gitleaks, err)
+	}
+	trufflehog, err := ParseTruffleHogReport([]byte(`{"DetectorName":"AWS","Raw":"s3cr3t-value","Redacted":"AKIA****","ExtraData":{"account":"s3cr3t-value"},"StructuredData":{"SecretParts":{"key":"s3cr3t-value"}},"SecretParts":{"key":"s3cr3t-value"},"SourceMetadata":{"Data":{"git":{"file":"a.env","line":1}}}}`))
+	if err != nil || len(trufflehog) != 1 {
+		t.Fatalf("trufflehog = %v, %v", trufflehog, err)
+	}
+	for _, finding := range []SecretFinding{gitleaks[0], trufflehog[0]} {
+		encoded, _ := json.Marshal(finding.Metadata)
+		if strings.Contains(string(encoded), "s3cr3t-value") {
+			t.Fatalf("%s metadata keeps secret material: %s", finding.Tool, encoded)
+		}
+		for key := range finding.Metadata {
+			if !safeMetadataKeys[key] {
+				t.Fatalf("%s metadata keeps non-allowlisted key %q", finding.Tool, key)
+			}
+		}
+	}
+	if gitleaks[0].Metadata["Commit"] != "abc" || trufflehog[0].Metadata["DetectorName"] != "AWS" {
+		t.Fatal("allowlisted fields were dropped")
 	}
 }

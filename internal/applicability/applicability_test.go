@@ -143,3 +143,46 @@ func TestDetectWithOverrides(t *testing.T) {
 		t.Fatalf("declared module root missing: %+v", result.Modules)
 	}
 }
+
+// A directory named like an option or climbing out of the checkout never
+// becomes a module root or an exclusion: both reach scanners as arguments
+// (Q14: a module "--exclude=*" emptied the SAST scope).
+func TestDetectDropsOptionLikeAndEscapingRoots(t *testing.T) {
+	result := DetectWithOverrides([]string{
+		"--exclude=*/pom.xml",
+		"--exclude=*/src/App.java",
+		"-x/node_modules/a.js",
+		"../up/pom.xml",
+		"java/pom.xml",
+		"java/src/App.java",
+	}, false, catalog(t), Overrides{ModuleRoots: []string{"-declared", "../escape", "ok"}})
+	for _, module := range result.Modules {
+		if !safeRoot(module.Root) {
+			t.Errorf("unsafe module root planned: %q", module.Root)
+		}
+		if module.Root == "-declared" || module.Root == "../escape" {
+			t.Errorf("declared unsafe root kept: %q", module.Root)
+		}
+	}
+	for _, exclusion := range result.Exclusions {
+		if !safeRoot(exclusion.Path) {
+			t.Errorf("unsafe exclusion planned: %q", exclusion.Path)
+		}
+	}
+	for _, s := range result.Applicable {
+		for _, module := range s.Modules {
+			if !safeRoot(module) {
+				t.Errorf("%s targets unsafe module %q", s.ScannerID, module)
+			}
+		}
+	}
+	found := false
+	for _, module := range result.Modules {
+		if module.Root == "java" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("safe module dropped: %+v", result.Modules)
+	}
+}

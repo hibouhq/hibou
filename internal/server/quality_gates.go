@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -92,6 +93,11 @@ func (s *Server) handleCreateQualityGate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionGateCreate, "quality_gate", qualityGate.ID.String(), map[string]any{
+		"name":    qualityGate.Name,
+		"enabled": qualityGate.Enabled,
+		"gate":    qualityGate,
+	})
 	api.JSON(w, http.StatusCreated, qualityGate)
 }
 
@@ -186,6 +192,12 @@ func (s *Server) handleUpdateQualityGate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionGateUpdate, "quality_gate", updated.ID.String(), map[string]any{
+		"name":           updated.Name,
+		"changed_fields": audit.ChangedFields(gate, updated, "updated_at", "created_at"),
+		"before":         gate,
+		"after":          updated,
+	})
 	api.JSON(w, http.StatusOK, updated)
 }
 
@@ -217,6 +229,10 @@ func (s *Server) handleDeleteQualityGate(w http.ResponseWriter, r *http.Request)
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete quality gate")
 		return
 	}
+	s.auditOrgConfig(r, org.ID, audit.ActionGateDelete, "quality_gate", gate.ID.String(), map[string]any{
+		"name": gate.Name,
+		"gate": gate,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

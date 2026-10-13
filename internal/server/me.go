@@ -13,6 +13,9 @@ import (
 type meResponse struct {
 	*store.User
 	IsInstanceAdmin bool `json:"is_instance_admin"`
+	// CanTriageCVEs mirrors the triage routes' authority (instance admin or
+	// instance-scoped cve-triager), so the UI only offers what will work.
+	CanTriageCVEs bool `json:"can_triage_cves"`
 }
 
 // @Summary      Get current user
@@ -25,7 +28,7 @@ type meResponse struct {
 // @Router       /users/me [get]
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	if user := UserFromContext(r.Context()); user != nil {
-		api.JSON(w, http.StatusOK, meResponse{User: user, IsInstanceAdmin: s.isInstanceAdmin(r)})
+		api.JSON(w, http.StatusOK, meResponse{User: user, IsInstanceAdmin: s.isInstanceAdmin(r), CanTriageCVEs: s.canSeeInstanceInventory(r)})
 		return
 	}
 	// A service principal (ADR-022) has no user: identify the token.

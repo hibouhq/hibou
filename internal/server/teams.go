@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 )
 
 type createTeamRequest struct {
@@ -94,6 +95,10 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionTeamCreate, "team", team.ID.String(), map[string]any{
+		"name": team.Name,
+		"slug": team.Slug,
+	})
 	api.JSON(w, http.StatusCreated, team)
 }
 
@@ -280,6 +285,11 @@ func (s *Server) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionTeamUpdate, "team", updated.ID.String(), map[string]any{
+		"changed_fields": audit.ChangedFields(team, updated, "updated_at", "created_at"),
+		"before":         map[string]any{"name": team.Name, "slug": team.Slug},
+		"after":          map[string]any{"name": updated.Name, "slug": updated.Slug},
+	})
 	api.JSON(w, http.StatusOK, updated)
 }
 
@@ -337,6 +347,10 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete team")
 		return
 	}
+	s.auditOrgConfig(r, org.ID, audit.ActionTeamDelete, "team", team.ID.String(), map[string]any{
+		"name": team.Name,
+		"slug": team.Slug,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -23,6 +23,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  // Throws when the server refused: the user stays signed in, so the caller
+  // must not present the logout as done.
   async function logout() {
     await api.logout()
     user.value = null

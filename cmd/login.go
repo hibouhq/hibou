@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hibouhq/hibou/internal/cliclient"
 	"github.com/hibouhq/hibou/internal/cliconfig"
 )
 
@@ -180,13 +180,7 @@ func checkLoginServerURL(server string, allowInsecure bool) error {
 	}
 }
 
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
+func isLoopbackHost(host string) bool { return cliclient.IsLoopbackHost(host) }
 
 // readSecretLine reads one line from stdin without echoing it when stdin is a
 // terminal (stty, on Unix-like systems). Elsewhere, or when stdin is piped,

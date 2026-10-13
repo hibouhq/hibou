@@ -67,12 +67,58 @@ func TestFetchOfflineBundle(t *testing.T) {
 	if err := os.WriteFile(file, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fetcher := &Fetcher{CacheDir: t.TempDir()}
+	fetcher := &Fetcher{CacheDir: t.TempDir(), BundleDir: bundle}
 	if _, err := fetcher.Fetch(context.Background(), scancatalog.Location{URL: "file://" + filepath.ToSlash(file), SHA256: digestOf(payload)}, "plugin.jar", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fetcher.Fetch(context.Background(), scancatalog.Location{URL: "file:///nope/missing.jar", SHA256: digestOf(payload)}, "missing.jar", false); err == nil || !strings.Contains(err.Error(), "offline bundle is missing") {
+	missing := filepath.ToSlash(filepath.Join(bundle, "missing.jar"))
+	if _, err := fetcher.Fetch(context.Background(), scancatalog.Location{URL: "file://" + missing, SHA256: digestOf(payload)}, "missing.jar", false); err == nil || !strings.Contains(err.Error(), "offline bundle is missing") {
 		t.Fatalf("missing bundle artifact = %v", err)
+	}
+}
+
+// file:// is the imported bundle only: no bundle configured, a path outside
+// it, or a link leading out of it are refused before anything is read.
+func TestFetchFileOnlyInsideBundle(t *testing.T) {
+	payload := []byte("jar bytes")
+	bundle, outside := t.TempDir(), t.TempDir()
+	secret := filepath.Join(outside, "secret")
+	_ = os.WriteFile(secret, payload, 0o600)
+	_ = os.Symlink(secret, filepath.Join(bundle, "link"))
+	location := func(path string) scancatalog.Location {
+		return scancatalog.Location{URL: "file://" + filepath.ToSlash(path), SHA256: digestOf(payload)}
+	}
+	if _, err := (&Fetcher{CacheDir: t.TempDir()}).Fetch(context.Background(), location(secret), "x", false); err == nil || !strings.Contains(err.Error(), "no offline bundle") {
+		t.Fatalf("file:// without a bundle dir = %v", err)
+	}
+	fetcher := &Fetcher{CacheDir: t.TempDir(), BundleDir: bundle}
+	for name, path := range map[string]string{
+		"outside":  secret,
+		"dot-dot":  filepath.Join(bundle, "..", filepath.Base(outside), "secret"),
+		"link-out": filepath.Join(bundle, "link"),
+	} {
+		if _, err := fetcher.Fetch(context.Background(), location(path), "x", false); err == nil || !strings.Contains(err.Error(), "outside the offline bundle") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	remote := scancatalog.Location{URL: "file://evil.example/" + filepath.ToSlash(filepath.Join(bundle, "x")), SHA256: digestOf(payload)}
+	if _, err := fetcher.Fetch(context.Background(), remote, "x", false); err == nil {
+		t.Fatal("file:// with a host must be refused")
+	}
+}
+
+// The sha256 names a cache directory: anything but 64 lowercase hex is
+// refused before the filesystem is touched.
+func TestFetchValidatesDigestFirst(t *testing.T) {
+	cache := t.TempDir()
+	for _, digest := range []string{"", "../../../../tmp/x", strings.Repeat("A", 64), strings.Repeat("a", 63) + "/", strings.Repeat("g", 64)} {
+		_, err := (&Fetcher{CacheDir: cache}).Fetch(context.Background(), scancatalog.Location{URL: "https://example.test/x", SHA256: digest}, "x", false)
+		if err == nil || !strings.Contains(err.Error(), "valid pinned sha256") {
+			t.Errorf("digest %q = %v", digest, err)
+		}
+	}
+	if entries, _ := os.ReadDir(cache); len(entries) != 0 {
+		t.Fatalf("cache touched: %v", entries)
 	}
 }
 
@@ -87,7 +133,7 @@ func TestOpenGrepAdapterRunsWithoutShell(t *testing.T) {
 
 	var gotArgs []string
 	env := Environment{
-		SourceRoot: "/src", OutDir: out, Fetcher: &Fetcher{CacheDir: t.TempDir()}, OpenGrepRules: rules,
+		SourceRoot: "/src", OutDir: out, Fetcher: &Fetcher{CacheDir: t.TempDir(), BundleDir: bundle}, OpenGrepRules: rules,
 		Command: func(_ context.Context, dir, name string, args ...string) ([]byte, int, error) {
 			gotArgs = args
 			if dir != "/src" {
@@ -107,7 +153,7 @@ func TestOpenGrepAdapterRunsWithoutShell(t *testing.T) {
 	}
 	joined := strings.Join(gotArgs, " ")
 	if !strings.Contains(joined, "--sarif-output="+filepath.Join(out, "opengrep-abc.sarif")) || !strings.Contains(joined, "-f "+rules) ||
-		!strings.HasSuffix(joined, "--exclude web/node_modules java web") {
+		!strings.HasSuffix(joined, "--exclude=web/node_modules -- java web") {
 		t.Fatalf("args = %v", gotArgs)
 	}
 	if !result.Unbound || !strings.HasPrefix(result.ConfigDigest, "sha256:") {
@@ -129,7 +175,7 @@ func TestSpotBugsAdapterNeedsCompiledClasses(t *testing.T) {
 		{Distribution: scancatalog.Distribution{Kind: "maven", Coordinates: "com.h3xstream.findsecbugs:findsecbugs-plugin:1.13.0"},
 			Location: &scancatalog.Location{URL: "file://" + filepath.ToSlash(bundle), SHA256: digestOf(jar)}},
 	}}
-	env := Environment{SourceRoot: t.TempDir(), OutDir: t.TempDir(), Fetcher: &Fetcher{CacheDir: t.TempDir()},
+	env := Environment{SourceRoot: t.TempDir(), OutDir: t.TempDir(), Fetcher: &Fetcher{CacheDir: t.TempDir(), BundleDir: filepath.Dir(bundle)},
 		Command: func(context.Context, string, string, ...string) ([]byte, int, error) {
 			t.Fatal("mvn must not run without compiled classes")
 			return nil, 0, nil

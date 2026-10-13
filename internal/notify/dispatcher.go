@@ -214,7 +214,12 @@ func (d *Dispatcher) handleEvent(_ context.Context, eventType events.Type, rawPa
 		integrationPayload.Metadata["integration_id"] = integration.ID.String()
 		integrationPayload.Metadata["integration_name"] = integration.Name
 		integrationPayload.Metadata["integration_type"] = integration.IntegrationType
-		integrationPayload.Metadata["integration_config"] = json.RawMessage(append([]byte(nil), integration.Config...))
+		config, err := Secrets().OpenConfig(integration.Config)
+		if err != nil {
+			d.recordDelivery(ctx, integration, sender, integrationPayload, time.Now().UTC(), err)
+			continue
+		}
+		integrationPayload.Metadata["integration_config"] = json.RawMessage(append([]byte(nil), config...))
 
 		_ = d.dispatchIntegration(ctx, integration, sender, integrationPayload, dispatchOptions{async: true})
 	}
@@ -265,7 +270,11 @@ func (d *Dispatcher) Replay(ctx context.Context, integration dbgen.Integration, 
 	payload.Metadata["integration_id"] = integration.ID.String()
 	payload.Metadata["integration_name"] = integration.Name
 	payload.Metadata["integration_type"] = integration.IntegrationType
-	payload.Metadata["integration_config"] = json.RawMessage(append([]byte(nil), integration.Config...))
+	config, err := Secrets().OpenConfig(integration.Config)
+	if err != nil {
+		return err
+	}
+	payload.Metadata["integration_config"] = json.RawMessage(append([]byte(nil), config...))
 	payload.Metadata["replay"] = true
 	return d.dispatchIntegration(ctx, integration, sender, payload, dispatchOptions{bypassRateLimit: true, bypassCircuitBreaker: true})
 }
@@ -392,7 +401,18 @@ func ruleMatchesIntegration(rule dbgen.NotificationRule, integration dbgen.Integ
 	if !strings.EqualFold(string(rule.DestinationType), integration.IntegrationType) {
 		return false
 	}
-	return destinationConfigMatches(rule.DestinationConfig, integration.Config)
+	// Both sides may hold sealed secret fields (a rule can select by webhook
+	// URL); ciphertexts are randomized, so compare the opened values. A config
+	// that cannot be opened matches nothing.
+	ruleConfig, err := Secrets().OpenConfig(rule.DestinationConfig)
+	if err != nil {
+		return false
+	}
+	openedConfig, err := Secrets().OpenConfig(integration.Config)
+	if err != nil {
+		return false
+	}
+	return destinationConfigMatches(ruleConfig, openedConfig)
 }
 
 func destinationConfigMatches(ruleConfig, integrationConfig json.RawMessage) bool {
@@ -543,6 +563,7 @@ func (d *Dispatcher) recordDelivery(ctx context.Context, integration dbgen.Integ
 		destinationType = strings.ToLower(strings.TrimSpace(sender.Type()))
 	}
 	if sendErr != nil {
+		sendErr = sanitizeDeliveryError(sendErr, integrationConfig(payload))
 		metrics.NotificationDeliveries.WithLabelValues(destinationType, "error").Inc()
 		d.log.Error().
 			Err(sendErr).
@@ -790,9 +811,7 @@ func (r *rateLimiter) allow(id uuid.UUID, limit int) bool {
 }
 
 func auditMetadata(metadata map[string]any) map[string]any {
-	cloned := cloneMetadata(metadata)
-	delete(cloned, "integration_config")
-	return cloned
+	return publicMetadata(metadata)
 }
 
 func mapValue(raw any) map[string]any {

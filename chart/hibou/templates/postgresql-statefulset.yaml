@@ -19,6 +19,18 @@ spec:
         app.kubernetes.io/component: postgresql
         {{- include "hibou.selectorLabels" . | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
+      # The official image's postgres user (uid/gid 999). Running as it
+      # directly skips the entrypoint's root phase; the entrypoint still
+      # resets PGDATA to 0700 after fsGroup has widened it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgresql
           image: {{ printf "%s:%s" .Values.postgresql.image.repository .Values.postgresql.image.tag | quote }}
@@ -55,11 +67,25 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql
-      {{- if not .Values.postgresql.persistence.enabled }}
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- if not .Values.postgresql.persistence.enabled }}
         - name: data
           emptyDir: {}
       {{- end }}

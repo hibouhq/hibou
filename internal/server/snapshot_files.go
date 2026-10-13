@@ -82,8 +82,11 @@ func (s *Server) handleListSnapshotFiles(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleDownloadSnapshotFile(w http.ResponseWriter, r *http.Request) {
-	_, _, artifacts, ok := s.loadAuthorizedSnapshotFiles(w, r)
+	repo, _, artifacts, ok := s.loadAuthorizedSnapshotFiles(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireRawArtifactAccess(w, r, repo) {
 		return
 	}
 
@@ -124,8 +127,11 @@ func (s *Server) handleDownloadSnapshotFile(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleDownloadSnapshotArchive(w http.ResponseWriter, r *http.Request) {
-	_, snapshot, artifacts, ok := s.loadAuthorizedSnapshotFiles(w, r)
+	repo, snapshot, artifacts, ok := s.loadAuthorizedSnapshotFiles(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireRawArtifactAccess(w, r, repo) {
 		return
 	}
 	if len(artifacts) == 0 {
@@ -156,6 +162,32 @@ func (s *Server) handleDownloadSnapshotArchive(w http.ResponseWriter, r *http.Re
 		_, _ = io.Copy(fw, rc)
 		_ = rc.Close()
 	}
+}
+
+// rawArtifactAccessMessage is the 403 body for a read-only role downloading
+// raw uploads.
+const rawArtifactAccessMessage = "downloading raw uploaded artifacts requires the developer role or higher on this repository"
+
+// requireRawArtifactAccess limits raw artifact bytes to roles that can write
+// the repository. Uploaded reports can carry more than the findings derived
+// from them (source excerpts, scanner context, environment details), so
+// viewer and auditor roles get the parsed findings, not the files.
+func (s *Server) requireRawArtifactAccess(w http.ResponseWriter, r *http.Request, repo *store.Repository) bool {
+	orgRole, err := s.principalOrgRole(r, repo.OrgID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load repository")
+		return false
+	}
+	access, err := s.principalRepoAccess(r, repo.OrgID, orgRole)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load repository")
+		return false
+	}
+	if !roleCanWrite(access.repoRole(orgRole, repo.ID)) {
+		api.JSONError(w, http.StatusForbidden, rawArtifactAccessMessage)
+		return false
+	}
+	return true
 }
 
 // uniqueArtifactFilename derives a stable download name from the artifact's

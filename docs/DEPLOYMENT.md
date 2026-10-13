@@ -214,6 +214,68 @@ more after the upgrade. Login uses PKCE (S256).
 State-changing requests authenticated by the session cookie are refused when
 the browser marks them cross-site (`Sec-Fetch-Site`) or their `Origin` differs
 from `HIBOU_BASE_URL`. Bearer-token requests and webhooks are not affected.
+To serve the UI on more than one hostname, list the others in
+`HIBOU_ALLOWED_ORIGINS` (`allowed_origins`, comma-separated
+`scheme://host[:port]`; chart: `hibou.allowedOrigins`).
+
+### Secure defaults and startup checks
+
+Outside development (`HIBOU_DEVELOPMENT` unset), `hibou serve` refuses to
+start when:
+
+- `HIBOU_BASE_URL` is empty or not an absolute `http(s)` URL. Without it
+  cookies are not `Secure` and lose the `__Host-` prefix. The chart derives it
+  from `ingress.hostname`; without an ingress set `hibou.baseURL`.
+- `/metrics` would be served on the application port without a bearer token
+  (`metrics.port: 0` and no `metrics.bearer_token`). `/metrics` now defaults
+  to its own port, `9090`, as in the chart. Scrapers that read it on the
+  application port must move to `:9090` or send the token.
+
+Defaults that changed for self-hosting:
+
+| Setting | Default | Note |
+|---------|---------|------|
+| `mcp.enabled` (`HIBOU_MCP_ENABLED`) | value of `development` | Plain HTTP on `mcp.port` (8081), all interfaces |
+| `api.docs.enabled` (`HIBOU_API_DOCS_ENABLED`) | value of `development` | Swagger UI at `/api/v1/docs` (inline script, relaxed CSP); 404 when off |
+| `metrics.port` (`HIBOU_METRICS_PORT`) | `9090` | `0` = application port, needs a bearer token outside development |
+| Chart `hibou.image.tag` | chart `appVersion` | Was `latest` |
+| Chart `trivy.image.tag` | `0.72.0` | Was `latest`; Trivy and PostgreSQL now run non-root with a read-only root filesystem |
+| Chart `hibou.autoProvisionOrgs` | `false` | When on, installing the forge App on any account creates an org; pair it with a sign-in allowlist |
+| Chart `hibou.mcp.enabled` | `false` | |
+
+`hibou.networkPolicy.enabled` stays `false` because it needs a CNI that
+enforces NetworkPolicy. Enable it wherever yours does: besides the default-deny
+policy for hibou pods it admits only hibou pods to the bundled SeaweedFS S3
+port. SeaweedFS master, volume and filer listen on the pod's loopback only
+either way. `helm install` prints a warning when the sign-in allowlists are
+empty.
+
+### Uploads
+
+`POST /api/v1/upload` is admitted before it waits for one of
+`upload.max_concurrent` slots (default 3 per replica) only when the caller can
+upload somewhere: an API token with `uploads:write`, or a user who belongs to
+an organization. One user or API key holds at most
+`upload.max_concurrent_per_principal` uploads (default 2), and the org-owned
+tokens of one org `upload.max_concurrent_per_org` together (default 2); the
+rest wait up to `upload.queue_wait` and then get 503 with `Retry-After`. Once
+admitted, a body that delivers less than `upload.min_throughput_bytes` (16 KiB)
+in any `upload.min_throughput_window` (30s) is cut off.
+
+### Client IP behind a CDN
+
+Hibou takes the client IP from the last `X-Forwarded-For` hop, which is what
+your ingress saw. Behind a CDN that hop is a CDN edge, so every client shares
+its rate-limit bucket, audit IP and webhook IP-allowlist verdict. Set:
+
+| Setting | Env | Chart |
+|---------|-----|-------|
+| `http.trusted_proxy_header` | `HIBOU_HTTP_TRUSTED_PROXY_HEADER` | `hibou.trustedProxy.header` |
+| `http.trusted_proxy_cidrs` | `HIBOU_HTTP_TRUSTED_PROXY_CIDRS` (comma-separated) | `hibou.trustedProxy.cidrs` |
+
+e.g. `CF-Connecting-IP` with Cloudflare's published ranges. The header is
+used only when the hop is inside the CIDRs, so a client that bypasses the CDN
+cannot choose its IP. Both are required together; off by default.
 
 ### Restricting sign-in
 
@@ -222,10 +284,17 @@ By default any account of a configured forge can sign in. To restrict it:
 | Setting | Env | Meaning |
 |---------|-----|---------|
 | `auth.allowed_orgs` | `HIBOU_AUTH_ALLOWED_ORGS` (comma-separated) | Members of these forge orgs may sign in |
-| `auth.allowed_users` | `HIBOU_AUTH_ALLOWED_USERS` (comma-separated) | These forge logins may sign in |
+| `auth.allowed_users` | `HIBOU_AUTH_ALLOWED_USERS` (comma-separated) | These forge logins, or `provider:id` entries (e.g. `github:12345`), may sign in |
 
-With either set, anyone else is refused in the OAuth callback (HTTP 403)
-before a user row is created. Matching is case-insensitive.
+With either set, anyone else is refused in the OAuth callback before a user
+row is created, and sent back to the login page with a "not allowed" notice.
+Matching is case-insensitive.
+
+The allowlist is also enforced after sign-in, on sessions, personal API keys
+and MCP: an org membership answer is re-checked every 24 hours, and a user
+stays allowed for at most 7 days while the forge cannot answer. Forge
+memberships themselves are re-validated hourly; members the forge no longer
+lists lose their Hibou membership.
 
 - `allowed_orgs` works on GitHub only. In App mode membership is checked with
   the App's installation token on that org
@@ -237,7 +306,20 @@ before a user row is created. Matching is case-insensitive.
 - GitLab and Forgejo: only `allowed_users` applies; their users must be
   listed by login.
 - A login can be renamed and then re-registered by someone else. Prefer
-  `allowed_orgs` where you can.
+  `allowed_orgs`, or a numeric `provider:id` entry, where you can.
+
+### Integration secrets at rest
+
+Integration and notification-rule secrets (webhook URLs, signing secrets,
+SMTP passwords, tokens) are write-only through the API: responses show
+`"***"`, and an update that omits or echoes `"***"` keeps the stored value.
+
+Set `HIBOU_ENCRYPTION_KEY` (`encryption.key`) to a base64 32-byte key
+(`openssl rand -base64 32`) to seal them with AES-GCM in the database.
+Existing plaintext values stay readable and are sealed on their next update.
+Keep the key with your other secrets: losing it makes sealed values
+unreadable, and those integrations must be re-entered. A malformed key
+refuses startup.
 
 Per-account caps: 10 organizations created, 50 API keys (personal and
 org-requested together), 100 saved search presets per surface (HTTP 422, or

@@ -9,14 +9,26 @@ port: 8585
 # Explicit local-development opt-in. Leave unset or false in production.
 # development: true
 
-# MCP server
+# MCP server: plain HTTP on host:port. Defaults to the value of development;
+# keep the port off the public network when you enable it.
 mcp:
-  enabled: true
+  enabled: false
   port: 8081
 
-# Public URL (used for cookie domain, OAuth callbacks)
-# base:
-#   url: https://hibou.example.com
+# Public URL (OAuth callbacks, Secure + __Host- session cookies, CSRF origin).
+# Required outside development: the server refuses to start without it.
+base:
+  url: https://hibou.example.com
+
+# Extra origins the CSRF check accepts besides base.url (e.g. a second hostname
+# for the same instance). Env: HIBOU_ALLOWED_ORIGINS, comma-separated.
+# allowed_origins: "https://hibou.internal.example.com"
+
+# Swagger UI at /api/v1/docs. Defaults to the value of development: it needs an
+# inline script and a relaxed CSP, so it is off on production instances.
+# api:
+#   docs:
+#     enabled: false
 
 # Database
 database:
@@ -142,12 +154,13 @@ epss:
   # outbound internet.
   url: ""
 
-# Prometheus /metrics (ADR-039). With port 0 it is served on the application
-# port, so anything that can reach hibou can read it. Give it its own port (not
-# forwarded by your ingress), a bearer token, or both.
+# Prometheus /metrics (ADR-039). Served on its own port (not forwarded by your
+# ingress) by default. port: 0 serves it on the application port, which
+# anything that can reach hibou can read: outside development that is refused
+# unless a bearer token is set.
 metrics:
   enabled: true  # false serves /metrics nowhere
-  port: 0
+  port: 9090
   # bearer_token: ""
   # bearer_token_file: /run/secrets/hibou-metrics-token  # wins over bearer_token
 
@@ -219,6 +232,29 @@ retention:
 max:
   upload:
     size: 104857600
+
+# Upload admission. Before waiting for one of max_concurrent slots, an upload
+# must come from a principal that can upload (token scope uploads:write, or a
+# user who belongs to an organization). One user or API key holds at most
+# max_concurrent_per_principal uploads at once, one org's service tokens
+# max_concurrent_per_org together. Once admitted, a body that delivers fewer
+# than min_throughput_bytes in any min_throughput_window is cut off.
+# upload:
+#   max_concurrent: 3
+#   queue_wait: 30s
+#   max_concurrent_per_principal: 2
+#   max_concurrent_per_org: 2
+#   min_throughput_bytes: 16384
+#   min_throughput_window: 30s
+
+# Client IP behind a CDN. hibou takes the client IP from the last
+# X-Forwarded-For hop (your ingress). Behind a CDN that hop is a CDN edge, so
+# every client would share one rate-limit bucket. When the hop is inside
+# trusted_proxy_cidrs, the IP in trusted_proxy_header is used instead (rate
+# limits, audit IPs, webhook IP allowlists). Both or neither.
+# http:
+#   trusted_proxy_header: CF-Connecting-IP
+#   trusted_proxy_cidrs: "173.245.48.0/20,103.21.244.0/22"  # the CDN's published ranges
 
 # Session secret (production is strict by default: set a stable random value before production)
 # Local development may opt in with development: true or HIBOU_DEVELOPMENT=true.

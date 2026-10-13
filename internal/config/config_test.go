@@ -99,6 +99,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("HIBOU_PORT", "9090")
+	t.Setenv("HIBOU_METRICS_PORT", "9091") // the default 9090 would clash
 	t.Setenv("HIBOU_HOST", "127.0.0.1")
 	t.Setenv("HIBOU_DEVELOPMENT", "true")
 	t.Setenv("HIBOU_LOG_LEVEL", "debug")

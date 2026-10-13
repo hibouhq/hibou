@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hibouhq/hibou/internal/cliclient"
+	"github.com/hibouhq/hibou/internal/scancatalog"
 	"github.com/hibouhq/hibou/internal/scanplan"
 	"github.com/hibouhq/hibou/internal/scanrun"
 )
@@ -27,6 +28,10 @@ var (
 	scanFailOnBlocked bool
 	scanOpenGrepRules string
 	scanMavenRepo     string
+	scanBundleDir     string
+
+	// scanLocalCatalog is the catalog compiled into this CLI; tests replace it.
+	scanLocalCatalog = scancatalog.Load
 
 	// scanCommandOverride replaces process execution in tests.
 	scanCommandOverride func(ctx context.Context, dir, name string, args ...string) ([]byte, int, error)
@@ -39,6 +44,14 @@ var scanCmd = &cobra.Command{
 the scanner artifact is fetched from the location the plan resolved (upstream, an
 operator mirror, or an offline bundle), its sha256 is verified before use, and the
 report is uploaded bound to its plan job. Nothing goes through a shell.
+
+What runs is decided by the scanner catalog compiled into this CLI: engine, command
+arguments, sha256 pins and Maven coordinates. The server only chooses which scanners
+run on which targets and where artifacts are downloaded from. A job for a scanner or
+version this CLI does not know fails: upgrade the CLI to match the server.
+
+Offline bundles: pass --bundle-dir (or HIBOU_SCANNER_BUNDLE_DIR) with the directory the
+bundle was imported into on this runner.
 
 Jobs the plan marks blocked are listed with the exact blocker and skipped. Bytecode
 scanners need the build's classes: compile first, then run hibou scan.
@@ -81,6 +94,21 @@ func runScan(ctx context.Context) error {
 		uploadComplete = false
 	}
 
+	local, err := scanLocalCatalog()
+	if err != nil {
+		return fmt.Errorf("load embedded scanner catalog: %w", err)
+	}
+	bundleDir := strings.TrimSpace(scanBundleDir)
+	if bundleDir == "" {
+		bundleDir = strings.TrimSpace(os.Getenv("HIBOU_SCANNER_BUNDLE_DIR"))
+	}
+	if bundleDir != "" {
+		if bundleDir, err = filepath.Abs(bundleDir); err != nil {
+			return fmt.Errorf("--bundle-dir: %w", err)
+		}
+	}
+	resolver := scanrun.Resolver{Catalog: local, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, BundleDir: bundleDir}
+
 	var catalog scannerCatalogEnvelope
 	if err := client.Get("/scanner-catalog", &catalog); err != nil {
 		return fmt.Errorf("load scanner catalog: %w", err)
@@ -107,6 +135,9 @@ func runScan(ctx context.Context) error {
 		return fmt.Errorf("create scan plan: %w", err)
 	}
 	printPlan(planned.Plan)
+	if planned.Plan.CatalogRevision != "" && planned.Plan.CatalogRevision != local.Revision {
+		fmt.Fprintf(os.Stderr, "note: server scanner catalog %s, this CLI embeds %s; jobs this CLI does not pin will fail\n", planned.Plan.CatalogRevision, local.Revision)
+	}
 	if scanDryRun {
 		return nil
 	}
@@ -135,7 +166,7 @@ func runScan(ctx context.Context) error {
 	env := scanrun.Environment{
 		SourceRoot:      uploadSourceRoot,
 		OutDir:          outDir,
-		Fetcher:         &scanrun.Fetcher{CacheDir: cacheDir},
+		Fetcher:         &scanrun.Fetcher{CacheDir: cacheDir, BundleDir: bundleDir},
 		OpenGrepRules:   scanOpenGrepRules,
 		MavenRepository: mavenRepo,
 		Command:         scanCommandOverride,
@@ -172,13 +203,19 @@ func runScan(ctx context.Context) error {
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-			entry, ok := entries[job.ScannerID]
-			if !ok {
-				outcomes[i] = outcome{job: job, err: fmt.Errorf("scanner %s missing from the catalog", job.ScannerID)}
+			// The server's entry only contributes download locations; the
+			// embedded catalog decides what is executed (P1).
+			var served *scanrun.CatalogEntry
+			if entry, ok := entries[job.ScannerID]; ok {
+				served = &entry
+			}
+			trusted, entry, err := resolver.Resolve(job, served)
+			if err != nil {
+				outcomes[i] = outcome{job: job, err: err}
 				return
 			}
-			result, err := scanrun.Run(ctx, job, entry, env)
-			outcomes[i] = outcome{job: job, result: result, err: err}
+			result, err := scanrun.Run(ctx, trusted, entry, env)
+			outcomes[i] = outcome{job: trusted, result: result, err: err}
 		}(i, job)
 	}
 	wg.Wait()
@@ -297,5 +334,6 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanDryRun, "dry-run", false, "Show the plan without storing or running it")
 	scanCmd.Flags().BoolVar(&scanFailOnBlocked, "fail-on-blocked", false, "Exit non-zero when a planned job is blocked")
 	scanCmd.Flags().StringVar(&scanOpenGrepRules, "opengrep-rules", "", "Local OpenGrep rules while no catalog ruleset is approved; such reports are uploaded unbound")
+	scanCmd.Flags().StringVar(&scanBundleDir, "bundle-dir", "", "Imported offline scanner bundle on this runner (default $HIBOU_SCANNER_BUNDLE_DIR); required when the server distributes offline")
 	scanCmd.Flags().StringVar(&scanMavenRepo, "maven-repo", "", "Local Maven repository to verify resolved plugin jars in (default ~/.m2/repository)")
 }

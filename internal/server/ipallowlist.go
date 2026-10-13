@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
+
+	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 const ipRefreshInterval = 6 * time.Hour
@@ -42,6 +46,17 @@ type forgeIPAllowlist struct {
 	dynamicConfigured bool
 	mu                sync.RWMutex
 	log               zerolog.Logger
+	// onChange, when set, is told which ranges a refresh added and removed
+	// (not on the initial load). Guarded by mu.
+	onChange func(added, removed []string)
+}
+
+// SetChangeHook registers a callback for refreshes that change the dynamic
+// ranges, so the change lands in the audit log.
+func (a *forgeIPAllowlist) SetChangeHook(fn func(added, removed []string)) {
+	a.mu.Lock()
+	a.onChange = fn
+	a.mu.Unlock()
 }
 
 // newForgeIPAllowlist creates an IP allowlist. If source is non-nil, it fetches
@@ -138,10 +153,74 @@ func (a *forgeIPAllowlist) refresh() {
 	}
 
 	a.mu.Lock()
+	previous := a.dynamic
 	a.dynamic = nets
+	hook := a.onChange
 	a.mu.Unlock()
 
+	added, removed := diffIPNets(previous, nets)
+	if len(previous) > 0 && (len(added) > 0 || len(removed) > 0) {
+		a.log.Info().Strs("added", added).Strs("removed", removed).Msg("dynamic IP allowlist changed")
+		if hook != nil {
+			hook(added, removed)
+		}
+	}
 	a.log.Info().Int("ranges", len(nets)).Msg("refreshed dynamic IP allowlist")
+}
+
+// diffIPNets returns the CIDRs only in next (added) and only in previous
+// (removed), sorted.
+func diffIPNets(previous, next []*net.IPNet) (added, removed []string) {
+	before := make(map[string]bool, len(previous))
+	for _, n := range previous {
+		before[n.String()] = true
+	}
+	after := make(map[string]bool, len(next))
+	for _, n := range next {
+		after[n.String()] = true
+		if !before[n.String()] {
+			added = append(added, n.String())
+		}
+	}
+	for cidr := range before {
+		if !after[cidr] {
+			removed = append(removed, cidr)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed
+}
+
+// auditIPAllowlistChange returns a change hook that records a forge's
+// webhook-source allowlist changes as system audit entries. Wire it with
+// allowlist.SetChangeHook(s.auditIPAllowlistChange(forgeID)).
+func (s *Server) auditIPAllowlistChange(forgeID string) func(added, removed []string) {
+	return func(added, removed []string) {
+		if s.queries == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		body, err := json.Marshal(map[string]any{
+			"forge_id": forgeID,
+			"added":    added,
+			"removed":  removed,
+		})
+		if err != nil {
+			return
+		}
+		if _, err := s.queries.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
+			ActorType:    audit.ActorSystem,
+			ActorDisplay: "ip-allowlist-refresh",
+			Action:       audit.ActionIPAllowlistChange,
+			ResourceType: "forge",
+			ResourceID:   forgeID,
+			Context:      body,
+		}); err != nil {
+			s.log.Warn().Err(err).Str("forge_id", forgeID).Msg("audit log write failed for IP allowlist change")
+		}
+	}
 }
 
 func (a *forgeIPAllowlist) contains(ip net.IP) bool {

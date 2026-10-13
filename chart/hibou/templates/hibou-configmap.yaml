@@ -31,7 +31,20 @@ data:
   HIBOU_OSV_URL: {{ .Values.hibou.advisory.osv.url | quote }}
   HIBOU_CACHE_TTL: {{ .Values.hibou.advisory.cache.ttl | quote }}
   HIBOU_MAX_UPLOAD_SIZE: {{ .Values.hibou.maxUploadSize | quote }}
-  HIBOU_MCP_ENABLED: {{ if hasKey .Values.hibou "mcp" }}{{ .Values.hibou.mcp.enabled | quote }}{{ else }}"true"{{ end }}
+  HIBOU_MCP_ENABLED: {{ if hasKey .Values.hibou "mcp" }}{{ .Values.hibou.mcp.enabled | quote }}{{ else }}"false"{{ end }}
+  HIBOU_API_DOCS_ENABLED: {{ dig "apiDocs" "enabled" false .Values.hibou | quote }}
+  {{- with .Values.hibou.allowedOrigins }}
+  HIBOU_ALLOWED_ORIGINS: {{ join "," . | quote }}
+  {{- end }}
+  {{- with .Values.hibou.trustedProxy }}
+  {{- if .header }}
+  {{- if not .cidrs }}
+  {{- fail "hibou.trustedProxy.cidrs is required with hibou.trustedProxy.header: without it any client could set its own IP" }}
+  {{- end }}
+  HIBOU_HTTP_TRUSTED_PROXY_HEADER: {{ .header | quote }}
+  HIBOU_HTTP_TRUSTED_PROXY_CIDRS: {{ join "," .cidrs | quote }}
+  {{- end }}
+  {{- end }}
   {{- if and .Values.hibou.retention (toString .Values.hibou.retention.autoPurge) }}
   HIBOU_RETENTION_AUTO_PURGE: {{ .Values.hibou.retention.autoPurge | toString | quote }}
   {{- end }}
@@ -62,7 +75,7 @@ data:
          all honor TMPDIR, and Go's os.TempDir does too. Always set: the CVE feed sweep
          is not optional, so a pod with nowhere to write would fail every sweep. */}}
   TMPDIR: {{ .Values.hibou.scratch.mountPath | quote }}
-  HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"true"{{ end }}
+  HIBOU_AUTO_PROVISION_ORGS: {{ if hasKey .Values.hibou "autoProvisionOrgs" }}{{ .Values.hibou.autoProvisionOrgs | quote }}{{ else }}"false"{{ end }}
   {{- with .Values.hibou.auth }}
   {{- if .allowedOrgs }}
   HIBOU_AUTH_ALLOWED_ORGS: {{ join "," .allowedOrgs | quote }}

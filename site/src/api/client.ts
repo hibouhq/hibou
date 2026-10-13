@@ -7,6 +7,7 @@ export interface User {
   avatar_url?: string
   provider: string
   is_instance_admin?: boolean
+  can_triage_cves?: boolean
 }
 
 // Instance-wide announcement banner, managed by instance admins in
@@ -2083,8 +2084,9 @@ class ApiClient {
     return this.request<ApiResponse<User>>('/users/me')
   }
 
+  /** Rejects when the server refused the logout: the session is still live. */
   logout() {
-    return fetch(`${API_BASE}/auth/logout`, { method: 'POST' })
+    return this.request<void>('/auth/logout', { method: 'POST' })
   }
 
   listApiKeys() {

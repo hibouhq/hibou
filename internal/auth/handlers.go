@@ -54,7 +54,7 @@ func CallbackHandler(mgr *Manager) http.HandlerFunc {
 
 		user, err := mgr.HandleOAuthCallback(w, r)
 		if err != nil {
-			WriteCallbackError(w, mgr, err)
+			WriteCallbackError(w, r, mgr, err)
 			return
 		}
 
@@ -63,18 +63,26 @@ func CallbackHandler(mgr *Manager) http.HandlerFunc {
 	}
 }
 
-// WriteCallbackError answers a failed OAuth callback. The detail (provider
-// responses, state mismatches) is logged, never echoed: the caller learns only
-// that sign-in failed, or that their account is not allowed.
-func WriteCallbackError(w http.ResponseWriter, mgr *Manager, err error) {
+// Sign-in failure codes the login page turns into a message. The browser
+// arrives here by navigation, so a JSON body would be shown raw; the page
+// maps the code to fixed text and never renders anything from the URL.
+const (
+	CallbackErrorNotAllowed = "not_allowed"
+	CallbackErrorFailed     = "sign_in_failed"
+)
+
+// WriteCallbackError answers a failed OAuth callback by sending the browser
+// back to the login page with a failure code. The detail (provider responses,
+// state mismatches) is logged, never echoed: the caller learns only that
+// sign-in failed, or that their account is not allowed.
+func WriteCallbackError(w http.ResponseWriter, r *http.Request, mgr *Manager, err error) {
+	code := CallbackErrorFailed
 	if errors.Is(err, ErrSignInNotAllowed) {
-		api.JSONError(w, http.StatusForbidden, ErrSignInNotAllowed.Error())
-		return
-	}
-	if mgr != nil {
+		code = CallbackErrorNotAllowed
+	} else if mgr != nil {
 		mgr.cfg.Log.Warn().Err(err).Msg("oauth callback failed")
 	}
-	api.JSONError(w, http.StatusBadRequest, "sign-in failed; please try again")
+	http.Redirect(w, r, "/login?error="+code, http.StatusFound)
 }
 
 // @Summary      Logout

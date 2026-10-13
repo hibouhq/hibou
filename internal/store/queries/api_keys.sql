@@ -8,7 +8,13 @@ RETURNING id, user_id, name, key_hash, scopes, expires_at, last_used_at, created
 -- resolve even after its creating user is deleted; the auth layer rejects
 -- user-owned keys whose user is gone.
 SELECT ak.id, ak.user_id, ak.name, ak.key_hash, ak.scopes, ak.expires_at, ak.owner_type, ak.owner_id, ak.description, ak.last_used_at, ak.created_at, ak.approval_status, ak.approved_by, ak.approved_at,
-    u.id AS actor_user_id, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at
+    u.id AS actor_user_id, u.email, u.display_name, u.avatar_url, u.provider, u.provider_id, u.created_at AS user_created_at, u.updated_at AS user_updated_at,
+    u.forge_login, u.signin_allowed_at,
+    -- An org-owned key whose creator still exists but no longer belongs to
+    -- the org stops authenticating: the person who holds the secret left.
+    (ak.owner_type <> 'org' OR ak.user_id IS NULL OR u.id IS NULL OR EXISTS (
+        SELECT 1 FROM org_members om WHERE om.org_id = ak.owner_id AND om.user_id = ak.user_id
+    ))::boolean AS creator_membership_valid
 FROM api_keys ak
 LEFT JOIN users u ON u.id = ak.user_id
 WHERE ak.key_hash = $1;

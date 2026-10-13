@@ -100,7 +100,7 @@ Availability and maturity vary by integration. The [documentation](docs/src/cont
 
 ### Try it locally
 
-**Prerequisites:** Docker with Compose, Git, Make, Go 1.26.3+, and Node.js 22+. The [VS Code devcontainer](.devcontainer/devcontainer.json) provides the development toolchain.
+**Prerequisites:** Docker with Compose, Git, Make, Go 1.26.9+, and Node.js 22+. The [VS Code devcontainer](.devcontainer/devcontainer.json) provides the development toolchain.
 
 ```bash
 git clone https://github.com/hibouhq/hibou.git

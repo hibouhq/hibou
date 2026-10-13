@@ -98,7 +98,7 @@ type Vulnerability struct {
 	PresentOnDefaultBranch  bool            `json:"present_on_default_branch"`
 	ResolvedOnDefaultBranch bool            `json:"resolved_on_default_branch"`
 	SecretType              *string         `json:"secret_type,omitempty"`
-	SecretHash              *string         `json:"secret_hash,omitempty"`
+	SecretHash              *string         `json:"-"` // keyed dedup digest: never serialized
 	CommitSHA               *string         `json:"commit_sha,omitempty"`
 	AuthorEmail             *string         `json:"author_email,omitempty"`
 	Verified                *bool           `json:"verified,omitempty"`

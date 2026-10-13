@@ -8,6 +8,8 @@ package scanbundle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,8 +146,18 @@ func Export(ctx context.Context, catalog *scancatalog.Catalog, opts ExportOption
 // Import verifies a bundle against the catalog and copies it into the store
 // directory, read-only. Nothing is copied unless everything verifies: a
 // corrupt or foreign artifact fails the whole import.
+//
+// Each artifact is hashed while it is copied into a staging directory inside
+// the store, and only the staged copies are renamed into place: what was
+// verified is exactly what lands in the store (no verify-then-reopen race).
+// Symbolic links anywhere under the bundle are refused.
 func Import(catalog *scancatalog.Catalog, bundleDir, storeDir string) (*Manifest, error) {
-	data, err := os.ReadFile(filepath.Join(bundleDir, ManifestName)) // #nosec G304 -- operator-provided bundle directory
+	manifestFile, err := openRegular(bundleDir, ManifestName)
+	if err != nil {
+		return nil, fmt.Errorf("read bundle manifest: %w", err)
+	}
+	data, err := io.ReadAll(io.LimitReader(manifestFile, 16<<20))
+	_ = manifestFile.Close()
 	if err != nil {
 		return nil, fmt.Errorf("read bundle manifest: %w", err)
 	}
@@ -160,7 +173,7 @@ func Import(catalog *scancatalog.Catalog, bundleDir, storeDir string) (*Manifest
 		}
 	}
 	for _, artifact := range manifest.Artifacts {
-		if strings.Contains(artifact.Path, "..") || filepath.IsAbs(artifact.Path) {
+		if strings.Contains(artifact.Path, "..") || filepath.IsAbs(artifact.Path) || strings.HasPrefix(artifact.Path, "/") {
 			return nil, fmt.Errorf("artifact path %q escapes the bundle", artifact.Path)
 		}
 		expected, ok := pinned[artifact.Path]
@@ -170,24 +183,40 @@ func Import(catalog *scancatalog.Catalog, bundleDir, storeDir string) (*Manifest
 		if expected != artifact.SHA256 {
 			return nil, fmt.Errorf("%s: manifest sha256 differs from the catalog", artifact.Path)
 		}
-		digest, err := scanrun.FileSHA256(filepath.Join(bundleDir, filepath.FromSlash(artifact.Path)))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", artifact.Path, err)
-		}
-		if digest != expected {
-			return nil, fmt.Errorf("%w: %s", scanrun.ErrDigestMismatch, artifact.Path)
-		}
 	}
-	for _, artifact := range manifest.Artifacts {
-		destination := filepath.Join(storeDir, filepath.FromSlash(artifact.Path))
-		if _, err := copyInto(filepath.Join(bundleDir, filepath.FromSlash(artifact.Path)), destination); err != nil {
+
+	if err := os.MkdirAll(storeDir, 0o750); err != nil {
+		return nil, err
+	}
+	staging, err := os.MkdirTemp(storeDir, ".import-*")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	staged := make([]string, len(manifest.Artifacts))
+	for i, artifact := range manifest.Artifacts {
+		staged[i] = filepath.Join(staging, strconv.Itoa(i))
+		if err := stageVerified(bundleDir, artifact.Path, staged[i], pinned[artifact.Path]); err != nil {
 			return nil, err
 		}
+	}
+	for i, artifact := range manifest.Artifacts {
 		mode := os.FileMode(0o440)
 		if strings.Count(artifact.Path, "/") == 2 && !strings.HasSuffix(artifact.Path, ".jar") {
 			mode = 0o550 // a binary
 		}
-		if err := os.Chmod(destination, mode); err != nil {
+		if err := os.Chmod(staged[i], mode); err != nil {
+			return nil, err
+		}
+		destination := filepath.Join(storeDir, filepath.FromSlash(artifact.Path))
+		if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
+			return nil, err
+		}
+		if err := noSymlinkBelow(storeDir, filepath.Dir(destination)); err != nil {
+			return nil, err
+		}
+		// #nosec G703 -- destination is storeDir joined with a catalog-pinned bundle path
+		if err := os.Rename(staged[i], destination); err != nil {
 			return nil, err
 		}
 	}
@@ -196,6 +225,87 @@ func Import(catalog *scancatalog.Catalog, bundleDir, storeDir string) (*Manifest
 		return nil, err
 	}
 	return &manifest, nil
+}
+
+// stageVerified copies one bundle artifact to staged while hashing it, and
+// fails unless the bytes written are the pinned ones.
+func stageVerified(bundleDir, relative, staged, expected string) error {
+	in, err := openRegular(bundleDir, relative)
+	if err != nil {
+		return fmt.Errorf("%s: %w", relative, err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- staging file in the store
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	_, err = io.Copy(io.MultiWriter(out, hash), in)
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", relative, err)
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != expected {
+		return fmt.Errorf("%w: %s", scanrun.ErrDigestMismatch, relative)
+	}
+	return nil
+}
+
+// errSymlink: a bundle must be plain files and directories; a link could
+// point the import at anything on the importing machine.
+var errSymlink = errors.New("symbolic links are not allowed in a scanner bundle")
+
+// openRegular opens root/relative, refusing a symbolic link in any path
+// component and anything but a regular file. The opened file is checked to
+// be the one inspected (a swap between Lstat and Open is detected).
+func openRegular(root, relative string) (*os.File, error) {
+	full := filepath.Join(root, filepath.FromSlash(relative))
+	if err := noSymlinkBelow(root, full); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(full)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", relative)
+	}
+	file, err := os.Open(full) // #nosec G304 -- inside the operator's bundle, no symlink component
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		_ = file.Close()
+		return nil, fmt.Errorf("%s changed while being imported", relative)
+	}
+	return file, nil
+}
+
+// noSymlinkBelow checks every path component from root (exclusive) down to
+// target (inclusive) with Lstat.
+func noSymlinkBelow(root, target string) error {
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is outside %s", target, root)
+	}
+	if relative == "." {
+		return nil
+	}
+	current := root
+	for _, part := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s", errSymlink, current)
+		}
+	}
+	return nil
 }
 
 // bundlePath mirrors scancatalog's offline layout.

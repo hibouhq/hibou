@@ -103,11 +103,13 @@ func (g *GitSource) exec(ctx context.Context, args ...string) ([]byte, error) {
 	if g.run != nil {
 		return g.run(ctx, g.Dir, args...)
 	}
-	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 -- args are built here, never from record content
-	cmd.Dir = g.Dir
-	// A clone that stops to ask for credentials would hang the worker; the
-	// repository is public, so a prompt only ever means something is wrong.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	// Minimal environment: a clone that stops to ask for credentials would
+	// hang the worker, and the server's own variables have no business in git.
+	cmd, cleanup, err := gitCommand(ctx, g.Dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -130,12 +132,12 @@ func (g *GitSource) Ensure(ctx context.Context) error {
 	if err := os.MkdirAll(g.Dir, 0o750); err != nil {
 		return fmt.Errorf("create feed dir: %w", err)
 	}
-	remote := g.Remote
-	if remote == "" {
-		remote = defaultRemote
+	remote := g.remoteURL()
+	if err := validateRemote(remote); err != nil {
+		return err
 	}
 	_, err := g.exec(ctx, "clone", "--depth", "1", "--filter=blob:none",
-		"--no-checkout", "--quiet", remote, ".")
+		"--no-checkout", "--quiet", "--", remote, ".")
 	return err
 }
 
@@ -148,7 +150,7 @@ func (g *GitSource) Changed(ctx context.Context) ([]string, string, error) {
 	if err := g.Ensure(ctx); err != nil {
 		return nil, "", err
 	}
-	if _, err := g.exec(ctx, "fetch", "--depth", "1", "--quiet", "origin", "HEAD"); err != nil {
+	if _, err := g.exec(ctx, "fetch", "--depth", "1", "--quiet", "--", "origin", "HEAD"); err != nil {
 		return nil, "", err
 	}
 	headOut, err := g.exec(ctx, "rev-parse", "FETCH_HEAD")
@@ -232,7 +234,11 @@ func (g *GitSource) Record(ctx context.Context, cveID string) ([]byte, error) {
 // Chosen before the seed so the snapshot and the resume point are the same
 // commit by construction.
 func (g *GitSource) RemoteHead(ctx context.Context) (string, error) {
-	out, err := g.exec(ctx, "ls-remote", g.remoteURL(), defaultBranch)
+	remote := g.remoteURL()
+	if err := validateRemote(remote); err != nil {
+		return "", err
+	}
+	out, err := g.exec(ctx, "ls-remote", "--", remote, defaultBranch)
 	if err != nil {
 		return "", err
 	}
@@ -261,7 +267,7 @@ func (g *GitSource) fetchCommit(ctx context.Context, commit string, committedAt 
 	}
 	commit = strings.ToLower(commit)
 
-	if _, err := g.exec(ctx, "fetch", "--quiet", "--depth", "1", "origin", commit); err == nil {
+	if _, err := g.exec(ctx, "fetch", "--quiet", "--depth", "1", "--", "origin", commit); err == nil {
 		if out, err := g.exec(ctx, "rev-parse", "FETCH_HEAD"); err == nil {
 			return strings.TrimSpace(string(out))
 		}
@@ -272,7 +278,7 @@ func (g *GitSource) fetchCommit(ctx context.Context, commit string, committedAt 
 	// An hour of slack: the boundary is exclusive and clock skew is real, and
 	// fetching slightly too much history costs trees, not records.
 	since := committedAt.Add(-time.Hour).UTC().Format(time.RFC3339)
-	if _, err := g.exec(ctx, "fetch", "--quiet", "--shallow-since="+since, "origin", defaultBranch); err != nil {
+	if _, err := g.exec(ctx, "fetch", "--quiet", "--shallow-since="+since, "--", "origin", defaultBranch); err != nil {
 		return ""
 	}
 	if _, err := g.exec(ctx, "cat-file", "-e", commit+"^{commit}"); err != nil {

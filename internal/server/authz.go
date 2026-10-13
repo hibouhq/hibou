@@ -11,6 +11,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/rbac"
+	"github.com/hibouhq/hibou/internal/repoaccess"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -139,29 +140,22 @@ func (a repoAccess) repoRole(orgRole string, repoID uuid.UUID) string {
 }
 
 // principalRepoAccess resolves repository visibility for the request principal
-// in an org. Service principals are bounded by their token scope instead, and
-// only forge-synced viewer/developer memberships can be scoped, so other roles
-// skip the lookup.
+// in an org (repoaccess.Resolve, shared with the MCP server). Service
+// principals are bounded by their token scope instead.
 func (s *Server) principalRepoAccess(r *http.Request, orgID uuid.UUID, orgRole string) (repoAccess, error) {
-	if auth.TokenAuthFromContext(r.Context()).IsServicePrincipal() {
+	if s.queries == nil {
 		return repoAccess{}, nil
 	}
-	if orgRole != rbac.RoleViewer && orgRole != rbac.RoleDeveloper {
-		return repoAccess{}, nil
+	var userID uuid.UUID
+	if user := UserFromContext(r.Context()); user != nil {
+		userID = user.ID
 	}
-	user := UserFromContext(r.Context())
-	if user == nil || s.queries == nil {
-		return repoAccess{}, nil
-	}
-	scoped, err := s.queries.IsRepoScopedOrgMember(r.Context(), orgID, user.ID)
-	if err != nil || !scoped {
-		return repoAccess{}, err
-	}
-	repos, err := s.queries.ListUserRepoAccessInOrg(r.Context(), orgID, user.ID)
+	access, err := repoaccess.Resolve(r.Context(), s.queries, orgID, userID,
+		auth.TokenAuthFromContext(r.Context()).IsServicePrincipal(), orgRole)
 	if err != nil {
 		return repoAccess{}, err
 	}
-	return repoAccess{scoped: true, repos: repos}, nil
+	return repoAccess{scoped: access.Scoped, repos: access.Repos}, nil
 }
 
 // loadOrgMembership resolves the org in the URL and the principal's role in

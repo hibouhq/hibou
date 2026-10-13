@@ -40,6 +40,9 @@ var serveCmd = &cobra.Command{
 		if err := cfg.ValidateStartup(log); err != nil {
 			return err
 		}
+		if err := cfg.ValidateServe(log); err != nil {
+			return err
+		}
 
 		db, err := store.New(cfg.DatabaseURL)
 		if err != nil {
@@ -141,14 +144,13 @@ var serveCmd = &cobra.Command{
 			go func() {
 				errCh <- runAuxServer(ctx, "metrics", metricsHTTP, cfg.MetricsListenAddr(), cfg.ShutdownTimeout, log)
 			}()
-		case cfg.Metrics.BearerToken == "":
-			log.Warn().Msg("/metrics is served unauthenticated on the application port; set metrics.port or metrics.bearer_token (ADR-039)")
 		}
 
 		if cfg.MCPEnabled {
 			mcpDelta := delta.NewService(delta.NewStoreAdapter(queries), log)
 			mcpSrv := hiboumcp.New(queries, mcpDelta, log, version.Version)
-			mcpHTTP := hiboumcp.NewHTTPServer(mcpSrv, queries, cfg.MCPPort, log)
+			// The sign-in allowlist applies to MCP keys as to the HTTP API.
+			mcpHTTP := hiboumcp.NewHTTPServer(mcpSrv, queries, cfg.MCPPort, log, hiboumcp.WithUserAllowed(authMgr.UserAllowed))
 			services++
 			go func() {
 				errCh <- runAuxServer(ctx, "MCP", mcpHTTP, cfg.MCPListenAddr(), cfg.ShutdownTimeout, log)

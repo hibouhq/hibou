@@ -258,7 +258,8 @@ func (f *authzFixture) addRepo(t *testing.T, slug string) *store.Repository {
 }
 
 // forgeUser creates a user as the permission sync would: a forge-sourced org
-// role plus per-repository grants.
+// role plus per-repository grants, repository-scoped when the grants miss a
+// repository enrolled at that time.
 func (f *authzFixture) forgeUser(t *testing.T, orgRole string, grants map[string]string) *store.User {
 	t.Helper()
 	ctx := context.Background()
@@ -271,10 +272,21 @@ func (f *authzFixture) forgeUser(t *testing.T, orgRole string, grants map[string
 			t.Fatalf("grant %s: %v", slug, err)
 		}
 	}
-	if err := f.srv.queries.UpsertForgeOrgMember(ctx, f.org.ID, user.ID, orgRole); err != nil {
+	scoped := false
+	for slug := range f.repo {
+		if _, granted := grants[slug]; !granted {
+			scoped = true
+		}
+	}
+	f.syncMembership(t, user, orgRole, scoped)
+	return user
+}
+
+func (f *authzFixture) syncMembership(t *testing.T, user *store.User, orgRole string, scoped bool) {
+	t.Helper()
+	if err := f.srv.queries.UpsertForgeOrgMemberScoped(context.Background(), f.org.ID, user.ID, orgRole, scoped); err != nil {
 		t.Fatalf("org member: %v", err)
 	}
-	return user
 }
 
 func (f *authzFixture) invitedUser(t *testing.T, role string) *store.User {
@@ -430,11 +442,9 @@ func TestUploadRequiresWritingRole(t *testing.T) {
 	developer := f.invitedUser(t, "developer")
 	collaborator := f.forgeUser(t, "developer", map[string]string{"app": "developer"})
 	f.addRepo(t, "other")
-	// The collaborator's sync predates "other"; make the gap one the forge
-	// answered by syncing again after it exists.
-	if err := f.srv.queries.UpsertForgeUserRepoAccess(context.Background(), collaborator.ID, f.repo["app"].ID, "developer"); err != nil {
-		t.Fatalf("resync: %v", err)
-	}
+	// The collaborator's sync predates "other"; syncing again after it exists
+	// records the gap the forge answered.
+	f.syncMembership(t, collaborator, "developer", true)
 
 	input := func(repo string) uploadRequest {
 		return uploadRequest{Provider: f.org.Provider, Org: f.org.Slug, Repo: repo}
@@ -490,9 +500,10 @@ func TestUploadStatusChecksTokenScopeAgainstTheUpload(t *testing.T) {
 	}
 }
 
-// A1: triage candidates name components; an org member sees their own org's,
-// never another tenant's internal package names.
-func TestTriageCandidatesAreScopedToTheOrg(t *testing.T) {
+// Q7: the CVE triage queue and the advisory data a decision authors are
+// instance-wide, so org membership — even an org-scoped triager grant — does
+// not reach them; an instance admin does, and sees candidates across orgs.
+func TestTriageRequiresInstanceAuthority(t *testing.T) {
 	mine := newAuthzFixture(t, "app")
 	theirs := &authzFixture{srv: mine.srv, repo: map[string]*store.Repository{}}
 	ctx := context.Background()
@@ -524,10 +535,31 @@ func TestTriageCandidatesAreScopedToTheOrg(t *testing.T) {
 	attach(mine.repo["app"], marker+"-mine")
 	attach(theirs.repo["svc"], marker+"-internal-secret")
 
-	member := mine.invitedUser(t, "developer")
-	candidates := mine.srv.triageCandidates(mine.request(member, http.MethodGet, ""), mine.org.ID, marker)
-	if len(candidates) != 1 || candidates[0].Name != marker+"-mine" {
-		t.Fatalf("candidates = %+v, want only this org's component", candidates)
+	member := mine.invitedUser(t, "admin")
+	handlers := map[string]http.HandlerFunc{
+		"list":   mine.srv.handleListTriageQueue,
+		"get":    mine.srv.handleGetTriageItem,
+		"decide": mine.srv.handleDecideTriageItem,
+	}
+	for name, handler := range handlers {
+		recorder := httptest.NewRecorder()
+		handler(recorder, mine.request(member, http.MethodGet, ""))
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("%s by an org admin = %d, want 403", name, recorder.Code)
+		}
+	}
+	if got := mine.srv.triageCandidates(mine.request(member, http.MethodGet, ""), marker); len(got) != 0 {
+		t.Errorf("org member got candidates %+v", got)
+	}
+
+	mine.srv.cfg.InstanceAdmins = []string{"github:" + member.ProviderID}
+	recorder := httptest.NewRecorder()
+	mine.srv.handleListTriageQueue(recorder, mine.request(member, http.MethodGet, ""))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("instance admin list = %d: %s", recorder.Code, recorder.Body)
+	}
+	if got := mine.srv.triageCandidates(mine.request(member, http.MethodGet, ""), marker); len(got) != 2 {
+		t.Fatalf("instance admin candidates = %+v, want both orgs", got)
 	}
 }
 

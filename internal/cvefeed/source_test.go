@@ -96,7 +96,7 @@ func TestGitSourceAgainstLocalRepo(t *testing.T) {
 	git(upstream, "add", ".")
 	git(upstream, "commit", "--quiet", "-m", "first")
 
-	source := &GitSource{Dir: t.TempDir(), Remote: upstream}
+	source := &GitSource{Dir: t.TempDir(), Remote: "file://" + filepath.ToSlash(upstream)}
 
 	// First sweep anchors without reporting: a fresh install must not queue
 	// the entire corpus.
@@ -223,7 +223,7 @@ func TestGitSourceResumesFromTheSeedCommit(t *testing.T) {
 	run("add", ".")
 	run("commit", "--quiet", "-m", "published after the import")
 
-	source := &GitSource{Dir: t.TempDir(), Remote: upstream, SeedCommit: sha}
+	source := &GitSource{Dir: t.TempDir(), Remote: "file://" + filepath.ToSlash(upstream), SeedCommit: sha}
 	ids, _, err := source.Changed(ctx)
 	if err != nil {
 		t.Fatalf("Changed: %v", err)
@@ -265,7 +265,7 @@ func TestGitSourceSeedsFromAMirroredRemote(t *testing.T) {
 	run("add", ".")
 	run("commit", "--quiet", "-m", "mirrored corpus")
 
-	source := &GitSource{Dir: t.TempDir(), Remote: mirror}
+	source := &GitSource{Dir: t.TempDir(), Remote: "file://" + filepath.ToSlash(mirror)}
 
 	stream, commit, committedAt, err := source.Snapshot(ctx)
 	if err != nil {
@@ -350,7 +350,7 @@ func TestGitSourceReadsRecordsAtHeadNotAtTheSeedCommit(t *testing.T) {
 	run("add", ".")
 	run("commit", "--quiet", "-m", "published after the seed")
 
-	source := &GitSource{Dir: t.TempDir(), Remote: upstream, SeedCommit: seedCommit}
+	source := &GitSource{Dir: t.TempDir(), Remote: "file://" + filepath.ToSlash(upstream), SeedCommit: seedCommit}
 	ids, _, err := source.Changed(ctx)
 	if err != nil {
 		t.Fatalf("Changed: %v", err)
@@ -371,5 +371,95 @@ func TestGitSourceReadsRecordsAtHeadNotAtTheSeedCommit(t *testing.T) {
 	}
 	if !strings.Contains(string(revised), "2026-08-25") {
 		t.Errorf("got the seed-time copy of a revised record: %s", revised)
+	}
+}
+
+// The remote reaches git as an argument: only https and file:// are
+// accepted, and nothing that reads as an option or picks a transport like
+// ext:: (which runs a command).
+func TestValidateRemote(t *testing.T) {
+	for remote, ok := range map[string]bool{
+		"https://github.com/CVEProject/cvelistV5.git":       true,
+		"https://user:tok@git.internal/mirrors/cvelist.git": true,
+		"file:///srv/mirror/cvelist.git":                    true,
+		"/srv/mirror/cvelist.git":                           false,
+		"--upload-pack=touch /tmp/x":                        false,
+		"-u":                                                false,
+		"ext::sh -c touch% /tmp/pwned":                      false,
+		"ssh://git@example.com/x.git":                       false,
+		"http://git.internal/x.git":                         false,
+		"https:///nohost":                                   false,
+	} {
+		if err := validateRemote(remote); (err == nil) != ok {
+			t.Errorf("validateRemote(%q) = %v, want ok=%v", remote, err, ok)
+		}
+	}
+	source := &GitSource{Dir: t.TempDir(), Remote: "ext::sh -c id", run: func(context.Context, string, ...string) ([]byte, error) {
+		t.Fatal("git must not run with a refused remote")
+		return nil, nil
+	}}
+	if err := source.Ensure(context.Background()); err == nil {
+		t.Fatal("Ensure must refuse an ext:: remote")
+	}
+	if _, err := source.RemoteHead(context.Background()); err == nil {
+		t.Fatal("RemoteHead must refuse an ext:: remote")
+	}
+}
+
+// git runs without the server's environment: secrets and GIT_* overrides
+// stay out, a throwaway HOME replaces the user's config, prompts are off.
+func TestGitEnvIsMinimal(t *testing.T) {
+	t.Setenv("HIBOU_DATABASE_URL", "postgres://secret")
+	t.Setenv("GIT_SSH_COMMAND", "touch /tmp/pwned")
+	t.Setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+	env := strings.Join(gitEnv("/tmp/home"), "\n")
+	for _, absent := range []string{"HIBOU_DATABASE_URL", "GIT_SSH_COMMAND"} {
+		if strings.Contains(env, absent) {
+			t.Errorf("%s leaked into git's environment", absent)
+		}
+	}
+	for _, present := range []string{"HOME=/tmp/home", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "HTTPS_PROXY=http://proxy.internal:3128"} {
+		if !strings.Contains(env, present) {
+			t.Errorf("git's environment lacks %s", present)
+		}
+	}
+}
+
+// Every git invocation that names the remote ends options first.
+func TestGitArgumentsEndOptionsBeforeTheRemote(t *testing.T) {
+	var calls [][]string
+	source := &GitSource{Dir: t.TempDir(), Remote: "https://git.internal/cvelist.git", run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if args[0] == "ls-remote" {
+			return []byte(strings.Repeat("a", 40) + "\trefs/heads/main\n"), nil
+		}
+		return nil, nil
+	}}
+	_ = source.Ensure(context.Background())
+	_, _ = source.RemoteHead(context.Background())
+	_ = source.fetchCommit(context.Background(), strings.Repeat("b", 40), time.Time{})
+	for _, args := range calls {
+		switch args[0] {
+		case "clone", "ls-remote", "fetch":
+			dash := -1
+			for i, arg := range args {
+				if arg == "--" {
+					dash = i
+					break
+				}
+			}
+			if dash < 0 {
+				t.Errorf("git %v has no -- before the remote", args)
+				continue
+			}
+			for _, arg := range args[dash+1:] {
+				if strings.HasPrefix(arg, "-") {
+					t.Errorf("git %v: %q after --", args, arg)
+				}
+			}
+		}
+	}
+	if len(calls) < 3 {
+		t.Fatalf("calls = %v", calls)
 	}
 }

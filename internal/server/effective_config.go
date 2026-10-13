@@ -121,7 +121,7 @@ func (s *Server) handleGetEffectiveRepoConfig(w http.ResponseWriter, r *http.Req
 		owner, name, resolved := s.boundRepoCoordinates(r.Context(), repo)
 		if !resolved {
 			fileUnavailable = true
-		} else if loaded, loadErr := s.repoConfigLoader.Load(r.Context(), repo.Provider, owner, name, repo.DefaultBranch); loadErr != nil {
+		} else if loaded, loadErr := s.repoConfigLoader.Load(forgeOwnerContext(r.Context(), owner), repo.Provider, owner, name, repo.DefaultBranch); loadErr != nil {
 			s.log.Warn().Err(loadErr).Str("repo_id", repo.ID.String()).Msg("load repo config for effective view")
 			fileUnavailable = true
 		} else {

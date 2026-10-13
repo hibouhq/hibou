@@ -51,3 +51,28 @@ func TestRequestContext(t *testing.T) {
 		})
 	}
 }
+
+func TestChangedFieldsNamesFieldsNotValues(t *testing.T) {
+	type gate struct {
+		Name      string   `json:"name"`
+		MaxHigh   int      `json:"max_high"`
+		Tags      []string `json:"tags"`
+		UpdatedAt string   `json:"updated_at"`
+	}
+	before := gate{Name: "prod", MaxHigh: 0, Tags: []string{"a"}, UpdatedAt: "t1"}
+	after := gate{Name: "prod", MaxHigh: 3, Tags: []string{"a", "b"}, UpdatedAt: "t2"}
+
+	got := ChangedFields(before, after, "updated_at")
+	if len(got) != 2 || got[0] != "max_high" || got[1] != "tags" {
+		t.Fatalf("ChangedFields = %v, want [max_high tags]", got)
+	}
+	if fields := ChangedFields(before, before); len(fields) != 0 {
+		t.Fatalf("identical snapshots reported %v", fields)
+	}
+	if fields := ChangedFields(map[string]any{"a": 1}, map[string]any{"b": 1}); len(fields) != 2 {
+		t.Fatalf("added+removed keys = %v, want both", fields)
+	}
+	if fields := ChangedFields("x", before); fields != nil {
+		t.Fatalf("non-object input = %v, want nil", fields)
+	}
+}

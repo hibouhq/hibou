@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -173,6 +174,10 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusForbidden, "repository is not owned by the forge account bound to this organization")
 		return
 	}
+	if errors.Is(err, errEnrollOwnerUnresolved) {
+		api.JSONError(w, http.StatusUnprocessableEntity, "provider_id must be owner/name or the id of a repository in this organization's synced forge inventory")
+		return
+	}
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to resolve repository")
 		return
@@ -211,6 +216,13 @@ func (s *Server) handleEnrollRepo(w http.ResponseWriter, r *http.Request) {
 // (clone, read source, post checks, open PRs). Security audit §3.1.
 var errEnrollForeignRepository = errors.New("repository owner is not the organization's forge account")
 
+// errEnrollOwnerUnresolved rejects a provider id whose owner cannot be
+// determined: an opaque id (GitHub, GitLab or Forgejo numeric id) absent from
+// the forge inventory. Accepting it skipped the owner check entirely, and
+// forge events for that id were then routed to whichever org enrolled it
+// first.
+var errEnrollOwnerUnresolved = errors.New("repository owner could not be resolved")
+
 // canonicalEnrollProviderID resolves the provider id to the inventory's
 // canonical key, preferring the org's own forge account inventory, then
 // refuses any id whose owner is not that account. A global inventory match is
@@ -231,7 +243,10 @@ func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider string,
 	if err != nil {
 		return "", err
 	}
-	if owner != "" && !org.OwnsForgeOwner(owner) {
+	if owner == "" {
+		return "", errEnrollOwnerUnresolved
+	}
+	if !org.OwnsForgeOwner(owner) {
 		return "", errEnrollForeignRepository
 	}
 	return canonical, nil
@@ -325,6 +340,10 @@ func decodeEnrollRepoRequest(w http.ResponseWriter, r *http.Request) (enrollRepo
 		api.JSONError(w, http.StatusBadRequest, "name is required")
 		return enrollRepoRequest{}, false
 	}
+	if !validRepoName(input.Name) {
+		api.JSONError(w, http.StatusBadRequest, invalidRepoNameMessage)
+		return enrollRepoRequest{}, false
+	}
 	if input.Slug == "" {
 		api.JSONError(w, http.StatusBadRequest, "slug is required")
 		return enrollRepoRequest{}, false
@@ -338,6 +357,23 @@ func decodeEnrollRepoRequest(w http.ResponseWriter, r *http.Request) (enrollRepo
 		return enrollRepoRequest{}, false
 	}
 	return input, true
+}
+
+const invalidRepoNameMessage = "name must be at most 255 characters with no '/', '\\', '..' or control characters"
+
+// validRepoName refuses names that read as forge coordinates. A repository's
+// name is a forge-coordinate fallback (repoCoordinates), so "victim/repo"
+// once pointed forge calls at another tenant's repository.
+func validRepoName(name string) bool {
+	if name == "" || len(name) > 255 || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func handleEnrollRepoCreateError(w http.ResponseWriter, err error) bool {
@@ -540,6 +576,10 @@ func (s *Server) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
 		name = strings.TrimSpace(*input.Name)
 		if name == "" {
 			api.JSONError(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+		if !validRepoName(name) {
+			api.JSONError(w, http.StatusBadRequest, invalidRepoNameMessage)
 			return
 		}
 	}
@@ -1031,7 +1071,8 @@ func (s *Server) handleGetTrends(w http.ResponseWriter, r *http.Request) {
 	for _, snapshot := range snapshots {
 		point, err := s.buildTrendPoint(r, snapshot, acceptanceKinds, disputed)
 		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, err.Error())
+			s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("build trend point")
+			api.JSONError(w, http.StatusInternalServerError, "failed to build trend")
 			return
 		}
 		points = append(points, point)

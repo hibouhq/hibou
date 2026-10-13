@@ -45,7 +45,7 @@ func (q *Queries) CountOrgsCreatedByUser(ctx context.Context, userID uuid.UUID) 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, display_name, provider, provider_id)
 VALUES ($1, $2, $3, $4)
-RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
+RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch, forge_login, signin_allowed_at
 `
 
 type CreateUserParams struct {
@@ -73,12 +73,14 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SessionEpoch,
+		&i.ForgeLogin,
+		&i.SigninAllowedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
+SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch, forge_login, signin_allowed_at
 FROM users
 WHERE id = $1
 `
@@ -96,12 +98,14 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SessionEpoch,
+		&i.ForgeLogin,
+		&i.SigninAllowedAt,
 	)
 	return i, err
 }
 
 const getUserByProviderID = `-- name: GetUserByProviderID :one
-SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
+SELECT id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch, forge_login, signin_allowed_at
 FROM users
 WHERE provider = $1 AND provider_id = $2
 `
@@ -124,15 +128,53 @@ func (q *Queries) GetUserByProviderID(ctx context.Context, arg GetUserByProvider
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SessionEpoch,
+		&i.ForgeLogin,
+		&i.SigninAllowedAt,
 	)
 	return i, err
+}
+
+const setUserForgeLogin = `-- name: SetUserForgeLogin :exec
+UPDATE users
+SET forge_login = $1
+WHERE id = $2
+`
+
+type SetUserForgeLoginParams struct {
+	ForgeLogin sql.NullString `json:"forge_login"`
+	ID         uuid.UUID      `json:"id"`
+}
+
+// The forge login seen at sign-in. Renamable, so never identity: the sign-in
+// allowlist and membership re-checks use it as the name the forge answers to.
+func (q *Queries) SetUserForgeLogin(ctx context.Context, arg SetUserForgeLoginParams) error {
+	_, err := q.db.ExecContext(ctx, setUserForgeLogin, arg.ForgeLogin, arg.ID)
+	return err
+}
+
+const setUserSignInAllowedAt = `-- name: SetUserSignInAllowedAt :exec
+UPDATE users
+SET signin_allowed_at = $1
+WHERE id = $2
+`
+
+type SetUserSignInAllowedAtParams struct {
+	AllowedAt sql.NullTime `json:"allowed_at"`
+	ID        uuid.UUID    `json:"id"`
+}
+
+// When the sign-in allowlist last admitted the user through org membership;
+// NULL once the forge says they left every allowed org.
+func (q *Queries) SetUserSignInAllowedAt(ctx context.Context, arg SetUserSignInAllowedAtParams) error {
+	_, err := q.db.ExecContext(ctx, setUserSignInAllowedAt, arg.AllowedAt, arg.ID)
+	return err
 }
 
 const updateUser = `-- name: UpdateUser :one
 UPDATE users
 SET email = $2, display_name = $3, avatar_url = $4, updated_at = NOW()
 WHERE id = $1
-RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
+RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch, forge_login, signin_allowed_at
 `
 
 type UpdateUserParams struct {
@@ -160,6 +202,8 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SessionEpoch,
+		&i.ForgeLogin,
+		&i.SigninAllowedAt,
 	)
 	return i, err
 }
@@ -172,7 +216,7 @@ ON CONFLICT (provider, provider_id) DO UPDATE SET
 	display_name = EXCLUDED.display_name,
 	avatar_url = EXCLUDED.avatar_url,
 	updated_at = NOW()
-RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch
+RETURNING id, email, display_name, avatar_url, provider, provider_id, created_at, updated_at, session_epoch, forge_login, signin_allowed_at
 `
 
 type UpsertUserParams struct {
@@ -202,6 +246,8 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SessionEpoch,
+		&i.ForgeLogin,
+		&i.SigninAllowedAt,
 	)
 	return i, err
 }

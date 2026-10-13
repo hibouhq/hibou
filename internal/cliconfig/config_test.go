@@ -105,3 +105,46 @@ func TestSaveFilePermissions(t *testing.T) {
 		t.Fatalf("file mode = %o, want %o", got, 0o600)
 	}
 }
+
+func TestSaveTightensExistingFilePermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	path := DefaultPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("server: https://old.example.com\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { // defeat umask
+		t.Fatalf("os.Chmod() error = %v", err)
+	}
+
+	if err := Save(Config{Server: "https://hibou.example.com", Token: "secret"}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat() error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want %o", got, 0o600)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Token != "secret" || cfg.Server != "https://hibou.example.com" {
+		t.Fatalf("Load() = %+v, want saved config", cfg)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("os.ReadDir() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("config dir has %d entries, want only config.yaml (temp file left behind?)", len(entries))
+	}
+}

@@ -109,3 +109,71 @@ func (s *Server) releaseUploadWorker() {
 	}
 	<-s.uploadWorkSlots
 }
+
+// inFlightKey is one counter an operation holds while it runs, with the most
+// it may hold at once.
+type inFlightKey struct {
+	key   string
+	limit int
+}
+
+// keyedInFlight counts operations in flight per key (principal, org). An
+// operation takes all its keys or none. The zero value is ready.
+type keyedInFlight struct {
+	mu      sync.Mutex
+	counts  map[string]int
+	changed chan struct{} // closed and replaced on every release
+}
+
+// acquire waits until every key is under its limit and takes them, or gives
+// up when expired fires (acquired=false) or ctx ends (cancelled=true).
+func (k *keyedInFlight) acquire(ctx context.Context, expired <-chan time.Time, keys []inFlightKey) (acquired, cancelled bool) {
+	for {
+		k.mu.Lock()
+		if k.counts == nil {
+			k.counts = make(map[string]int)
+		}
+		if k.changed == nil {
+			k.changed = make(chan struct{})
+		}
+		free := true
+		for _, entry := range keys {
+			if entry.limit > 0 && k.counts[entry.key] >= entry.limit {
+				free = false
+				break
+			}
+		}
+		if free {
+			for _, entry := range keys {
+				k.counts[entry.key]++
+			}
+			k.mu.Unlock()
+			return true, false
+		}
+		changed := k.changed
+		k.mu.Unlock()
+		select {
+		case <-changed:
+		case <-expired:
+			return false, false
+		case <-ctx.Done():
+			return false, true
+		}
+	}
+}
+
+func (k *keyedInFlight) release(keys []inFlightKey) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, entry := range keys {
+		if k.counts[entry.key] <= 1 {
+			delete(k.counts, entry.key)
+		} else {
+			k.counts[entry.key]--
+		}
+	}
+	if k.changed != nil {
+		close(k.changed)
+	}
+	k.changed = make(chan struct{})
+}

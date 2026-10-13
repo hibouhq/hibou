@@ -28,13 +28,13 @@ func (s *WebhookSender) Send(ctx context.Context, p Payload) error {
 		return errors.New("webhook url is required")
 	}
 	secret := configString(config, "secret")
-	body, err := json.Marshal(p)
+	body, err := json.Marshal(newWebhookBody(p))
 	if err != nil {
 		return fmt.Errorf("marshal webhook payload: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build webhook request: %w", err)
+		return fmt.Errorf("build webhook request: %w", transportError(err))
 	}
 	if secret != "" {
 		mac := hmac.New(sha256.New, []byte(secret))
@@ -48,11 +48,53 @@ func (s *WebhookSender) Send(ctx context.Context, p Payload) error {
 	req.Header.Set("User-Agent", "hibou/"+version.Version)
 	resp, err := httpClientWithDefault(s.client).Do(req)
 	if err != nil {
-		return fmt.Errorf("send webhook: %w", err)
+		return fmt.Errorf("send webhook: %w", transportError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// webhookBody is the generic webhook's wire format. It is built field by
+// field from the payload — never by marshaling Payload itself, whose
+// Metadata carries the integration config (URL, HMAC secret) for the senders.
+// Key names match what receivers got before the DTO existed.
+type webhookBody struct {
+	EventType string         `json:"EventType"`
+	Title     string         `json:"Title"`
+	Body      string         `json:"Body"`
+	Severity  string         `json:"Severity"`
+	Link      string         `json:"Link"`
+	OrgID     string         `json:"OrgID"`
+	RepoName  string         `json:"RepoName"`
+	Metadata  map[string]any `json:"Metadata"`
+}
+
+func newWebhookBody(p Payload) webhookBody {
+	body := webhookBody{
+		EventType: p.EventType,
+		Title:     p.Title,
+		Body:      p.Body,
+		Severity:  p.Severity,
+		Link:      p.Link,
+		OrgID:     p.OrgID.String(),
+		RepoName:  p.RepoName,
+		Metadata:  publicMetadata(p.Metadata),
+	}
+	return body
+}
+
+// publicMetadata is the event metadata safe to send to a receiver: the
+// integration config and anything named like a credential are dropped.
+func publicMetadata(metadata map[string]any) map[string]any {
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		if key == "integration_config" || IsSecretConfigKey(key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }

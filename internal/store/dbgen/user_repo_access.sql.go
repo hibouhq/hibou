@@ -12,30 +12,32 @@ import (
 	"github.com/lib/pq"
 )
 
+const deleteForgeUserRepoAccessInOrg = `-- name: DeleteForgeUserRepoAccessInOrg :exec
+DELETE FROM user_repo_access ura
+USING repositories r
+WHERE r.id = ura.repo_id
+  AND ura.user_id = $1
+  AND r.org_id = $2
+  AND ura.source = 'forge'
+`
+
+type DeleteForgeUserRepoAccessInOrgParams struct {
+	UserID uuid.UUID `json:"user_id"`
+	OrgID  uuid.UUID `json:"org_id"`
+}
+
+func (q *Queries) DeleteForgeUserRepoAccessInOrg(ctx context.Context, arg DeleteForgeUserRepoAccessInOrgParams) error {
+	_, err := q.db.ExecContext(ctx, deleteForgeUserRepoAccessInOrg, arg.UserID, arg.OrgID)
+	return err
+}
+
 const isRepoScopedOrgMember = `-- name: IsRepoScopedOrgMember :one
-WITH access AS (
-    SELECT ura.repo_id, COALESCE(ura.synced_at, ura.updated_at) AS seen_at
-    FROM user_repo_access ura
-    JOIN repositories r ON r.id = ura.repo_id
-    WHERE ura.user_id = $2
-      AND r.org_id = $1
-)
-SELECT (
-    EXISTS (
-        SELECT 1
-        FROM org_members om
-        WHERE om.org_id = $1
-          AND om.user_id = $2
-          AND om.source = 'forge'
-          AND om.role IN ('viewer', 'developer')
-    )
-    AND EXISTS (
-        SELECT 1
-        FROM repositories r
-        WHERE r.org_id = $1
-          AND r.created_at <= (SELECT MAX(seen_at) FROM access)
-          AND NOT EXISTS (SELECT 1 FROM access a WHERE a.repo_id = r.id)
-    )
+SELECT EXISTS (
+    SELECT 1
+    FROM org_members om
+    WHERE om.org_id = $1
+      AND om.user_id = $2
+      AND om.repo_scoped
 )::boolean AS repo_scoped
 `
 
@@ -44,11 +46,10 @@ type IsRepoScopedOrgMemberParams struct {
 	UserID uuid.UUID `json:"user_id"`
 }
 
-// A forge-synced non-admin membership is repo-scoped when the last sync gave
-// the user access to some of the org's repositories but not to one that was
-// already enrolled at that time: that is the forge saying "these repositories,
-// not the organization". Members whose sync covered every repository (the
-// forge's own org-wide read), invited members and admins are never scoped.
+// Recorded by the permission sync (org_members.repo_scoped). A scoped member
+// sees exactly their user_repo_access rows, so a repository enrolled after the
+// last sync, or the deletion of their only granted repository, leaves them
+// with less, never with the whole organization.
 func (q *Queries) IsRepoScopedOrgMember(ctx context.Context, arg IsRepoScopedOrgMemberParams) (bool, error) {
 	row := q.db.QueryRowContext(ctx, isRepoScopedOrgMember, arg.OrgID, arg.UserID)
 	var repo_scoped bool
@@ -62,26 +63,16 @@ FROM org_members om
 JOIN repositories repo ON repo.org_id = om.org_id
 WHERE repo.id = $1
   AND (
-      om.source <> 'forge'
-      OR om.role NOT IN ('viewer', 'developer')
+      NOT om.repo_scoped
       OR EXISTS (
           SELECT 1 FROM user_repo_access ura
           WHERE ura.user_id = om.user_id AND ura.repo_id = repo.id
       )
-      OR NOT EXISTS (
-          SELECT 1
-          FROM user_repo_access ura
-          JOIN repositories other ON other.id = ura.repo_id
-          WHERE ura.user_id = om.user_id AND other.org_id = om.org_id
-      )
   )
 `
 
-// Org members who may see a repository, for targeting live events. Repository
-// collaborators (forge viewer/developer memberships that carry per-repository
-// grants in this org) are included only with a grant on this repository. A
-// member whose sync predates the repository may be left out; live events are
-// best-effort and the page still polls, so erring narrow is the safe side.
+// Org members who may see a repository, for targeting live events.
+// Repository-scoped members are included only with a grant on it.
 func (q *Queries) ListRepoAudienceUserIDs(ctx context.Context, repoID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.QueryContext(ctx, listRepoAudienceUserIDs, repoID)
 	if err != nil {

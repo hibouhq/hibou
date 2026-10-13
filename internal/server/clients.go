@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -139,6 +140,11 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionClientCreate, "client", client.ID.String(), map[string]any{
+		"name":        client.Name,
+		"slug":        client.Slug,
+		"client_type": client.ClientType,
+	})
 	api.JSON(w, http.StatusCreated, client)
 }
 
@@ -281,6 +287,11 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Field names only: contact details are personal data.
+	s.auditOrgConfig(r, org.ID, audit.ActionClientUpdate, "client", updated.ID.String(), map[string]any{
+		"name":           updated.Name,
+		"changed_fields": audit.ChangedFields(client, updated, "updated_at", "created_at"),
+	})
 	api.JSON(w, http.StatusOK, updated)
 }
 
@@ -311,6 +322,10 @@ func (s *Server) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete client")
 		return
 	}
+	s.auditOrgConfig(r, org.ID, audit.ActionClientDelete, "client", client.ID.String(), map[string]any{
+		"name": client.Name,
+		"slug": client.Slug,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -408,7 +423,8 @@ func (s *Server) handleCreateDeployment(w http.ResponseWriter, r *http.Request) 
 	deployedAt := deploymentTime(input.DeployedAt)
 
 	if err := s.supersedeActiveDeployments(r, client.ID, environment, status); err != nil {
-		api.JSONError(w, http.StatusInternalServerError, err.Error())
+		s.log.Error().Err(err).Str("client_id", client.ID.String()).Msg("supersede active deployments")
+		api.JSONError(w, http.StatusInternalServerError, "failed to supersede active deployments")
 		return
 	}
 

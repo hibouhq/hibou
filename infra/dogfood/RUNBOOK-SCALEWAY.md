@@ -65,7 +65,7 @@ ssh-keygen -t ed25519 -C "hibou-dogfood" -f ~/.ssh/id_ed25519_hibou
 1. Prepare Terraform variables:
 
 ```bash
-cd /workspaces/new_project/infra/scaleway
+cd "$(git rev-parse --show-toplevel)/infra/scaleway"
 cp terraform.tfvars.example terraform.tfvars
 ```
 
@@ -123,7 +123,7 @@ kubectl rollout status deploy/cert-manager-cainjector -n cert-manager --timeout=
 2. Apply the ClusterIssuer after replacing the hostname placeholder email:
 
 ```bash
-sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/cluster-issuer.yaml | kubectl apply -f -
+sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" "$(git rev-parse --show-toplevel)/infra/dogfood/cluster-issuer.yaml" | kubectl apply -f -
 kubectl get clusterissuer letsencrypt-prod
 ```
 
@@ -151,9 +151,9 @@ kubectl create secret generic hibou-db-url \
 4. Install or upgrade Hibou:
 
 ```bash
-sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/values-dogfood.yaml > /tmp/hibou-values-dogfood.yaml
+sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" "$(git rev-parse --show-toplevel)/infra/dogfood/values-dogfood.yaml" > /tmp/hibou-values-dogfood.yaml
 
-helm upgrade --install hibou /workspaces/new_project/chart/hibou \
+helm upgrade --install hibou "$(git rev-parse --show-toplevel)/chart/hibou" \
   -n "$HIBOU_NAMESPACE" \
    -f /tmp/hibou-values-dogfood.yaml
 ```
@@ -255,6 +255,12 @@ printf '%s\n' "$GITHUB_APP_WEBHOOK_SECRET"
 3. Grant account permissions (required for login):
    - Email addresses: Read-only
 
+   Grant organization permissions:
+   - Members: Read-only (required: the sign-in allowlist `hibou.auth.allowedOrgs`
+     checks membership with the App's token; without it every sign-in is
+     refused with "not allowed"). After adding it, an org owner must accept the
+     updated permissions on the installation.
+
    This lets login read the signing-in user's email via `/user/emails`. Without it, the callback fails with `Resource not accessible by integration`.
 
 4. Grant repository permissions (for app-mode operations):
@@ -311,9 +317,9 @@ kubectl create secret generic hibou-forge-github \
 9. Re-run the Helm upgrade:
 
 ```bash
-sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" /workspaces/new_project/infra/dogfood/values-dogfood.yaml > /tmp/hibou-values-dogfood.yaml
+sed "s/HIBOU_DOMAIN/${HIBOU_DOMAIN}/g" "$(git rev-parse --show-toplevel)/infra/dogfood/values-dogfood.yaml" > /tmp/hibou-values-dogfood.yaml
 
-helm upgrade --install hibou /workspaces/new_project/chart/hibou \
+helm upgrade --install hibou "$(git rev-parse --show-toplevel)/chart/hibou" \
   -n "$HIBOU_NAMESPACE" \
    -f /tmp/hibou-values-dogfood.yaml
 ```

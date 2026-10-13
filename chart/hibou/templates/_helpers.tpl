@@ -276,6 +276,10 @@ where the scheduler can place the pod, so the operator has to see the number.
 
 {{/* Dedicated metrics port, or "0" when metrics are disabled or served on the
 application port. */}}
+{{- define "hibou.image" -}}
+{{- printf "%s:%s" .Values.hibou.image.repository (.Values.hibou.image.tag | default .Chart.AppVersion | toString) -}}
+{{- end -}}
+
 {{- define "hibou.metricsPort" -}}
 {{- if .Values.hibou.metrics.enabled -}}{{ .Values.hibou.metrics.port | int }}{{- else -}}0{{- end -}}
 {{- end -}}

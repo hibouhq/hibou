@@ -4,9 +4,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/auth"
 )
 
 // csrfProtection rejects cross-site state-changing requests that would ride
@@ -22,13 +24,14 @@ import (
 //     loopback origin also passes: the Vite dev server proxies the SPA from
 //     another port.
 //
-// Safe methods, bearer-token requests (a page cannot attach an Authorization
-// header cross-origin without a CORS preflight hibou never grants) and forge
+// Safe methods, bearer-token requests without a session cookie (a page cannot
+// attach an Authorization header cross-origin without a CORS preflight hibou
+// never grants) and forge
 // webhooks (no cookie, authenticated by signature) are exempt. Non-browser
 // clients send neither header and pass.
 func (s *Server) csrfProtection(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !csrfRequestAllowed(r, s.cfg.BaseURL, s.cfg.IsDevelopment()) {
+		if !csrfRequestAllowed(r, s.cfg.BaseURL, s.cfg.IsDevelopment(), s.cfg.AllowedOrigins...) {
 			api.JSONError(w, http.StatusForbidden, "cross-site request refused")
 			return
 		}
@@ -36,12 +39,18 @@ func (s *Server) csrfProtection(next http.Handler) http.Handler {
 	})
 }
 
-func csrfRequestAllowed(r *http.Request, baseURL string, development bool) bool {
+// allowedOrigins are extra instance origins (Config.AllowedOrigins, already
+// normalized to lowercase scheme://host); they pass the Origin check only, the
+// Sec-Fetch-Site refusal still applies.
+func csrfRequestAllowed(r *http.Request, baseURL string, development bool, allowedOrigins ...string) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
 		return true
 	}
-	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+	// A bearer request is exempt only without a session cookie: SessionAuth
+	// authenticates the cookie first, so "Bearer x" next to a cookie would
+	// otherwise carry a cross-site write on the victim's session.
+	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && !auth.HasSessionCookie(r) {
 		return true
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/webhooks/") {
@@ -54,7 +63,8 @@ func csrfRequestAllowed(r *http.Request, baseURL string, development bool) bool 
 		}
 	}
 	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
-		return originMatches(origin, baseURL, r.Host) || (development && isLoopbackOrigin(origin))
+		return originMatches(origin, baseURL, r.Host) || (development && isLoopbackOrigin(origin)) ||
+			slices.Contains(allowedOrigins, strings.ToLower(origin))
 	}
 	return true
 }

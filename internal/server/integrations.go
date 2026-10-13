@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/notify"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -83,7 +84,18 @@ func (s *Server) handleCreateIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	integration, err := s.queries.CreateIntegration(r.Context(), org.ID, input.Name, string(integrationType), defaultRawJSON(input.Config, "{}"), input.Enabled)
+	config := defaultRawJSON(input.Config, "{}")
+	if err := notify.ValidateNewConfig(config); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid config: "+err.Error())
+		return
+	}
+	sealed, err := notify.Secrets().SealConfig(config)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create integration")
+		return
+	}
+
+	integration, err := s.queries.CreateIntegration(r.Context(), org.ID, input.Name, string(integrationType), sealed, input.Enabled)
 	if err != nil {
 		if isUniqueViolation(err) {
 			api.JSONError(w, http.StatusBadRequest, "integration name already exists in this organization")
@@ -93,7 +105,13 @@ func (s *Server) handleCreateIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	api.JSON(w, http.StatusCreated, integration)
+	s.auditOrgConfig(r, org.ID, audit.ActionIntegrationCreate, "integration", integration.ID.String(), map[string]any{
+		"name":             integration.Name,
+		"integration_type": integration.IntegrationType,
+		"enabled":          integration.Enabled,
+		"config_fields":    notify.ConfigKeys(integration.Config),
+	})
+	api.JSON(w, http.StatusCreated, redactIntegrationConfig(*integration, true))
 }
 
 // @Summary      List integrations
@@ -296,7 +314,20 @@ func (s *Server) handleUpdateIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	updated, err := s.queries.UpdateIntegration(r.Context(), integration.ID, input.Name, defaultRawJSON(input.Config, "{}"), input.Enabled)
+	// Secret fields are write-only: omitted or masked ones keep the stored
+	// value, so a client can round-trip what GET returned.
+	merged, err := notify.MergeConfig(integration.Config, defaultRawJSON(input.Config, "{}"))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid config: "+err.Error())
+		return
+	}
+	sealed, err := notify.Secrets().SealConfig(merged)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to update integration")
+		return
+	}
+
+	updated, err := s.queries.UpdateIntegration(r.Context(), integration.ID, input.Name, sealed, input.Enabled)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to update integration")
 		return
@@ -306,7 +337,11 @@ func (s *Server) handleUpdateIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	api.JSON(w, http.StatusOK, updated)
+	s.auditOrgConfig(r, org.ID, audit.ActionIntegrationUpdate, "integration", updated.ID.String(), map[string]any{
+		"name":           updated.Name,
+		"changed_fields": integrationChangedFields(*integration, *updated),
+	})
+	api.JSON(w, http.StatusOK, redactIntegrationConfig(*updated, true))
 }
 
 // @Summary      Delete integration
@@ -338,6 +373,10 @@ func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionIntegrationDelete, "integration", integration.ID.String(), map[string]any{
+		"name":             integration.Name,
+		"integration_type": integration.IntegrationType,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -402,10 +441,36 @@ func (s *Server) isOrgAdminMember(r *http.Request, orgID uuid.UUID) (bool, error
 	return role == "admin", nil
 }
 
+// redactIntegrationConfig shapes an integration for an API response. Admins
+// see the config with every secret field masked (write-only, even to them);
+// everyone else sees no config at all.
 func redactIntegrationConfig(integration dbgen.Integration, includeConfig bool) dbgen.Integration {
 	if includeConfig {
+		integration.Config = notify.MaskConfig(integration.Config)
 		return integration
 	}
 	integration.Config = json.RawMessage("{}")
 	return integration
+}
+
+// integrationChangedFields names what an update changed: top-level fields
+// plus "config.<key>" for each config entry, secrets included by name only.
+func integrationChangedFields(before, after dbgen.Integration) []string {
+	changed := audit.ChangedFields(before, after, "config", "updated_at", "created_at", "last_success_at", "last_failure_at", "failure_count")
+	for _, key := range notify.Secrets().ChangedConfigFields(before.Config, after.Config) {
+		changed = append(changed, "config."+key)
+	}
+	return changed
+}
+
+// auditOrgConfig records an org configuration change, attributed to the
+// request principal. Callers pass field names and identifiers, never secret
+// values.
+func (s *Server) auditOrgConfig(r *http.Request, orgID uuid.UUID, action, resourceType, resourceID string, context map[string]any) {
+	s.writeAuditLog(r, UserFromContext(r.Context()), orgAuditID(orgID), auditEntry{
+		Action:       action,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Context:      context,
+	})
 }

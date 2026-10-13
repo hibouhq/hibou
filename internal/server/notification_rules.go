@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/notify"
 	"github.com/hibouhq/hibou/internal/store"
@@ -100,7 +101,18 @@ func (s *Server) handleCreateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	rule, err := s.queries.CreateNotificationRule(r.Context(), org.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, defaultRawJSON(input.DestinationConfig, "{}"), input.Enabled)
+	destinationConfig := defaultRawJSON(input.DestinationConfig, "{}")
+	if err := notify.ValidateNewConfig(destinationConfig); err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid destination_config: "+err.Error())
+		return
+	}
+	sealed, err := notify.Secrets().SealConfig(destinationConfig)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to create notification rule")
+		return
+	}
+
+	rule, err := s.queries.CreateNotificationRule(r.Context(), org.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, sealed, input.Enabled)
 	if err != nil {
 		if isUniqueViolation(err) {
 			api.JSONError(w, http.StatusBadRequest, "notification rule name already exists in this organization")
@@ -110,7 +122,14 @@ func (s *Server) handleCreateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	api.JSON(w, http.StatusCreated, rule)
+	s.auditOrgConfig(r, org.ID, audit.ActionNotificationRuleCreate, "notification_rule", rule.ID.String(), map[string]any{
+		"name":                      rule.Name,
+		"event_type":                rule.EventType,
+		"destination_type":          string(rule.DestinationType),
+		"enabled":                   rule.Enabled,
+		"destination_config_fields": notify.ConfigKeys(rule.DestinationConfig),
+	})
+	api.JSON(w, http.StatusCreated, redactNotificationRule(*rule, true))
 }
 
 // @Summary      List notification rules
@@ -155,8 +174,11 @@ func (s *Server) handleListNotificationRules(w http.ResponseWriter, r *http.Requ
 // redactNotificationRule hides a rule's destination from non-admins, as
 // redactIntegrationConfig does for integrations: a webhook or Slack URL is a
 // credential, since anyone holding it can post into the destination.
+// Admins see the destination with its secret fields masked: write-only even
+// to them.
 func redactNotificationRule(rule store.NotificationRule, includeDestination bool) store.NotificationRule {
 	if includeDestination {
+		rule.DestinationConfig = notify.MaskConfig(rule.DestinationConfig)
 		return rule
 	}
 	rule.DestinationConfig = json.RawMessage("{}")
@@ -348,7 +370,18 @@ func (s *Server) handleUpdateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	updated, err := s.queries.UpdateNotificationRule(r.Context(), rule.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, defaultRawJSON(input.DestinationConfig, "{}"), input.Enabled)
+	merged, err := notify.MergeConfig(rule.DestinationConfig, defaultRawJSON(input.DestinationConfig, "{}"))
+	if err != nil {
+		api.JSONError(w, http.StatusBadRequest, "invalid destination_config: "+err.Error())
+		return
+	}
+	sealed, err := notify.Secrets().SealConfig(merged)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to update notification rule")
+		return
+	}
+
+	updated, err := s.queries.UpdateNotificationRule(r.Context(), rule.ID, input.Name, input.EventType, defaultRawJSON(input.Conditions, "{}"), destinationType, sealed, input.Enabled)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to update notification rule")
 		return
@@ -358,7 +391,15 @@ func (s *Server) handleUpdateNotificationRule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	api.JSON(w, http.StatusOK, updated)
+	changed := audit.ChangedFields(*rule, *updated, "destination_config", "updated_at", "created_at")
+	for _, key := range notify.Secrets().ChangedConfigFields(rule.DestinationConfig, updated.DestinationConfig) {
+		changed = append(changed, "destination_config."+key)
+	}
+	s.auditOrgConfig(r, org.ID, audit.ActionNotificationRuleUpdate, "notification_rule", updated.ID.String(), map[string]any{
+		"name":           updated.Name,
+		"changed_fields": changed,
+	})
+	api.JSON(w, http.StatusOK, redactNotificationRule(*updated, true))
 }
 
 // @Summary      Delete notification rule
@@ -389,6 +430,10 @@ func (s *Server) handleDeleteNotificationRule(w http.ResponseWriter, r *http.Req
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete notification rule")
 		return
 	}
+	s.auditOrgConfig(r, org.ID, audit.ActionNotificationRuleDelete, "notification_rule", rule.ID.String(), map[string]any{
+		"name":       rule.Name,
+		"event_type": rule.EventType,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

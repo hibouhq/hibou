@@ -1,16 +1,16 @@
 # Hibou Threat Model
 
-Last updated: May 2026
-Version: 1.0
-Scope: This document covers Hibou's production and development attack surface as implemented in the Go API server, embedded SPA, PostgreSQL data store, forge integrations, webhook ingestion, upload pipeline, notification system, MCP endpoint, and supported deployment patterns described in the repository as of May 2026.
+Last updated: October 2026
+Version: 1.1
+Scope: This document covers Hibou's production and development attack surface as implemented in the Go API server, embedded SPA, PostgreSQL data store, forge integrations, webhook ingestion, upload pipeline, notification system, MCP endpoint, and supported deployment patterns described in the repository as of October 2026. Version 1.1 records the residual risks closed since 1.0 (see "Mitigated since version 1.0"), the CLI and CI trust model, and release verification.
 
 ## Executive Summary
 
 Hibou is a multi-tenant DevSecOps platform that ingests security artifacts such as SBOMs, SARIF, VEX documents, and generic findings; correlates them with repository and release context; and exposes that state through a web UI, REST API, CLI, and built-in MCP server. The platform's highest-value assets are authentication material, tenant-scoped security findings, integration secrets, audit evidence, and the integrity of repository-to-snapshot lineage. This threat model uses STRIDE to evaluate those assets across Hibou's main trust boundaries: browser to SPA, Internet to ingress, ingress to application, application to PostgreSQL, application to Trivy and forge APIs, and MCP clients to the MCP server.
 
-The strongest built-in controls already present in the codebase are transport-aware session cookie settings derived from `HIBOU_BASE_URL`, HMAC-signed session and OAuth state cookies in `internal/auth/auth.go`, API key hashing in `internal/auth/middleware.go`, a hybrid authorization model that combines handler-level org-role checks with Casbin-backed enforcement in some paths, forge webhook HMAC validation when webhook secrets are configured plus per-provider IP allowlisting and rate limiting in `internal/server/server.go` and `internal/server/ipallowlist.go`, upload size enforcement in `internal/server/uploads.go`, audit logging intended to provide append-only operational history, and SSRF protection for outbound notifications in `internal/notify/dispatcher.go`. The container image also reduces runtime attack surface by using a distroless base image and building static binaries with `CGO_ENABLED=0` in the repository `Dockerfile`.
+The strongest built-in controls already present in the codebase are transport-aware session cookie settings derived from `HIBOU_BASE_URL`, HMAC-signed session and OAuth state cookies in `internal/auth/auth.go`, API key hashing in `internal/auth/middleware.go`, a hybrid authorization model that combines handler-level org-role checks with Casbin-backed enforcement in some paths, mandatory forge webhook HMAC validation plus per-provider IP allowlisting and rate limiting in `internal/server/server.go` and `internal/server/ipallowlist.go`, upload size enforcement in `internal/server/uploads.go`, audit logging intended to provide append-only operational history, and SSRF protection for outbound notifications in `internal/notify/dispatcher.go`. The container image also reduces runtime attack surface by using a shell-free Wolfi base image built with apko from a lockfile (`apko.yaml`, `apko.lock.json`) and static binaries built with `CGO_ENABLED=0`.
 
-The key residual risks are concentrated around configuration mistakes and exposure management rather than obviously unsafe default code paths. The most important examples are the shipped default `HIBOU_SESSION_SECRET`, which allows forged session and OAuth state cookies if left unchanged; long-lived bearer API keys; stateless HMAC-signed sessions that cannot be selectively revoked server-side without rotating `HIBOU_SESSION_SECRET`; optional MCP exposure on a separate listener enabled by default; permissive behavior while a dynamic forge IP allowlist has not loaded yet; webhook routes that skip HMAC validation entirely when operators leave webhook secrets unset; `/api/v1/auth/dev-login`, which issues a local admin session when no forge providers are configured; operational risk from running Docker Compose with default development credentials; and the general blast radius of compromised CI runners or compromised forge applications that legitimately possess secrets and upload authority. These risks are tractable, but they require deployment hardening and regular review.
+The key residual risks are concentrated around configuration mistakes and exposure management rather than obviously unsafe default code paths. Outside development mode, the server refuses to start with the shipped default or a short `HIBOU_SESSION_SECRET`, with an empty `HIBOU_BASE_URL`, or with a forge that has no webhook secret; sessions are revocable per user; the MCP listener and `/api/v1/auth/dev-login` are development-only by default. The remaining important risks are long-lived bearer API keys; permissive IP-allowlist behavior while a dynamic forge IP list has not loaded yet (HMAC validation still applies); operational risk from running Docker Compose with default development credentials; and the general blast radius of compromised CI runners or compromised forge applications that legitimately possess secrets and upload authority. These risks are tractable, but they require deployment hardening and regular review.
 
 ## System Overview
 
@@ -59,7 +59,7 @@ Hibou is implemented as a single Go binary with multiple personalities. In serve
 - Session cookie name: `hibou_session`
 - OAuth state cookie name: `hibou_oauth_state`
 - Main server listener: `HIBOU_HOST` + `HIBOU_PORT`
-- MCP listener: `HIBOU_MCP_ENABLED` + `HIBOU_MCP_PORT`
+- MCP listener: `HIBOU_MCP_ENABLED` (defaults to on only in development) + `HIBOU_MCP_PORT`
 - Database connection string: `HIBOU_DATABASE_URL`
 - Upload ceiling: `HIBOU_MAX_UPLOAD_SIZE`
 - Artifact storage path: `HIBOU_ARTIFACT_PATH`
@@ -120,11 +120,11 @@ TB-7  MCP clients <-> Dedicated MCP listener
 | ID | Threat | Affected components | Severity | Likelihood | Existing mitigations | Residual risk |
 | --- | --- | --- | --- | --- | --- | --- |
 | S-1 | OAuth state forgery against `/api/v1/auth/callback` to bind an attacker-controlled authorization code to a victim browser session. Relevant to OWASP A07:2021 Identification and Authentication Failures. | Browser, auth handlers, forge provider callbacks | High | Medium | `internal/auth/auth.go` generates 32-byte random state, stores it in an HMAC-signed `hibou_oauth_state` cookie with 10-minute lifetime, validates provider ID and timestamp, then clears the cookie on success. Cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` when `HIBOU_BASE_URL` is HTTPS. | If `HIBOU_BASE_URL` is left blank or HTTP in front of a misconfigured proxy, cookies may be less protected. Stateless state handling still depends entirely on `HIBOU_SESSION_SECRET` secrecy. |
-| S-2 | Session cookie theft or replay via browser compromise, proxy logging, or XSS elsewhere in the deployment. | Browser, session middleware, reverse proxies | High | Medium | Session cookie is HMAC-signed in `internal/auth/auth.go`, `HttpOnly`, `SameSite=Lax`, and optionally `Secure`. Expiry is 7 days. User record is reloaded from DB each request. | Cookie contents are not encrypted, only integrity-protected. There is no per-session server-side revocation list; selective revocation requires rotating `HIBOU_SESSION_SECRET` or removing the underlying user. |
+| S-2 | Session cookie theft or replay via browser compromise, proxy logging, or XSS elsewhere in the deployment. | Browser, session middleware, reverse proxies | High | Medium | Session cookie is HMAC-signed in `internal/auth/auth.go`, `HttpOnly`, `SameSite=Lax`, and optionally `Secure`. Expiry is 7 days. User record is reloaded from DB each request. Each session carries the user's session epoch: logout bumps it server-side, which invalidates every outstanding session of that user, and revoking a user bumps it and revokes the user's API keys. | Cookie contents are not encrypted, only integrity-protected. Revocation is per user, not per individual session. |
 | S-3 | API key brute force or credential stuffing against bearer-token protected upload and API routes. | API, `authenticateBearerToken`, DB | High | Low | API keys are hashed before lookup with `store.HashAPIKey`, so plaintext secrets are not stored. Expiry is enforced when set, and last-used timestamps are recorded. | No explicit global auth rate limit is visible in the reviewed paths. Long-lived CI tokens remain high-value bearer secrets if leaked. |
-| S-4 | Webhook sender spoofing to fake push or PR events. | `/api/v1/webhooks/{provider}`, forge integrations | High | Medium | Provider-specific `ValidateWebhookPayload` enforces HMAC validation when `HIBOU_FORGE_N_WEBHOOK_SECRET` is configured. `webhookProtection` adds optional per-provider IP allowlisting and rate limiting. GitHub IPs auto-refresh every 6 hours from `/meta`. | `internal/server/ipallowlist.go` allows requests until the dynamic allowlist loads successfully, so first-start posture depends on webhook secret validation alone. GitHub, Forgejo, and GitLab all skip signature verification entirely if operators leave webhook secrets unset. |
+| S-4 | Webhook sender spoofing to fake push or PR events. | `/api/v1/webhooks/{provider}`, forge integrations | High | Medium | Provider-specific `ValidateWebhookPayload` enforces HMAC validation. Outside development, startup refuses a forge without `HIBOU_FORGE_N_WEBHOOK_SECRET` and a secret-less delivery fails closed. `webhookProtection` adds optional per-provider IP allowlisting and rate limiting. GitHub IPs auto-refresh every 6 hours from `/meta`. | `internal/server/ipallowlist.go` allows requests until the dynamic allowlist loads successfully, so first-start posture depends on webhook secret validation alone. Weak or reused webhook secrets weaken the check. |
 | S-5 | Forged upload identity by reusing a stolen CLI or CI API key to submit malicious findings under a legitimate repository. | Upload API, snapshots, audit trail | High | Medium | Uploads require bearer authentication and validate repository/ref payload structure before snapshot creation. Audit and snapshot lineage preserve actor association. | API keys are bearer-only; there is no request signing or workload identity binding. A compromised runner can impersonate the pipeline until key rotation. |
-| S-6 | Forged `hibou_session` and `hibou_oauth_state` cookies when `HIBOU_SESSION_SECRET` is left at the shipped default value `change-me-in-production`. Anyone who knows the default can mint valid cookies and bypass normal login. | Browser sessions, OAuth callback flow, auth middleware | Critical | Medium | Cookies are HMAC-signed and time-bounded, and deployments can override `HIBOU_SESSION_SECRET`. | `internal/config/config.go` ships a known static default. If operators do not replace it before exposure, both interactive sessions and OAuth state validation can be forged remotely. |
+| S-6 | Forged `hibou_session` and `hibou_oauth_state` cookies when `HIBOU_SESSION_SECRET` is left at the shipped default value `change-me-in-production`. Anyone who knows the default can mint valid cookies and bypass normal login. | Browser sessions, OAuth callback flow, auth middleware | Critical | Low | Cookies are HMAC-signed and time-bounded. Outside development mode, startup refuses an empty secret, the shipped default, or a secret shorter than 32 bytes. | A deployment run with `HIBOU_DEVELOPMENT` set still accepts the default; never expose development mode. A leaked secret must be rotated (rotation invalidates all sessions). |
 
 ### Tampering
 
@@ -133,7 +133,7 @@ TB-7  MCP clients <-> Dedicated MCP listener
 | T-1 | SBOM or SARIF payload tampering in transit or at source to hide vulnerable components or inject false findings. Relevant to OWASP A08:2021 Software and Data Integrity Failures. | Upload pipeline, snapshot creation, downstream analysis | High | Medium | TLS is expected at ingress. Upload handlers enforce auth, normalize request context, and preserve raw artifact lineage. Deduplication and snapshot immutability reduce accidental overwrite risk. | Hibou trusts authenticated uploaders for content truthfulness. It does not cryptographically attest uploaded artifacts or verify provenance by default. |
 | T-2 | Database record manipulation to alter severity, role assignments, audit evidence, or tenant ownership. | PostgreSQL, RBAC adapter, findings state | Critical | Low | SQL access is mediated through store queries and Casbin adapter paths. Schema comments position audit logs as append-only operational history. | A DB administrator or compromised application pod with DB credentials can still tamper directly unless DB-level least privilege, append-only controls, backups, and monitoring are in place. |
 | T-3 | Artifact storage tampering or deletion on the local filesystem under `HIBOU_ARTIFACT_PATH`. | Filesystem object store, retention worker | High | Medium | Artifact storage is at least isolated behind application code, and retention runs through a controlled worker. | Filesystem storage lacks intrinsic object immutability or integrity verification. Host or pod compromise can alter or remove evidence without cryptographic detection. |
-| T-4 | Webhook payload modification between sender and Hibou. | Forge webhooks, repo/ref state updates | High | Low | Forge HMAC validation in provider implementations rejects modified payloads when webhook secrets are configured. Optional IP allowlists reduce attack surface. | If secrets are weak, reused, or unset, tampering resistance drops to network-level protections only. |
+| T-4 | Webhook payload modification between sender and Hibou. | Forge webhooks, repo/ref state updates | High | Low | Forge HMAC validation in provider implementations rejects modified payloads; outside development a webhook secret is mandatory. Optional IP allowlists reduce attack surface. | If secrets are weak or reused, tampering resistance drops to network-level protections only. |
 
 ### Repudiation
 
@@ -147,12 +147,12 @@ TB-7  MCP clients <-> Dedicated MCP listener
 
 | ID | Threat | Affected components | Severity | Likelihood | Existing mitigations | Residual risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| I-1 | Database credential exposure through environment leaks, Helm misconfiguration, or debug output. | Application config, Kubernetes secrets, Docker Compose | Critical | Medium | Secrets are expected to be injected via Kubernetes secrets or environment variables. Distroless runtime reduces interactive shell exposure. | `internal/config/config.go` has permissive development defaults, and `docker-compose.yml` uses `hibou:hibou` credentials. Production hardening is an operator responsibility. |
+| I-1 | Database credential exposure through environment leaks, Helm misconfiguration, or debug output. | Application config, Kubernetes secrets, Docker Compose | Critical | Medium | Secrets are expected to be injected via Kubernetes secrets or environment variables. The shell-free runtime image reduces interactive shell exposure. | `internal/config/config.go` has permissive development defaults, and `docker-compose.yml` uses `hibou:hibou` credentials. Production hardening is an operator responsibility. |
 | I-2 | API key leakage in logs, CI output, or browser storage. | CLI, CI workflows, HTTP headers | High | Medium | API keys are hashed at rest and never need to be stored in browser cookies. | Bearer tokens still appear in process environments, CI secret stores, or reverse proxy logs if mishandled. No proof-of-possession control exists. |
 | I-3 | Exfiltration of SBOM, findings, or vulnerability data across tenant boundaries. Relevant to OWASP A01:2021 Broken Access Control. | REST API, SPA, RBAC, database queries | Critical | Medium | Multi-tenancy is a first-class design goal in `SPEC.md`. Reviewed handlers commonly gate access with direct org membership and role lookups, and some paths use Casbin-backed policy checks. Most API routes are nested under org/repo scoping. | This remains a high-impact class because the authorization model is split across handler logic and policy enforcement. Any IDOR, missing role check, or drift between those mechanisms would directly expose customer security posture. Broad regression testing is required. |
-| I-4 | Session token exposure through insecure transport or misconfigured cookie policy. | Browser, ingress, auth config | High | Low | `CookieSecure()` derives secure-cookie behavior from `HIBOU_BASE_URL`; cookies are `HttpOnly` and `SameSite=Lax`. | Leaving `HIBOU_BASE_URL` empty in production or terminating TLS incorrectly can silently weaken cookie protection. |
+| I-4 | Session token exposure through insecure transport or misconfigured cookie policy. | Browser, ingress, auth config | High | Low | `CookieSecure()` derives secure-cookie behavior from `HIBOU_BASE_URL`; cookies are `HttpOnly` and `SameSite=Lax`. Outside development, `hibou serve` refuses an empty or non-absolute `HIBOU_BASE_URL` and warns on plain `http://`. | A plain-http base URL, or TLS terminated incorrectly in front of an https base URL, still weakens cookie protection. |
 | I-5 | Forge secret leakage, including webhook secret, client secret, GitHub App private key, or app ID metadata. | Environment secrets, Kubernetes, CI | Critical | Medium | Secrets are logically separated by forge index and expected to reside in secret stores. | Hibou does not provide an in-process secret manager. Any pod exec, env dump, or misconfigured secret projection can expose forge credentials. |
-| I-6 | MCP data leakage if the dedicated MCP listener is exposed beyond intended clients or mapped to overly broad tool permissions. | MCP server, AI clients | High | Medium | MCP runs on a separate listener from the main API and routes through service-layer abstractions rather than direct DB access. | `HIBOU_MCP_ENABLED` defaults to true. Exposure depends on network policy and whatever auth the MCP HTTP wrapper enforces. Operators must treat this as a sensitive admin interface. |
+| I-6 | MCP data leakage if the dedicated MCP listener is exposed beyond intended clients or mapped to overly broad tool permissions. | MCP server, AI clients | High | Medium | MCP runs on a separate listener from the main API and routes through service-layer abstractions rather than direct DB access. | `HIBOU_MCP_ENABLED` defaults to on only in development; enabling it elsewhere logs a warning. When enabled, exposure depends on network policy and whatever auth the MCP HTTP wrapper enforces. Operators must treat this as a sensitive admin interface. |
 
 ### Denial of Service
 
@@ -173,7 +173,7 @@ TB-7  MCP clients <-> Dedicated MCP listener
 | E-3 | Admin role escalation by a malicious insider editing role bindings or policy storage. | Org member management, Casbin grouping policies, DB | High | Low | Role assignments are mediated through server handlers and stored centrally; admin changes can be audited. | Operators with direct DB access or compromised app credentials could still elevate privileges out of band. |
 | E-4 | MCP tool abuse to access or mutate more data than an API user should reach. | MCP server, AI agent integrations | High | Medium | The design intent in `SPEC.md` is for MCP tools to reuse the same API/service-layer rules rather than bypass them. | MCP introduces a second control plane. Its exposure, auth model, and tool granularity require explicit review whenever new MCP tools are added. |
 | E-5 | Insecure direct object reference on org/repo resources that allows cross-tenant reads or writes with otherwise valid auth. Mapped to OWASP A01:2021 Broken Access Control. | Org, repo, client, release, snapshot endpoints | Critical | Medium | Nested resource routing, RBAC, and auditability reduce accidental misuse. | This class is too important to mark closed without dedicated authorization tests for every major route family. |
-| E-6 | Exposure of `/api/v1/auth/dev-login` in a deployment that has no forge providers configured. The route creates or reuses a local `dev-admin` user and issues an authenticated admin session cookie. | Auth routes, zero-provider deployments, Docker Compose-style environments | High | Medium | `DevLoginHandler` refuses requests when any forge provider is configured, and the route is documented as development-only. | A zero-provider deployment exposed beyond localhost or a trusted private network effectively exposes one-step admin login. This is a configuration threat, not a theoretical edge case. |
+| E-6 | Exposure of `/api/v1/auth/dev-login` in a deployment that has no forge providers configured. The route creates or reuses a local `dev-admin` user and issues an authenticated admin session cookie. | Auth routes, zero-provider deployments, Docker Compose-style environments | High | Low | `DevLoginHandler` refuses requests unless the server runs in development mode with no forge provider configured. | A development-mode deployment exposed beyond localhost or a trusted private network effectively exposes one-step admin login. Never expose development mode. |
 
 ## Data Flow Analysis
 
@@ -224,7 +224,7 @@ Controls applied:
 Forge -> POST /api/v1/webhooks/{provider}
       -> optional IP allowlist middleware
       -> optional per-IP rate limiter
-      -> provider HMAC verification when webhook secret is configured
+      -> provider HMAC verification (secret mandatory outside development)
       -> event type header extraction
       -> payload parsed into push / PR event
       -> repository lookup and ref state update in PostgreSQL
@@ -234,12 +234,12 @@ Controls applied:
 
 - `webhookProtection` middleware in `internal/server/server.go`
 - GitHub dynamic `/meta` CIDR refresh and optional static CIDRs in `internal/server/ipallowlist.go`
-- Provider `ValidateWebhookPayload()` before any state mutation in `internal/server/webhooks.go` when a webhook secret is configured
+- Provider `ValidateWebhookPayload()` before any state mutation in `internal/server/webhooks.go`; a forge without a webhook secret fails closed outside development
 
 ### 4. MCP Tool Call Flow
 
 ```text
-MCP client -> dedicated MCP HTTP listener (default enabled on separate port)
+MCP client -> dedicated MCP HTTP listener (separate port; off by default outside development)
            -> internal/mcp server instance
            -> service/store queries for tenant data and analysis
            -> structured tool response back to client
@@ -308,7 +308,7 @@ Primary threats:
 
 - `docker-compose.yml` intentionally uses default credentials and exposes PostgreSQL, Forgejo, and Trivy on localhost ports.
 - Development OAuth and webhook flows may use HTTP, not HTTPS.
-- `/api/v1/auth/dev-login` remains available whenever no forge providers are configured, so exposing a Compose-style deployment beyond localhost creates an admin-session issuance path.
+- `/api/v1/auth/dev-login` is available in development mode when no forge providers are configured, so exposing a Compose-style deployment beyond localhost creates an admin-session issuance path.
 - Developers may accidentally reuse dev settings in production.
 
 Deployment guidance:
@@ -320,39 +320,80 @@ Deployment guidance:
 
 ## Supply Chain Considerations
 
-Hibou's supply chain risk includes Go modules, npm packages for the site build, the `aquasec/trivy:latest` image used in Compose, PostgreSQL images, forge container images for development, and the distroless runtime base image in the `Dockerfile`. These map most directly to OWASP A06:2021 Vulnerable and Outdated Components and OWASP A08:2021 Software and Data Integrity Failures.
+Hibou's supply chain risk includes Go modules, npm packages for the site and docs builds, the scanner binaries it runs, the development toolchain, container base images, and the CI pipeline that builds and signs releases. These map most directly to OWASP A06:2021 Vulnerable and Outdated Components and OWASP A08:2021 Software and Data Integrity Failures.
 
-Key observations:
+Controls in place:
 
-- The runtime image is minimized by using `gcr.io/distroless/base-debian12`, which reduces shell-based post-exploitation options.
-- Build stages rely on external registries for Node.js, Go, npm dependencies, and Go modules. Lockfiles and module sums help, but they do not eliminate malicious upstream release risk.
-- `docker-compose.yml` tracks `aquasec/trivy:latest`, which increases update velocity but also nondeterminism. Pinning by digest is preferable for controlled environments.
-- Hibou's own product mission suggests it should generate and publish its own SBOM for the shipped binary and container image, then continuously scan that SBOM.
+- The runtime image is built from a shell-free Wolfi base produced by apko from a package lockfile; CI builds the image `FROM` the base image digest apko just published, never from a mutable tag. Other base images are pinned by digest.
+- Every tool the development container downloads is checked against a sha256 pinned in `.devcontainer/Dockerfile`, taken from the upstream's published checksums; a version bump without a matching checksum fails the build.
+- Renovate waits 3 days after a release before proposing it (npm, Go, GitHub Actions, container images), and GitHub Actions are pinned by commit SHA.
+- In CI, Actions runtime and OIDC tokens (`ACTIONS_*`) are not forwarded into the development container that runs `npm ci`, tests, and third-party tools; signing and attestation run on the runner host.
+- Releases publish `SHA256SUMS` for the CLI binaries, signed keyless with Sigstore, and GitHub build-provenance attestations for the binaries and the image. The image (release tags and `sha-*` builds of `main`) and the Helm chart OCI artifact are signed with cosign. Release assets are never overwritten.
 
-Recommended supply-chain controls:
+Recommended supply-chain controls for operators:
 
-- Pin container images by digest in deployment manifests.
+- Deploy the image and chart by digest, and verify signatures before deploying (see "Verifying releases").
 - Continuously scan Go and npm dependency trees and alert on exploitable issues.
-- Produce a release SBOM for Hibou itself and sign release artifacts.
 - Review transitive dependency changes in both Go and npm lockfiles during release approval.
+
+### CLI and CI trust model
+
+- The CLI trusts the scanner catalog compiled into it. `hibou scan` resolves each job the server plans against that embedded catalog (artifact digest, arguments, engine, coordinates); the server can at most supply a mirror base URL, and a download that does not match the embedded digest is refused.
+- A Hibou instance cannot push binaries to CI. The server offers CLI downloads (`/api/v1/bin/{os}/{arch}`) for convenience, but the official upload actions only run a CLI the workflow supplies (`cli-path`), a download that matches a checksum pinned in the workflow (`cli-sha256`, taken from the release's signed `SHA256SUMS`), or a `hibou` already installed on the runner. The checksum the server advertises is informational, and no unverified download is executed.
+- The upload actions require an `https://` server URL unless plain HTTP is explicitly allowed for local testing, because the CLI sends the API token to that server.
+
+### Verifying releases
+
+Replace `X.Y.Z` with the release version. Keyless signatures are bound to this repository's CI workflow identity.
+
+```bash
+# CLI binaries: verify the signed checksum list, then the binaries against it
+gh release download vX.Y.Z -R hibouhq/hibou \
+  -p 'hibou-linux-amd64' -p SHA256SUMS -p SHA256SUMS.sigstore.json
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v'
+sha256sum --ignore-missing -c SHA256SUMS
+
+# Build provenance (binaries and image)
+gh attestation verify hibou-linux-amd64 -R hibouhq/hibou
+gh attestation verify oci://ghcr.io/hibouhq/hibou:X.Y.Z -R hibouhq/hibou
+
+# Container image and Helm chart signatures
+cosign verify ghcr.io/hibouhq/hibou:X.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v'
+cosign verify ghcr.io/hibouhq/charts/hibou:X.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/hibouhq/hibou/\.github/workflows/ci\.yml@refs/tags/v'
+```
+
+Builds of `main` (`sha-*` image tags, `0.0.0-sha-*` charts) are signed by the same workflow with the identity suffix `@refs/heads/main`.
 
 ## Residual Risks & Recommendations
 
 | Priority | Residual risk | Why it remains | Recommended mitigation |
 | --- | --- | --- | --- |
-| P1 | Default `HIBOU_SESSION_SECRET` left unchanged | `internal/config/config.go` ships a known static default, so sessions and OAuth state are forgeable if operators do not override it | Fail startup when `HIBOU_SESSION_SECRET` is unset or equal to the default, rotate any environment that ever exposed the default, and add deployment checks for secret uniqueness. |
-| P1 | Stateless session revocation gap | Signed cookies can be validated without server-side session storage | Add server-side session records or token versioning so single-user session revocation does not require global secret rotation. |
-| P1 | MCP listener exposure | Separate control plane may be reachable if operators expose default port or omit auth review | Disable MCP by default in exposed environments, or require explicit enablement plus network policy and authentication review. |
+| P1 | MCP listener exposure when enabled | Separate control plane is reachable if operators enable it and expose its port | Keep it off unless needed; when enabled, restrict it with network policy and review its authentication. |
 | P1 | Cross-tenant authorization regressions | Multi-tenant security depends on consistent authorization across hand-written org-role checks and Casbin-backed paths on every route | Add route-level authorization tests for every org/repo/client/release endpoint family, including negative IDOR cases and mixed-model policy drift checks. |
 | P1 | Bearer API key replay from compromised CI | Keys are transferable secrets with no workload binding | Add short-lived scoped upload tokens, OIDC workload identity, or signed request support for CI uploads. |
-| P1 | Zero-provider `dev-login` exposure | `POST /api/v1/auth/dev-login` issues a local admin session whenever no forge providers are configured | Disable the route outside explicit development mode, or fail startup when no providers are configured on a non-local deployment. |
-| P2 | Dynamic forge allowlist warm-up window | Requests are allowed until the dynamic IP list loads | Persist last-known-good IP ranges, fail closed when webhook secrets are absent, and alert on allowlist refresh failure. |
-| P2 | Webhook authenticity depends on operator configuration | GitHub, Forgejo, and GitLab skip HMAC verification if their webhook secret is unset | Require non-empty webhook secrets for enabled webhook providers and surface health warnings when validation is effectively disabled. |
+| P1 | Development mode exposed | Development mode accepts the default session secret, unverified webhooks, and `dev-login` | Never run an exposed instance with `HIBOU_DEVELOPMENT` set; alert on the startup warnings it logs. |
+| P2 | Dynamic forge allowlist warm-up window | Requests are allowed until the dynamic IP list loads (HMAC validation still applies) | Persist last-known-good IP ranges and alert on allowlist refresh failure. |
 | P2 | Artifact store integrity | Filesystem storage can be altered by host or pod compromise | Add checksums, append-only evidence records, and optional object storage with versioning/immutability. |
 | P2 | Upload resource exhaustion below max size | Valid but expensive payloads can still consume CPU and memory | Add per-user and per-org upload rate limits, parser timeouts, and worker queue quotas. |
 | P2 | Production secret management drift | Environment-based secret injection is easy to misconfigure | Publish a hardened deployment baseline covering secret stores, rotation cadence, audit requirements, and Kubernetes RBAC minimums. |
 | P3 | Notification delivery non-repudiation limits | Audit shows send attempt, not recipient receipt | Add optional signed delivery receipts or webhook retry response capture for high-assurance integrations. |
-| P3 | Supply chain nondeterminism in dev images | `latest` tags and unpinned upstreams increase uncertainty | Pin Compose images by digest for reproducible security testing and document update cadence. |
+| P3 | Supply chain nondeterminism in Compose | Some Compose service images still track floating tags | Pin Compose images by digest for reproducible security testing and document update cadence. |
+
+### Mitigated since version 1.0
+
+- Default or short `HIBOU_SESSION_SECRET`: refused at startup outside development.
+- Session revocation: per-user session epoch; logout and user revocation invalidate sessions server-side, and user revocation also revokes the user's API keys.
+- Webhook authenticity: a webhook secret is mandatory outside development; secret-less deliveries fail closed.
+- MCP listener: disabled by default outside development.
+- `dev-login`: only in development mode with no forge provider configured.
+- Empty `HIBOU_BASE_URL`: refused by `hibou serve` outside development.
+- Release integrity: signed `SHA256SUMS`, build provenance, signed image and chart (see "Verifying releases").
 
 ## Review Schedule
 

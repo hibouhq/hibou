@@ -93,3 +93,6 @@ ORDER BY repo.id ASC;
 
 -- name: DeleteRepository :exec
 DELETE FROM repositories WHERE id = $1;
+
+-- name: ListRepositoryIDsByOrg :many
+SELECT id FROM repositories WHERE org_id = $1;

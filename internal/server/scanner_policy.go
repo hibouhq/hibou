@@ -585,7 +585,7 @@ func (s *Server) handleCreateScopeOverride(w http.ResponseWriter, r *http.Reques
 		api.JSONError(w, http.StatusBadRequest, "kind must be exclude or module_root")
 		return
 	}
-	if request.Path == "" || request.Path == "." || strings.Contains(request.Path, "..") || len(request.Path) > 512 {
+	if !validScopeOverridePath(request.Path) {
 		api.JSONError(w, http.StatusBadRequest, "path must be a repository-relative path below the root")
 		return
 	}
@@ -607,6 +607,13 @@ func (s *Server) handleCreateScopeOverride(w http.ResponseWriter, r *http.Reques
 	})
 	s.refreshApplicabilityAsync(repo, repo.DefaultBranch)
 	api.JSON(w, http.StatusCreated, saved)
+}
+
+// validScopeOverridePath accepts a repository-relative path below the root.
+// Override paths become scanner targets and exclusions on the CLI, so a
+// leading "-" (read as an option, Q14) and ".." are refused.
+func validScopeOverridePath(p string) bool {
+	return p != "" && p != "." && !strings.Contains(p, "..") && !strings.HasPrefix(p, "-") && len(p) <= 512
 }
 
 // @Summary      Remove an owner scope refinement

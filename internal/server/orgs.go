@@ -13,6 +13,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/orgprovision"
 	"github.com/hibouhq/hibou/internal/repoinventory"
 	"github.com/hibouhq/hibou/internal/store"
@@ -105,8 +106,10 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusBadRequest, "provider is not configured on this instance")
 		return
 	}
+	var account orgprovision.ForgeAccount
 	if s.forges[input.Provider] != nil && s.orgProvisionSvc != nil {
-		err := s.orgProvisionSvc.AuthorizeForgeOrgCreation(r.Context(), user, input.Provider, input.Slug)
+		var err error
+		account, err = s.orgProvisionSvc.AuthorizeForgeOrgCreationAccount(r.Context(), user, input.Provider, input.Slug)
 		if errors.Is(err, orgprovision.ErrForgeOrgUnauthorized) {
 			api.JSONError(w, http.StatusForbidden, "forge organization creation requires a verified forge admin of an installed account")
 			return
@@ -137,6 +140,9 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 
 	org, ok := s.createOrganizationWithDefaults(w, r, tx, user.ID, input)
 	if !ok {
+		return
+	}
+	if !s.bindCreatedOrg(w, r, tx, org, account) {
 		return
 	}
 
@@ -207,6 +213,27 @@ func (s *Server) createOrganizationWithDefaults(w http.ResponseWriter, r *http.R
 		return nil, false
 	}
 	return org, true
+}
+
+// bindCreatedOrg binds a manually created org to the installed forge account
+// its creation was authorized against, as auto-provisioning does: the owner
+// checks on forge calls and the rename protections key on that binding, and
+// an unbound org would match any account its slug happens to slugify from.
+func (s *Server) bindCreatedOrg(w http.ResponseWriter, r *http.Request, tx *sql.Tx, org *store.Organization, account orgprovision.ForgeAccount) bool {
+	if account.Login == "" {
+		return true
+	}
+	if err := s.queries.WithTx(tx).SetOrganizationForgeAccount(r.Context(), org.ID, account.ID, account.Login); err != nil {
+		if isUniqueViolation(err) {
+			api.JSONError(w, http.StatusConflict, "this forge account is already bound to another organization")
+		} else {
+			api.JSONError(w, http.StatusInternalServerError, "failed to create organization")
+		}
+		return false
+	}
+	org.ForgeAccountLogin = account.Login
+	org.ForgeAccountID = account.ID
+	return true
 }
 
 func (s *Server) seedCreatedOrg(orgID, userID uuid.UUID) {
@@ -422,6 +449,11 @@ func (s *Server) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.auditOrgConfig(r, org.ID, audit.ActionOrgUpdate, "organization", org.ID.String(), map[string]any{
+		"changed_fields": audit.ChangedFields(org, updated, "updated_at", "created_at"),
+		"before":         map[string]any{"name": org.Name, "display_name": org.DisplayName},
+		"after":          map[string]any{"name": updated.Name, "display_name": updated.DisplayName},
+	})
 	api.JSON(w, http.StatusOK, updated)
 }
 
@@ -476,6 +508,13 @@ func (s *Server) handleDeleteOrg(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusInternalServerError, "failed to delete organization")
 		return
 	}
+	// audit_logs has no FK to organizations: the record outlives the org.
+	s.auditOrgConfig(r, org.ID, audit.ActionOrgDelete, "organization", org.ID.String(), map[string]any{
+		"provider":         org.Provider,
+		"slug":             org.Slug,
+		"name":             org.Name,
+		"purged_artifacts": len(objectKeys),
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -5,6 +5,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -101,6 +102,18 @@ func effectiveLimits(cfg config.LimitsConfig) config.LimitsConfig {
 	}
 	if cfg.Upload.ProcessingConcurrency <= 0 {
 		cfg.Upload.ProcessingConcurrency = defaults.Upload.ProcessingConcurrency
+	}
+	if cfg.Upload.MaxConcurrentPerPrincipal <= 0 {
+		cfg.Upload.MaxConcurrentPerPrincipal = defaults.Upload.MaxConcurrentPerPrincipal
+	}
+	if cfg.Upload.MaxConcurrentPerOrg <= 0 {
+		cfg.Upload.MaxConcurrentPerOrg = defaults.Upload.MaxConcurrentPerOrg
+	}
+	if cfg.Upload.MinThroughputBytes <= 0 {
+		cfg.Upload.MinThroughputBytes = defaults.Upload.MinThroughputBytes
+	}
+	if cfg.Upload.MinThroughputWindow <= 0 {
+		cfg.Upload.MinThroughputWindow = defaults.Upload.MinThroughputWindow
 	}
 	// RateLimit.Enabled is not defaulted: a zero config means "off".
 	return cfg
@@ -227,7 +240,7 @@ func spaContentSecurityPolicy(baseURL string) string {
 	}
 	return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' data: blob: https:; font-src 'self' data:; connect-src " + connect + "; " +
-		"worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+		"worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 }
 
 // rateLimiters holds the token buckets of rate_limit.*. A nil field means
@@ -307,14 +320,35 @@ func rateLimitMiddleware(limiter *ipRateLimiter, key func(*http.Request) string)
 // uploadConcurrencyMiddleware holds at most upload.max_concurrent uploads in
 // flight per replica: each one buffers its decoded artifact several times
 // over, so the cap is what keeps a burst of CI jobs from exhausting memory.
-// A request waits up to upload.queue_wait for a slot, then gets 503.
+// Before queueing, the caller must be a principal able to upload somewhere
+// (uploadAdmission), and one principal or org holds at most
+// upload.max_concurrent_per_{principal,org} uploads, so a single tenant
+// cannot take every slot. A request waits up to upload.queue_wait for its
+// slots, then gets 503; once admitted, a body slower than
+// upload.min_throughput_* is cut off (uploadThroughputGuard).
 func (s *Server) uploadConcurrencyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys, ok := s.uploadAdmission(w, r)
+		if !ok {
+			return
+		}
 		timer := time.NewTimer(s.limits.Upload.QueueWait)
 		defer timer.Stop()
+		acquired, cancelled := s.uploadInFlight.acquire(r.Context(), timer.C, keys)
+		if !acquired {
+			if !cancelled {
+				w.Header().Set("Retry-After", "30")
+				api.JSONError(w, http.StatusServiceUnavailable, "too many uploads in flight for this principal or organization, retry later")
+			}
+			return
+		}
+		defer s.uploadInFlight.release(keys)
 		select {
 		case s.uploadSlots <- struct{}{}:
 			defer func() { <-s.uploadSlots }()
+			guard := newUploadThroughputGuard(w, r.Body, s.limits.Upload.MinThroughputBytes, s.limits.Upload.MinThroughputWindow)
+			defer guard.stop()
+			r.Body = guard
 			next.ServeHTTP(w, r)
 		case <-timer.C:
 			w.Header().Set("Retry-After", "30")
@@ -322,4 +356,50 @@ func (s *Server) uploadConcurrencyMiddleware(next http.Handler) http.Handler {
 		case <-r.Context().Done():
 		}
 	})
+}
+
+// trustedProxyClientIP returns middleware that takes the client IP from
+// header when the peer the ingress saw (chi's X-Forwarded-For result, else
+// the TCP peer) is inside cidrs: behind a CDN that peer is a CDN edge, and
+// every client would otherwise share its rate-limit bucket, audit IP and
+// webhook allowlist verdict. Nil when not configured.
+func trustedProxyClientIP(header string, cidrs []netip.Prefix) func(http.Handler) http.Handler {
+	if header == "" || len(cidrs) == 0 {
+		return nil
+	}
+	fromHeader := middleware.ClientIPFromHeader(header)
+	return func(next http.Handler) http.Handler {
+		viaHeader := fromHeader(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if peer := requestPeerAddr(r); peer.IsValid() && prefixesContain(cidrs, peer) {
+				viaHeader.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func requestPeerAddr(r *http.Request) netip.Addr {
+	if addr := middleware.GetClientIPAddr(r.Context()); addr.IsValid() {
+		return addr.Unmap()
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr.Unmap()
+}
+
+func prefixesContain(prefixes []netip.Prefix, addr netip.Addr) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }

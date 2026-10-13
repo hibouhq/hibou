@@ -78,3 +78,11 @@ COMPOSE_.*
 XDG_RUNTIME_DIR
 XDG_CONFIG_HOME
 SSH_AUTH_SOCK
+
+# ── Actions runtime / OIDC tokens (host-only) ───────────────────────
+# ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN mint OIDC tokens (keyless signing,
+# cloud federation) and ACTIONS_RUNTIME_TOKEN/ACTIONS_CACHE_URL reach the
+# cache and artifact services. Steps run in the devcontainer (npm ci, tests,
+# third-party tools) never need them; signing and attestation run on the host.
+ACTIONS_ID_TOKEN_REQUEST_.*
+ACTIONS_.*

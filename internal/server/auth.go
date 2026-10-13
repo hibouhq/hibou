@@ -21,7 +21,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.authMgr.HandleOAuthCallback(w, r)
 	if err != nil {
-		internalauth.WriteCallbackError(w, s.authMgr, err)
+		internalauth.WriteCallbackError(w, r, s.authMgr, err)
 		return
 	}
 	if s.orgProvisionSvc != nil {

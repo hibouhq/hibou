@@ -12004,6 +12004,10 @@ const docTemplate = `{
                 "avatar_url": {
                     "type": "string"
                 },
+                "can_triage_cves": {
+                    "description": "CanTriageCVEs mirrors the triage routes' authority (instance admin or\ninstance-scoped cve-triager), so the UI only offers what will work.",
+                    "type": "boolean"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -13580,9 +13584,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "id": {
-                    "type": "string"
-                },
-                "key_hash": {
                     "type": "string"
                 },
                 "last_used_at": {
@@ -15203,9 +15204,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "scanner_version": {
-                    "type": "string"
-                },
-                "secret_hash": {
                     "type": "string"
                 },
                 "secret_type": {
