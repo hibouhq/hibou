@@ -2,6 +2,8 @@ package lsp
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -115,5 +117,24 @@ func TestParseRemote(t *testing.T) {
 		if _, err := parseRemote(bad); err == nil {
 			t.Errorf("parseRemote(%q) succeeded, want error", bad)
 		}
+	}
+}
+
+func TestNestedRepos(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, dir := range []string{"sample/.git", "tools/castor/.git", "node_modules/pkg/.git", "a/b/c/d/.git", "sample/inner/.git"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string]bool{}
+	for _, p := range nestedRepos(root) {
+		rel, _ := filepath.Rel(root, p)
+		got[filepath.ToSlash(rel)] = true
+	}
+	if !got["sample"] || !got["tools/castor"] || len(got) != 2 {
+		t.Fatalf("nested repos = %v, want sample and tools/castor only (no node_modules, no deeper than 3, none inside another repo)", got)
 	}
 }

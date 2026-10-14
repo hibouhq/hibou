@@ -225,6 +225,17 @@ func (s *Server) handle(ctx, sessionCtx context.Context, stop context.CancelFunc
 		var p findingsParams
 		_ = decode(params, &p)
 		return s.findingsFor(ctx, p), nil
+	case "hibou/repositories":
+		// The client's own list of repositories (VS Code's git: what Source
+		// Control shows), so hibou tracks the same ones.
+		var p struct {
+			Roots []string `json:"roots"`
+		}
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		go s.trackRepositories(sessionCtx, p.Roots)
+		return nil, nil
 	case "hibou/presets":
 		return s.presets(ctx)
 	case "hibou/cweSets":
@@ -445,6 +456,12 @@ func (s *Server) startLoops(ctx context.Context) {
 	go func() {
 		for _, root := range roots {
 			s.workspaceFor(loopCtx, root)
+			// Nested checkouts (a sample project, a separate repository kept
+			// inside the folder) are tracked from the start, not only once one
+			// of their files is opened, so the panel can list every repository.
+			for _, nested := range nestedRepos(root) {
+				s.workspaceFor(loopCtx, nested)
+			}
 		}
 		s.refreshAll(loopCtx, true)
 

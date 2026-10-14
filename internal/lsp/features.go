@@ -712,35 +712,47 @@ func (s *Server) executeCommand(ctx, sessionCtx context.Context, p executeComman
 
 // panelFinding is one row of the clients' findings panel.
 type panelFinding struct {
-	Fingerprint string   `json:"fingerprint"`
-	Title       string   `json:"title"`
-	Severity    string   `json:"severity"`
-	Status      string   `json:"status"`
-	Accepted    bool     `json:"accepted"`
-	Type        string   `json:"type"`
-	Rule        string   `json:"rule,omitempty"`
-	Scanner     string   `json:"scanner,omitempty"`
-	Component   string   `json:"component,omitempty"`
-	Package     string   `json:"package,omitempty"` // component name, for grouping
-	Version     string   `json:"version,omitempty"`
-	AdvisoryID  string   `json:"advisoryId,omitempty"`
-	Path        string   `json:"path,omitempty"`
-	URI         string   `json:"uri,omitempty"`
-	Range       lspRange `json:"range"`
-	Edited      bool     `json:"edited,omitempty"`
-	KEV         bool     `json:"kev,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+	// Root is the work tree the finding belongs to (Status.root), so a list
+	// spanning several repositories can be grouped by repository.
+	Root       string   `json:"root"`
+	Title      string   `json:"title"`
+	Severity   string   `json:"severity"`
+	Status     string   `json:"status"`
+	Accepted   bool     `json:"accepted"`
+	Type       string   `json:"type"`
+	Rule       string   `json:"rule,omitempty"`
+	Scanner    string   `json:"scanner,omitempty"`
+	Component  string   `json:"component,omitempty"`
+	Package    string   `json:"package,omitempty"` // component name, for grouping
+	Version    string   `json:"version,omitempty"`
+	AdvisoryID string   `json:"advisoryId,omitempty"`
+	Path       string   `json:"path,omitempty"`
+	URI        string   `json:"uri,omitempty"`
+	Range      lspRange `json:"range"`
+	Edited     bool     `json:"edited,omitempty"`
+	KEV        bool     `json:"kev,omitempty"`
 	// Presence is reported, not_rechecked or unconfirmed (ADR-034).
 	Presence string `json:"presence,omitempty"`
 	// History: a secret no longer in the code, still in git history at Commit.
 	History bool   `json:"history,omitempty"`
 	Commit  string `json:"commit,omitempty"`
 	// CWEs the finding carries, for the panel's cwe: completion counts.
-	CWEs   []apiCWE `json:"cwes,omitempty"`
-	WebURL string   `json:"webUrl"`
+	CWEs []apiCWE `json:"cwes,omitempty"`
+	// Risk scores shown next to the finding (ADR-038): CVSS base score and
+	// version, EPSS probability and percentile.
+	CVSS           *float64 `json:"cvss,omitempty"`
+	CVSSVersion    string   `json:"cvssVersion,omitempty"`
+	EPSS           *float64 `json:"epss,omitempty"`
+	EPSSPercentile *float64 `json:"epssPercentile,omitempty"`
+	WebURL         string   `json:"webUrl"`
 }
 
 type findingsParams struct {
 	URI string `json:"uri"`
+	// Root restricts the list to one work tree (a status's root): a workspace
+	// can hold several repositories, and the panel shows one at a time.
+	Root string `json:"root"`
 	// Query is the web UI's filter language (internal/filterquery), evaluated
 	// by the server so results match the web UI exactly.
 	Query string `json:"query"`
@@ -770,7 +782,7 @@ func (s *Server) findingsFor(ctx context.Context, p findingsParams) findingsResu
 		ws.mu.Lock()
 		findings, repo, snap, root := ws.findings, ws.repo, ws.snapshot, ws.root
 		ws.mu.Unlock()
-		if repo == nil || snap == nil {
+		if repo == nil || snap == nil || (p.Root != "" && filepath.Clean(p.Root) != root) {
 			continue
 		}
 		if query != "" {
@@ -820,6 +832,7 @@ func (s *Server) findingsFor(ctx context.Context, p findingsParams) findingsResu
 			}
 			pf := toPanel(server, repo, f, rel, uri, r, edited)
 			pf.History = history
+			pf.Root = root
 			out = append(out, pf)
 		}
 	}
@@ -882,6 +895,13 @@ func toPanel(server string, repo *repoRef, f apiFinding, rel, uri string, r lspR
 	}
 	if f.ComponentName != "" {
 		pf.Component = strings.TrimSpace(f.ComponentName + " " + f.ComponentVersion)
+	}
+	if f.CVSS != nil && f.CVSS.Score != nil {
+		pf.CVSS, pf.CVSSVersion = f.CVSS.Score, f.CVSS.Version
+	}
+	if f.EPSS != nil {
+		score, percentile := f.EPSS.Score, f.EPSS.Percentile
+		pf.EPSS, pf.EPSSPercentile = &score, &percentile
 	}
 	if repo != nil {
 		pf.WebURL = findingURL(server, *repo, f.Fingerprint)
