@@ -248,8 +248,11 @@ type apiFinding struct {
 	AdvisoryID             string `json:"advisory_id"`
 	// Presence is reported, not_rechecked or unconfirmed (ADR-034). A
 	// carried row's lines refer to LastSeenCommit, not the snapshot's commit.
-	Presence        string          `json:"presence"`
-	LastSeenCommit  string          `json:"last_seen_commit"`
+	Presence       string `json:"presence"`
+	LastSeenCommit string `json:"last_seen_commit"`
+	// CommitSHA is, for a secret, the commit where it was found (history
+	// scan); its lines refer to that commit.
+	CommitSHA       string          `json:"commit_sha"`
 	Solution        string          `json:"solution"`
 	RemediationLink string          `json:"remediation_link"`
 	Reachability    string          `json:"reachability"`

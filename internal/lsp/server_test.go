@@ -607,3 +607,47 @@ func TestPlaceMapsCarriedFindingsFromLastSeenCommit(t *testing.T) {
 		}
 	}
 }
+
+// A secret's lines refer to the commit the history scan found it in. One
+// replaced since is history-only (nothing to underline, still to rotate); one
+// still present is placed on its current line.
+func TestPlaceSecretsFromTheirCommit(t *testing.T) {
+	repo := t.TempDir()
+	gitCmd(t, repo, "init", "-q", "-b", "main")
+	write := func(content string) {
+		if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package a\nvar gone = \"0123456789abcdef\"\nvar kept = \"fedcba9876543210\"\n}\n")
+	gitCmd(t, repo, "add", "a.go")
+	gitCmd(t, repo, "commit", "-q", "-m", "secrets")
+	found := gitCmd(t, repo, "rev-parse", "HEAD")
+	current := "package a\n// moved\nvar gone = defaultSecret\nvar kept = \"fedcba9876543210\"\n}\n"
+	write(current)
+	gitCmd(t, repo, "commit", "-q", "-am", "replace one")
+	head := gitCmd(t, repo, "rev-parse", "HEAD")
+
+	s := &Server{docs: map[string]*document{}, workspaces: map[string]*workspace{}, rootOfDir: map[string]string{}}
+	ws := newWorkspace(s, repo)
+	ws.state = stateReady
+	ws.snapshot = &pickedSnapshot{ID: "s", Commit: head}
+	ws.findings = []apiFinding{
+		{Fingerprint: "gone", Type: "secret", Status: "detected", Presence: "not_rechecked", LastSeenCommit: head, CommitSHA: found, StartLine: 2, EndLine: 2, FilePath: "a.go"},
+		{Fingerprint: "kept", Type: "secret", Status: "detected", Presence: "reported", CommitSHA: found, StartLine: 3, EndLine: 3, FilePath: "a.go"},
+	}
+	ws.byPath = map[string][]int{"a.go": {0, 1}}
+	d := document{uri: "file:///a.go", ws: ws, rel: "a.go"}
+	d.setText(current)
+
+	got := map[string]placedFinding{}
+	for _, p := range s.place(context.Background(), d) {
+		got[p.f.Fingerprint] = p
+	}
+	if !got["gone"].historyOnly {
+		t.Errorf("a replaced secret must be history-only, got %+v", got["gone"])
+	}
+	if k := got["kept"]; k.historyOnly || k.start != 3 {
+		t.Errorf("a secret still present must sit on line 3, got %+v", k)
+	}
+}

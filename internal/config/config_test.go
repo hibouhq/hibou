@@ -767,7 +767,7 @@ func TestValidateStartupRejectsShortSecretOutsideDevelopment(t *testing.T) {
 // §3.4 / A3: outside development a forge without a webhook secret or an
 // OAuth client id refuses startup; development only warns.
 func TestValidateStartupForgeSecrets(t *testing.T) {
-	const secret = "0123456789abcdef0123456789abcdef"
+	const secret = "0123456789abcdef0123456789abcdef" // gitleaks:allow -- this is a test
 	complete := ForgeConfig{Type: "github", ID: "github", ClientID: "cid", WebhookSecret: "hook"}
 
 	if err := (Config{SessionSecret: secret, Forges: []ForgeConfig{complete}}).ValidateStartup(zerolog.Nop()); err != nil {

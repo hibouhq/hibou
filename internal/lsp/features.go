@@ -27,6 +27,9 @@ type placedFinding struct {
 	// inSource: the buffer already carries the scanner's suppression
 	// directive; hibou will see it at the next scan.
 	inSource bool
+	// historyOnly: a secret whose flagged lines no longer exist in the code.
+	// It lives on in git history (rotate it) but has no line to underline.
+	historyOnly bool
 }
 
 func (s *Server) visible(f apiFinding) bool {
@@ -67,9 +70,11 @@ func (s *Server) place(ctx context.Context, d document) []placedFinding {
 			if end < start {
 				end = start
 			}
-			ns, ne, edited := mapFrom(findingCommit(f, snap.Commit)).mapRange(start, end)
+			lm := mapFrom(findingCommit(f, snap.Commit))
+			ns, ne, edited := lm.mapRange(start, end)
 			placed = append(placed, placedFinding{f: f, start: ns, end: ne, edited: edited,
-				inSource: f.Status == "detected" && suppressedInSource(f, d.lines, ns, ne)})
+				inSource:    f.Status == "detected" && suppressedInSource(f, d.lines, ns, ne),
+				historyOnly: f.Type == "secret" && f.CommitSHA != "" && lm.gone(start, end)})
 		}
 	}
 	placed = append(placed, s.manifestFindings(d)...)
@@ -81,6 +86,10 @@ func (s *Server) place(ctx context.Context, d document) []placedFinding {
 // reported finding, the commit where a carried one was last seen otherwise.
 // Mapping a carried row from the snapshot commit put it on stale lines.
 func findingCommit(f apiFinding, snapshotCommit string) string {
+	// A secret's lines refer to the commit where the history scan found it.
+	if f.Type == "secret" && f.CommitSHA != "" {
+		return f.CommitSHA
+	}
 	if carried(f) && f.LastSeenCommit != "" {
 		return f.LastSeenCommit
 	}
@@ -206,6 +215,9 @@ func (s *Server) publishSnapshot(ctx context.Context, d document, version *int) 
 	s.mu.Unlock()
 	diags := make([]diagnostic, 0, len(placed))
 	for _, p := range placed {
+		if p.historyOnly {
+			continue // nothing left to underline; the panel lists it
+		}
 		diags = append(diags, s.toDiagnostic(server, d, p))
 	}
 	_ = s.conn.notify("textDocument/publishDiagnostics", publishDiagnosticsParams{URI: d.uri, Version: version, Diagnostics: diags})
@@ -297,6 +309,9 @@ func (s *Server) hover(ctx context.Context, p textDocumentPositionParams) *hover
 	d := s.snapshotDoc(live)
 	var hits []placedFinding
 	for _, pf := range s.place(ctx, d) {
+		if pf.historyOnly {
+			continue
+		}
 		if p.Position.Line >= pf.start && p.Position.Line <= pf.end {
 			hits = append(hits, pf)
 		}
@@ -716,7 +731,10 @@ type panelFinding struct {
 	KEV         bool     `json:"kev,omitempty"`
 	// Presence is reported, not_rechecked or unconfirmed (ADR-034).
 	Presence string `json:"presence,omitempty"`
-	WebURL   string `json:"webUrl"`
+	// History: a secret no longer in the code, still in git history at Commit.
+	History bool   `json:"history,omitempty"`
+	Commit  string `json:"commit,omitempty"`
+	WebURL  string `json:"webUrl"`
 }
 
 type findingsParams struct {
@@ -788,12 +806,19 @@ func (s *Server) findingsFor(ctx context.Context, p findingsParams) findingsResu
 			}
 			line := max(f.StartLine-1, 0)
 			r, edited := lspRange{Start: position{Line: line}, End: position{Line: line}}, false
+			history := false
 			if fileURI != "" {
 				if pos, ok := positions.lookup(rel, fileURI, f.Fingerprint); ok {
-					r, edited = pos.r, pos.edited
+					r, edited, history = pos.r, pos.edited, pos.history
 				}
 			}
-			out = append(out, toPanel(server, repo, f, rel, fileURI, r, edited))
+			uri := fileURI
+			if history {
+				uri = "" // no line to open: the row opens the finding in hibou
+			}
+			pf := toPanel(server, repo, f, rel, uri, r, edited)
+			pf.History = history
+			out = append(out, pf)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return severityRank(out[i].Severity) < severityRank(out[j].Severity) })
@@ -801,8 +826,9 @@ func (s *Server) findingsFor(ctx context.Context, p findingsParams) findingsResu
 }
 
 type mappedPosition struct {
-	r      lspRange
-	edited bool
+	r       lspRange
+	edited  bool
+	history bool // a secret whose lines no longer exist: only in git history
 }
 
 // positionCache places each file's findings once per request.
@@ -836,7 +862,7 @@ func (c *positionCache) lookup(rel, uri, fingerprint string) (mappedPosition, bo
 		}
 		if d.ws != nil {
 			for _, p := range c.s.place(c.ctx, d) {
-				byFP[p.f.Fingerprint] = mappedPosition{r: lineRange(d.lines, p.start, p.end), edited: p.edited}
+				byFP[p.f.Fingerprint] = mappedPosition{r: lineRange(d.lines, p.start, p.end), edited: p.edited, history: p.historyOnly}
 			}
 		}
 		c.files[rel] = byFP
@@ -850,7 +876,7 @@ func toPanel(server string, repo *repoRef, f apiFinding, rel, uri string, r lspR
 		Fingerprint: f.Fingerprint, Title: orDefault(f.Title, f.Description), Severity: f.Severity, Status: f.Status,
 		Accepted: f.Acceptance != nil, Type: f.Type, Rule: f.ruleID(), Scanner: f.ScannerName, Path: rel, URI: uri,
 		Range: r, Edited: edited, KEV: f.KEV, Presence: f.Presence, AdvisoryID: f.AdvisoryID,
-		Package: f.ComponentName, Version: f.ComponentVersion,
+		Package: f.ComponentName, Version: f.ComponentVersion, Commit: f.CommitSHA,
 	}
 	if f.ComponentName != "" {
 		pf.Component = strings.TrimSpace(f.ComponentName + " " + f.ComponentVersion)

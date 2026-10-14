@@ -155,6 +155,22 @@ func myersMatches(a, b []string) ([][2]int, bool) {
 	return pairs, true
 }
 
+// gone reports whether every line of the 0-based range [start, end] was
+// deleted or rewritten: the flagged code no longer exists in the buffer.
+func (m *lineMap) gone(start, end int) bool {
+	if len(m.newLine) == 0 {
+		return false
+	}
+	start = clamp(start, 0, len(m.newLine)-1)
+	end = clamp(end, start, len(m.newLine)-1)
+	for i := start; i <= end; i++ {
+		if m.newLine[i] >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // mapRange maps the 0-based inclusive range [start, end] of the scanned file.
 // It returns the current range and whether any line of it was edited. A range
 // whose lines were all deleted is anchored at the nearest surviving line
