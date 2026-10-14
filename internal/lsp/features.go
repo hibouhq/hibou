@@ -22,6 +22,9 @@ type placedFinding struct {
 	// manifest is true for a dependency finding attached to the manifest line
 	// declaring its component.
 	manifest bool
+	// inSource: the buffer already carries the scanner's suppression
+	// directive; hibou will see it at the next scan.
+	inSource bool
 }
 
 func (s *Server) visible(f apiFinding) bool {
@@ -63,7 +66,8 @@ func (s *Server) place(ctx context.Context, d document) []placedFinding {
 				end = start
 			}
 			ns, ne, edited := mapFrom(findingCommit(f, snap.Commit)).mapRange(start, end)
-			placed = append(placed, placedFinding{f: f, start: ns, end: ne, edited: edited})
+			placed = append(placed, placedFinding{f: f, start: ns, end: ne, edited: edited,
+				inSource: f.Status == "detected" && suppressedInSource(f, d.lines, ns, ne)})
 		}
 	}
 	placed = append(placed, s.manifestFindings(d)...)
@@ -241,8 +245,11 @@ func (s *Server) toDiagnostic(server string, d document, p placedFinding) diagno
 	case f.Acceptance != nil:
 		msg = "Accepted (" + strings.ReplaceAll(f.Acceptance.ReasonKind, "_", " ") + "): " + msg
 		sev, diagTags = severityHint, []int{tagUnnecessary}
+	case p.inSource:
+		msg = "Suppressed in source (takes effect at the next scan): " + msg
+		sev, diagTags = severityHint, []int{tagUnnecessary}
 	}
-	if p.edited {
+	if p.edited && !p.inSource {
 		msg += " — code changed since the scan; may already be fixed"
 	}
 	if carried(f) {
@@ -352,6 +359,8 @@ func hoverMarkdown(server string, repo *repoRef, p placedFinding) string {
 	}
 
 	switch {
+	case p.inSource:
+		b.WriteString("\nSuppressed in source by a directive in this file. hibou records it at the next scan.\n")
 	case f.Status == "suppressed":
 		b.WriteString("\nSuppressed in source")
 		if j := f.suppressionJustification(); j != "" {
@@ -364,7 +373,7 @@ func hoverMarkdown(server string, repo *repoRef, p placedFinding) string {
 	case f.Acceptance != nil:
 		fmt.Fprintf(&b, "\nAccepted as %s: %s\n", strings.ReplaceAll(f.Acceptance.ReasonKind, "_", " "), mdEscape(f.Acceptance.Reason))
 	}
-	if p.edited {
+	if p.edited && !p.inSource {
 		b.WriteString("\n_The code changed since this scan. The finding may already be fixed; the next scan will tell._\n")
 	}
 	if carried(f) {
@@ -448,7 +457,8 @@ func (s *Server) codeActions(p codeActionParams) []codeAction {
 			Command: &command{Title: "Open in hibou", Command: cmdOpenFinding, Arguments: []any{fp}},
 		})
 
-		if f.Status == "detected" && f.Acceptance == nil {
+		inSource := suppressedInSource(f, d.lines, diag.Range.Start.Line, diag.Range.End.Line)
+		if f.Status == "detected" && f.Acceptance == nil && !inSource {
 			if _, ok := directiveFor(f, reasonPlaceholder); ok {
 				line := diag.Range.Start.Line
 				if snippets {

@@ -326,6 +326,32 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected edit %+v", edits)
 	}
 
+	// Once the directive is in the buffer, the finding reads as suppressed
+	// (greyed) without waiting for the next scan.
+	lines := strings.Split(edited, "\n")
+	lines[5] += edits[0].NewText
+	c.notify("textDocument/didChange", map[string]any{
+		"textDocument":   map[string]any{"uri": uri, "version": 2},
+		"contentChanges": []map[string]any{{"text": strings.Join(lines, "\n")}},
+	})
+	deadline := time.After(10 * time.Second)
+	for suppressed := false; !suppressed; {
+		select {
+		case msg := <-c.notes:
+			var p publishDiagnosticsParams
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.URI == uri && p.Version != nil && *p.Version == 2 && len(p.Diagnostics) == 1 {
+				d := p.Diagnostics[0]
+				if d.Severity != severityHint || !strings.HasPrefix(d.Message, "Suppressed in source") {
+					t.Fatalf("after the directive: %+v", d)
+				}
+				suppressed = true
+			}
+		case <-deadline:
+			t.Fatal("no diagnostics for the suppressed buffer")
+		}
+	}
+
 	var statuses []status
 	if err := c.call("hibou/status", nil, &statuses); err != nil {
 		t.Fatal(err)

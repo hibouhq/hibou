@@ -176,3 +176,66 @@ func utf16Len(s string) int {
 	}
 	return n
 }
+
+// Directive patterns, matched case-insensitively on the finding's lines. The
+// optional capture lists the rule IDs a directive is limited to.
+var (
+	gosecDirective   = regexp.MustCompile(`(?i)#nosec\b([^-#\n]*)`)
+	banditDirective  = regexp.MustCompile(`(?i)#\s*nosec\b:?([^#\n]*)`)
+	semgrepDirective = regexp.MustCompile(`(?i)\bnosemgrep\b(?::\s*([^\n]*))?`)
+	eslintSameLine   = regexp.MustCompile(`(?i)eslint-disable-line\b([^\n]*)`)
+	eslintNextLine   = regexp.MustCompile(`(?i)eslint-disable-next-line\b([^\n]*)`)
+	gitleaksAllow    = regexp.MustCompile(`(?i)gitleaks:allow\b`)
+)
+
+// suppressedInSource reports whether the current buffer already carries the
+// scanner's native directive for f on its lines [start, end] (0-based), or on
+// the line above for directives that apply to the next line. hibou learns
+// about it at the next scan; until then the editor shows the finding as
+// suppressed rather than open.
+func suppressedInSource(f apiFinding, lines []string, start, end int) bool {
+	if start < 0 || start >= len(lines) {
+		return false
+	}
+	end = min(max(end, start), len(lines)-1)
+	rule := f.ruleID()
+	tool := strings.ToLower(f.ScannerName)
+	on := func(re *regexp.Regexp, from, to int) bool {
+		for i := max(from, 0); i <= to && i < len(lines); i++ {
+			if m := re.FindStringSubmatch(lines[i]); m != nil {
+				if len(m) < 2 || rulesCover(m[1], rule) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	switch {
+	case strings.Contains(tool, "gosec"):
+		return on(gosecDirective, start, end)
+	case strings.Contains(tool, "semgrep") || strings.Contains(tool, "opengrep"):
+		return on(semgrepDirective, start-1, end)
+	case strings.Contains(tool, "eslint"):
+		return on(eslintSameLine, start, end) || on(eslintNextLine, start-1, start-1)
+	case strings.Contains(tool, "bandit"):
+		return on(banditDirective, start, end)
+	case strings.Contains(tool, "gitleaks"):
+		return on(gitleaksAllow, start, end)
+	}
+	return false
+}
+
+// rulesCover reports whether a directive's rule list (possibly empty, which
+// means every rule) names rule.
+func rulesCover(list, rule string) bool {
+	ids := strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
+	if len(ids) == 0 || rule == "" {
+		return true
+	}
+	for _, id := range ids {
+		if strings.EqualFold(strings.TrimSpace(id), rule) {
+			return true
+		}
+	}
+	return false
+}

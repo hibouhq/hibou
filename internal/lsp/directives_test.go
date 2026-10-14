@@ -69,3 +69,34 @@ func TestDirectiveRefusals(t *testing.T) {
 		t.Errorf("sanitizeReason = %q", got)
 	}
 }
+
+func TestSuppressedInSource(t *testing.T) {
+	t.Parallel()
+
+	finding := func(tool, rule string) apiFinding {
+		return apiFinding{ScannerName: tool, PrimaryIdentifierKind: "rule", PrimaryIdentifierValue: rule}
+	}
+	cases := []struct {
+		name  string
+		f     apiFinding
+		lines []string
+		line  int
+		want  bool
+	}{
+		{"gitleaks allow", finding("gitleaks", "generic-api-key"), []string{`const k = "x" // gitleaks:allow -- test`}, 0, true},
+		{"gosec named rule", finding("gosec", "G304"), []string{`f, _ := os.Open(p) // #nosec G304 -- reviewed`}, 0, true},
+		{"gosec other rule", finding("gosec", "G304"), []string{`f, _ := os.Open(p) // #nosec G101 -- reviewed`}, 0, false},
+		{"gosec blanket", finding("gosec", "G304"), []string{`f, _ := os.Open(p) // #nosec`}, 0, true},
+		{"semgrep line above", finding("opengrep oss", "go.sqli"), []string{"// reason", "// nosemgrep: go.sqli", "db.Query(q)"}, 2, true},
+		{"semgrep other rule", finding("semgrep oss", "go.sqli"), []string{"// nosemgrep: go.xss", "db.Query(q)"}, 1, false},
+		{"eslint next line", finding("eslint", "no-eval"), []string{"// eslint-disable-next-line no-eval -- ok", "eval(x)"}, 1, true},
+		{"bandit", finding("bandit", "B602"), []string{"call(x, shell=True)  # nosec B602 # ok"}, 0, true},
+		{"no directive", finding("gitleaks", "aws"), []string{`key = "AKIA..."`}, 0, false},
+		{"directive elsewhere", finding("gosec", "G304"), []string{`// #nosec G304`, "", `f, _ := os.Open(p)`}, 2, false},
+	}
+	for _, tc := range cases {
+		if got := suppressedInSource(tc.f, tc.lines, tc.line, tc.line); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
