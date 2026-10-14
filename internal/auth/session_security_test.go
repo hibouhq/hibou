@@ -17,7 +17,7 @@ import (
 	"github.com/hibouhq/hibou/internal/store"
 )
 
-const testSessionSecret = "0123456789abcdef0123456789abcdef"
+const testSessionSecret = "0123456789abcdef0123456789abcdef" // gitleaks:allow -- this is a test file
 
 // fakeLoginProvider implements just enough of forge.Provider for the OAuth
 // flow and the sign-in allowlist; any other call panics on the nil embed.

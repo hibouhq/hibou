@@ -31,6 +31,7 @@ var hibouRequests = []string{
 	"hibou/status", "hibou/findings", "hibou/refresh",
 	"hibou/login/start", "hibou/login/wait", "hibou/login/cancel", "hibou/logout", "hibou/setToken",
 	"hibou/suppressionEdit", "hibou/triage", "hibou/coverage", "hibou/secretCheck",
+	"hibou/presets",
 }
 
 // Commands the server executes itself (advertised in executeCommandProvider).
@@ -221,11 +222,11 @@ func (s *Server) handle(ctx, sessionCtx context.Context, stop context.CancelFunc
 	case "hibou/status":
 		return s.statuses(), nil
 	case "hibou/findings":
-		var p struct {
-			URI string `json:"uri"`
-		}
+		var p findingsParams
 		_ = decode(params, &p)
-		return s.findingsFor(ctx, p.URI), nil
+		return s.findingsFor(ctx, p), nil
+	case "hibou/presets":
+		return s.presets(ctx)
 	case "hibou/refresh":
 		s.refreshAll(sessionCtx, true)
 		return s.statuses(), nil

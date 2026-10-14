@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -704,71 +706,151 @@ type panelFinding struct {
 	Rule        string   `json:"rule,omitempty"`
 	Scanner     string   `json:"scanner,omitempty"`
 	Component   string   `json:"component,omitempty"`
+	Package     string   `json:"package,omitempty"` // component name, for grouping
+	Version     string   `json:"version,omitempty"`
+	AdvisoryID  string   `json:"advisoryId,omitempty"`
 	Path        string   `json:"path,omitempty"`
 	URI         string   `json:"uri,omitempty"`
 	Range       lspRange `json:"range"`
 	Edited      bool     `json:"edited,omitempty"`
 	KEV         bool     `json:"kev,omitempty"`
-	WebURL      string   `json:"webUrl"`
+	// Presence is reported, not_rechecked or unconfirmed (ADR-034).
+	Presence string `json:"presence,omitempty"`
+	WebURL   string `json:"webUrl"`
 }
 
+type findingsParams struct {
+	URI string `json:"uri"`
+	// Query is the web UI's filter language (internal/filterquery), evaluated
+	// by the server so results match the web UI exactly.
+	Query string `json:"query"`
+}
+
+type findingsResult struct {
+	Findings []panelFinding `json:"findings"`
+	// Error is the server's answer to an invalid query.
+	Error string `json:"error,omitempty"`
+}
+
+// maxQueryPages caps a filtered fetch at 5,000 findings.
+const maxQueryPages = 50
+
 // findingsFor lists findings for the panel: one document's when uri is set,
-// else every workspace's. Positions use the open buffer when there is one.
-func (s *Server) findingsFor(ctx context.Context, uri string) []panelFinding {
+// else every workspace's, optionally filtered by query. Positions are mapped
+// onto the current code: the open buffer when there is one, else the file on
+// disk, so clicking a row lands on the right line.
+func (s *Server) findingsFor(ctx context.Context, p findingsParams) findingsResult {
 	s.mu.Lock()
 	server := s.server
 	s.mu.Unlock()
 	out := []panelFinding{}
-	if uri != "" {
-		live := s.doc(uri)
-		if live == nil {
-			return out
-		}
-		d := s.snapshotDoc(live)
-		repo := d.ws.repoRef()
-		for _, p := range s.place(ctx, d) {
-			out = append(out, toPanel(server, repo, p.f, d.rel, d.uri, lineRange(d.lines, p.start, p.end), p.edited))
-		}
-		return out
-	}
-	open := map[string]bool{}
+	query := strings.TrimSpace(p.Query)
+
 	for _, ws := range s.allWorkspaces() {
-		for _, d := range s.docsOf(ws) {
-			snap := s.snapshotDoc(d)
-			open[snap.uri] = true
-			repo := ws.repoRef()
-			for _, p := range s.place(ctx, snap) {
-				out = append(out, toPanel(server, repo, p.f, snap.rel, snap.uri, lineRange(snap.lines, p.start, p.end), p.edited))
-			}
-		}
 		ws.mu.Lock()
-		findings, repo, root := ws.findings, ws.repo, ws.root
+		findings, repo, snap, root := ws.findings, ws.repo, ws.snapshot, ws.root
 		ws.mu.Unlock()
+		if repo == nil || snap == nil {
+			continue
+		}
+		if query != "" {
+			client, err := s.api()
+			if err != nil {
+				return findingsResult{Findings: out, Error: err.Error()}
+			}
+			q := url.Values{}
+			q.Set("snapshot", snap.ID)
+			q.Set("q", query)
+			q.Set("sort", "severity_desc")
+			filtered, _, err := getAll[apiFinding](ctx, client, repoPath(*repo)+"/findings", q, maxQueryPages)
+			var apiErr *apiError
+			if errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest {
+				return findingsResult{Findings: []panelFinding{}, Error: orDefault(apiErr.Message, "invalid filter query")}
+			}
+			if err != nil {
+				return findingsResult{Findings: out, Error: err.Error()}
+			}
+			findings = filtered
+		}
+
+		positions := newPositionCache(s, ctx, ws)
 		for _, f := range findings {
-			if !s.visible(f) {
+			if f.Status == "resolved" || !s.visible(f) {
 				continue
 			}
 			rel := normalizeRepoPath(f.FilePath)
 			fileURI := ""
 			if rel != "" && !isAbsScannerPath(f.FilePath) {
-				fileURI = pathToURI(root + "/" + rel)
-				if open[fileURI] {
-					continue
-				}
+				fileURI = pathToURI(filepath.Join(root, filepath.FromSlash(rel)))
+			}
+			if p.URI != "" && fileURI != p.URI {
+				continue
 			}
 			line := max(f.StartLine-1, 0)
-			out = append(out, toPanel(server, repo, f, rel, fileURI, lspRange{Start: position{Line: line}, End: position{Line: line}}, false))
+			r, edited := lspRange{Start: position{Line: line}, End: position{Line: line}}, false
+			if fileURI != "" {
+				if pos, ok := positions.lookup(rel, fileURI, f.Fingerprint); ok {
+					r, edited = pos.r, pos.edited
+				}
+			}
+			out = append(out, toPanel(server, repo, f, rel, fileURI, r, edited))
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return severityRank(out[i].Severity) < severityRank(out[j].Severity) })
-	return out
+	return findingsResult{Findings: out}
+}
+
+type mappedPosition struct {
+	r      lspRange
+	edited bool
+}
+
+// positionCache places each file's findings once per request.
+type positionCache struct {
+	s     *Server
+	ctx   context.Context
+	ws    *workspace
+	files map[string]map[string]mappedPosition // rel -> fingerprint -> position
+}
+
+func newPositionCache(s *Server, ctx context.Context, ws *workspace) *positionCache {
+	return &positionCache{s: s, ctx: ctx, ws: ws, files: map[string]map[string]mappedPosition{}}
+}
+
+func (c *positionCache) lookup(rel, uri, fingerprint string) (mappedPosition, bool) {
+	byFP, ok := c.files[rel]
+	if !ok {
+		byFP = map[string]mappedPosition{}
+		var d document
+		if live := c.s.doc(uri); live != nil {
+			d = c.s.snapshotDoc(live)
+		} else {
+			path := filepath.Join(c.ws.root, filepath.FromSlash(rel))
+			info, err := os.Stat(path)
+			if err == nil && info.Mode().IsRegular() && info.Size() <= maxDiskFileBytes {
+				if data, err := os.ReadFile(path); err == nil { // #nosec G304 -- a file inside the user's own work tree; normalizeRepoPath keeps rel under the root.
+					d = document{uri: uri, path: path, ws: c.ws, rel: rel}
+					d.setText(string(data))
+				}
+			}
+		}
+		if d.ws != nil {
+			for _, p := range c.s.place(c.ctx, d) {
+				byFP[p.f.Fingerprint] = mappedPosition{r: lineRange(d.lines, p.start, p.end), edited: p.edited}
+			}
+		}
+		c.files[rel] = byFP
+	}
+	pos, ok := byFP[fingerprint]
+	return pos, ok
 }
 
 func toPanel(server string, repo *repoRef, f apiFinding, rel, uri string, r lspRange, edited bool) panelFinding {
 	pf := panelFinding{
 		Fingerprint: f.Fingerprint, Title: orDefault(f.Title, f.Description), Severity: f.Severity, Status: f.Status,
 		Accepted: f.Acceptance != nil, Type: f.Type, Rule: f.ruleID(), Scanner: f.ScannerName, Path: rel, URI: uri,
-		Range: r, Edited: edited, KEV: f.KEV,
+		Range: r, Edited: edited, KEV: f.KEV, Presence: f.Presence, AdvisoryID: f.AdvisoryID,
+		Package: f.ComponentName, Version: f.ComponentVersion,
 	}
 	if f.ComponentName != "" {
 		pf.Component = strings.TrimSpace(f.ComponentName + " " + f.ComponentVersion)
@@ -873,4 +955,30 @@ func (s *Server) coverage(ctx context.Context, uri string) (*coverageResult, err
 		}
 	}
 	return res, nil
+}
+
+type presetsResult struct {
+	Presets []apiSearchPreset `json:"presets"`
+	// Error explains an empty list: an older server, or a service token.
+	Error string `json:"error,omitempty"`
+}
+
+// presets returns the user's findings presets. Servers before ADR-042 keep
+// presets browser-only (403); the list is then empty with a reason.
+func (s *Server) presets(ctx context.Context) (*presetsResult, error) {
+	client, err := s.api()
+	if err != nil {
+		return nil, err
+	}
+	list, err := client.searchPresets(ctx)
+	switch {
+	case isStatus(err, http.StatusForbidden) || isStatus(err, http.StatusUnauthorized):
+		return &presetsResult{Presets: []apiSearchPreset{}, Error: "presets need a newer hibou server"}, nil
+	case err != nil:
+		return nil, err
+	}
+	if list == nil {
+		list = []apiSearchPreset{}
+	}
+	return &presetsResult{Presets: list}, nil
 }

@@ -134,8 +134,11 @@ var routeScopes = map[string]routeScope{
 	"DELETE /api/v1/users/me/api-keys/{keyID}":      sessionOnlyRoute(),
 	"POST /api/v1/users/me/api-keys/{keyID}/rotate": sessionOnlyRoute(),
 
-	// UI state, not something an automation token has a use for.
-	"GET /api/v1/users/me/search-presets/":              sessionOnlyRoute(),
+	// Personal search presets. Reading them is the token owner's own UI state
+	// (like GET /users/me): the IDE extensions offer the same presets as the
+	// web UI (ADR-042, amending ADR-033). Writes stay browser-only. The handler
+	// refuses tokens without a user (service principals).
+	"GET /api/v1/users/me/search-presets/":              selfRoute(),
 	"POST /api/v1/users/me/search-presets/":             sessionOnlyRoute(),
 	"PUT /api/v1/users/me/search-presets/{presetID}":    sessionOnlyRoute(),
 	"DELETE /api/v1/users/me/search-presets/{presetID}": sessionOnlyRoute(),

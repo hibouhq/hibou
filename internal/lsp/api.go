@@ -404,3 +404,18 @@ func webURL(server string, r repoRef, query url.Values) string {
 	}
 	return u
 }
+
+type apiSearchPreset struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Query string `json:"query"`
+}
+
+// searchPresets lists the token owner's findings presets, the same ones the
+// web UI's filter bar offers (ADR-033; readable by token since ADR-042).
+func (c *apiClient) searchPresets(ctx context.Context) ([]apiSearchPreset, error) {
+	var out []apiSearchPreset
+	q := url.Values{}
+	q.Set("surface", "findings")
+	return out, c.get(ctx, "/users/me/search-presets", q, &out)
+}

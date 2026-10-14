@@ -243,3 +243,24 @@ func TestTokenScopeGuardIgnoresSessionsAndUnscopedTokens(t *testing.T) {
 		})
 	}
 }
+
+// The IDE extensions read their owner's search presets with the IDE token;
+// creating, changing and deleting presets stays a browser action (ADR-042,
+// amending ADR-033).
+func TestSearchPresetsReadableByTokenWritesSessionOnly(t *testing.T) {
+	t.Parallel()
+
+	readOnly := apitoken.Scope{Permissions: map[apitoken.Capability]apitoken.AccessLevel{apitoken.CapVulnerabilities: apitoken.AccessRead}}
+	if rs, ok := routeScopes["GET /api/v1/users/me/search-presets/"]; !ok || !rs.allows(readOnly, "", "") {
+		t.Fatal("a token must be able to read its owner's search presets")
+	}
+	for _, route := range []string{
+		"POST /api/v1/users/me/search-presets/",
+		"PUT /api/v1/users/me/search-presets/{presetID}",
+		"DELETE /api/v1/users/me/search-presets/{presetID}",
+	} {
+		if rs, ok := routeScopes[route]; !ok || rs.allows(readOnly, "", "") {
+			t.Errorf("%s must stay session-only", route)
+		}
+	}
+}

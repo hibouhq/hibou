@@ -205,6 +205,15 @@ func fakeHibou(t *testing.T, commit string, acceptances *atomic.Int32) *httptest
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"pr_number": 7, "state": "failure", "passed": false, "reasons": []string{"1 new high finding"}}})
 	})
 	mux.HandleFunc("GET /api/v1/orgs/github/acme/repos/app/findings", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("q") == "bad syntax" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": 400, "message": "invalid filter query"}})
+			return
+		}
+		if q := r.URL.Query().Get("q"); q != "" && q != "severity:high" {
+			list(w, []map[string]any{})
+			return
+		}
 		if r.URL.Query().Get("snapshot") != "snap-1" {
 			t.Errorf("findings asked for snapshot %q", r.URL.Query().Get("snapshot"))
 		}
@@ -358,6 +367,23 @@ func TestServerEndToEnd(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].State != stateReady || statuses[0].Counts["high"] != 1 || statuses[0].Gate == nil || statuses[0].Gate.PR != "7" || statuses[0].Snapshot == nil || !statuses[0].Snapshot.AtHead {
 		t.Fatalf("unexpected status %+v", statuses)
+	}
+
+	var panel findingsResult
+	if err := c.call("hibou/findings", map[string]any{}, &panel); err != nil {
+		t.Fatal(err)
+	}
+	if len(panel.Findings) != 1 || panel.Findings[0].Range.Start.Line != 5 || panel.Findings[0].URI != uri {
+		t.Fatalf("panel must map onto the open buffer: %+v", panel)
+	}
+	if err := c.call("hibou/findings", map[string]any{"query": "severity:high"}, &panel); err != nil || len(panel.Findings) != 1 || panel.Error != "" {
+		t.Fatalf("filtered panel = %+v, %v", panel, err)
+	}
+	if err := c.call("hibou/findings", map[string]any{"query": "severity:low"}, &panel); err != nil || len(panel.Findings) != 0 {
+		t.Fatalf("the query must reach the server: %+v, %v", panel, err)
+	}
+	if err := c.call("hibou/findings", map[string]any{"query": "bad syntax"}, &panel); err != nil || !strings.Contains(panel.Error, "invalid filter") {
+		t.Fatalf("an invalid query must come back as an error message: %+v, %v", panel, err)
 	}
 
 	var tr triageResult
