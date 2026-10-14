@@ -116,8 +116,15 @@ func (c *testClient) notify(method string, params any) {
 	c.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
 
-// waitDiagnostics returns the first non-empty diagnostics published for uri.
+// waitDiagnostics returns the first non-empty diagnostics published for the
+// open document uri (publishes for open documents carry a version).
 func (c *testClient) waitDiagnostics(uri string) []diagnostic {
+	return c.waitDiagnosticsFor(uri, true)
+}
+
+// waitDiagnosticsFor waits for diagnostics of the open buffer (open=true) or
+// of the closed file read from disk (open=false, no version).
+func (c *testClient) waitDiagnosticsFor(uri string, open bool) []diagnostic {
 	c.t.Helper()
 	deadline := time.After(15 * time.Second)
 	for {
@@ -128,7 +135,7 @@ func (c *testClient) waitDiagnostics(uri string) []diagnostic {
 			}
 			var p publishDiagnosticsParams
 			_ = json.Unmarshal(msg.Params, &p)
-			if p.URI == uri && len(p.Diagnostics) > 0 {
+			if p.URI == uri && len(p.Diagnostics) > 0 && (p.Version != nil) == open {
 				return p.Diagnostics
 			}
 		case <-deadline:
@@ -251,6 +258,13 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.notify("initialized", map[string]any{})
+
+	// Before the file is opened, its findings are published from disk so the
+	// editor's problems panel lists them.
+	uri := pathToURI(filepath.Join(repo, "main.go"))
+	if disk := c.waitDiagnosticsFor(uri, false); len(disk) != 1 || disk[0].Range.Start.Line != 3 {
+		t.Fatalf("closed file diagnostics = %+v, want one on line 3", disk)
+	}
 	caps, _ := initResult["capabilities"].(map[string]any)
 	exp, _ := caps["experimental"].(map[string]any)
 	hib, _ := exp["hibou"].(map[string]any)
@@ -260,7 +274,6 @@ func TestServerEndToEnd(t *testing.T) {
 
 	// The buffer gained two lines above the finding since the scan.
 	edited := strings.Replace(scannedSource, "func main() {\n", "// added\n// added\nfunc main() {\n", 1)
-	uri := pathToURI(filepath.Join(repo, "main.go"))
 	c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": uri, "languageId": "go", "version": 1, "text": edited}})
 
 	diags := c.waitDiagnostics(uri)

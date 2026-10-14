@@ -54,6 +54,8 @@ type workspace struct {
 	scanned   map[string]*scannedFile
 	coverage  map[string]*apiCoverageSource
 	refs      []apiRef
+	diskKey   string          // snapshot@HEAD the closed files were last published for
+	diskURIs  map[string]bool // closed files currently carrying diagnostics
 }
 
 type pickedSnapshot struct {
@@ -188,6 +190,7 @@ func (s *Server) refreshWorkspace(ctx context.Context, w *workspace, remote bool
 	for _, d := range s.docsOf(w) {
 		s.publish(ctx, d)
 	}
+	s.publishClosedFiles(ctx, w, false)
 	if after := w.status(); !sameStatus(before, after) {
 		_ = s.conn.notify("hibou/statusChanged", after)
 	}
@@ -571,6 +574,13 @@ func (w *workspace) refreshGate(ctx context.Context, client *apiClient, repo rep
 	w.mu.Lock()
 	w.pr, w.gate = pr, gate
 	w.mu.Unlock()
+}
+
+// hasFindings reports whether the current snapshot has findings in rel.
+func (w *workspace) hasFindings(rel string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.state == stateReady && len(w.byPath[rel]) > 0
 }
 
 // fileFindings returns the findings recorded for a repo-relative path.

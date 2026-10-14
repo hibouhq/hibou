@@ -194,7 +194,7 @@ func resolveRule(tool Tool, result Result) ReportingDescriptor {
 	if ref := result.Rule; ref != nil {
 		component, ok := referencedComponent(tool, ref.ToolComponent)
 		if ok {
-			if descriptor, found := lookupDescriptor(component.Rules, *ref); found {
+			if descriptor, found := lookupDescriptor(component.Rules, *ref); found && ruleIDMatches(result.RuleID, descriptor.ID) {
 				return descriptor
 			}
 		}
@@ -203,7 +203,7 @@ func resolveRule(tool Tool, result Result) ReportingDescriptor {
 	rules := tool.Driver.Rules
 	if result.RuleIndex != nil {
 		idx := *result.RuleIndex
-		if idx >= 0 && idx < len(rules) {
+		if idx >= 0 && idx < len(rules) && ruleIDMatches(result.RuleID, rules[idx].ID) {
 			return rules[idx]
 		}
 	}
@@ -219,6 +219,21 @@ func resolveRule(tool Tool, result Result) ReportingDescriptor {
 	}
 
 	return ReportingDescriptor{}
+}
+
+// ruleIDMatches reports whether an index-resolved descriptor is the rule the
+// result names. §3.27.5 requires ruleId to equal the descriptor's id, or to
+// extend it hierarchically ("CA2000/1" for rule "CA2000"). Producers break
+// this: gosec 2.27 emits ruleIndex values pointing at other rules, which gave
+// every rule a neighbour's CWE. When they disagree, ruleId wins and the rule
+// is looked up by id. A result without ruleId keeps the index.
+func ruleIDMatches(resultRuleID, descriptorID string) bool {
+	resultRuleID, descriptorID = strings.TrimSpace(resultRuleID), strings.TrimSpace(descriptorID)
+	if resultRuleID == "" || descriptorID == "" {
+		return true
+	}
+	return strings.EqualFold(resultRuleID, descriptorID) ||
+		(len(resultRuleID) > len(descriptorID) && strings.EqualFold(resultRuleID[:len(descriptorID)], descriptorID) && resultRuleID[len(descriptorID)] == '/')
 }
 
 // referencedComponent applies §3.54.2: no index and no guid means the driver,

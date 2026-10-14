@@ -6,6 +6,7 @@ package presence
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -210,6 +211,18 @@ func Plan(previous, current Snapshot, opts Options) ([]Carry, []Resolution) {
 			reported[key] = struct{}{}
 		}
 	}
+	// Identities reported now, to recognise a finding whose fingerprint
+	// changed while it stayed put (ADR-034 §7: the switch to content
+	// fingerprints re-keyed every finding of fingerprint-less scanners).
+	reportedIdentities := make(map[string]string, len(current.Rows))
+	for _, row := range current.Rows {
+		if row.Presence != "" && row.Presence != store.PresenceReported {
+			continue
+		}
+		if id := IdentityKey(row); id != "" {
+			reportedIdentities[id] = row.Fingerprint
+		}
+	}
 	runsByProducer := groupRuns(current.Runs)
 	previousRuns := groupRuns(previous.Runs)
 
@@ -245,6 +258,18 @@ func Plan(previous, current Snapshot, opts Options) ([]Carry, []Resolution) {
 			}
 			if row.LastSeenCommit != nil {
 				carry.LastSeenCommit = *row.LastSeenCommit
+			}
+		}
+
+		// Same finding, same line, reported under another fingerprint: it was
+		// re-keyed, not fixed. Carrying the old row would show it twice; it
+		// is closed as a producer-side change (its triage already moved to
+		// the new fingerprint, carryTriageAcrossRekeys). This also closes the
+		// duplicates carried before this rule existed.
+		if producer != "" {
+			if fp, ok := reportedIdentities[IdentityKey(row)]; ok && fp != row.Fingerprint {
+				resolutions = append(resolutions, Resolution{Source: row, Producer: producer, Reason: ResolvedProducerChanged})
+				continue
 			}
 		}
 
@@ -565,4 +590,30 @@ func ReasonText(reason string) string {
 		return "not re-checked since an earlier build"
 	}
 	return reason
+}
+
+// IdentityKey is a fingerprint-independent content identity: what the finding
+// is and where it lives. Scanner name is case-normalized (SARIF driver names
+// changed casing once already).
+func IdentityKey(vuln store.Vulnerability) string {
+	identifier := strings.TrimSpace(vuln.PrimaryIdentifierValue)
+	purl := strings.TrimSpace(ptrString(vuln.ComponentPurl))
+	filePath := strings.TrimSpace(ptrString(vuln.FilePath))
+	// Without something that names WHAT the finding is or WHERE it lives, two
+	// rows cannot be asserted identical — return no key rather than cancel
+	// unrelated findings that merely share a type.
+	if identifier == "" && purl == "" && filePath == "" {
+		return ""
+	}
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(vuln.Type)),
+		strings.ToLower(strings.TrimSpace(vuln.ScannerName)),
+		identifier,
+		purl,
+		filePath,
+	}
+	if vuln.StartLine != nil {
+		parts = append(parts, strconv.FormatInt(int64(*vuln.StartLine), 10))
+	}
+	return strings.Join(parts, "|")
 }

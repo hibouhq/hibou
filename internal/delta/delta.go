@@ -556,30 +556,10 @@ func cancelIdentityPairs(newVulns, resolved []store.Vulnerability) ([]store.Vuln
 	return keptNew, keptResolved
 }
 
-// identityKey is a fingerprint-independent content identity: what the finding
-// is and where it lives. Scanner name is case-normalized (SARIF driver names
-// changed casing once already).
+// identityKey is presence.IdentityKey, shared with the presence planner so a
+// re-keyed finding is recognised the same way in both places.
 func identityKey(vuln store.Vulnerability) string {
-	identifier := strings.TrimSpace(vuln.PrimaryIdentifierValue)
-	purl := strings.TrimSpace(ptrString(vuln.ComponentPurl))
-	filePath := strings.TrimSpace(ptrString(vuln.FilePath))
-	// Without something that names WHAT the finding is or WHERE it lives, two
-	// rows cannot be asserted identical — return no key rather than cancel
-	// unrelated findings that merely share a type.
-	if identifier == "" && purl == "" && filePath == "" {
-		return ""
-	}
-	parts := []string{
-		strings.ToLower(strings.TrimSpace(vuln.Type)),
-		strings.ToLower(strings.TrimSpace(vuln.ScannerName)),
-		identifier,
-		purl,
-		filePath,
-	}
-	if vuln.StartLine != nil {
-		parts = append(parts, strconv.FormatInt(int64(*vuln.StartLine), 10))
-	}
-	return strings.Join(parts, "|")
+	return presence.IdentityKey(vuln)
 }
 
 // cancelLineDriftPairs drops new/resolved pairs that are the same code finding

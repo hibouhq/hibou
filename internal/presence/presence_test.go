@@ -282,3 +282,51 @@ func TestPlanRetiredProducer(t *testing.T) {
 		t.Fatalf("retired but running again: carries %+v resolutions %+v", carries, resolutions)
 	}
 }
+
+// A finding re-keyed in place (same rule, file and line, new fingerprint — the
+// switch to content fingerprints, ADR-034 §7) is closed, not carried: carrying
+// it showed every such finding twice. Duplicates carried before the rule
+// existed close the same way.
+func TestPlanClosesRekeyedFindings(t *testing.T) {
+	at := func(fingerprint string, line int32) store.Vulnerability {
+		r := row("sast", "gosec", fingerprint, "internal/objstore/filesystem.go")
+		r.PrimaryIdentifierValue = "G304"
+		r.StartLine = &line
+		return r
+	}
+	alreadyCarried := at("old-carried", 84)
+	alreadyCarried.Presence = store.PresenceUnconfirmed
+
+	previous := Snapshot{ID: uuid.New(), CommitSHA: "a1", Rows: []store.Vulnerability{
+		at("old-location-hash", 84), // re-keyed by this upload
+		alreadyCarried,              // duplicate carried by an earlier upload
+		at("new-content-hash", 84),
+		at("moved-away", 12), // different line: not the same finding
+	}}
+	current := Snapshot{ID: uuid.New(), CommitSHA: "b2",
+		Rows: []store.Vulnerability{at("new-content-hash", 84)},
+		Runs: []store.ProducerRun{completed("gosec")},
+	}
+	carries, resolutions := Plan(previous, current, Options{Changed: changes(map[string]Change{
+		"internal/objstore/filesystem.go": {Known: true, Changed: false},
+	})})
+
+	got := resolutionReasons(resolutions)
+	for _, fp := range []string{"old-location-hash", "old-carried"} {
+		if got[fp] != ResolvedProducerChanged {
+			t.Errorf("%s: resolution %q, want %q", fp, got[fp], ResolvedProducerChanged)
+		}
+	}
+	carried := carriedReasons(carries)
+	if _, ok := carried["old-location-hash"]; ok {
+		t.Error("re-keyed finding must not be carried")
+	}
+	if _, ok := carried["moved-away"]; !ok {
+		if _, resolved := got["moved-away"]; !resolved {
+			t.Error("a finding on another line must follow the usual rules (carried or resolved), not vanish")
+		}
+	}
+	if got["moved-away"] == ResolvedProducerChanged {
+		t.Error("a finding on another line is not a re-key")
+	}
+}

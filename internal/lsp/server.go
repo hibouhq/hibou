@@ -565,8 +565,25 @@ func (s *Server) didChange(p didChangeParams) {
 
 func (s *Server) didClose(p didCloseParams) {
 	s.mu.Lock()
+	doc := s.docs[p.TextDocument.URI]
 	delete(s.docs, p.TextDocument.URI)
+	var ws *workspace
+	var rel string
+	if doc != nil {
+		ws, rel = doc.ws, doc.rel
+	}
 	s.mu.Unlock()
+	// A closed file keeps its findings in the problems panel, now from the
+	// saved file on disk.
+	if ws != nil && ws.hasFindings(rel) && s.publishDiskFile(context.Background(), ws, rel, p.TextDocument.URI) {
+		ws.mu.Lock()
+		if ws.diskURIs == nil {
+			ws.diskURIs = map[string]bool{}
+		}
+		ws.diskURIs[p.TextDocument.URI] = true
+		ws.mu.Unlock()
+		return
+	}
 	_ = s.conn.notify("textDocument/publishDiagnostics", publishDiagnosticsParams{URI: p.TextDocument.URI, Diagnostics: []diagnostic{}})
 }
 

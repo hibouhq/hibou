@@ -223,3 +223,35 @@ func TestExtractFindingsSuppressions(t *testing.T) {
 		}
 	}
 }
+
+// gosec 2.27 emits ruleIndex values that point at other rules (here G301's
+// result points at G204). Trusting the index gave G301 the CWE of G204;
+// ruleId must win when the two disagree.
+func TestRuleIndexMismatchFallsBackToRuleID(t *testing.T) {
+	t.Parallel()
+
+	const doc = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gosec","rules":[
+	  {"id":"G204","relationships":[{"target":{"id":"78","toolComponent":{"name":"CWE"}}}]},
+	  {"id":"G301","relationships":[{"target":{"id":"276","toolComponent":{"name":"CWE"}}}]},
+	  {"id":"CA2000","relationships":[{"target":{"id":"404","toolComponent":{"name":"CWE"}}}]}
+	]}},"taxonomies":[{"name":"CWE"}],"results":[
+	  {"ruleId":"G301","ruleIndex":0,"message":{"text":"perm"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":1}}}]},
+	  {"ruleId":"G204","ruleIndex":0,"message":{"text":"exec"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":2}}}]},
+	  {"ruleId":"CA2000/1","ruleIndex":2,"message":{"text":"sub"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":3}}}]},
+	  {"ruleIndex":1,"message":{"text":"no id"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":4}}}]}
+	]}]}`
+	parsed, err := Parse(strings.NewReader(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := ExtractFindings(parsed, "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int][]int{1: {276}, 2: {78}, 3: {404}, 4: {276}}
+	for _, f := range findings {
+		if f.Rule == nil || len(f.Rule.CWEs) != 1 || f.Rule.CWEs[0] != want[int(f.StartLine)][0] {
+			t.Errorf("line %d (%s): rule CWEs = %v, want %v", f.StartLine, f.RuleID, f.Rule, want[int(f.StartLine)])
+		}
+	}
+}

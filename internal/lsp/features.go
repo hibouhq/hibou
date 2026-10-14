@@ -166,6 +166,13 @@ func severityToLSP(sev string) int {
 
 func (s *Server) publish(ctx context.Context, live *document) {
 	d := s.snapshotDoc(live)
+	version := d.version
+	s.publishSnapshot(ctx, d, &version)
+}
+
+// publishSnapshot publishes d's diagnostics; version is nil for a closed file
+// read from disk.
+func (s *Server) publishSnapshot(ctx context.Context, d document, version *int) {
 	placed := s.place(ctx, d)
 	s.mu.Lock()
 	server := s.server
@@ -174,8 +181,7 @@ func (s *Server) publish(ctx context.Context, live *document) {
 	for _, p := range placed {
 		diags = append(diags, s.toDiagnostic(server, d, p))
 	}
-	version := d.version
-	_ = s.conn.notify("textDocument/publishDiagnostics", publishDiagnosticsParams{URI: d.uri, Version: &version, Diagnostics: diags})
+	_ = s.conn.notify("textDocument/publishDiagnostics", publishDiagnosticsParams{URI: d.uri, Version: version, Diagnostics: diags})
 }
 
 func lineRange(lines []string, start, end int) lspRange {
