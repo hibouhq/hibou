@@ -2,6 +2,8 @@ package lsp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -54,7 +56,8 @@ type workspace struct {
 	scanned   map[string]*scannedFile
 	coverage  map[string]*apiCoverageSource
 	refs      []apiRef
-	diskKey   string          // snapshot@HEAD the closed files were last published for
+	diskKey   string          // snapshot@HEAD#digest the closed files were last published for
+	digest    string          // findingsDigest of the current findings
 	diskURIs  map[string]bool // closed files currently carrying diagnostics
 }
 
@@ -272,7 +275,11 @@ func (w *workspace) refresh(ctx context.Context, remote bool) {
 	w.mu.Lock()
 	same := w.snapshot != nil && w.snapshot.ID == snap.ID && w.state == stateReady
 	w.mu.Unlock()
-	if same {
+	// A local HEAD move with the same snapshot changes nothing on the
+	// server. A server poll (or Refresh) re-fetches even then: triage done in
+	// the web UI (false positive, acceptance, dispute) changes findings
+	// without a new snapshot.
+	if same && !remote {
 		w.mu.Lock()
 		w.snapshot = snap // AtHead may change while the ID does not
 		w.mu.Unlock()
@@ -297,10 +304,24 @@ func (w *workspace) refresh(ctx context.Context, remote bool) {
 	}
 	w.mu.Lock()
 	w.snapshot, w.findings, w.byPath, w.byAbsPath, w.truncated = snap, findings, byPath, byAbsPath, truncated
-	w.scanned = map[string]*scannedFile{}
-	w.coverage = map[string]*apiCoverageSource{}
+	w.digest = findingsDigest(findings)
+	if !same {
+		// Same snapshot: the scanned file contents and coverage still hold.
+		w.scanned = map[string]*scannedFile{}
+		w.coverage = map[string]*apiCoverageSource{}
+	}
 	w.state, w.message = stateReady, ""
 	w.mu.Unlock()
+}
+
+// findingsDigest summarises what the editor shows of each finding, so a
+// re-fetch that changed nothing does not republish every closed file.
+func findingsDigest(findings []apiFinding) string {
+	h := sha256.New()
+	for _, f := range findings {
+		fmt.Fprintf(h, "%s|%s|%s|%t|%t|%d|%d\n", f.Fingerprint, f.Status, f.Presence, f.Acceptance != nil, f.Dispute != nil, f.StartLine, f.EndLine)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (w *workspace) reportAPIError(err error) {

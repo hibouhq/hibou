@@ -164,6 +164,10 @@ func main() {
 }
 `
 
+// fakeMarkedFalsePositive makes fakeHibou report the finding as a false
+// positive, as if marked in the web UI after the scan (no new snapshot).
+var fakeMarkedFalsePositive atomic.Bool
+
 // fakeHibou serves the endpoints the language server reads.
 func fakeHibou(t *testing.T, commit string, acceptances *atomic.Int32) *httptest.Server {
 	t.Helper()
@@ -216,6 +220,15 @@ func fakeHibou(t *testing.T, commit string, acceptances *atomic.Int32) *httptest
 		}
 		if r.URL.Query().Get("snapshot") != "snap-1" {
 			t.Errorf("findings asked for snapshot %q", r.URL.Query().Get("snapshot"))
+		}
+		if fakeMarkedFalsePositive.Load() {
+			marked := map[string]any{}
+			for k, v := range finding {
+				marked[k] = v
+			}
+			marked["acceptance"] = map[string]any{"reason_kind": "false_positive", "reason": "test data", "created_at": time.Now().Format(time.RFC3339)}
+			list(w, []map[string]any{marked})
+			return
 		}
 		list(w, []map[string]any{finding})
 	})
@@ -649,5 +662,59 @@ func TestPlaceSecretsFromTheirCommit(t *testing.T) {
 	}
 	if k := got["kept"]; k.historyOnly || k.start != 3 {
 		t.Errorf("a secret still present must sit on line 3, got %+v", k)
+	}
+}
+
+// Triage done in the web UI changes a finding without a new snapshot; a
+// refresh must still bring it to the editor.
+func TestWebUITriageReachesTheEditorWithoutANewScan(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HIBOU_TOKEN", "hb_test")
+	fakeMarkedFalsePositive.Store(false)
+	t.Cleanup(func() { fakeMarkedFalsePositive.Store(false) })
+
+	repo := t.TempDir()
+	gitCmd(t, repo, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte(scannedSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, repo, "add", "main.go")
+	gitCmd(t, repo, "commit", "-q", "-m", "init")
+	gitCmd(t, repo, "remote", "add", "origin", "https://github.com/acme/app")
+	var acceptances atomic.Int32
+	api := fakeHibou(t, gitCmd(t, repo, "rev-parse", "HEAD"), &acceptances)
+
+	c, stop := startServer(t)
+	defer stop()
+	if err := c.call("initialize", map[string]any{"rootUri": pathToURI(repo), "capabilities": map[string]any{}, "initializationOptions": map[string]any{"server": api.URL}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("initialized", map[string]any{})
+	uri := pathToURI(filepath.Join(repo, "main.go"))
+	c.notify("textDocument/didOpen", map[string]any{"textDocument": map[string]any{"uri": uri, "languageId": "go", "version": 1, "text": scannedSource}})
+	if d := c.waitDiagnostics(uri); d[0].Severity != severityError {
+		t.Fatalf("before triage: %+v", d)
+	}
+
+	fakeMarkedFalsePositive.Store(true)
+	if err := c.call("hibou/refresh", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case msg := <-c.notes:
+			var p publishDiagnosticsParams
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.URI == uri && p.Version != nil && len(p.Diagnostics) == 0 {
+				_ = c.call("shutdown", nil, nil)
+				c.notify("exit", nil)
+				return // accepted findings are hidden by default
+			}
+		case <-deadline:
+			t.Fatal("the false positive marked on the server never reached the editor")
+		}
 	}
 }

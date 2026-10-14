@@ -25,7 +25,9 @@ func (s *Server) publishClosedFiles(ctx context.Context, w *workspace, force boo
 	w.mu.Lock()
 	key := w.lastHead
 	if w.snapshot != nil && w.state == stateReady {
-		key = w.snapshot.ID + "@" + w.lastHead
+		// The digest changes when triage changes a finding without a new
+		// snapshot (marked false positive in the web UI).
+		key = w.snapshot.ID + "@" + w.lastHead + "#" + w.digest
 	}
 	if !force && key == w.diskKey {
 		w.mu.Unlock()
