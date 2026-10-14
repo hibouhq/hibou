@@ -31,7 +31,7 @@ var hibouRequests = []string{
 	"hibou/status", "hibou/findings", "hibou/refresh",
 	"hibou/login/start", "hibou/login/wait", "hibou/login/cancel", "hibou/logout", "hibou/setToken",
 	"hibou/suppressionEdit", "hibou/triage", "hibou/coverage", "hibou/secretCheck",
-	"hibou/presets",
+	"hibou/presets", "hibou/cweSets", "hibou/cweSearch",
 }
 
 // Commands the server executes itself (advertised in executeCommandProvider).
@@ -227,6 +227,12 @@ func (s *Server) handle(ctx, sessionCtx context.Context, stop context.CancelFunc
 		return s.findingsFor(ctx, p), nil
 	case "hibou/presets":
 		return s.presets(ctx)
+	case "hibou/cweSets":
+		return s.cweSets(ctx)
+	case "hibou/cweSearch":
+		var p cweSearchParams
+		_ = decode(params, &p)
+		return s.cweSearch(ctx, p)
 	case "hibou/refresh":
 		s.refreshAll(sessionCtx, true)
 		return s.statuses(), nil

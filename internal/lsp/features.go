@@ -734,7 +734,9 @@ type panelFinding struct {
 	// History: a secret no longer in the code, still in git history at Commit.
 	History bool   `json:"history,omitempty"`
 	Commit  string `json:"commit,omitempty"`
-	WebURL  string `json:"webUrl"`
+	// CWEs the finding carries, for the panel's cwe: completion counts.
+	CWEs   []apiCWE `json:"cwes,omitempty"`
+	WebURL string   `json:"webUrl"`
 }
 
 type findingsParams struct {
@@ -876,7 +878,7 @@ func toPanel(server string, repo *repoRef, f apiFinding, rel, uri string, r lspR
 		Fingerprint: f.Fingerprint, Title: orDefault(f.Title, f.Description), Severity: f.Severity, Status: f.Status,
 		Accepted: f.Acceptance != nil, Type: f.Type, Rule: f.ruleID(), Scanner: f.ScannerName, Path: rel, URI: uri,
 		Range: r, Edited: edited, KEV: f.KEV, Presence: f.Presence, AdvisoryID: f.AdvisoryID,
-		Package: f.ComponentName, Version: f.ComponentVersion, Commit: f.CommitSHA,
+		Package: f.ComponentName, Version: f.ComponentVersion, Commit: f.CommitSHA, CWEs: f.CWEs,
 	}
 	if f.ComponentName != "" {
 		pf.Component = strings.TrimSpace(f.ComponentName + " " + f.ComponentVersion)
