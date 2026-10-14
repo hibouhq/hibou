@@ -55,3 +55,23 @@ func TestNormalizeServerURL(t *testing.T) {
 		t.Error("sameServer should ignore scheme default, case and trailing slash")
 	}
 }
+
+func TestBrowserCommands(t *testing.T) {
+	const u = "https://hibou.example/device?user_code=BCDF-GHJK"
+	devcontainer := "/vscode/vscode-server/bin/linux-x64/abc/bin/helpers/browser.sh"
+	got := browserCommands(devcontainer, u, "linux")
+	if len(got) != 1 || len(got[0]) != 2 || got[0][0] != devcontainer || got[0][1] != u {
+		t.Fatalf("absolute $BROWSER must run as given with the URL: %q", got)
+	}
+	got = browserCommands("firefox --new-window %s:w3m", u, "linux")
+	if len(got) != 2 || got[0][0] != "firefox" || got[0][2] != u || got[1][0] != "w3m" || got[1][1] != u {
+		t.Fatalf("list with %%s placeholder: %q", got)
+	}
+	if got := browserCommands("  ", u, "linux"); len(got) != 0 {
+		t.Fatalf("blank $BROWSER: %q", got)
+	}
+	got = browserCommands(`C:\Tools\browser.exe`, u, "windows")
+	if len(got) != 1 || got[0][0] != `C:\Tools\browser.exe` {
+		t.Fatalf("windows must not split on ':': %q", got)
+	}
+}

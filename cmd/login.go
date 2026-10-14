@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -370,6 +369,37 @@ func runStty(arg string) error {
 	return cmd.Run()
 }
 
+// browserCommands reads $BROWSER the way xdg-open, Python's webbrowser and gh
+// do: a list of commands separated by ":" (";" on Windows, where ":" is part
+// of a path), each a command line in which %s stands for the URL (appended
+// when absent). The command is used as given — dev containers point it at a
+// helper script by absolute path (VS Code's browser.sh).
+func browserCommands(env, url, goos string) [][]string {
+	sep := ":"
+	if goos == "windows" {
+		sep = ";"
+	}
+	var commands [][]string
+	for _, entry := range strings.Split(env, sep) {
+		fields := strings.Fields(entry)
+		if len(fields) == 0 {
+			continue
+		}
+		substituted := false
+		for i, field := range fields[1:] {
+			if strings.Contains(field, "%s") {
+				fields[i+1] = strings.ReplaceAll(field, "%s", url)
+				substituted = true
+			}
+		}
+		if !substituted {
+			fields = append(fields, url)
+		}
+		commands = append(commands, fields)
+	}
+	return commands
+}
+
 func openBrowser(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -377,8 +407,15 @@ func openBrowser(rawURL string) error {
 	}
 	cleanURL := parsed.String()
 
-	if browser := strings.TrimSpace(os.Getenv("BROWSER")); browser != "" {
-		return exec.Command(filepath.Base(browser), cleanURL).Start() // #nosec G204 G702 -- browser from user's $BROWSER env
+	for _, args := range browserCommands(os.Getenv("BROWSER"), cleanURL, runtime.GOOS) {
+		path, err := exec.LookPath(args[0])
+		if err != nil {
+			continue
+		}
+		// #nosec G204 G702 -- the user's own $BROWSER command, run as they would run it; URL validated above.
+		if err := exec.Command(path, args[1:]...).Start(); err == nil {
+			return nil
+		}
 	}
 
 	switch runtime.GOOS {

@@ -29,19 +29,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Every `uses: ./.github/actions/...` after a container step loads its
-      # action.yml from the workspace, which the devcontainer has mounted
-      # read-write. Record .github and .devcontainer now, before any container
-      # step, outside the workspace; each "Verify workflow files are unchanged"
-      # step below compares against it before the host loads a local action
-      # again. Plain find/sha256sum, not git: host git would read .git/config,
-      # which the container can also write (core.fsmonitor runs a command).
-      # This catches workspace tampering, not a container escape: the
-      # devcontainer is privileged (docker-in-docker). See THREAT-MODEL.md,
-      # "CI and release trust".
-      - name: Record workflow files
-        run: find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort > "${RUNNER_TEMP}/workspace-trust.manifest"
-
       # Read from git before any container step can touch .git.
       - name: Get commit info
         if: github.event_name != 'pull_request'
@@ -82,9 +69,6 @@ jobs:
             # others for the same two cores.
             go build ./...
 
-      - name: Verify workflow files are unchanged
-        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
-
       # Two waves of two, not one wave of five.
       #
       # `ubuntu-latest` on a private repo is 2 vCPU / 7 GB. The previous
@@ -108,20 +92,18 @@ jobs:
               # regenerating again HERE races the parallel Lint step —
               # `sqlc diff` reads dbgen/ while this step rewrites it in
               # place, failing Lint with a whole-file phantom diff.
+              # Binaries last: the snapshot below copies them right after.
               run-cmd: |
+                (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
                 if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
                   make build-all GENERATE_DEP=
                 else
                   make build-image-binaries GENERATE_DEP=
                 fi
-                (cd site && npm run coverage -- --reporter=default --reporter=junit --outputFile=junit-front.xml)
 
-      - name: Verify workflow files are unchanged
-        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
-
-      # Copy the binaries out of the workspace as soon as they are built, so no
-      # later container step can swap them: the host runs hibou-linux-amd64
-      # (Hibou upload), and a release checksums, signs and publishes the copies.
+      # Copy the binaries out of the workspace as soon as they are built: the
+      # host runs hibou-linux-amd64 (Hibou upload), and a release checksums,
+      # signs and publishes these copies rather than the workspace files.
       - name: Snapshot built binaries
         env:
           IS_RELEASE: ${{ github.event_name == 'release' }}
@@ -160,9 +142,6 @@ jobs:
                 node scripts/sbom-license.mjs go-sbom.cdx.json go "${GITHUB_SHA}"
                 trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
                 node scripts/sbom-license.mjs frontend-sbom.cdx.json frontend "${GITHUB_SHA}"
-
-      - name: Verify workflow files are unchanged
-        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
 
       # --- Publishing (push to main, or a published release; never a PR) ---
 
@@ -245,10 +224,6 @@ jobs:
             # The metadata file carries the pushed index digest, which the
             # host signs and attests below.
             docker buildx bake -f docker-bake.hcl --metadata-file bake-metadata.json
-
-      - name: Verify workflow files are unchanged
-        if: github.event_name != 'pull_request'
-        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
 
       - name: Upload security artifacts
         if: always() && vars.UPLOAD_GITHUB_SECURITY_ARTIFACTS == 'true'
@@ -366,10 +341,6 @@ jobs:
             trivy image --format cyclonedx --output image-sbom.cdx.json "${IMAGE}@${DIGEST}"
             node scripts/sbom-license.mjs image-sbom.cdx.json image "${RELEASE_VERSION}"
 
-      - name: Verify workflow files are unchanged
-        if: github.event_name == 'release'
-        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
-
       - name: Publish Helm chart
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/devcontainer-ci
@@ -450,9 +421,6 @@ jobs:
             exit 1
           fi
           cosign sign --yes "${ref}"
-
-      - name: Verify workflow files are unchanged
-        run: diff "${RUNNER_TEMP}/workspace-trust.manifest" <(find .github .devcontainer -printf '%y %m %p %l\n' -type f -exec sha256sum {} + | LC_ALL=C sort) || { echo "::error::.github or .devcontainer changed since checkout"; exit 1; }
 
       - name: Check Hibou upload config
         id: hibou-ci

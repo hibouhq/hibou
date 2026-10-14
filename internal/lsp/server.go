@@ -34,9 +34,11 @@ var hibouRequests = []string{
 }
 
 // Commands the server executes itself (advertised in executeCommandProvider).
+// LSP clients register them as editor commands, so they live under their own
+// hibou.server.* prefix: a name the extension also registers would collide.
 const (
-	cmdOpenFinding = "hibou.openFinding"
-	cmdRefresh     = "hibou.refresh"
+	cmdOpenFinding = "hibou.server.openFinding"
+	cmdRefresh     = "hibou.server.refresh"
 )
 
 // Commands the clients implement, because they need user input the protocol
