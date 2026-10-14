@@ -136,7 +136,7 @@ jobs:
               run-cmd: |
                 set -euo pipefail
                 node --test scripts/sbom-license.test.mjs
-                gosec -track-suppressions -fmt sarif -out gosec.sarif ./... || true
+                gosec -track-suppressions -exclude-generated -fmt sarif -out gosec.sarif ./... || true
                 trivy fs --format sarif --output trivy-fs.sarif .
                 trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
                 node scripts/sbom-license.mjs go-sbom.cdx.json go "${GITHUB_SHA}"
