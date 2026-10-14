@@ -1,6 +1,9 @@
 package presence
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -328,5 +331,61 @@ func TestPlanClosesRekeyedFindings(t *testing.T) {
 	}
 	if got["moved-away"] == ResolvedProducerChanged {
 		t.Error("a finding on another line is not a re-key")
+	}
+}
+
+// Existing duplicates (a dbgen file that grew between scans): rows keyed by
+// location (ref-scoped, as an earlier server did) carried on their old lines
+// next to the same findings reported under content fingerprints. They are
+// closed; a location-keyed row in a group the producer still keys by location
+// is not.
+func TestPlanClosesLocationKeyedRowsOfContentKeyedGroups(t *testing.T) {
+	locationFP := func(scope, rule, file string, line int32) string {
+		sum := sha256.Sum256([]byte(scope + "/gosec/" + rule + "/" + file + "/" + strconv.Itoa(int(line))))
+		return hex.EncodeToString(sum[:])
+	}
+	at := func(fingerprint, rule, file string, line int32, presence string) store.Vulnerability {
+		r := row("sast", "gosec", fingerprint, file)
+		r.PrimaryIdentifierValue = rule
+		r.StartLine = &line
+		r.Presence = presence
+		return r
+	}
+	const api, other = "internal/store/dbgen/api_keys.sql.go", "other.go"
+	oldDup := at(locationFP("ref-1", "G101", api, 166), "G101", api, 166, store.PresenceUnconfirmed)
+	stillLocation := at(locationFP("repo-1", "G104", other, 3), "G104", other, 3, store.PresenceReported)
+
+	previous := Snapshot{ID: uuid.New(), CommitSHA: "a1", Rows: []store.Vulnerability{
+		oldDup,
+		at("content-181", "G101", api, 181, store.PresenceReported),
+		stillLocation,
+		at(locationFP("repo-1", "G104", other, 9), "G104", other, 9, store.PresenceReported),
+	}}
+	current := Snapshot{ID: uuid.New(), CommitSHA: "b2",
+		Rows: []store.Vulnerability{
+			at("content-181", "G101", api, 181, store.PresenceReported),
+			// G104 in other.go is still keyed by location (e.g. no source at upload).
+			at(locationFP("repo-1", "G104", other, 9), "G104", other, 9, store.PresenceReported),
+		},
+		Runs: []store.ProducerRun{completed("gosec")},
+	}
+	opts := Options{LocationScopes: []string{"repo-1", "ref-1"}, Changed: changes(map[string]Change{
+		api:   {Known: false},
+		other: {Known: false},
+	})}
+	carries, resolutions := Plan(previous, current, opts)
+
+	if got := resolutionReasons(resolutions)[oldDup.Fingerprint]; got != ResolvedProducerChanged {
+		t.Errorf("location-keyed duplicate: resolution %q, want %q", got, ResolvedProducerChanged)
+	}
+	if got := resolutionReasons(resolutions)[stillLocation.Fingerprint]; got == ResolvedProducerChanged {
+		t.Error("a group still keyed by location must not be closed as a re-key")
+	}
+	if _, carried := carriedReasons(carries)[oldDup.Fingerprint]; carried {
+		t.Error("the duplicate must not be carried again")
+	}
+	// Without scopes the rule cannot tell location keys apart: no closing.
+	if got := resolutionReasons(func() []Resolution { _, r := Plan(previous, current, Options{}); return r }())[oldDup.Fingerprint]; got == ResolvedProducerChanged {
+		t.Error("without LocationScopes nothing may be closed as a re-key")
 	}
 }

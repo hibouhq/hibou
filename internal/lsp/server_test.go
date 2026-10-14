@@ -517,3 +517,41 @@ func TestSecretCheckSendsOnlyTheStagedDiffWhenEnabled(t *testing.T) {
 		t.Fatalf("sent %q", bodies)
 	}
 }
+
+// A carried (unconfirmed) finding's lines refer to the commit where it was
+// last seen, not to the snapshot's commit: mapping it from the snapshot put it
+// on stale lines once the file had grown.
+func TestPlaceMapsCarriedFindingsFromLastSeenCommit(t *testing.T) {
+	repo := t.TempDir()
+	gitCmd(t, repo, "init", "-q", "-b", "main")
+	write := func(content string) {
+		if err := os.WriteFile(filepath.Join(repo, "a.go"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package a\nvar secret = 1\n")
+	gitCmd(t, repo, "add", "a.go")
+	gitCmd(t, repo, "commit", "-q", "-m", "old")
+	old := gitCmd(t, repo, "rev-parse", "HEAD")
+	write("package a\n// one\n// two\n// three\nvar secret = 1\n")
+	gitCmd(t, repo, "commit", "-q", "-am", "grow")
+	head := gitCmd(t, repo, "rev-parse", "HEAD")
+
+	s := &Server{docs: map[string]*document{}, workspaces: map[string]*workspace{}, rootOfDir: map[string]string{}}
+	ws := newWorkspace(s, repo)
+	ws.state = stateReady
+	ws.snapshot = &pickedSnapshot{ID: "s", Commit: head}
+	ws.findings = []apiFinding{
+		{Fingerprint: "new", Status: "detected", Presence: "reported", StartLine: 5, EndLine: 5, FilePath: "a.go"},
+		{Fingerprint: "old", Status: "detected", Presence: "unconfirmed", LastSeenCommit: old, StartLine: 2, EndLine: 2, FilePath: "a.go"},
+	}
+	ws.byPath = map[string][]int{"a.go": {0, 1}}
+
+	d := document{uri: "file:///a.go", ws: ws, rel: "a.go"}
+	d.setText("package a\n// one\n// two\n// three\nvar secret = 1\n")
+	for _, p := range s.place(context.Background(), d) {
+		if p.start != 4 {
+			t.Errorf("%s placed on line %d, want 4", p.f.Fingerprint, p.start)
+		}
+	}
+}

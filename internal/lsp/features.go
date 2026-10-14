@@ -39,11 +39,17 @@ func (s *Server) place(ctx context.Context, d document) []placedFinding {
 	snap, findings := d.ws.fileFindings(d.rel)
 	var placed []placedFinding
 	if snap != nil && len(findings) > 0 {
-		var lm *lineMap
-		if sf := d.ws.scannedLines(ctx, snap.Commit, d.rel); sf.known {
-			lm = newLineMap(sf.lines, d.lines)
-		} else {
-			lm = identityLineMap(len(d.lines))
+		maps := map[string]*lineMap{}
+		mapFrom := func(commit string) *lineMap {
+			if lm := maps[commit]; lm != nil {
+				return lm
+			}
+			lm := identityLineMap(len(d.lines))
+			if sf := d.ws.scannedLines(ctx, commit, d.rel); sf.known {
+				lm = newLineMap(sf.lines, d.lines)
+			}
+			maps[commit] = lm
+			return lm
 		}
 		for _, f := range findings {
 			if !s.visible(f) {
@@ -56,13 +62,28 @@ func (s *Server) place(ctx context.Context, d document) []placedFinding {
 			if end < start {
 				end = start
 			}
-			ns, ne, edited := lm.mapRange(start, end)
+			ns, ne, edited := mapFrom(findingCommit(f, snap.Commit)).mapRange(start, end)
 			placed = append(placed, placedFinding{f: f, start: ns, end: ne, edited: edited})
 		}
 	}
 	placed = append(placed, s.manifestFindings(d)...)
 	sort.SliceStable(placed, func(i, j int) bool { return placed[i].start < placed[j].start })
 	return placed
+}
+
+// findingCommit is the commit a finding's lines refer to: the snapshot's for a
+// reported finding, the commit where a carried one was last seen otherwise.
+// Mapping a carried row from the snapshot commit put it on stale lines.
+func findingCommit(f apiFinding, snapshotCommit string) string {
+	if carried(f) && f.LastSeenCommit != "" {
+		return f.LastSeenCommit
+	}
+	return snapshotCommit
+}
+
+// carried reports a finding the latest scan did not re-confirm (ADR-034).
+func carried(f apiFinding) bool {
+	return f.Presence != "" && f.Presence != "reported"
 }
 
 // Manifests dependency findings without a source location attach to.
@@ -224,6 +245,9 @@ func (s *Server) toDiagnostic(server string, d document, p placedFinding) diagno
 	if p.edited {
 		msg += " — code changed since the scan; may already be fixed"
 	}
+	if carried(f) {
+		msg += " — not re-confirmed by the latest scan"
+	}
 
 	code := f.ruleID()
 	if code == "" {
@@ -342,6 +366,9 @@ func hoverMarkdown(server string, repo *repoRef, p placedFinding) string {
 	}
 	if p.edited {
 		b.WriteString("\n_The code changed since this scan. The finding may already be fixed; the next scan will tell._\n")
+	}
+	if carried(f) {
+		b.WriteString("\n_Not re-confirmed by the latest scan (" + strings.ReplaceAll(f.Presence, "_", " ") + "); shown where it was last seen._\n")
 	}
 	if desc := strings.TrimSpace(f.Description); desc != "" && desc != f.Title {
 		b.WriteString("\n" + mdEscape(truncate(desc, 600)) + "\n")

@@ -229,31 +229,35 @@ type apiCWE struct {
 }
 
 type apiFinding struct {
-	ID                     string          `json:"id"`
-	Type                   string          `json:"type"`
-	Title                  string          `json:"title"`
-	Description            string          `json:"description"`
-	Severity               string          `json:"severity"`
-	Status                 string          `json:"status"`
-	PrimaryIdentifierKind  string          `json:"primary_identifier_kind"`
-	PrimaryIdentifierValue string          `json:"primary_identifier_value"`
-	ScannerName            string          `json:"scanner_name"`
-	FilePath               string          `json:"file_path"`
-	StartLine              int             `json:"start_line"`
-	EndLine                int             `json:"end_line"`
-	Fingerprint            string          `json:"fingerprint"`
-	ComponentName          string          `json:"component_name"`
-	ComponentVersion       string          `json:"component_version"`
-	ComponentPurl          string          `json:"component_purl"`
-	AdvisoryID             string          `json:"advisory_id"`
-	Solution               string          `json:"solution"`
-	RemediationLink        string          `json:"remediation_link"`
-	Reachability           string          `json:"reachability"`
-	FirstSeenAt            *time.Time      `json:"first_seen_at"`
-	Metadata               json.RawMessage `json:"metadata"`
-	KEV                    bool            `json:"kev"`
-	CWEs                   []apiCWE        `json:"cwes"`
-	CVSS                   *struct {
+	ID                     string `json:"id"`
+	Type                   string `json:"type"`
+	Title                  string `json:"title"`
+	Description            string `json:"description"`
+	Severity               string `json:"severity"`
+	Status                 string `json:"status"`
+	PrimaryIdentifierKind  string `json:"primary_identifier_kind"`
+	PrimaryIdentifierValue string `json:"primary_identifier_value"`
+	ScannerName            string `json:"scanner_name"`
+	FilePath               string `json:"file_path"`
+	StartLine              int    `json:"start_line"`
+	EndLine                int    `json:"end_line"`
+	Fingerprint            string `json:"fingerprint"`
+	ComponentName          string `json:"component_name"`
+	ComponentVersion       string `json:"component_version"`
+	ComponentPurl          string `json:"component_purl"`
+	AdvisoryID             string `json:"advisory_id"`
+	// Presence is reported, not_rechecked or unconfirmed (ADR-034). A
+	// carried row's lines refer to LastSeenCommit, not the snapshot's commit.
+	Presence        string          `json:"presence"`
+	LastSeenCommit  string          `json:"last_seen_commit"`
+	Solution        string          `json:"solution"`
+	RemediationLink string          `json:"remediation_link"`
+	Reachability    string          `json:"reachability"`
+	FirstSeenAt     *time.Time      `json:"first_seen_at"`
+	Metadata        json.RawMessage `json:"metadata"`
+	KEV             bool            `json:"kev"`
+	CWEs            []apiCWE        `json:"cwes"`
+	CVSS            *struct {
 		Score   *float64 `json:"score"`
 		Version string   `json:"version"`
 	} `json:"cvss"`

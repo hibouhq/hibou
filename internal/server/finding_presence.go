@@ -220,7 +220,13 @@ func (s *Server) presencePolicies(ctx context.Context, queries *store.Queries, s
 	if err != nil {
 		return nil, presence.Options{}, fmt.Errorf("load closed assertions: %w", err)
 	}
-	return repo, presence.Options{Policy: producerPolicyLookup(policies), ClosedAssertions: closed}, nil
+	return repo, presence.Options{
+		Policy:           producerPolicyLookup(policies),
+		ClosedAssertions: closed,
+		// Location fingerprints were scoped by ref before they were scoped by
+		// repository: both identify a location-keyed row (ADR-034 §7 re-keys).
+		LocationScopes: []string{repo.ID.String(), ref.ID.String()},
+	}, nil
 }
 
 // presenceOptions is the PR delta's view (no transaction, no lock): policies

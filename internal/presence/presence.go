@@ -5,6 +5,8 @@
 package presence
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -128,6 +130,10 @@ type Options struct {
 	// ClosedAssertions are fingerprints of manual and agent findings a
 	// decision resolved or retracted (ADR-034 §4): not carried.
 	ClosedAssertions map[string]bool
+	// LocationScopes are the ids location fingerprints were scoped by: the
+	// repository (current fallback) and the ref (an earlier one). They let
+	// Plan recognise a row keyed by location (see locationKeyed).
+	LocationScopes []string
 }
 
 func (o Options) policy(producer string) Policy {
@@ -223,6 +229,18 @@ func Plan(previous, current Snapshot, opts Options) ([]Carry, []Resolution) {
 			reportedIdentities[id] = row.Fingerprint
 		}
 	}
+	// (producer, rule, file) groups the producer now reports under content
+	// fingerprints (ADR-034 §7). A location-keyed row absent from such a group
+	// will never be reported under its old key again.
+	contentKeyed := make(map[string]bool)
+	for _, row := range current.Rows {
+		if row.Presence != "" && row.Presence != store.PresenceReported {
+			continue
+		}
+		if group := driftGroup(row); group != "" && !locationKeyed(row, opts.LocationScopes) {
+			contentKeyed[group] = true
+		}
+	}
 	runsByProducer := groupRuns(current.Runs)
 	previousRuns := groupRuns(previous.Runs)
 
@@ -268,6 +286,14 @@ func Plan(previous, current Snapshot, opts Options) ([]Carry, []Resolution) {
 		// duplicates carried before this rule existed.
 		if producer != "" {
 			if fp, ok := reportedIdentities[IdentityKey(row)]; ok && fp != row.Fingerprint {
+				resolutions = append(resolutions, Resolution{Source: row, Producer: producer, Reason: ResolvedProducerChanged})
+				continue
+			}
+			// Same for a location-keyed row whose lines moved: its key
+			// cannot recur once the producer's results carry content
+			// fingerprints, so carrying it only shows the finding twice, on
+			// stale lines.
+			if contentKeyed[driftGroup(row)] && locationKeyed(row, opts.LocationScopes) {
 				resolutions = append(resolutions, Resolution{Source: row, Producer: producer, Reason: ResolvedProducerChanged})
 				continue
 			}
@@ -616,4 +642,43 @@ func IdentityKey(vuln store.Vulnerability) string {
 		parts = append(parts, strconv.FormatInt(int64(*vuln.StartLine), 10))
 	}
 	return strings.Join(parts, "|")
+}
+
+// driftGroup is IdentityKey without the line: the (type, producer, rule,
+// package, file) a finding belongs to wherever it sits in the file.
+func driftGroup(vuln store.Vulnerability) string {
+	identifier := strings.TrimSpace(vuln.PrimaryIdentifierValue)
+	filePath := strings.TrimSpace(ptrString(vuln.FilePath))
+	if identifier == "" || filePath == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(vuln.Type)),
+		strings.ToLower(strings.TrimSpace(vuln.ScannerName)),
+		identifier,
+		strings.TrimSpace(ptrString(vuln.ComponentPurl)),
+		filePath,
+	}, "|")
+}
+
+// locationKeyed reports whether a row's fingerprint is the server's location
+// fallback, sha256(scope/tool/rule/file/line) (sarif.ExtractFindings), for one
+// of scopes: the key used for results without a producer fingerprint before
+// hibou upload added content fingerprints.
+func locationKeyed(vuln store.Vulnerability, scopes []string) bool {
+	if vuln.StartLine == nil || len(scopes) == 0 {
+		return false
+	}
+	tail := strings.ToLower(strings.TrimSpace(vuln.ScannerName)) + "/" + strings.TrimSpace(vuln.PrimaryIdentifierValue) + "/" +
+		strings.TrimSpace(ptrString(vuln.FilePath)) + "/" + strconv.FormatInt(int64(*vuln.StartLine), 10)
+	for _, scope := range scopes {
+		if scope == "" {
+			continue
+		}
+		sum := sha256.Sum256([]byte(scope + "/" + tail))
+		if hex.EncodeToString(sum[:]) == vuln.Fingerprint {
+			return true
+		}
+	}
+	return false
 }
