@@ -1,3 +1,5 @@
+<p align="center"><img src="./brand/readme-banner.svg" alt="Hibou — Eyes on what you ship" width="100%" /></p>
+
 # Hibou
 
 **Self-hosted, open-source security intelligence for the software lifecycle.** Bring dependency vulnerabilities, code findings, secrets, coverage, and release impact into one workspace on your own infrastructure. Keep your scanners; give their results a shared history and a place to act. Hibou is currently self-hosted only, not a hosted SaaS offering.

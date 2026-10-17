@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="24" height="24" role="img" aria-labelledby="title">
+  <title id="title">Hibou outline toolbar icon</title>
+
+  <path fill="#e6edf3" fill-rule="evenodd" d="M44 20 88 60V120H168V60L212 20V208H168V156H88V208H44ZM56 47.16 76 65.34V132H180V65.34L200 47.16V196H180V144H76V196H56Z" />
+  <path fill="#e6edf3" fill-rule="evenodd" d="M124.4 180A18.4 18.4 0 1 0 87.6 180A18.4 18.4 0 1 0 124.4 180ZM113.2 180A7.2 7.2 0 1 0 98.8 180A7.2 7.2 0 1 0 113.2 180ZM168.4 180A18.4 18.4 0 1 0 131.6 180A18.4 18.4 0 1 0 168.4 180ZM157.2 180A7.2 7.2 0 1 0 142.8 180A7.2 7.2 0 1 0 157.2 180Z" />
+  <path fill="#e6edf3" d="M128 196 118 206 128 216 138 206Z" />
+</svg>

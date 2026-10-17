@@ -9,8 +9,11 @@ import { Steps, Code } from '@astrojs/starlight/components';
 
 - Docker & Docker Compose
 - Git
+- Make, Go 1.26.9+, Node.js 22+ (the devcontainer provides them)
 
-## Setup
+## One command
+
+The fastest way to a running instance with sample data:
 
 <Steps>
 
@@ -27,42 +30,64 @@ import { Steps, Code } from '@astrojs/starlight/components';
    cp .env.example .env
    ```
 
-3. **Start infrastructure**
+3. **Start everything**
 
    ```bash
-   make up
+   make start-quick
    ```
 
-   This starts PostgreSQL, Forgejo, and Trivy containers.
-
-4. **Provision the development forge**
-
-   ```bash
-   make setup
-   ```
-
-   This creates a Forgejo admin user, registers an OAuth2 application, and writes the credentials to `.env`.
-
-5. **Run the server**
-
-   ```bash
-   make dev
-   ```
-
-   The API is available at `http://localhost:8585` and the UI at `http://localhost:8080`.
+   This starts PostgreSQL, seeds sample organizations, repositories and
+   findings, builds the Vue UI, and runs the API and Vite dev server together.
 
 </Steps>
 
+The UI is available at **`http://localhost:3000`** and the API at
+**`http://localhost:8585`**. On the login page, click **Dev Login** to sign in
+as a local admin.
+
+## Step by step
+
+Prefer to run each stage yourself?
+
+| Command | What it does |
+|---------|--------------|
+| `make up` | Start PostgreSQL only (Docker Compose) |
+| `make setup` | `make up` + seed sample data |
+| `make dev` | Build the dev binary and run the API + Vite with hot reload |
+| `make seed` / `make reset` | Re-seed / drop and re-seed the database |
+
+```bash
+make setup   # postgres + sample data
+make dev     # run the app
+```
+
+## With Forgejo OAuth
+
+To exercise the full forge OAuth flow against a local Forgejo instance:
+
+```bash
+make up-all       # postgres + Forgejo + Trivy
+make setup-full   # provision Forgejo admin + OAuth2 app, write creds to .env
+make dev
+```
+
+`make start` rolls the full OAuth setup, real seed data, and `make dev` into a
+single command.
+
 ## Development Login
 
-When no forge providers are configured (or for quick local development), Hibou exposes a **Dev Login** button on the login page. This creates a local admin user without requiring OAuth2.
+When no forge providers are configured (or for quick local development), Hibou
+exposes a **Dev Login** button on the login page. This creates a local admin
+user without requiring OAuth2.
 
 :::caution
-Dev Login should never be used in production. It is only available when no forge providers are configured or in development mode.
+Dev Login should never be used in production. It is only available when no forge
+providers are configured or in development mode. Do not expose such an instance
+publicly; use forge authentication and a production configuration when deploying.
 :::
 
 ## Next Steps
 
-- [Configure forge providers](/admin/forge-providers) to connect your Git hosting
-- [Set up organizations](/guide/organizations) to manage teams and repositories
-- [Enable security scanning](/guide/security-scans) for your repositories
+- [Configure forge providers](../../admin/forge-providers/) to connect your Git hosting
+- [Set up organizations](../../guide/organizations/) to manage teams and repositories
+- [Enable security scanning](../../guide/security-scans/) for your repositories

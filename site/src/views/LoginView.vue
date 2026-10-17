@@ -1,8 +1,19 @@
 <template>
   <div class="flex min-h-screen items-center justify-center bg-gray-950">
     <div class="w-full max-w-sm rounded-lg border border-gray-800 bg-gray-900 p-8">
-      <h1 class="mb-6 text-center text-2xl font-bold text-gray-100">
-        Hibou
+      <div class="mb-5 flex justify-center">
+        <span class="flex h-14 w-14 items-center justify-center rounded-2xl border border-gray-800 bg-gray-950">
+          <img
+            src="/logomark.svg"
+            class="h-9 w-9"
+            width="36"
+            height="36"
+            alt=""
+          >
+        </span>
+      </div>
+      <h1 class="mb-1 text-center text-2xl font-bold text-gray-100">
+        hibou
       </h1>
       <p class="mb-6 text-center text-sm text-gray-400">
         Sign in to continue

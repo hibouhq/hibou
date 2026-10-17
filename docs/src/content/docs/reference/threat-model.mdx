@@ -1,0 +1,182 @@
+---
+title: Threat Model
+description: Hibou's trust boundaries, security controls, residual risks, and deployment responsibilities.
+---
+
+This page summarizes the [engineering threat model](https://github.com/hibouhq/hibou/blob/main/docs/THREAT-MODEL.md),
+version 1.1, reviewed in October 2026. The linked assessment tracks the latest
+source and may differ from this documentation version.
+
+Hibou is alpha software, not production-ready. This model describes controls
+and remaining risks; it is not a security certification or a guarantee of
+tenant isolation, artifact authenticity, or production suitability.
+
+## Scope
+
+The model covers the API, embedded web UI, authentication, PostgreSQL,
+uploaded artifacts, forge webhooks, notifications, CLI/CI trust, and the
+optional MCP listener. It uses **STRIDE**: spoofing, tampering, repudiation,
+information disclosure, denial of service, and elevation of privilege.
+
+Scanner execution, IDE extensions, and registry plugins introduce additional
+trust boundaries in their host environments. Review those integrations
+separately; this summary is not a complete assessment of every integration.
+
+## Assets And Trust Boundaries
+
+| Asset | What must be protected |
+| --- | --- |
+| Sessions, API tokens, and forge credentials | Identity, confidentiality, revocation, and least privilege |
+| Findings, inventories, and uploaded reports | Tenant isolation, integrity, and repository/commit lineage |
+| Policies, roles, and triage decisions | Authorized changes and traceable ownership |
+| Database and artifact storage | Confidentiality, availability, backup, and recovery |
+| Audit history and release evidence | Accountability, retention, and resistance to tampering |
+
+```text
+Browsers / CLI / CI / forge webhooks
+                |
+          Ingress and TLS
+                |
+      Hibou API, UI, and workers
+        |       |          |
+   PostgreSQL   |    Forge/advisory APIs
+          Artifact storage
+
+MCP clients -> separate MCP listener
+Workers -> notification destinations
+```
+
+Each connection crosses a trust boundary. Network access, authenticated
+identity, and permission to act are separate checks; a repository identifier
+or an authenticated token alone does not establish authorization.
+
+## Threats And Controls
+
+### Spoofing
+
+Attackers may steal sessions or API tokens, forge webhook deliveries, or trick
+users into approving a device-login request.
+
+- Session and OAuth state cookies are HMAC-signed, not encrypted. Cookie
+  transport protection depends on the configured base URL and TLS deployment.
+- Session revocation is per user, not per individual browser session.
+- API tokens are hashed at rest, but remain replayable bearer credentials.
+- Webhook authentication uses provider-specific validation. A webhook secret
+  is required outside development mode; optional IP restrictions supplement
+  rather than replace authentication.
+- Device login requires explicit browser approval. Compare the code and
+  requesting device before approving a request you initiated.
+
+### Tampering
+
+An authenticated uploader or compromised CI runner can submit misleading
+reports. Host or database access can also alter stored evidence.
+
+- Upload authentication, input limits, and repository/snapshot lineage help
+  attribute submissions; they do not prove that report contents are truthful.
+- Uploaded artifacts are not automatically authenticated by signed provenance.
+- Database administrators and compromised application credentials can modify
+  records. Filesystem artifacts do not provide intrinsic immutability.
+
+### Repudiation
+
+Audit records associate actions with users or tokens, but have limits.
+
+- Audit history is operational evidence, not database-enforced immutable storage.
+- An upload identifies the credential used, not independently the CI job or
+  person who controlled it.
+- Notification logs record delivery attempts, not proof that a recipient read
+  or acknowledged a message.
+
+### Information Disclosure
+
+The highest-impact risks include cross-tenant access, leaked integration
+secrets, and an unnecessarily exposed MCP listener.
+
+- Authorization combines route-level organization/role checks with
+  policy-backed enforcement. Every route needs consistent object scoping and
+  negative authorization tests.
+- Keep credentials out of logs, command output, public configuration, and
+  browser storage. Hashing tokens at rest does not protect a leaked token.
+- MCP is disabled by default outside development. If enabled, restrict its
+  network exposure and review authentication and tool permissions.
+- Notification destination validation includes SSRF protections, but outbound
+  access should also be restricted at the network boundary.
+
+### Denial Of Service
+
+Upload limits and webhook controls reduce some resource-exhaustion risks,
+but do not eliminate them.
+
+- `HIBOU_MAX_UPLOAD_SIZE` limits request size. A valid report below that limit
+  can still be expensive to parse and process.
+- Configure webhook rate limits and ingress protections. Per-IP limits do not
+  stop every distributed attack.
+- Protect database capacity, worker resources, and external scanner availability.
+  Do not assume comprehensive per-tenant quotas or query budgets are enforced.
+
+### Elevation Of Privilege
+
+A missing organization or repository permission check can become a tenant
+boundary failure. A compromised administrator, database account, or CI runner
+can also exceed the intended trust boundary.
+
+- Scope tokens to their task and revoke unused credentials.
+- Review authorization for every new API route, MCP tool, and background action.
+- Never expose development mode: its development login and relaxed safeguards
+  are not suitable for an Internet-facing instance.
+
+## CLI, Scanners, And Release Trust
+
+The CLI resolves supported scanner jobs against its embedded catalog and
+verifies downloaded artifacts against pinned digests. A server-provided
+checksum alone is not an independent trust anchor.
+
+The official upload action accepts a supplied CLI, an independently pinned
+CLI download, or a CLI already installed on the runner. Use HTTPS for the
+server connection; insecure HTTP is for explicitly configured local testing.
+
+Verify release signatures and build provenance when available, checking both
+the signing workflow and the exact release ref. An unsigned checksum list can
+detect corruption but does not establish publisher authenticity. Signing
+availability depends on the release workflow and repository publication state.
+
+A valid signature does not prove that a build runner was uncompromised. The
+engineering assessment records a residual risk from privileged build containers
+sharing a runner with signing credentials. See its release-verification section
+for commands and the full CI trust assumptions.
+
+## Deployment Responsibilities
+
+These precautions reduce exposure; they do not make alpha software
+production-ready.
+
+- Keep development Compose instances private. Do not reuse development
+  credentials or forge applications in a deployed environment.
+- Set `HIBOU_BASE_URL` to the actual HTTPS endpoint and use a unique, strong
+  `HIBOU_SESSION_SECRET`. Outside development, invalid defaults are rejected.
+- Store database and forge credentials in a secret store; restrict access and
+  establish a rotation procedure.
+- Expose only required services. Keep PostgreSQL, artifact storage, scanner
+  services, and the optional MCP listener on restricted networks.
+- Restrict outbound access, apply resource limits, and monitor upload queues,
+  webhook failures, integration health, and authentication anomalies.
+- Maintain off-host backups and test restoration of both database and artifact
+  data. Application audit logs are not a substitute for protected backups.
+
+See [configuration](../../admin/configuration/),
+[authentication](../../admin/authentication/),
+[container deployment](../../admin/docker/), and
+[cluster deployment](../../admin/kubernetes/) for the available settings.
+
+## Residual Risks And Review
+
+Prioritize tenant-isolation regressions, compromised CI credentials, exposed
+development mode or MCP, and direct database or artifact-store tampering.
+Dynamic forge IP allowlists also have a warm-up window before their first
+successful refresh; webhook authentication still applies during that window.
+
+Review this model after authentication or authorization changes, new public
+endpoints or integrations, deployment-topology changes, and security incidents.
+The engineering assessment recommends a review at least every six months.
+Validate mitigation claims against the implementation, not design intent alone.

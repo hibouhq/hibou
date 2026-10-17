@@ -20,7 +20,7 @@ CHART=oci://ghcr.io/hibouhq/charts/hibou
 # itself via `hibou release deploy`. Auth comes from `hibou login` state or
 # the HIBOU_TOKEN env var (HIBOU_API_TOKEN accepted as an alias); skipped
 # with a warning when neither is available.
-export HIBOU_SERVER="${HIBOU_SERVER:-https://hibouhq.com}"
+export HIBOU_SERVER="${HIBOU_SERVER:-https://dogfood.hibouhq.com}"
 export HIBOU_ORG="${HIBOU_ORG:-github/hibouhq}"
 HIBOU_REPO_SLUG="${HIBOU_REPO_SLUG:-hibou}"
 HIBOU_CLIENT_SLUG="${HIBOU_CLIENT_SLUG:-internal}"
@@ -124,8 +124,8 @@ helm "${HELM_ARGS[@]}"
 info "Verifying"
 kubectl rollout status "deploy/hibou" -n "$NAMESPACE" --timeout=180s
 kubectl get deploy hibou -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
-code="$(curl -sS -o /dev/null -w '%{http_code}' https://hibouhq.com/ || true)"
-echo "https://hibouhq.com -> ${code}"
+code="$(curl -sS -o /dev/null -w '%{http_code}' https://dogfood.hibouhq.com/ || true)"
+echo "https://dogfood.hibouhq.com -> ${code}"
 [ "$code" = "200" ] || die "site returned ${code}"
 
 # Record the deployment in Hibou (assign the release to the dogfood client).

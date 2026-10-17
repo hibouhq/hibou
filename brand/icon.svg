@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">Hibou app icon</title>
+  <rect width="256" height="256" rx="32" fill="#0b0f1a" />
+  <path d="M44 20 88 60V208H44Z" fill="#58a6ff" />
+  <path d="M212 20 168 60V208H212Z" fill="#58a6ff" />
+  <rect x="44" y="120" width="168" height="36" fill="#58a6ff" />
+  <circle cx="106" cy="180" r="18.4" fill="#fbbf24" />
+  <circle cx="150" cy="180" r="18.4" fill="#fbbf24" />
+  <circle cx="106" cy="180" r="7.2" fill="#0b0f1a" />
+  <circle cx="150" cy="180" r="7.2" fill="#0b0f1a" />
+  <path d="M128 196 118 206 128 216 138 206Z" fill="#fbbf24" />
+</svg>

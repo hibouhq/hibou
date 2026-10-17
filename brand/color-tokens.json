@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schemas.hibou.dev/brand/color-tokens.json",
+  "name": "Hibou Brand Color Tokens",
+  "description": "Single source of truth for Hibou brand and UI colors. Extends the GitHub-dark surface family used by the product.",
+  "color": {
+    "core": {
+      "night":            { "value": "#0B0F1A", "comment": "Deepest background, hero, social cards" },
+      "surface":          { "value": "#0D1117", "comment": "App background" },
+      "surface-raised":   { "value": "#161B22", "comment": "Cards, headers" },
+      "surface-overlay":  { "value": "#1C2128", "comment": "Popovers, insets" },
+      "border":           { "value": "#30363D", "comment": "Dividers, outlines" },
+      "border-subtle":    { "value": "#21262D", "comment": "Hairlines" },
+      "text":             { "value": "#E6EDF3", "comment": "Primary text on dark" },
+      "text-muted":       { "value": "#8B949E", "comment": "Secondary text" }
+    },
+    "brand": {
+      "blue":             { "value": "#58A6FF", "comment": "Primary: links, actions, focus, logo strokes" },
+      "blue-deep":        { "value": "#3B82F6", "comment": "Gradients, pressed states" },
+      "cyan":             { "value": "#22D3EE", "comment": "Vigil Cyan: twilight gradient pair, highlights" },
+      "amber":            { "value": "#FBBF24", "comment": "Owl Amber signature: the eyes. One focal accent per view" },
+      "amber-deep":       { "value": "#F59E0B", "comment": "Amber pressed / borders" }
+    },
+    "gradient": {
+      "twilight": {
+        "value": "linear-gradient(135deg, #22D3EE 0%, #3B82F6 55%, #0B0F1A 100%)",
+        "stops": ["#22D3EE", "#3B82F6", "#0B0F1A"]
+      }
+    },
+    "severity": {
+      "critical": { "value": "#F85149" },
+      "high":     { "value": "#E6550D" },
+      "medium":   { "value": "#D29922" },
+      "low":      { "value": "#8B949E" },
+      "info":     { "value": "#58A6FF" }
+    },
+    "status": {
+      "ok":     { "value": "#3FB950" },
+      "ok-muted": { "value": "#238636" },
+      "warn":   { "value": "#D29922" },
+      "warn-muted": { "value": "#9E6A03" },
+      "danger": { "value": "#F85149" },
+      "danger-muted": { "value": "#DA3633" }
+    }
+  }
+}

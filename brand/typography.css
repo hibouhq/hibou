@@ -1,0 +1,100 @@
+/*
+ * Hibou — Brand typography & color custom properties
+ * Import in any web surface (app, landing, docs) for a consistent brand.
+ *
+ *   @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap");
+ *   @import "./typography.css";
+ *
+ * Fonts (all open source):
+ *   Space Grotesk — display / headings / the lowercase "hibou" wordmark
+ *   Inter         — UI and body
+ *   JetBrains Mono — code, CLI, data
+ */
+
+:root {
+  /* Type families */
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* Type scale (1.25 ratio) */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+  --text-3xl: 2.75rem;
+  --text-4xl: 3.75rem;
+
+  /* Weights */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Tracking */
+  --tracking-display: -0.02em;
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+
+  /* Line height */
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.6;
+
+  /* Brand color tokens (mirror brand/color-tokens.json) */
+  --night: #0B0F1A;
+  --surface: #0D1117;
+  --surface-raised: #161B22;
+  --surface-overlay: #1C2128;
+  --border: #30363D;
+  --border-subtle: #21262D;
+  --text: #E6EDF3;
+  --text-muted: #8B949E;
+
+  --brand-blue: #58A6FF;
+  --brand-blue-deep: #3B82F6;
+  --brand-cyan: #22D3EE;
+  --brand-amber: #FBBF24;
+  --brand-amber-deep: #F59E0B;
+
+  --gradient-twilight: linear-gradient(135deg, #22D3EE 0%, #3B82F6 55%, #0B0F1A 100%);
+}
+
+/* Display / headings */
+.hb-display,
+.hb-h1,
+.hb-h2,
+.hb-h3 {
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-display);
+  line-height: var(--leading-tight);
+  color: var(--text);
+}
+
+/* The wordmark — always lowercase */
+.hb-wordmark {
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: lowercase;
+  color: var(--text);
+}
+
+/* Body */
+body,
+.hb-body {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  color: var(--text);
+}
+
+/* Code */
+code,
+pre,
+.hb-mono {
+  font-family: var(--font-mono);
+}

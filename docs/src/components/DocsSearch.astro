@@ -1,0 +1,63 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+---
+
+<div class="docs-search">
+    <button type="button" data-docs-search>
+        <Icon name="magnifier" size="1.25rem" />
+        <span>Search documentation</span>
+        <Icon name="right-arrow" size="1.25rem" />
+    </button>
+    <p>
+        Try: <a href="getting-started/quickstart/">quick start</a>, <a
+            href="admin/configuration/">configuration</a
+        >, <a href="reference/api/">API</a>
+    </p>
+</div>
+
+<script>
+    document
+        .querySelector<HTMLButtonElement>("[data-docs-search]")
+        ?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            document
+                .querySelector<HTMLButtonElement>(
+                    "site-search button[data-open-modal]",
+                )
+                ?.click();
+        });
+</script>
+
+<style>
+    .docs-search {
+        margin-block: 2rem;
+    }
+    button {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        width: 100%;
+        padding: 1rem;
+        border: 2px solid var(--hb-line);
+        background: var(--hb-page);
+        color: var(--hb-ink);
+        font: 0.875rem var(--sl-font-mono);
+        cursor: pointer;
+        text-align: start;
+    }
+    button span {
+        flex: 1;
+    }
+    button:hover {
+        border-color: var(--sl-color-accent);
+    }
+    p {
+        margin-top: 0.75rem;
+        font-size: 0.8125rem;
+        color: var(--hb-muted);
+    }
+    a {
+        color: var(--sl-color-accent);
+        text-underline-offset: 0.2em;
+    }
+</style>

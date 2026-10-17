@@ -1,32 +1,60 @@
 ---
-title: Hibou Documentation
-description: DevSecOps security platform for your Git forges
-template: splash
-hero:
-  tagline: Connect your forges. Scan your code. Ship with confidence.
-  actions:
-    - text: Get Started
-      link: /getting-started/introduction/
-      icon: right-arrow
-    - text: View on GitHub
-      link: https://github.com/hibouhq/hibou
-      icon: external
-      variant: minimal
+title: Hibou documentation
+description: Set up Hibou, connect your repositories, and track dependency, code, and release risk.
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import DocsSearch from '../../components/DocsSearch.astro';
 
-<CardGrid stagger>
-  <Card title="Multi-Forge" icon="setting">
-    Connect GitHub, Forgejo, Gitea, and GitLab — even multiple instances of the same type.
-  </Card>
-  <Card title="Automated Scanning" icon="approve-check">
-    Webhook-driven security scans on every push and pull request via Trivy.
-  </Card>
-  <Card title="Multi-Tenant" icon="group">
-    Organizations, teams, and RBAC for isolated security management.
-  </Card>
-  <Card title="Open API" icon="open-book">
-    Full REST API with OpenAPI documentation for automation and integrations.
-  </Card>
-</CardGrid>
+<p class="docs-lede">Open security intelligence for your software lifecycle.</p>
+
+Bring dependency risk, code findings, pull request analysis, and release impact
+into one self-hosted view. Start with a local instance, then connect your
+repositories and send your first SBOM.
+
+<DocsSearch />
+
+<a class="docs-start" href="getting-started/quickstart/">
+  <strong>Get started with Hibou &rarr;</strong>
+  <span>Run a local instance, load sample data, and explore your first repository.</span>
+</a>
+
+<p class="docs-label">Explore the docs</p>
+
+<div class="docs-topics">
+  <a href="getting-started/introduction/">
+    <span class="topic-label">01 / OVERVIEW</span>
+    <strong>Understand Hibou</strong>
+    <span class="topic-description">Learn how repositories, snapshots, and findings fit together.</span>
+    <span class="topic-link">Introduction &rarr;</span>
+  </a>
+  <a href="admin/configuration/">
+    <span class="topic-label">02 / OPERATIONS</span>
+    <strong>Deploy &amp; configure</strong>
+    <span class="topic-description">Set up your instance, authentication, and organization access.</span>
+    <span class="topic-link">Configuration &rarr;</span>
+  </a>
+  <a href="guide/security-scans/">
+    <span class="topic-label">03 / SECURITY</span>
+    <strong>Track findings</strong>
+    <span class="topic-description">Follow vulnerability, secret, and malware scans across repositories.</span>
+    <span class="topic-link">Security scans &rarr;</span>
+  </a>
+  <a href="guide/dependency-inventory/">
+    <span class="topic-label">04 / INVENTORY</span>
+    <strong>Know your dependencies</strong>
+    <span class="topic-description">Explore components, versions, licenses, and dependency risk.</span>
+    <span class="topic-link">Dependency inventory &rarr;</span>
+  </a>
+  <a href="guide/license-gating/">
+    <span class="topic-label">05 / POLICY</span>
+    <strong>Set license policies</strong>
+    <span class="topic-description">Define license rules and keep policy decisions consistent.</span>
+    <span class="topic-link">License gating &rarr;</span>
+  </a>
+  <a href="reference/api/">
+    <span class="topic-label">06 / REFERENCE</span>
+    <strong>Build integrations</strong>
+    <span class="topic-description">Automate uploads and connect existing tools through the API.</span>
+    <span class="topic-link">REST API &rarr;</span>
+  </a>
+</div>

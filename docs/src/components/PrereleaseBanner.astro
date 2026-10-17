@@ -1,0 +1,36 @@
+---
+import Default from "@astrojs/starlight/components/Banner.astro";
+
+const stage = import.meta.env.HIBOU_RELEASE_STAGE;
+---
+
+{
+    stage && (
+        <aside
+            class="prerelease-banner"
+            aria-label="Prerelease notice"
+            data-pagefind-ignore
+        >
+            <strong>{stage === "alpha" ? "Alpha" : "Beta"} release.</strong>
+            Not production-ready. Breaking changes are expected.
+        </aside>
+    )
+}
+<Default {...Astro.props}><slot /></Default>
+
+<style>
+    .prerelease-banner {
+        padding: 1rem var(--sl-nav-pad-x);
+        background: var(--hibou-amber);
+        color: #161b22;
+        border-bottom: 2px solid #161b22;
+        font-size: 0.875rem;
+        line-height: 1.6;
+        text-align: center;
+        text-wrap: pretty;
+    }
+    strong {
+        display: block;
+        font-family: var(--sl-font-mono);
+    }
+</style>

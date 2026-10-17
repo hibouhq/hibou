@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-labelledby="title">
+  <title id="title">Hibou outline toolbar icon, optically adjusted for 16 pixels</title>
+
+  <path fill="#374151" fill-rule="evenodd" d="M1 1 4 4V7H12V4L15 1V14H12V10H4V14H1ZM2 3.41 3 4.41V8H13V4.41L14 3.41V13H13V9H3V13H2Z" />
+  <rect fill="#374151" x="5" y="11" width="2" height="2" />
+  <rect fill="#374151" x="9" y="11" width="2" height="2" />
+</svg>

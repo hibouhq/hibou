@@ -452,6 +452,40 @@ definitions:
       notes:
         type: string
     type: object
+  server.advisoryMatchRequest:
+    properties:
+      purls:
+        items:
+          type: string
+        type: array
+      release:
+        type: string
+      repo:
+        description: |-
+          Repo scopes VEX, the not-shipped lists and the package policy;
+          Release names the context for the audit entry.
+        type: string
+    type: object
+  server.advisoryMatchResponse:
+    properties:
+      matches:
+        items:
+          $ref: '#/definitions/server.purlMatchResponse'
+        type: array
+      summary:
+        properties:
+          holds:
+            type: integer
+          kev:
+            type: integer
+          malware:
+            type: integer
+          purls:
+            type: integer
+          vulnerable:
+            type: integer
+        type: object
+    type: object
   server.assertionDecisionRequest:
     properties:
       reason:
@@ -697,6 +731,33 @@ definitions:
         type: string
       head_format:
         type: string
+    type: object
+  server.componentSignalsResponse:
+    properties:
+      alternatives:
+        items:
+          type: string
+        type: array
+      cooldown_until:
+        type: string
+      deprecated:
+        type: boolean
+      deprecated_reason:
+        type: string
+      fetched_at:
+        type: string
+      in_cooldown:
+        type: boolean
+      low_usage:
+        type: boolean
+      published_at:
+        type: string
+      recommended_version:
+        type: string
+      source:
+        type: string
+      unpublished:
+        type: boolean
     type: object
   server.coverageSourceLine:
     properties:
@@ -1283,6 +1344,22 @@ definitions:
         items:
           $ref: '#/definitions/store.FindingOccurrence'
         type: array
+      remediation:
+        description: |-
+          Remediation is the package policy's verdict on each version the
+          advisory (or deps.dev) proposes: a fix still in cooldown is shown as
+          such before anyone bumps to it (ADR-048 §8).
+        items:
+          $ref: '#/definitions/server.remediationVersionResponse'
+        type: array
+      signals:
+        allOf:
+        - $ref: '#/definitions/server.componentSignalsResponse'
+        description: |-
+          Signals are the deps.dev package signals of the affected version
+          (ADR-048): cooldown, deprecation, low usage, unpublished, and a
+          suggested version when the advisory names no fix. Absent when not
+          evaluated.
       vex:
         items:
           $ref: '#/definitions/server.findingVEXResponse'
@@ -1534,12 +1611,25 @@ definitions:
         type: string
       enabled:
         type: boolean
+      findings:
+        allOf:
+        - $ref: '#/definitions/store.FindingStats'
+        description: |-
+          Findings counts the findings stored once per repository and the
+          snapshot rows pointing at them (ADR-049).
       interval_seconds:
         type: number
       inventory_enabled:
         type: boolean
       inventory_interval_seconds:
         type: number
+      inventory_sets:
+        allOf:
+        - $ref: '#/definitions/store.InventorySetStats'
+        description: |-
+          InventorySets counts the shared inventory sets and the snapshots
+          pointing at them (ADR-045, Database section): a ratio near one
+          means something writes non-canonical rows.
       metrics_exposure:
         description: |-
           MetricsExposure says how /metrics is reachable: "disabled",
@@ -1549,6 +1639,40 @@ definitions:
         allOf:
         - $ref: '#/definitions/storageusage.Sample'
         description: Sample is null until the sampler's first pass has completed.
+    type: object
+  server.matchedAdvisoryResponse:
+    properties:
+      canonical_id:
+        type: string
+      cvss:
+        type: number
+      epss:
+        type: number
+      fixed_versions:
+        items:
+          type: string
+        type: array
+      id:
+        type: string
+      is_malware:
+        type: boolean
+      kev:
+        type: boolean
+      malware_type:
+        type: string
+      published_at:
+        type: string
+      rated_by:
+        type: string
+      severity:
+        type: string
+      title:
+        type: string
+      vex_status:
+        description: |-
+          VEXStatus is the repository's effective VEX verdict for the pair:
+          not_affected, affected, fixed, under_investigation, or empty.
+        type: string
     type: object
   server.meResponse:
     properties:
@@ -1960,6 +2084,33 @@ definitions:
       snapshot_id:
         type: string
     type: object
+  server.purlMatchResponse:
+    properties:
+      advisories:
+        items:
+          $ref: '#/definitions/server.matchedAdvisoryResponse'
+        type: array
+      decision:
+        description: |-
+          Decision is the package policy's verdict (allow, hold, deny) with
+          its reason, when the policy evaluator is configured.
+        type: string
+      purl:
+        type: string
+      reason:
+        type: string
+      shipped:
+        description: |-
+          Shipped and ShippedReason apply the repository's not-shipped lists
+          to the purl alone (no module or SBOM evidence is known locally).
+        type: boolean
+      shipped_reason:
+        type: string
+      signals:
+        $ref: '#/definitions/server.componentSignalsResponse'
+      supported:
+        type: boolean
+    type: object
   server.reachabilityRequest:
     properties:
       analyzer:
@@ -2012,6 +2163,31 @@ definitions:
         type: string
       status:
         type: string
+    type: object
+  server.remediationVersionResponse:
+    properties:
+      cooldown_until:
+        type: string
+      decision:
+        description: 'Decision: allow, hold, deny; empty when not evaluated.'
+        type: string
+      evaluated:
+        type: boolean
+      in_cooldown:
+        type: boolean
+      purl:
+        type: string
+      reason:
+        type: string
+      source:
+        description: 'Source: advisory (fixed_versions) or deps.dev (recommended version).'
+        type: string
+      version:
+        type: string
+      warnings:
+        items:
+          type: string
+        type: array
     type: object
   server.repoApplicabilityResponse:
     properties:
@@ -2964,6 +3140,13 @@ definitions:
       version:
         type: string
     type: object
+  store.FindingStats:
+    properties:
+      findings:
+        type: integer
+      snapshot_rows:
+        type: integer
+    type: object
   store.FixingPullRequest:
     properties:
       fingerprint:
@@ -3080,6 +3263,17 @@ definitions:
         type: string
       updated_at:
         type: string
+    type: object
+  store.InventorySetStats:
+    properties:
+      component_rows:
+        type: integer
+      edge_rows:
+        type: integer
+      sets:
+        type: integer
+      snapshots_with_inventory:
+        type: integer
     type: object
   store.NotificationRule:
     properties:
@@ -3764,6 +3958,19 @@ definitions:
         type: string
       severity_override_reason:
         type: string
+      shipped:
+        description: |-
+          Shipped says whether the affected component reaches clients (ADR-045
+          §6); nil when the finding has no component or the attribute was not
+          computed. Attached per page, never a column.
+        type: boolean
+      shipped_reason:
+        type: string
+      signals:
+        description: |-
+          Signals are the deps.dev package signals of the affected version
+          (ADR-048 §8), in the shape the components view uses; attached per page
+          by the server for component-backed findings, never a column.
       snapshot_id:
         type: string
       solution:
@@ -4719,6 +4926,77 @@ paths:
       summary: Update organization
       tags:
       - organizations
+  /orgs/{provider}/{slug}/advisories/export:
+    get:
+      description: 'Streams newline-delimited JSON: a header, then one record per
+        advisory with its affected ranges, ratings, aliases, KEV flag and EPSS score
+        (ADR-046 step 6). `ecosystem` limits the export (repeatable or comma-separated);
+        without it every ecosystem is exported. Audit-logged.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Ecosystems to export, e.g. npm,maven
+        in: query
+        name: ecosystem
+        type: string
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: NDJSON stream
+          schema:
+            type: string
+      summary: Export the advisory database for offline scans
+      tags:
+      - advisories
+  /orgs/{provider}/{slug}/advisories/match:
+    post:
+      consumes:
+      - application/json
+      description: 'Stateless: receives purls and versions only and returns the organization''s
+        advisory view (ADR-046 §2). With a repository, applies its VEX statements,
+        not-shipped lists and package policy, read-only. Persists nothing beyond an
+        audit entry.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Purls to match
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.advisoryMatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.advisoryMatchResponse'
+              type: object
+      summary: Match package versions against advisories
+      tags:
+      - advisories
   /orgs/{provider}/{slug}/api-keys:
     get:
       description: List org-owned API keys. Org admins see all of them; any other

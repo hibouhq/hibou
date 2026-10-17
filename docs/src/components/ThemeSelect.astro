@@ -1,0 +1,51 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+---
+
+<starlight-theme-select>
+    <Icon name="sun" class="label-icon" size="1rem" />
+    <select aria-label="Select theme">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="auto">Auto</option>
+    </select>
+</starlight-theme-select>
+
+<script>
+    class HibouThemeSelect extends HTMLElement {
+        connectedCallback() {
+            const select = this.querySelector("select")!;
+            let preference = "light";
+            try {
+                const stored = localStorage.getItem("starlight-theme");
+                if (stored === "dark" || stored === "light" || stored === "auto" || stored === "") {
+                    preference = stored || "auto";
+                }
+            } catch {}
+            const apply = () => {
+                document.documentElement.dataset.theme = preference === "auto"
+                    ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : preference;
+                window.StarlightThemeProvider.updatePickers(preference);
+            };
+            apply();
+            select.addEventListener("change", () => {
+                preference = select.value;
+                try { localStorage.setItem("starlight-theme", preference); } catch {}
+                apply();
+            });
+            matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+                if (select.value === "auto") {
+                    preference = "auto";
+                    apply();
+                }
+            });
+        }
+    }
+    customElements.define("starlight-theme-select", HibouThemeSelect);
+</script>
+
+<style>
+    starlight-theme-select { display: flex; align-items: center; gap: 0.4rem; }
+    select { font: 0.8125rem var(--sl-font-mono); color: var(--hb-ink); background: var(--hb-paper); border: 0; padding: 0.5rem 0.25rem; cursor: pointer; }
+</style>

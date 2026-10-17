@@ -39,6 +39,7 @@ test-results/
 docs/node_modules/
 docs/dist/
 docs/.astro/
+/docs/public/hibou-press-kit.zip
 
 # apko SBOM artifacts
 sbom-*.spdx.json

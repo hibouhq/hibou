@@ -1,37 +1,74 @@
 ---
 title: Introduction
-description: What is Hibou and why use it
+description: What Hibou is, who it's for, and how it watches your software lifecycle.
 ---
 
-Hibou is an open-source DevSecOps security platform that connects to your Git forges (GitHub, Forgejo/Gitea, GitLab) and provides centralized security scanning, vulnerability tracking, and compliance reporting.
+**Hibou** (French for *owl*) is an open-source, self-hostable security
+intelligence platform for the whole software lifecycle. It connects to your Git
+forges, ingests the findings that today live scattered across a dozen scanners,
+and merges them into one calm, multi-tenant view of dependency, code, and
+release risk.
 
-## Key Features
+> **Wisdom over alarm. Signal over noise. Eyes on what you ship.**
 
-- **Multi-forge support** — Connect GitHub, Forgejo, Gitea, and GitLab instances simultaneously
-- **Multiple instances** — Run several instances of the same forge type (e.g., two Forgejo servers)
-- **Automatic scanning** — Webhook-driven security scans on push and pull request events
-- **RBAC** — Role-based access control with organizations and teams
-- **Multi-tenant** — Isolated organizations with separate repositories and team memberships
-- **REST API** — Full OpenAPI-documented API for automation
+:::caution[Alpha]
+Hibou is in alpha: a solo, spare-time project built with LLM assistance, not a
+production-readiness or support promise. Expect bugs, incomplete workflows, and
+documentation that lags behind the code. Hibou is self-hosted only and licensed
+under AGPL-3.0-only.
+:::
 
-## Architecture
+## Why Hibou?
 
-Hibou consists of:
+Most teams watch their supply chain through disconnected tools — SBOMs in one,
+secrets in another, SARIF somewhere else — with no single view of what's actually
+reachable or shippable. Hibou is the owl on the branch above: it watches every
+dependency, commit, and release, surfaces only what matters, and — because it's
+open source and runs as a single binary you host — it answers to you.
+
+## What Hibou does
+
+- **SBOM & dependencies** — Ingest CycloneDX (JSON/XML) and SPDX (JSON) with
+  async processing and dedup; track each component's risk over time.
+- **Vulnerability intelligence** — Pluggable advisory providers (OSV.dev, NVD,
+  GitHub Advisory, Trivy, Sonatype OSS Index) with canonical alias merging.
+- **Reachability analysis** — Go call-graph (RTA/VTA), Java bytecode, and Rust
+  source analysis to auto-VEX vulnerabilities that can't actually be reached.
+- **Secrets & malware** — Gitleaks, TruffleHog, betterleaks and the GitHub
+  secret-scanning API; typosquat, dependency-confusion, backdoor and cryptominer
+  detection.
+- **SARIF & code findings** — Ingest from Semgrep, CodeQL, or any SARIF 2.1.0
+  producer.
+- **VEX & compliance** — OpenVEX, CSAF and CycloneDX VEX with automatic VEX on
+  upgrade/removal, supplier propagation, and ISO 27001 control mapping.
+- **PR quality gates** — Delta analysis of new vs. resolved findings, coverage
+  thresholds, and inline annotations on the forge.
+- **Release & client tracking** — Deployments, rollback history, and CVE impact
+  across clients.
+
+## Built for self-hosting
+
+Hibou ships as **one Go binary** that embeds the Vue 3 SPA — plus a REST API, a
+CI-friendly CLI, a built-in [MCP](https://modelcontextprotocol.io) server for AI
+assistants, real-time WebSocket updates, an immutable audit log, and a Helm
+chart for Kubernetes.
 
 | Component | Technology |
 |-----------|-----------|
-| Backend API | Go (Chi router) |
-| Frontend | Vue 3 + TypeScript + Tailwind CSS |
+| Backend API | Go (Chi router), zerolog, sqlc |
+| Frontend | Vue 3 + TypeScript + Pinia + Tailwind CSS |
 | Database | PostgreSQL 18 |
-| Scanner | Trivy |
+| Scanner | Trivy (server mode) |
 | Auth | OAuth2 per forge provider |
-| RBAC | Casbin |
+| RBAC | Casbin — organizations, teams, roles |
 
-## How It Works
+## The watch
 
-1. An administrator configures one or more forge providers (GitHub, Forgejo, etc.)
-2. Users authenticate via OAuth2 through their forge
-3. Organizations are created and linked to forge organizations
-4. Repositories are imported and webhooks are registered
-5. On push/PR events, Hibou triggers security scans via Trivy
-6. Results are stored and visible in the dashboard
+Hibou follows risk across the lifecycle so nothing slips through between tools:
+
+1. **Dependency** — SBOM ingestion, vulnerability matching, malware detection.
+2. **Code** — SARIF findings, secret scanning, reachability to cut false positives.
+3. **Pull request** — Delta gates, coverage thresholds, inline forge annotations.
+4. **Release** — Deployments, rollback history, CVE impact tracked across clients.
+
+Ready to try it? Head to the [Quick Start](../quickstart/).

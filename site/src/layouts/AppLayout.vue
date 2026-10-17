@@ -20,37 +20,15 @@
             class="flex items-center gap-3 text-sm font-semibold text-white"
           >
             <span class="flex h-8 w-8 items-center justify-center rounded-xl border border-surface-border bg-surface-overlay shadow-[0_0_0_1px_rgba(255,255,255,0.02)]">
-              <svg
-                viewBox="0 0 32 32"
-                class="h-5 w-5 text-accent"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
+              <img
+                src="/logomark.svg"
+                class="h-6 w-6"
+                width="24"
+                height="24"
+                alt=""
               >
-                <path
-                  d="M8 24V12L12 8L16 12L20 8L24 12V24L16 28L8 24Z"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linejoin="round"
-                />
-                <circle
-                  cx="13"
-                  cy="16"
-                  r="2"
-                  fill="currentColor"
-                />
-                <circle
-                  cx="19"
-                  cy="16"
-                  r="2"
-                  fill="currentColor"
-                />
-                <path
-                  d="M16 18L14.5 20H17.5L16 18Z"
-                  fill="currentColor"
-                />
-              </svg>
             </span>
-            <span :class="currentRepoSlug ? 'hidden' : 'hidden sm:inline'">Hibou</span>
+            <span :class="currentRepoSlug ? 'hidden' : 'hidden sm:inline'">hibou</span>
           </RouterLink>
 
           <div class="flex min-w-0 items-center gap-1.5 text-sm">

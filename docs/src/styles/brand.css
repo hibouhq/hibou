@@ -1,0 +1,230 @@
+:root {
+  --sl-font: "Inter", sans-serif;
+  --sl-font-mono: "JetBrains Mono", monospace;
+  --hibou-amber: #fbbf24;
+  --hb-ink: #e6edf3;
+  --hb-paper: #0d1117;
+  --hb-page: #0b0f1a;
+  --hb-line: #8b949e;
+  --hb-shadow: #30363d;
+  --hb-muted: #b8c2cf;
+  --sl-color-accent-low: #15314e;
+  --sl-color-accent: #58a6ff;
+  --sl-color-accent-high: #58a6ff;
+  --sl-color-white: #e6edf3;
+  --sl-color-gray-1: #d6dee8;
+  --sl-color-gray-2: #b8c2cf;
+  --sl-color-gray-3: #8b949e;
+  --sl-color-gray-4: #59636e;
+  --sl-color-gray-5: #30363d;
+  --sl-color-gray-6: #1c2128;
+  --sl-color-gray-7: #161b22;
+  --sl-color-bg: var(--hb-paper);
+  --sl-color-bg-nav: var(--hb-paper);
+  --sl-color-bg-sidebar: #161b22;
+  --sl-color-hairline: #30363d;
+  --sl-content-width: 52rem;
+}
+
+:root[data-theme="light"] {
+  --hb-ink: #161b22;
+  --hb-paper: #ffffff;
+  --hb-page: #f3f5f7;
+  --hb-line: #161b22;
+  --hb-shadow: #161b22;
+  --hb-muted: #4b5563;
+  --sl-color-accent-low: #e8f1ff;
+  --sl-color-accent: #1f6feb;
+  --sl-color-accent-high: #1f6feb;
+  --sl-color-white: #161b22;
+  --sl-color-gray-1: #242b34;
+  --sl-color-gray-2: #374151;
+  --sl-color-gray-3: #4b5563;
+  --sl-color-gray-4: #687481;
+  --sl-color-gray-5: #d1d7de;
+  --sl-color-gray-6: #edf0f3;
+  --sl-color-gray-7: #f3f5f7;
+  --sl-color-bg-sidebar: #edf0f3;
+  --sl-color-hairline: #d1d7de;
+}
+
+html,
+body {
+  background: var(--hb-page);
+  letter-spacing: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.sidebar,
+header,
+.pagination-links {
+  font-family: var(--sl-font-mono);
+  letter-spacing: 0;
+}
+
+h1 {
+  line-height: 1.2;
+  font-size: 2.5rem;
+}
+
+main {
+  background: var(--hb-paper);
+}
+
+header.header {
+  border-bottom: 2px solid var(--hb-line);
+}
+
+.sidebar a {
+  border-radius: 0;
+}
+
+.sidebar a[aria-current="page"] {
+  background: var(--hibou-amber);
+  color: #161b22;
+  font-weight: 600;
+}
+
+nav[aria-labelledby="starlight__on-this-page"] a[aria-current="true"] {
+  color: var(--hb-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--sl-color-accent);
+  text-underline-offset: 0.25em;
+}
+
+:focus-visible {
+  outline: 3px solid var(--sl-color-accent);
+  outline-offset: 4px;
+}
+
+.sl-markdown-content a:not([class]) {
+  text-underline-offset: 0.2em;
+}
+
+.docs-lede {
+  font-size: 1.2rem;
+  color: var(--hb-muted);
+}
+
+.sl-markdown-content .docs-label {
+  font: 500 0.75rem var(--sl-font-mono);
+  text-transform: uppercase;
+  color: var(--hb-muted);
+  margin-bottom: 0.75rem;
+}
+
+.docs-start {
+  display: block;
+  margin-block: 2rem;
+  padding: 1.5rem;
+  background: var(--hibou-amber);
+  border: 2px solid var(--hb-line);
+  box-shadow: 4px 4px 0 var(--hb-shadow);
+  color: #161b22;
+  text-decoration: none;
+}
+
+.docs-start strong {
+  display: block;
+  font: 600 1.25rem var(--sl-font-mono);
+}
+
+.docs-start span {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.docs-start:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.docs-topics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.docs-topics a {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  padding: 1.5rem;
+  margin: 0;
+  border: 2px solid var(--hb-line);
+  color: var(--hb-ink);
+  text-decoration: none;
+  box-shadow: 3px 3px 0 var(--hb-shadow);
+}
+
+.docs-topics a:hover {
+  border-color: var(--sl-color-accent);
+}
+
+.docs-topics .topic-label {
+  font: 500 0.6875rem var(--sl-font-mono);
+  color: var(--hb-muted);
+}
+
+.docs-topics strong {
+  margin-top: 0.75rem;
+  font: 600 1.125rem/1.5 var(--sl-font-mono);
+}
+
+.docs-topics .topic-description {
+  margin-top: 0.75rem;
+  color: var(--hb-muted);
+  font-size: 0.9375rem;
+}
+
+.docs-topics .topic-link {
+  margin-top: 1.25rem;
+  color: var(--sl-color-accent);
+  font: 500 0.8125rem var(--sl-font-mono);
+}
+
+.pagination-links a {
+  border-radius: 0;
+  border: 2px solid var(--hb-line);
+  box-shadow: 3px 3px 0 var(--hb-shadow);
+}
+
+site-search button[data-open-modal] {
+  border-radius: 0;
+}
+
+@media (max-width: 50rem) {
+  h1 {
+    font-size: 2rem;
+    overflow-wrap: anywhere;
+  }
+
+  .docs-lede {
+    font-size: 1.0625rem;
+  }
+
+  .docs-topics {
+    grid-template-columns: 1fr;
+  }
+
+  .docs-topics a,
+  .docs-start {
+    padding: 1.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}

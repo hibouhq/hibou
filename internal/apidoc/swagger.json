@@ -1501,6 +1501,108 @@
                 }
             }
         },
+        "/orgs/{provider}/{slug}/advisories/export": {
+            "get": {
+                "description": "Streams newline-delimited JSON: a header, then one record per advisory with its affected ranges, ratings, aliases, KEV flag and EPSS score (ADR-046 step 6). `ecosystem` limits the export (repeatable or comma-separated); without it every ecosystem is exported. Audit-logged.",
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "advisories"
+                ],
+                "summary": "Export the advisory database for offline scans",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Ecosystems to export, e.g. npm,maven",
+                        "name": "ecosystem",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "NDJSON stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/advisories/match": {
+            "post": {
+                "description": "Stateless: receives purls and versions only and returns the organization's advisory view (ADR-046 §2). With a repository, applies its VEX statements, not-shipped lists and package policy, read-only. Persists nothing beyond an audit entry.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "advisories"
+                ],
+                "summary": "Match package versions against advisories",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Purls to match",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.advisoryMatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.advisoryMatchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/api-keys": {
             "get": {
                 "security": [
@@ -10916,6 +11018,55 @@
                 }
             }
         },
+        "server.advisoryMatchRequest": {
+            "type": "object",
+            "properties": {
+                "purls": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "release": {
+                    "type": "string"
+                },
+                "repo": {
+                    "description": "Repo scopes VEX, the not-shipped lists and the package policy;\nRelease names the context for the audit entry.",
+                    "type": "string"
+                }
+            }
+        },
+        "server.advisoryMatchResponse": {
+            "type": "object",
+            "properties": {
+                "matches": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.purlMatchResponse"
+                    }
+                },
+                "summary": {
+                    "type": "object",
+                    "properties": {
+                        "holds": {
+                            "type": "integer"
+                        },
+                        "kev": {
+                            "type": "integer"
+                        },
+                        "malware": {
+                            "type": "integer"
+                        },
+                        "purls": {
+                            "type": "integer"
+                        },
+                        "vulnerable": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            }
+        },
         "server.assertionDecisionRequest": {
             "type": "object",
             "properties": {
@@ -11262,6 +11413,47 @@
                 },
                 "head_format": {
                     "type": "string"
+                }
+            }
+        },
+        "server.componentSignalsResponse": {
+            "type": "object",
+            "properties": {
+                "alternatives": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "cooldown_until": {
+                    "type": "string"
+                },
+                "deprecated": {
+                    "type": "boolean"
+                },
+                "deprecated_reason": {
+                    "type": "string"
+                },
+                "fetched_at": {
+                    "type": "string"
+                },
+                "in_cooldown": {
+                    "type": "boolean"
+                },
+                "low_usage": {
+                    "type": "boolean"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "recommended_version": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "unpublished": {
+                    "type": "boolean"
                 }
             }
         },
@@ -12083,6 +12275,21 @@
                         "$ref": "#/definitions/store.FindingOccurrence"
                     }
                 },
+                "remediation": {
+                    "description": "Remediation is the package policy's verdict on each version the\nadvisory (or deps.dev) proposes: a fix still in cooldown is shown as\nsuch before anyone bumps to it (ADR-048 §8).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.remediationVersionResponse"
+                    }
+                },
+                "signals": {
+                    "description": "Signals are the deps.dev package signals of the affected version\n(ADR-048): cooldown, deprecation, low usage, unpublished, and a\nsuggested version when the advisory names no fix. Absent when not\nevaluated.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.componentSignalsResponse"
+                        }
+                    ]
+                },
                 "vex": {
                     "type": "array",
                     "items": {
@@ -12429,6 +12636,14 @@
                 "enabled": {
                     "type": "boolean"
                 },
+                "findings": {
+                    "description": "Findings counts the findings stored once per repository and the\nsnapshot rows pointing at them (ADR-049).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.FindingStats"
+                        }
+                    ]
+                },
                 "interval_seconds": {
                     "type": "number"
                 },
@@ -12437,6 +12652,14 @@
                 },
                 "inventory_interval_seconds": {
                     "type": "number"
+                },
+                "inventory_sets": {
+                    "description": "InventorySets counts the shared inventory sets and the snapshots\npointing at them (ADR-045, Database section): a ratio near one\nmeans something writes non-canonical rows.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/store.InventorySetStats"
+                        }
+                    ]
                 },
                 "metrics_exposure": {
                     "description": "MetricsExposure says how /metrics is reachable: \"disabled\",\n\"dedicated_port\", \"token\" or \"public\" (application port, no token).",
@@ -12449,6 +12672,54 @@
                             "$ref": "#/definitions/storageusage.Sample"
                         }
                     ]
+                }
+            }
+        },
+        "server.matchedAdvisoryResponse": {
+            "type": "object",
+            "properties": {
+                "canonical_id": {
+                    "type": "string"
+                },
+                "cvss": {
+                    "type": "number"
+                },
+                "epss": {
+                    "type": "number"
+                },
+                "fixed_versions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_malware": {
+                    "type": "boolean"
+                },
+                "kev": {
+                    "type": "boolean"
+                },
+                "malware_type": {
+                    "type": "string"
+                },
+                "published_at": {
+                    "type": "string"
+                },
+                "rated_by": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "vex_status": {
+                    "description": "VEXStatus is the repository's effective VEX verdict for the pair:\nnot_affected, affected, fixed, under_investigation, or empty.",
+                    "type": "string"
                 }
             }
         },
@@ -13018,6 +13289,40 @@
                 }
             }
         },
+        "server.purlMatchResponse": {
+            "type": "object",
+            "properties": {
+                "advisories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.matchedAdvisoryResponse"
+                    }
+                },
+                "decision": {
+                    "description": "Decision is the package policy's verdict (allow, hold, deny) with\nits reason, when the policy evaluator is configured.",
+                    "type": "string"
+                },
+                "purl": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "shipped": {
+                    "description": "Shipped and ShippedReason apply the repository's not-shipped lists\nto the purl alone (no module or SBOM evidence is known locally).",
+                    "type": "boolean"
+                },
+                "shipped_reason": {
+                    "type": "string"
+                },
+                "signals": {
+                    "$ref": "#/definitions/server.componentSignalsResponse"
+                },
+                "supported": {
+                    "type": "boolean"
+                }
+            }
+        },
         "server.reachabilityRequest": {
             "type": "object",
             "properties": {
@@ -13089,6 +13394,43 @@
                 },
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "server.remediationVersionResponse": {
+            "type": "object",
+            "properties": {
+                "cooldown_until": {
+                    "type": "string"
+                },
+                "decision": {
+                    "description": "Decision: allow, hold, deny; empty when not evaluated.",
+                    "type": "string"
+                },
+                "evaluated": {
+                    "type": "boolean"
+                },
+                "in_cooldown": {
+                    "type": "boolean"
+                },
+                "purl": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source: advisory (fixed_versions) or deps.dev (recommended version).",
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -14517,6 +14859,17 @@
                 }
             }
         },
+        "store.FindingStats": {
+            "type": "object",
+            "properties": {
+                "findings": {
+                    "type": "integer"
+                },
+                "snapshot_rows": {
+                    "type": "integer"
+                }
+            }
+        },
         "store.FixingPullRequest": {
             "type": "object",
             "properties": {
@@ -14689,6 +15042,23 @@
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "store.InventorySetStats": {
+            "type": "object",
+            "properties": {
+                "component_rows": {
+                    "type": "integer"
+                },
+                "edge_rows": {
+                    "type": "integer"
+                },
+                "sets": {
+                    "type": "integer"
+                },
+                "snapshots_with_inventory": {
+                    "type": "integer"
                 }
             }
         },
@@ -15671,6 +16041,16 @@
                 },
                 "severity_override_reason": {
                     "type": "string"
+                },
+                "shipped": {
+                    "description": "Shipped says whether the affected component reaches clients (ADR-045\n§6); nil when the finding has no component or the attribute was not\ncomputed. Attached per page, never a column.",
+                    "type": "boolean"
+                },
+                "shipped_reason": {
+                    "type": "string"
+                },
+                "signals": {
+                    "description": "Signals are the deps.dev package signals of the affected version\n(ADR-048 §8), in the shape the components view uses; attached per page\nby the server for component-backed findings, never a column."
                 },
                 "snapshot_id": {
                     "type": "string"

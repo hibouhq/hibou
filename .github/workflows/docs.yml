@@ -15,12 +15,15 @@ on:
         required: false
         default: "latest"
 
-# Allow only one concurrent deployment per version
+# One deployment at a time across all refs: each run extends the previous
+# run's site, so a main push and a tag deploying in parallel would drop each
+# other's version.
 concurrency:
-  group: pages-${{ github.ref }}
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
@@ -89,11 +92,26 @@ jobs:
             PUBLIC_DOCS_VERSION="${DOCS_VERSION}" \
             npm run build
 
+      # download-artifact only sees the current run unless given a run-id, so
+      # without this every deploy started from an empty site and dropped all
+      # other versions. The saved site expires after its 90-day retention.
+      - name: Find previous site
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list -R "$GITHUB_REPOSITORY" --workflow docs.yml \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
       - name: Download existing site
+        if: steps.previous.outputs.run_id != ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: github-pages-current
           path: _site
+          run-id: ${{ steps.previous.outputs.run_id }}
+          github-token: ${{ github.token }}
         continue-on-error: true
 
       - name: Assemble versioned site
@@ -102,6 +120,13 @@ jobs:
           IS_LATEST: ${{ steps.version.outputs.is_latest }}
         run: |
           mkdir -p _site
+
+          # Custom domain for GitHub Pages. This MUST be re-written into the
+          # artifact on every deploy: Actions-based Pages deployments
+          # (upload-pages-artifact + deploy-pages) publish a fresh site each run
+          # and drop the custom domain unless a CNAME file is present in the site
+          # root. One site: the landing page at /, versioned docs below it.
+          echo "hibouhq.com" > _site/CNAME
 
           # Copy built docs into version subdirectory
           rm -rf "_site/$VERSION"
@@ -134,21 +159,10 @@ jobs:
             mv _site/versions.tmp _site/versions.json
           fi
 
-          # Root index.html redirects to /stable/
-          cat > _site/index.html << 'EOF'
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <meta charset="utf-8">
-              <meta http-equiv="refresh" content="0; url=./stable/">
-              <link rel="canonical" href="./stable/">
-              <title>Redirecting to Hibou Docs</title>
-            </head>
-            <body>
-              <p>Redirecting to <a href="./stable/">stable documentation</a>...</p>
-            </body>
-          </html>
-          EOF
+          # Root index.html is the landing page; versioned docs live
+          # under /stable, /latest, /vX.Y. The landing's "Docs" links point to
+          # ./stable/. Self-contained (assets inlined), so nothing else to copy.
+          cp docs/landing.html _site/index.html
 
           echo "Site structure:"
           ls -la _site/

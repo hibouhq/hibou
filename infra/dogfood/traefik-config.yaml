@@ -9,6 +9,8 @@
 #   kube-proxy), so per-IP rate limits and audit logs see the client, not the
 #   node. Safe on a single node; on multi-node clusters only nodes running a
 #   Traefik pod receive traffic.
+# - web -> websecure redirect (308): plain HTTP is never served. cert-manager
+#   HTTP-01 challenges still pass, Let's Encrypt follows the redirect to 443.
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -21,6 +23,9 @@ spec:
       - "--entryPoints.web.transport.respondingTimeouts.idleTimeout=180s"
       - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=300s"
       - "--entryPoints.websecure.transport.respondingTimeouts.idleTimeout=180s"
+      - "--entryPoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entryPoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entryPoints.web.http.redirections.entryPoint.permanent=true"
     service:
       spec:
         externalTrafficPolicy: Local

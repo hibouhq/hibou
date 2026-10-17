@@ -150,7 +150,7 @@ trivy:
 
 ingress:
   enabled: true
-  hostname: hibouhq.com
+  hostname: dogfood.hibouhq.com
   className: traefik
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
