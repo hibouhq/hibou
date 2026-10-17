@@ -506,3 +506,28 @@ WHERE v.repo_id = $1
   AND s.status IN ('complete', 'active')
 ORDER BY LEAST(v.first_seen_at, s.created_at) ASC, s.created_at ASC
 LIMIT 1;
+
+-- name: CopyMatchedVulnerabilities :many
+-- The dependency and malware matches of one snapshot, written for another
+-- with the same inventory (scan reuse). Rows the prior scan resolved or
+-- only carried forward are not matches and stay behind; status restarts
+-- at detected, as a fresh match would, and triage applies by fingerprint.
+INSERT INTO vulnerabilities (
+    type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value,
+    original_severity, severity, status, scanner_name, scanner_vendor, scanner_version, scanner_external_id,
+    fingerprint, component_id, component_name, component_version, component_purl, ecosystem,
+    advisory_id, affected_range_id, has_remediation, metadata, origin,
+    cvss_score, cvss_version, cvss_vector, rated_by
+)
+SELECT v.type, sqlc.arg(to_snapshot_id), v.title, v.description, v.primary_identifier_kind, v.primary_identifier_value,
+       v.original_severity, v.original_severity, 'detected', v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id,
+       v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem,
+       v.advisory_id, v.affected_range_id, v.has_remediation, '{}'::jsonb, v.origin,
+       v.cvss_score, v.cvss_version, v.cvss_vector, v.rated_by
+FROM vulnerabilities v
+WHERE v.snapshot_id = sqlc.arg(from_snapshot_id)
+  AND v.type IN ('dependency', 'malware')
+  AND v.status <> 'resolved'
+  AND v.presence = 'reported'
+ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET last_seen_at = NOW()
+RETURNING id, type, primary_identifier_value, severity, component_name, component_version;

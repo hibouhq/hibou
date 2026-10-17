@@ -34,6 +34,12 @@ type mockScannerStore struct {
 	createdScanID  uuid.UUID
 	providerIDs    map[string]uuid.UUID
 	advisories     map[uuid.UUID]dbgen.Advisory
+	// Scan reuse: what FindReusableScan answers and what a copy yields.
+	reusable     *store.ReusableScan
+	copied       []store.CopiedVulnerability
+	copyCalls    int
+	reusedFrom   []uuid.UUID
+	reuseLookups int
 }
 
 func newMockScannerStore() *mockScannerStore {
@@ -139,6 +145,21 @@ func (m *mockScannerStore) CreateVulnerability(_ context.Context, arg dbgen.Crea
 		vulnerability.AffectedRangeID = &arg.AffectedRangeID.UUID
 	}
 	return vulnerability, nil
+}
+
+func (m *mockScannerStore) FindReusableScan(_ context.Context, _ uuid.UUID, _ []string, _ time.Time) (*store.ReusableScan, error) {
+	m.reuseLookups++
+	return m.reusable, nil
+}
+
+func (m *mockScannerStore) CopyMatchedVulnerabilities(_ context.Context, _, _ uuid.UUID) ([]store.CopiedVulnerability, error) {
+	m.copyCalls++
+	return m.copied, nil
+}
+
+func (m *mockScannerStore) MarkScanReused(_ context.Context, _, fromScanID uuid.UUID) error {
+	m.reusedFrom = append(m.reusedFrom, fromScanID)
+	return nil
 }
 
 func (m *mockScannerStore) GetSnapshotByID(_ context.Context, _ uuid.UUID) (*store.Snapshot, error) {
@@ -641,5 +662,57 @@ func TestRunScanSkipsWithdrawnTriageAuthoredAdvisories(t *testing.T) {
 	}
 	if len(store.vulnerabilities) != 0 {
 		t.Fatalf("expected no findings from a withdrawn advisory, got %d", len(store.vulnerabilities))
+	}
+}
+
+// A snapshot with an inventory set another snapshot already scanned gets
+// that scan's matches copied: no provider query, no range matching, the
+// scan complete and marked as reused.
+func TestRunScanReusesMatchesOfSameInventorySet(t *testing.T) {
+	mock := newMockScannerStore()
+	componentID := uuid.New()
+	mock.components = []dbgen.Component{{ID: componentID, Purl: "pkg:npm/lodash@4.17.20", Name: "lodash", Version: "4.17.20", Ecosystem: "npm"}}
+	priorScan := uuid.New()
+	mock.reusable = &store.ReusableScan{ScanID: priorScan, SnapshotID: uuid.New()}
+	mock.copied = []store.CopiedVulnerability{{ID: uuid.New(), Type: "dependency", Identifier: "GHSA-1", Severity: "high", ComponentName: "lodash", ComponentVersion: "4.17.20"}}
+	cache := newMockCache()
+	ingester := newMockIngester()
+	bus := &mockBus{}
+	service := New(mock, cache, ingester, bus, map[string]provider.AdvisoryProvider{"osv": mockProvider{name: "osv"}}, zerolog.Nop())
+
+	if _, err := service.RunScan(context.Background(), uuid.New(), []string{"osv"}, "system"); err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if mock.copyCalls != 1 || len(mock.reusedFrom) != 1 || mock.reusedFrom[0] != priorScan {
+		t.Fatalf("copy calls %d, reused from %v", mock.copyCalls, mock.reusedFrom)
+	}
+	if len(cache.queryHistory) != 0 {
+		t.Errorf("a reused scan must not query providers: %d queries", len(cache.queryHistory))
+	}
+	if len(mock.vulnerabilities) != 0 {
+		t.Errorf("a reused scan must not match ranges: %d vulnerabilities created", len(mock.vulnerabilities))
+	}
+	if got := freshCountForType(mock.markStaleCalls, "dependency"); got != 1 {
+		t.Errorf("copied matches must count as fresh: %d", got)
+	}
+	if provider, ok := mock.providerStatuses["osv"]; !ok || provider.Status != "complete" {
+		t.Errorf("provider record %+v", provider)
+	}
+	last := mock.scanStatuses[len(mock.scanStatuses)-1]
+	if last.Status != "complete" {
+		t.Errorf("scan status %s", last.Status)
+	}
+
+	// A rescan a person asked for, and a snapshot with nothing to scan,
+	// never reuse.
+	mock = newMockScannerStore()
+	mock.components = []dbgen.Component{{ID: componentID, Purl: "pkg:npm/lodash@4.17.20", Name: "lodash", Version: "4.17.20", Ecosystem: "npm"}}
+	mock.reusable = &store.ReusableScan{ScanID: priorScan, SnapshotID: uuid.New()}
+	service = New(mock, newMockCache(), newMockIngester(), &mockBus{}, map[string]provider.AdvisoryProvider{"osv": mockProvider{name: "osv"}}, zerolog.Nop())
+	if _, err := service.RunScan(context.Background(), uuid.New(), []string{"osv"}, "manual"); err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if mock.reuseLookups != 0 || mock.copyCalls != 0 {
+		t.Errorf("manual rescan looked for reuse: lookups %d copies %d", mock.reuseLookups, mock.copyCalls)
 	}
 }

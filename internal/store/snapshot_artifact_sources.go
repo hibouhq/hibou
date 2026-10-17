@@ -60,14 +60,3 @@ func (q *Queries) CountSnapshotComponentsBySourceLabel(ctx context.Context, snap
 	count, err := q.db.CountSnapshotComponentsBySourceLabel(ctx, dbgen.CountSnapshotComponentsBySourceLabelParams{SnapshotID: snapshotID, Label: label})
 	return int(count), err
 }
-
-// RemoveSnapshotComponentSource removes an artifact's label from the
-// snapshot's components and deletes those no artifact reports any more.
-// Returns the number of components removed.
-func (q *Queries) RemoveSnapshotComponentSource(ctx context.Context, snapshotID uuid.UUID, label string) (int, error) {
-	if err := q.db.RemoveSnapshotComponentSourceLabel(ctx, dbgen.RemoveSnapshotComponentSourceLabelParams{Label: label, SnapshotID: snapshotID}); err != nil {
-		return 0, err
-	}
-	removed, err := q.db.DeleteSnapshotComponentsWithoutSource(ctx, snapshotID)
-	return int(removed), err
-}

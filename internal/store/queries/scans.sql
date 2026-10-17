@@ -43,3 +43,25 @@ SELECT
     -- parse as scan_status on snapshots with no scans (observed on dogfood,
     -- which silently degraded the whole guard open).
     COALESCE((SELECT sc.status::text FROM scans sc WHERE sc.snapshot_id = $1 ORDER BY sc.created_at DESC LIMIT 1), '') AS latest_status;
+
+-- name: FindReusableScan :one
+-- A complete scan of another snapshot with the same inventory set, run
+-- with the same providers after the last advisory or range change and
+-- not before @not_before: its matches are the matches this snapshot
+-- would get (ADR-045, Database section).
+SELECT sc.id AS scan_id, sc.snapshot_id
+FROM snapshots s
+JOIN snapshots prior ON prior.inventory_set_id = s.inventory_set_id AND prior.id <> s.id AND prior.org_id = s.org_id
+JOIN scans sc ON sc.snapshot_id = prior.id AND sc.status = 'complete'
+WHERE s.id = sqlc.arg(snapshot_id)
+  AND s.inventory_set_id IS NOT NULL
+  AND sc.providers_requested = sqlc.arg(providers)::text[]
+  AND sc.completed_at > sqlc.arg(not_before)::timestamptz
+  AND sc.completed_at > GREATEST(
+        COALESCE((SELECT max(a.updated_at) FROM advisories a), '-infinity'::timestamptz),
+        COALESCE((SELECT max(r.created_at) FROM affected_ranges r), '-infinity'::timestamptz))
+ORDER BY sc.completed_at DESC
+LIMIT 1;
+
+-- name: MarkScanReused :exec
+UPDATE scans SET reused_from_scan_id = sqlc.arg(from_scan_id) WHERE id = sqlc.arg(id);

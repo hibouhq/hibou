@@ -52,7 +52,7 @@ UPDATE snapshots SET
 	expected_uploads = COALESCE($10, expected_uploads)
 WHERE ref_id = $1 AND commit_sha = $2 AND run_id IS NULL
 	AND (status = 'pending' OR (status = 'failed' AND received_uploads = 0))
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type AdoptPlaceholderSnapshotParams struct {
@@ -123,6 +123,7 @@ func (q *Queries) AdoptPlaceholderSnapshot(ctx context.Context, arg AdoptPlaceho
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -190,7 +191,7 @@ SET artifact_processing_claimed_by = $1,
 	artifact_processing_last_error = NULL
 FROM candidate
 WHERE s.id = candidate.id
-RETURNING s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt, s.pinned, s.retention_hold, s.artifact_bytes, s.artifact_processing_claimed_by, s.artifact_processing_claim_expires_at, s.artifact_processing_started_at, s.artifact_processing_finished_at, s.artifact_processing_attempts, s.artifact_processing_last_error, s.org_id, s.repo_id, s.merge_commit_sha, s.base_commit_sha
+RETURNING s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt, s.pinned, s.retention_hold, s.artifact_bytes, s.artifact_processing_claimed_by, s.artifact_processing_claim_expires_at, s.artifact_processing_started_at, s.artifact_processing_finished_at, s.artifact_processing_attempts, s.artifact_processing_last_error, s.org_id, s.repo_id, s.merge_commit_sha, s.base_commit_sha, s.inventory_set_id
 `
 
 type ClaimNextArtifactProcessingSnapshotParams struct {
@@ -232,6 +233,7 @@ func (q *Queries) ClaimNextArtifactProcessingSnapshot(ctx context.Context, arg C
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -245,7 +247,7 @@ SET status = 'complete',
 	artifact_processing_last_error = NULL
 WHERE id = $1
 	AND artifact_processing_claimed_by = $2
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type CompleteArtifactProcessingSnapshotParams struct {
@@ -286,6 +288,7 @@ func (q *Queries) CompleteArtifactProcessingSnapshot(ctx context.Context, arg Co
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -299,7 +302,7 @@ SET status = 'complete',
 	artifact_processing_last_error = $1
 WHERE id = $2
 	AND artifact_processing_claimed_by = $3
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type CompleteArtifactProcessingSnapshotWithWarningParams struct {
@@ -341,6 +344,7 @@ func (q *Queries) CompleteArtifactProcessingSnapshotWithWarning(ctx context.Cont
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -361,7 +365,7 @@ SET status = CASE
 END
 WHERE snapshots.id = $1
 	AND snapshots.status = 'pending'
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 // Finalizing an upload does not mean the data is ready: SBOM/SARIF artifacts
@@ -403,6 +407,7 @@ func (q *Queries) CompleteSnapshot(ctx context.Context, id uuid.UUID) (Snapshot,
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -455,7 +460,7 @@ SELECT $1, $2, 'pending'
 WHERE NOT EXISTS (
 	SELECT 1 FROM snapshots WHERE ref_id = $1 AND commit_sha = $2
 )
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type CreatePlaceholderSnapshotParams struct {
@@ -499,6 +504,7 @@ func (q *Queries) CreatePlaceholderSnapshot(ctx context.Context, arg CreatePlace
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -506,7 +512,7 @@ func (q *Queries) CreatePlaceholderSnapshot(ctx context.Context, arg CreatePlace
 const createSnapshot = `-- name: CreateSnapshot :one
 INSERT INTO snapshots (ref_id, commit_sha, status)
 VALUES ($1, $2, $3)
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type CreateSnapshotParams struct {
@@ -548,6 +554,7 @@ func (q *Queries) CreateSnapshot(ctx context.Context, arg CreateSnapshotParams) 
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -555,7 +562,7 @@ func (q *Queries) CreateSnapshot(ctx context.Context, arg CreateSnapshotParams) 
 const createSnapshotWithLabels = `-- name: CreateSnapshotWithLabels :one
 INSERT INTO snapshots (ref_id, commit_sha, status, labels, image_digest)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type CreateSnapshotWithLabelsParams struct {
@@ -605,6 +612,7 @@ func (q *Queries) CreateSnapshotWithLabels(ctx context.Context, arg CreateSnapsh
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -618,7 +626,7 @@ SET status = 'failed',
 	artifact_processing_last_error = $2
 WHERE id = $3
 	AND artifact_processing_claimed_by = $4
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type FailArtifactProcessingSnapshotParams struct {
@@ -666,6 +674,7 @@ func (q *Queries) FailArtifactProcessingSnapshot(ctx context.Context, arg FailAr
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -733,7 +742,7 @@ func (q *Queries) FinalizeUnreachableArtifactProcessing(ctx context.Context, max
 }
 
 const getLatestCompleteSnapshotByRef = `-- name: GetLatestCompleteSnapshotByRef :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots WHERE ref_id = $1 AND status IN ('complete', 'active') ORDER BY created_at DESC LIMIT 1
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots WHERE ref_id = $1 AND status IN ('complete', 'active') ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestCompleteSnapshotByRef(ctx context.Context, refID uuid.UUID) (Snapshot, error) {
@@ -769,12 +778,13 @@ func (q *Queries) GetLatestCompleteSnapshotByRef(ctx context.Context, refID uuid
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getLatestSnapshotByRef = `-- name: GetLatestSnapshotByRef :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (Snapshot, error) {
@@ -810,12 +820,13 @@ func (q *Queries) GetLatestSnapshotByRef(ctx context.Context, refID uuid.UUID) (
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getLatestSnapshotByRepoAndSHA = `-- name: GetLatestSnapshotByRepoAndSHA :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots
 WHERE repo_id = $1 AND commit_sha = $2
 ORDER BY created_at DESC
 LIMIT 1
@@ -860,12 +871,13 @@ func (q *Queries) GetLatestSnapshotByRepoAndSHA(ctx context.Context, arg GetLate
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getLatestSnapshotForBuild = `-- name: GetLatestSnapshotForBuild :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots
 WHERE ref_id = $1
 	AND commit_sha = $2
 	AND COALESCE(run_id, '') = COALESCE($3, '')
@@ -912,12 +924,13 @@ func (q *Queries) GetLatestSnapshotForBuild(ctx context.Context, arg GetLatestSn
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getSnapshotAtDate = `-- name: GetSnapshotAtDate :one
-SELECT s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt, s.pinned, s.retention_hold, s.artifact_bytes, s.artifact_processing_claimed_by, s.artifact_processing_claim_expires_at, s.artifact_processing_started_at, s.artifact_processing_finished_at, s.artifact_processing_attempts, s.artifact_processing_last_error, s.org_id, s.repo_id, s.merge_commit_sha, s.base_commit_sha FROM snapshots s
+SELECT s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt, s.pinned, s.retention_hold, s.artifact_bytes, s.artifact_processing_claimed_by, s.artifact_processing_claim_expires_at, s.artifact_processing_started_at, s.artifact_processing_finished_at, s.artifact_processing_attempts, s.artifact_processing_last_error, s.org_id, s.repo_id, s.merge_commit_sha, s.base_commit_sha, s.inventory_set_id FROM snapshots s
 JOIN refs r ON r.id = s.ref_id
 WHERE r.repo_id = $1
 	AND r.name = $2
@@ -966,12 +979,13 @@ func (q *Queries) GetSnapshotAtDate(ctx context.Context, arg GetSnapshotAtDatePa
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getSnapshotByBuildIdentity = `-- name: GetSnapshotByBuildIdentity :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 FROM snapshots
 WHERE ref_id = $1
 	AND commit_sha = $2
@@ -1026,12 +1040,13 @@ func (q *Queries) GetSnapshotByBuildIdentity(ctx context.Context, arg GetSnapsho
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getSnapshotByID = `-- name: GetSnapshotByID :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots WHERE id = $1
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots WHERE id = $1
 `
 
 func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, error) {
@@ -1067,12 +1082,13 @@ func (q *Queries) GetSnapshotByID(ctx context.Context, id uuid.UUID) (Snapshot, 
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const getSnapshotByRefCommit = `-- name: GetSnapshotByRefCommit :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots WHERE ref_id = $1 AND commit_sha = $2
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots WHERE ref_id = $1 AND commit_sha = $2
 `
 
 type GetSnapshotByRefCommitParams struct {
@@ -1113,6 +1129,7 @@ func (q *Queries) GetSnapshotByRefCommit(ctx context.Context, arg GetSnapshotByR
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -1139,7 +1156,7 @@ const incrementSnapshotReceivedUploads = `-- name: IncrementSnapshotReceivedUplo
 UPDATE snapshots
 SET received_uploads = received_uploads + 1
 WHERE id = $1
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 func (q *Queries) IncrementSnapshotReceivedUploads(ctx context.Context, id uuid.UUID) (Snapshot, error) {
@@ -1175,12 +1192,13 @@ func (q *Queries) IncrementSnapshotReceivedUploads(ctx context.Context, id uuid.
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const listArchivedSnapshotsForPurge = `-- name: ListArchivedSnapshotsForPurge :many
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots
 WHERE created_at < $1
 	AND status = 'archived'
 ORDER BY created_at ASC
@@ -1231,6 +1249,7 @@ func (q *Queries) ListArchivedSnapshotsForPurge(ctx context.Context, arg ListArc
 			&i.RepoID,
 			&i.MergeCommitSha,
 			&i.BaseCommitSha,
+			&i.InventorySetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1342,7 +1361,7 @@ func (q *Queries) ListComponentsBySnapshotWithVulns(ctx context.Context, snapsho
 }
 
 const listExpiredSnapshots = `-- name: ListExpiredSnapshots :many
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots
 WHERE created_at < $1
 	AND status IN ('complete', 'active')
 ORDER BY created_at ASC
@@ -1393,6 +1412,7 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnaps
 			&i.RepoID,
 			&i.MergeCommitSha,
 			&i.BaseCommitSha,
+			&i.InventorySetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1408,7 +1428,7 @@ func (q *Queries) ListExpiredSnapshots(ctx context.Context, arg ListExpiredSnaps
 }
 
 const listSnapshotsByRef = `-- name: ListSnapshotsByRef :many
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots WHERE ref_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListSnapshotsByRefParams struct {
@@ -1456,6 +1476,7 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 			&i.RepoID,
 			&i.MergeCommitSha,
 			&i.BaseCommitSha,
+			&i.InventorySetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1471,7 +1492,7 @@ func (q *Queries) ListSnapshotsByRef(ctx context.Context, arg ListSnapshotsByRef
 }
 
 const listSnapshotsByRefWithLabels = `-- name: ListSnapshotsByRefWithLabels :many
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots WHERE ref_id = $1 AND labels @> $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4
 `
 
 type ListSnapshotsByRefWithLabelsParams struct {
@@ -1525,6 +1546,7 @@ func (q *Queries) ListSnapshotsByRefWithLabels(ctx context.Context, arg ListSnap
 			&i.RepoID,
 			&i.MergeCommitSha,
 			&i.BaseCommitSha,
+			&i.InventorySetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1540,7 +1562,7 @@ func (q *Queries) ListSnapshotsByRefWithLabels(ctx context.Context, arg ListSnap
 }
 
 const listSnapshotsForRetentionTimeline = `-- name: ListSnapshotsForRetentionTimeline :many
-SELECT s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt, s.pinned, s.retention_hold, s.artifact_bytes, s.artifact_processing_claimed_by, s.artifact_processing_claim_expires_at, s.artifact_processing_started_at, s.artifact_processing_finished_at, s.artifact_processing_attempts, s.artifact_processing_last_error, s.org_id, s.repo_id, s.merge_commit_sha, s.base_commit_sha
+SELECT s.id, s.ref_id, s.commit_sha, s.status, s.labels, s.image_digest, s.created_at, s.build_url, s.run_id, s.run_number, s.pr_number, s.pr_target_branch, s.tag, s.expected_uploads, s.received_uploads, s.run_attempt, s.pinned, s.retention_hold, s.artifact_bytes, s.artifact_processing_claimed_by, s.artifact_processing_claim_expires_at, s.artifact_processing_started_at, s.artifact_processing_finished_at, s.artifact_processing_attempts, s.artifact_processing_last_error, s.org_id, s.repo_id, s.merge_commit_sha, s.base_commit_sha, s.inventory_set_id
 FROM snapshots s
 JOIN refs r ON r.id = s.ref_id
 WHERE r.repo_id = $1
@@ -1593,6 +1615,7 @@ func (q *Queries) ListSnapshotsForRetentionTimeline(ctx context.Context, arg Lis
 			&i.RepoID,
 			&i.MergeCommitSha,
 			&i.BaseCommitSha,
+			&i.InventorySetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1608,7 +1631,7 @@ func (q *Queries) ListSnapshotsForRetentionTimeline(ctx context.Context, arg Lis
 }
 
 const listStalePendingSnapshots = `-- name: ListStalePendingSnapshots :many
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots
 WHERE status = 'pending'
 	AND CASE WHEN run_id IS NULL AND received_uploads = 0
 		THEN created_at < $1
@@ -1669,6 +1692,7 @@ func (q *Queries) ListStalePendingSnapshots(ctx context.Context, arg ListStalePe
 			&i.RepoID,
 			&i.MergeCommitSha,
 			&i.BaseCommitSha,
+			&i.InventorySetID,
 		); err != nil {
 			return nil, err
 		}
@@ -1714,10 +1738,15 @@ WITH target AS (
 	FROM snapshots s
 	WHERE s.id = $1
 	FOR UPDATE
+), sources_released AS (
+	-- The inventory goes with the artifacts: the set is freed by the
+	-- collector once nothing else points at it (ADR-045, Database).
+	DELETE FROM inventory_sources src USING target t WHERE src.snapshot_id = t.id
 ), snapshot_update AS (
 	UPDATE snapshots s
 	SET status = 'purged',
-		artifact_bytes = 0
+		artifact_bytes = 0,
+		inventory_set_id = NULL
 	FROM target t
 	WHERE s.id = t.id
 	RETURNING t.ref_id, t.artifact_bytes AS reclaimed_bytes
@@ -1797,7 +1826,7 @@ UPDATE snapshots
 SET pinned = $2,
 	retention_hold = $3
 WHERE id = $1
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type UpdateSnapshotRetentionFlagsParams struct {
@@ -1839,12 +1868,13 @@ func (q *Queries) UpdateSnapshotRetentionFlags(ctx context.Context, arg UpdateSn
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
 
 const updateSnapshotStatus = `-- name: UpdateSnapshotStatus :one
-UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+UPDATE snapshots SET status = $2 WHERE id = $1 RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type UpdateSnapshotStatusParams struct {
@@ -1885,6 +1915,7 @@ func (q *Queries) UpdateSnapshotStatus(ctx context.Context, arg UpdateSnapshotSt
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }
@@ -1951,7 +1982,7 @@ ON CONFLICT (ref_id, commit_sha, COALESCE(run_id, ''), COALESCE(run_attempt, '')
 	-- the same build must not blank what the first one knew.
 	merge_commit_sha = CASE WHEN snapshots.merge_commit_sha = '' THEN EXCLUDED.merge_commit_sha ELSE snapshots.merge_commit_sha END,
 	base_commit_sha = CASE WHEN snapshots.base_commit_sha = '' THEN EXCLUDED.base_commit_sha ELSE snapshots.base_commit_sha END
-RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha
+RETURNING id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id
 `
 
 type UpsertSnapshotForBuildParams struct {
@@ -2017,6 +2048,7 @@ func (q *Queries) UpsertSnapshotForBuild(ctx context.Context, arg UpsertSnapshot
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }

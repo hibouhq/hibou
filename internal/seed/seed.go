@@ -684,14 +684,27 @@ func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.
 		ON CONFLICT (purl, version) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id
 	`
-	const linkSnapshotComponent = `
-		INSERT INTO snapshot_components (snapshot_id, component_id)
-		VALUES ($1, $2)
+	// The snapshot's inventory is one set (ADR-045, Database section):
+	// rows are staged, sealed by the database and shared with any other
+	// seeded snapshot of the organisation that carries the same list.
+	const stageComponent = `
+		INSERT INTO inventory_staging_components (staging_key, component_id, labels)
+		VALUES ($1, $2, '{"sbom:seed.cdx.json": true}'::jsonb)
 		ON CONFLICT DO NOTHING
+	`
+	const sealInventory = `
+		WITH sealed AS (
+			SELECT inventory_seal_staged(s.org_id, $2, NULL) AS set_id FROM snapshots s WHERE s.id = $1
+		), source AS (
+			INSERT INTO inventory_sources (snapshot_id, label, set_id)
+			SELECT $1, 'sbom:seed.cdx.json', set_id FROM sealed
+			ON CONFLICT (snapshot_id, label) DO UPDATE SET set_id = EXCLUDED.set_id
+		)
+		UPDATE snapshots SET inventory_set_id = (SELECT set_id FROM sealed) WHERE id = $1
 	`
 
 	componentIDs := make(map[string]uuid.UUID, len(components))
-
+	stagingKey := uuid.New()
 	for _, seededComponent := range components {
 		if !seededComponent.presentAt(daysAgo) {
 			continue
@@ -700,10 +713,15 @@ func seedComponentsForSnapshot(ctx context.Context, tx *sql.Tx, snapshotID uuid.
 		if err := tx.QueryRowContext(ctx, insertComponent, seededComponent.purl, seededComponent.name, seededComponent.version, seededComponent.ecosystem).Scan(&componentID); err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx, linkSnapshotComponent, snapshotID, componentID); err != nil {
+		if _, err := tx.ExecContext(ctx, stageComponent, stagingKey, componentID); err != nil {
 			return nil, err
 		}
 		componentIDs[seededComponent.purl] = componentID
+	}
+	if len(componentIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, sealInventory, snapshotID, stagingKey); err != nil {
+			return nil, fmt.Errorf("seal seeded inventory: %w", err)
+		}
 	}
 
 	return componentIDs, nil

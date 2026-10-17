@@ -5,6 +5,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/storageusage"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 // ADR-039: the instance-admin view of the persisted storage usage sample.
@@ -20,6 +21,10 @@ type instanceStorageResponse struct {
 	// MetricsExposure says how /metrics is reachable: "disabled",
 	// "dedicated_port", "token" or "public" (application port, no token).
 	MetricsExposure string `json:"metrics_exposure"`
+	// InventorySets counts the shared inventory sets and the snapshots
+	// pointing at them (ADR-045, Database section): a ratio near one
+	// means something writes non-canonical rows.
+	InventorySets *store.InventorySetStats `json:"inventory_sets,omitempty"`
 }
 
 // @Summary      Instance storage usage
@@ -43,6 +48,14 @@ func (s *Server) handleInstanceStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.cfg.StorageUsage
+	var sets *store.InventorySetStats
+	if s.queries != nil {
+		if stats, err := s.queries.InventorySetStats(r.Context()); err == nil {
+			sets = &stats
+		} else {
+			s.log.Warn().Err(err).Msg("inventory set statistics")
+		}
+	}
 	api.JSON(w, http.StatusOK, instanceStorageResponse{
 		Sample:                   sample,
 		Enabled:                  cfg.Enabled,
@@ -51,6 +64,7 @@ func (s *Server) handleInstanceStorage(w http.ResponseWriter, r *http.Request) {
 		InventoryIntervalSeconds: cfg.Inventory.Interval.Seconds(),
 		ArtifactBackend:          s.cfg.ArtifactBackend,
 		MetricsExposure:          s.metricsExposure(),
+		InventorySets:            sets,
 	})
 }
 

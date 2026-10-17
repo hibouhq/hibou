@@ -8,6 +8,7 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -16,7 +17,7 @@ import (
 const createScan = `-- name: CreateScan :one
 INSERT INTO scans (snapshot_id, status, providers_requested, triggered_by)
 VALUES ($1, $2, $3, $4)
-RETURNING id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at
+RETURNING id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at, reused_from_scan_id
 `
 
 type CreateScanParams struct {
@@ -44,6 +45,7 @@ func (q *Queries) CreateScan(ctx context.Context, arg CreateScanParams) (Scan, e
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.ReusedFromScanID,
 	)
 	return i, err
 }
@@ -77,6 +79,44 @@ func (q *Queries) CreateScanProvider(ctx context.Context, arg CreateScanProvider
 		&i.StartedAt,
 		&i.CompletedAt,
 	)
+	return i, err
+}
+
+const findReusableScan = `-- name: FindReusableScan :one
+SELECT sc.id AS scan_id, sc.snapshot_id
+FROM snapshots s
+JOIN snapshots prior ON prior.inventory_set_id = s.inventory_set_id AND prior.id <> s.id AND prior.org_id = s.org_id
+JOIN scans sc ON sc.snapshot_id = prior.id AND sc.status = 'complete'
+WHERE s.id = $1
+  AND s.inventory_set_id IS NOT NULL
+  AND sc.providers_requested = $2::text[]
+  AND sc.completed_at > $3::timestamptz
+  AND sc.completed_at > GREATEST(
+        COALESCE((SELECT max(a.updated_at) FROM advisories a), '-infinity'::timestamptz),
+        COALESCE((SELECT max(r.created_at) FROM affected_ranges r), '-infinity'::timestamptz))
+ORDER BY sc.completed_at DESC
+LIMIT 1
+`
+
+type FindReusableScanParams struct {
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	Providers  []string  `json:"providers"`
+	NotBefore  time.Time `json:"not_before"`
+}
+
+type FindReusableScanRow struct {
+	ScanID     uuid.UUID `json:"scan_id"`
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+}
+
+// A complete scan of another snapshot with the same inventory set, run
+// with the same providers after the last advisory or range change and
+// not before @not_before: its matches are the matches this snapshot
+// would get (ADR-045, Database section).
+func (q *Queries) FindReusableScan(ctx context.Context, arg FindReusableScanParams) (FindReusableScanRow, error) {
+	row := q.db.QueryRowContext(ctx, findReusableScan, arg.SnapshotID, pq.Array(arg.Providers), arg.NotBefore)
+	var i FindReusableScanRow
+	err := row.Scan(&i.ScanID, &i.SnapshotID)
 	return i, err
 }
 
@@ -118,7 +158,7 @@ func (q *Queries) GetGateScanReadiness(ctx context.Context, snapshotID uuid.UUID
 }
 
 const getScanByID = `-- name: GetScanByID :one
-SELECT id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at FROM scans WHERE id = $1
+SELECT id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at, reused_from_scan_id FROM scans WHERE id = $1
 `
 
 func (q *Queries) GetScanByID(ctx context.Context, id uuid.UUID) (Scan, error) {
@@ -134,6 +174,7 @@ func (q *Queries) GetScanByID(ctx context.Context, id uuid.UUID) (Scan, error) {
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.ReusedFromScanID,
 	)
 	return i, err
 }
@@ -179,7 +220,7 @@ func (q *Queries) ListScanProvidersByScan(ctx context.Context, scanID uuid.UUID)
 }
 
 const listScansBySnapshot = `-- name: ListScansBySnapshot :many
-SELECT id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at FROM scans WHERE snapshot_id = $1 ORDER BY created_at DESC
+SELECT id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at, reused_from_scan_id FROM scans WHERE snapshot_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListScansBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]Scan, error) {
@@ -201,6 +242,7 @@ func (q *Queries) ListScansBySnapshot(ctx context.Context, snapshotID uuid.UUID)
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.CreatedAt,
+			&i.ReusedFromScanID,
 		); err != nil {
 			return nil, err
 		}
@@ -213,6 +255,20 @@ func (q *Queries) ListScansBySnapshot(ctx context.Context, snapshotID uuid.UUID)
 		return nil, err
 	}
 	return items, nil
+}
+
+const markScanReused = `-- name: MarkScanReused :exec
+UPDATE scans SET reused_from_scan_id = $1 WHERE id = $2
+`
+
+type MarkScanReusedParams struct {
+	FromScanID uuid.NullUUID `json:"from_scan_id"`
+	ID         uuid.UUID     `json:"id"`
+}
+
+func (q *Queries) MarkScanReused(ctx context.Context, arg MarkScanReusedParams) error {
+	_, err := q.db.ExecContext(ctx, markScanReused, arg.FromScanID, arg.ID)
+	return err
 }
 
 const updateScanProvider = `-- name: UpdateScanProvider :one
@@ -269,7 +325,7 @@ func (q *Queries) UpdateScanProvider(ctx context.Context, arg UpdateScanProvider
 
 const updateScanStatus = `-- name: UpdateScanStatus :one
 UPDATE scans SET status = $2, error_message = $3, started_at = $4, completed_at = $5
-WHERE id = $1 RETURNING id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at
+WHERE id = $1 RETURNING id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at, reused_from_scan_id
 `
 
 type UpdateScanStatusParams struct {
@@ -299,6 +355,7 @@ func (q *Queries) UpdateScanStatus(ctx context.Context, arg UpdateScanStatusPara
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+		&i.ReusedFromScanID,
 	)
 	return i, err
 }

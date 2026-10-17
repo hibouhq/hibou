@@ -520,7 +520,7 @@ func (q *Queries) GetLatestSnapshotWithAnalysisDataByRef(ctx context.Context, re
 		WHERE s.ref_id = $1
 		  AND s.status != 'purged'
 		  AND (
-			EXISTS (SELECT 1 FROM snapshot_components sc WHERE sc.snapshot_id = s.id)
+			s.inventory_set_id IS NOT NULL
 			OR EXISTS (SELECT 1 FROM vulnerabilities v WHERE v.snapshot_id = s.id)
 		  )
 		ORDER BY s.created_at DESC, s.id DESC
@@ -584,7 +584,7 @@ func (q *Queries) GetLatestSnapshotWithComponentsByRef(ctx context.Context, refI
 		FROM snapshots s
 		WHERE s.ref_id = $1
 		  AND s.status != 'purged'
-		  AND EXISTS (SELECT 1 FROM snapshot_components sc WHERE sc.snapshot_id = s.id)
+		  AND s.inventory_set_id IS NOT NULL
 		ORDER BY s.created_at DESC, s.id DESC
 		LIMIT 1
 	`

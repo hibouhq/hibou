@@ -228,10 +228,15 @@ WITH target AS (
 	FROM snapshots s
 	WHERE s.id = $1
 	FOR UPDATE
+), sources_released AS (
+	-- The inventory goes with the artifacts: the set is freed by the
+	-- collector once nothing else points at it (ADR-045, Database).
+	DELETE FROM inventory_sources src USING target t WHERE src.snapshot_id = t.id
 ), snapshot_update AS (
 	UPDATE snapshots s
 	SET status = 'purged',
-		artifact_bytes = 0
+		artifact_bytes = 0,
+		inventory_set_id = NULL
 	FROM target t
 	WHERE s.id = t.id
 	RETURNING t.ref_id, t.artifact_bytes AS reclaimed_bytes

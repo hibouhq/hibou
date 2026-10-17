@@ -105,23 +105,6 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshot
 	return i, err
 }
 
-const deleteSnapshotComponentsWithoutSource = `-- name: DeleteSnapshotComponentsWithoutSource :execrows
-DELETE FROM snapshot_components
-WHERE snapshot_id = $1
-  AND NOT EXISTS (
-    SELECT 1 FROM jsonb_object_keys(labels) AS k WHERE k LIKE 'sbom:%'
-  )
-`
-
-// Components no remaining artifact reports leave the effective inventory.
-func (q *Queries) DeleteSnapshotComponentsWithoutSource(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteSnapshotComponentsWithoutSource, snapshotID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getSnapshotArtifactByID = `-- name: GetSnapshotArtifactByID :one
 SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id, origin, metadata, revoked_at, revoked_by, revoke_reason, created_by FROM snapshot_artifacts
 WHERE id = $1
@@ -301,24 +284,6 @@ func (q *Queries) ListSnapshotArtifactsBySnapshot(ctx context.Context, snapshotI
 		return nil, err
 	}
 	return items, nil
-}
-
-const removeSnapshotComponentSourceLabel = `-- name: RemoveSnapshotComponentSourceLabel :exec
-UPDATE snapshot_components
-SET labels = labels - $1::text
-WHERE snapshot_id = $2 AND labels ? $1::text
-`
-
-type RemoveSnapshotComponentSourceLabelParams struct {
-	Label      string    `json:"label"`
-	SnapshotID uuid.UUID `json:"snapshot_id"`
-}
-
-// Drops one artifact's provenance label from every component of the
-// snapshot (revocation, ADR-045 §5.3).
-func (q *Queries) RemoveSnapshotComponentSourceLabel(ctx context.Context, arg RemoveSnapshotComponentSourceLabelParams) error {
-	_, err := q.db.ExecContext(ctx, removeSnapshotComponentSourceLabel, arg.Label, arg.SnapshotID)
-	return err
 }
 
 const restoreSnapshotArtifact = `-- name: RestoreSnapshotArtifact :execrows

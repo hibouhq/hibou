@@ -24,14 +24,24 @@ Infrastructure and CI references are inventoried too, each as its own
 ecosystem: Terraform providers (`.terraform.lock.hcl`), Helm charts
 (`Chart.lock`, `Chart.yaml`), GitHub Actions and reusable workflows, GitLab
 CI includes and components, Ansible collections and roles, and the images
-`Dockerfile` and Compose files referrecordedence. A tag reference is *declared*; a
-commit SHA or a digest is **. These ecosystems are not shipped by
+`Dockerfile` and Compose files reference. A tag reference is *declared*; a
+commit SHA or a digest is *recorded*. These ecosystems are not shipped by
 default (see below).
 
 Extraction runs on every push to the default branch and to the branches
 listed in `dependencies.branches`, on release tags, and on the first read of
 any other branch. A pull request that touches a manifest is extracted and
 compared with its target branch.
+
+Inventories are stored once per organization and shared: a push, branch
+or pull request whose dependencies match an inventory the server already
+holds writes a pointer, not a copy, and an advisory scan of an inventory
+another snapshot already scanned since the last advisory change reuses
+that scan's matches. A monorepo with hundreds of pull requests a day costs
+one set per distinct dependency state, not one per snapshot. Retention
+releases a purged snapshot's inventory and the retention pass frees sets
+nothing references; the instance storage page counts the sets and the
+snapshots sharing them.
 
 ### Running the extractor in CI
 

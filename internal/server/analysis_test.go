@@ -1164,12 +1164,7 @@ func seedSnapshotComponentWithID(t *testing.T, srv *Server, snapshotID uuid.UUID
 	); err != nil {
 		t.Fatalf("insert component: %v", err)
 	}
-	if _, err := srv.db.ExecContext(
-		context.Background(),
-		`INSERT INTO snapshot_components (snapshot_id, component_id, labels) VALUES ($1, $2, '{}'::jsonb)`,
-		snapshotID,
-		componentID,
-	); err != nil {
+	if err := srv.queries.AttachComponentToSnapshot(context.Background(), snapshotID, componentID, nil); err != nil {
 		t.Fatalf("insert snapshot component: %v", err)
 	}
 

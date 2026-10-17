@@ -340,15 +340,29 @@ when the filesystem scan did not see them; the server never pulls images
 against Maven Central on explicit opt-in (`--maven-central`), since a hash
 leaves the machine.
 
-Not implemented, by decision rather than omission: the Database section's
-dedicated tables (option B). Storage stays the per-snapshot model with the
-row copy on digest reuse and the provenance labels per component, which
-covers §5.3 (origin, metadata and revocation live on the artifact) and
-keeps the eighteen queries unchanged. The move to B is a migration on its
-own, to be scheduled when the rows-written-per-day figure of the storage
-usage view (ADR-039) shows a repository that retention (ADR-014) does not
-keep within budget; §4.1.1's row-sharing claim holds only for identical
-inventories until then. Throttling of the upgrade pass is a fixed page per
+**Increment 5 (2026-10-17, rollout steps 2 and 11): the Database section,
+option B.** Migration `00066` creates `inventory_sets`,
+`inventory_set_components`, `inventory_set_edges` and `inventory_sources`,
+points `snapshots.inventory_set_id` at the effective set, backfills one
+effective set per snapshot deduplicated by digest within the organization,
+and replaces the three per-snapshot tables with views of the same names,
+so every reader keeps its query. Rows are staged under a key and sealed
+by one SQL function that computes the digest, returns the known set or
+copies the rows and the counts; ingestion, digest reuse, the development
+seed and the backfill all go through it. A push whose inventory an
+organization already holds writes one source row and one pointer; a
+snapshot with one source points at that source's set directly; several
+sources merge into an effective set, recomputed when a source is revoked.
+Immutability is enforced by triggers (no update of sealed sets or their
+rows; deletion by the collector only, or with the organization). Retention's
+purge releases the snapshot's inventory, and the retention pass collects
+unreferenced sets. Migration `00067` makes advisory matching run once per
+distinct set: an automatic scan of a snapshot whose set another snapshot
+of the organization scanned after the last advisory or range change, with
+the same providers and within a day, copies that scan's matches and is
+recorded as reused; a rescan a person asks for runs in full. See "As
+implemented" under the Schema for where the shape differs from the one
+written in advance. Throttling of the upgrade pass is a fixed page per
 pass with one job per repository, rather than per-org accounting.
 
 Rationale: both are Go and Apache-2.0, so they keep the single binary
@@ -1069,6 +1083,37 @@ CREATE INDEX snapshots_inventory_set_idx ON snapshots (inventory_set_id);
 ADR-047 adds its approval and candidate columns to `inventory_sources` and
 its own small tables; nothing here changes for it.
 
+### As implemented (2026-10-17)
+
+Three choices differ from the schema above, each taken after reading what
+the readers of the tables need:
+
+- **Rows keep the flat label set** (`labels jsonb`) instead of `smallint`
+  codes, flag and origin bitmasks and a module column. Provenance, the
+  shipping policy, the gate, coverage and the UI all consume the label
+  set, and the saving that matters is the deduplication, not the row
+  width. The header counts (`total_count`, `direct_count`,
+  `indirect_count`) are computed from the labels when the set is sealed.
+  Narrow columns remain available as a later optimisation if measured.
+- **`inventory_sources` is one row per (snapshot, source)** pointing at
+  the shared set, in place of a shared source plus
+  `snapshot_inventory_sources`. The cost is the same (one small row per
+  snapshot per source), there is one join fewer, and origin, actor,
+  metadata and revocation already live on `snapshot_artifacts`
+  (migration `00065`), so the file and actor columns are not duplicated.
+  Sources that predate the migration carry no set (`set_id` NULL) and are
+  rebuilt from the rows that carry their label when they are reused or
+  when a sibling source is revoked.
+- **Scan reuse is a property of the scan, not of the set.** The matches of
+  a complete scan are copied to a snapshot with the same set
+  (`scans.reused_from_scan_id`), so findings stay per snapshot as ADR-012
+  and ADR-034 expect; identical inventories are matched once per advisory
+  change rather than once ever.
+
+Not kept: the `inventory_origin` enum (the artifact's `origin` column
+serves), the policy revision on snapshots (shipped is decided on read, so
+a not-shipped list change never rewrites sets), and the shipped count.
+
 ### Why this shape
 
 **Storage.** Rows are proportional to *distinct* inventories, not to
@@ -1164,17 +1209,24 @@ before adoption.
 
 ### Migration
 
-1. Create the tables. Backfill one `legacy` source set per existing SBOM
-   artifact from `snapshot_components.labels`, and one effective set per
-   snapshot, deduplicated by digest. Run it in batches per repository,
-   resumable.
+1. Create the tables. Backfill one effective set per snapshot from
+   `snapshot_components`, deduplicated by digest, and one source row per
+   SBOM artifact and extraction run, known by its label. Done in
+   `00066` as one transaction: the backfill is a loop per snapshot through
+   the sealing function, atomic under the migration runner; an instance
+   with hundreds of millions of rows runs it in a maintenance window.
 2. Replace `snapshot_components`, `component_dependencies` and
    `snapshot_dependency_roots` with **views** of the same names and columns
-   over the new tables. The 18 existing queries keep working unchanged.
-3. Rewrite those queries against the new tables one by one, measured with
-   `EXPLAIN (ANALYZE, BUFFERS)` on a production-sized corpus as `00035` was,
-   starting with the CVE feed and advisory matching. Drop the views when
-   nothing reads them.
+   over the new tables. Done in `00066`; the old tables are dropped in the
+   same migration, the views are a join on the snapshot's pointer and the
+   set's primary key.
+3. Rewrite the queries that the views serve worse than a direct read,
+   measured with `EXPLAIN (ANALYZE, BUFFERS)` on a production-sized corpus
+   as `00035` was. Measured on the development corpus, every per-snapshot
+   read plans as a primary-key lookup on `snapshots` followed by a
+   primary-key prefix scan on the set, and every per-component read as
+   the component index followed by the pointer index; none needed a
+   rewrite. Advisory matching reuses prior scans per set (`00067`).
 
 ## Rollout
 

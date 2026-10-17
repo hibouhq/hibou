@@ -22,32 +22,6 @@ func (q *Queries) UpsertComponent(ctx context.Context, purl, name, version, ecos
 	})
 }
 
-// AttachComponentToSnapshot records a component's presence in a snapshot.
-// labels may be nil; when set it is merged into any labels already recorded for
-// this pair (see the query for why the merge is shallow).
-func (q *Queries) AttachComponentToSnapshot(ctx context.Context, snapshotID, componentID uuid.UUID, labels json.RawMessage) error {
-	return q.db.AttachComponentToSnapshot(ctx, dbgen.AttachComponentToSnapshotParams{
-		SnapshotID:  snapshotID,
-		ComponentID: componentID,
-		Labels:      labels,
-	})
-}
-
-func (q *Queries) UpsertComponentDependency(ctx context.Context, snapshotID, componentID, dependsOnComponentID uuid.UUID) error {
-	return q.db.UpsertComponentDependency(ctx, dbgen.UpsertComponentDependencyParams{
-		SnapshotID:           snapshotID,
-		ComponentID:          componentID,
-		DependsOnComponentID: dependsOnComponentID,
-	})
-}
-
-func (q *Queries) UpsertSnapshotDependencyRoot(ctx context.Context, snapshotID, componentID uuid.UUID) error {
-	return q.db.UpsertSnapshotDependencyRoot(ctx, dbgen.UpsertSnapshotDependencyRootParams{
-		SnapshotID:  snapshotID,
-		ComponentID: componentID,
-	})
-}
-
 // ListSnapshotComponentLabels returns each component's provenance labels in
 // the snapshot, keyed by component id.
 func (q *Queries) ListSnapshotComponentLabels(ctx context.Context, snapshotID uuid.UUID) (map[uuid.UUID]json.RawMessage, error) {

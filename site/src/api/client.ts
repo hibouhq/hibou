@@ -705,6 +705,15 @@ export interface InstanceStorage {
   inventory_interval_seconds: number
   artifact_backend: string
   metrics_exposure: MetricsExposure
+  /** Shared inventory sets (ADR-045): how many, their rows, and the snapshots pointing at them. */
+  inventory_sets?: InventorySetStats
+}
+
+export interface InventorySetStats {
+  sets: number
+  component_rows: number
+  edge_rows: number
+  snapshots_with_inventory: number
 }
 
 export interface InstanceJobKindCounts {

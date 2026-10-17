@@ -1263,11 +1263,9 @@ type Component struct {
 }
 
 type ComponentDependency struct {
-	ID                   uuid.UUID `json:"id"`
 	SnapshotID           uuid.UUID `json:"snapshot_id"`
 	ComponentID          uuid.UUID `json:"component_id"`
 	DependsOnComponentID uuid.UUID `json:"depends_on_component_id"`
-	CreatedAt            time.Time `json:"created_at"`
 }
 
 type CoverageException struct {
@@ -1566,6 +1564,52 @@ type Integration struct {
 	FailureCount    int32           `json:"failure_count"`
 	CreatedAt       time.Time       `json:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+}
+
+type InventorySet struct {
+	ID              int64         `json:"id"`
+	OrgID           uuid.UUID     `json:"org_id"`
+	Digest          []byte        `json:"digest"`
+	RootComponentID uuid.NullUUID `json:"root_component_id"`
+	TotalCount      sql.NullInt32 `json:"total_count"`
+	DirectCount     sql.NullInt32 `json:"direct_count"`
+	IndirectCount   sql.NullInt32 `json:"indirect_count"`
+	SealedAt        sql.NullTime  `json:"sealed_at"`
+	CreatedAt       time.Time     `json:"created_at"`
+}
+
+type InventorySetComponent struct {
+	SetID       int64           `json:"set_id"`
+	ComponentID uuid.UUID       `json:"component_id"`
+	Labels      json.RawMessage `json:"labels"`
+}
+
+type InventorySetEdge struct {
+	SetID                int64     `json:"set_id"`
+	ComponentID          uuid.UUID `json:"component_id"`
+	DependsOnComponentID uuid.UUID `json:"depends_on_component_id"`
+}
+
+type InventorySource struct {
+	ID              int64         `json:"id"`
+	SnapshotID      uuid.UUID     `json:"snapshot_id"`
+	SetID           sql.NullInt64 `json:"set_id"`
+	Label           string        `json:"label"`
+	ArtifactID      uuid.NullUUID `json:"artifact_id"`
+	ExtractionRunID uuid.NullUUID `json:"extraction_run_id"`
+	CreatedAt       time.Time     `json:"created_at"`
+}
+
+type InventoryStagingComponent struct {
+	StagingKey  uuid.UUID       `json:"staging_key"`
+	ComponentID uuid.UUID       `json:"component_id"`
+	Labels      json.RawMessage `json:"labels"`
+}
+
+type InventoryStagingEdge struct {
+	StagingKey           uuid.UUID `json:"staging_key"`
+	ComponentID          uuid.UUID `json:"component_id"`
+	DependsOnComponentID uuid.UUID `json:"depends_on_component_id"`
 }
 
 type KevEntry struct {
@@ -1884,15 +1928,16 @@ type Repository struct {
 }
 
 type Scan struct {
-	ID                 uuid.UUID    `json:"id"`
-	SnapshotID         uuid.UUID    `json:"snapshot_id"`
-	Status             string       `json:"status"`
-	ProvidersRequested []string     `json:"providers_requested"`
-	TriggeredBy        string       `json:"triggered_by"`
-	ErrorMessage       string       `json:"error_message"`
-	StartedAt          sql.NullTime `json:"started_at"`
-	CompletedAt        sql.NullTime `json:"completed_at"`
-	CreatedAt          time.Time    `json:"created_at"`
+	ID                 uuid.UUID     `json:"id"`
+	SnapshotID         uuid.UUID     `json:"snapshot_id"`
+	Status             string        `json:"status"`
+	ProvidersRequested []string      `json:"providers_requested"`
+	TriggeredBy        string        `json:"triggered_by"`
+	ErrorMessage       string        `json:"error_message"`
+	StartedAt          sql.NullTime  `json:"started_at"`
+	CompletedAt        sql.NullTime  `json:"completed_at"`
+	CreatedAt          time.Time     `json:"created_at"`
+	ReusedFromScanID   uuid.NullUUID `json:"reused_from_scan_id"`
 }
 
 type ScanCoverage struct {
@@ -2033,6 +2078,7 @@ type Snapshot struct {
 	RepoID                           uuid.UUID       `json:"repo_id"`
 	MergeCommitSha                   string          `json:"merge_commit_sha"`
 	BaseCommitSha                    string          `json:"base_commit_sha"`
+	InventorySetID                   sql.NullInt64   `json:"inventory_set_id"`
 }
 
 type SnapshotArtifact struct {
@@ -2077,9 +2123,8 @@ type SnapshotComponent struct {
 }
 
 type SnapshotDependencyRoot struct {
-	SnapshotID  uuid.UUID `json:"snapshot_id"`
-	ComponentID uuid.UUID `json:"component_id"`
-	CreatedAt   time.Time `json:"created_at"`
+	SnapshotID  uuid.UUID     `json:"snapshot_id"`
+	ComponentID uuid.NullUUID `json:"component_id"`
 }
 
 type SnapshotVulnRollup struct {

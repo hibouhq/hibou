@@ -15,6 +15,18 @@ import (
 type Queries struct {
 	db    *dbgen.Queries
 	sqlDB *sql.DB
+	// tx is set by WithTx so raw statements join the transaction.
+	tx *sql.Tx
+}
+
+// execer runs raw statements inside the transaction when there is one.
+func (q *Queries) execer() interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+} {
+	if q.tx != nil {
+		return q.tx
+	}
+	return q.sqlDB
 }
 
 type ListComponentsBySnapshotWithVulnsRow = dbgen.ListComponentsBySnapshotWithVulnsRow
@@ -29,7 +41,7 @@ func (q *Queries) BeginTx(ctx context.Context) (*sql.Tx, error) {
 }
 
 func (q *Queries) WithTx(tx *sql.Tx) *Queries {
-	return &Queries{db: q.db.WithTx(tx), sqlDB: q.sqlDB}
+	return &Queries{db: q.db.WithTx(tx), sqlDB: q.sqlDB, tx: tx}
 }
 
 func (q *Queries) GetAdvisoryCache(ctx context.Context, arg dbgen.GetAdvisoryCacheParams) (dbgen.AdvisoryCache, error) {

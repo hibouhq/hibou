@@ -285,7 +285,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 		return &snapshot.ID, err
 	}
 	sum := sha256.Sum256(document)
-	if _, err := s.queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
+	run, err := s.queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
 		RepoID:           repo.ID,
 		SnapshotID:       snapshot.ID,
 		CommitSHA:        commit,
@@ -296,8 +296,16 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 		ComponentCount:   len(inv.Components),
 		Modules:          extractionModules(inv),
 		Updaters:         extractionUpdaters(inv),
-	}); err != nil {
+	})
+	if err != nil {
 		return &snapshot.ID, fmt.Errorf("record extraction run: %w", err)
+	}
+	// The run is what the source is known by (its set was recorded by the
+	// ingestion); a snapshot with the same input digest shares it.
+	if run != nil {
+		if err := s.queries.AttachInventorySource(ctx, snapshot.ID, "sbom:"+depInventoryArtifactFilename, nil, nil, &run.ID); err != nil {
+			return &snapshot.ID, fmt.Errorf("link extraction run to its inventory source: %w", err)
+		}
 	}
 	s.recordDepExtractionProducerRun(ctx, snapshot.ID, inv, nil, nil)
 	if snapshot.Status == store.SnapshotStatusPending {
@@ -433,13 +441,8 @@ func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Reposi
 		return err
 	}
 	queries := s.queries.WithTx(tx)
-	copied, err := queries.CopyExtractedInventory(ctx, prior.SnapshotID, snapshot.ID, "sbom:"+depInventoryArtifactFilename)
-	if err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("copy extracted inventory: %w", err)
-	}
 	priorID := prior.ID
-	if _, err := queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
+	run, err := queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
 		RepoID:           repo.ID,
 		SnapshotID:       snapshot.ID,
 		CommitSHA:        commit,
@@ -451,9 +454,21 @@ func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Reposi
 		Modules:          prior.Modules,
 		Updaters:         prior.Updaters,
 		ReusedFrom:       &priorID,
-	}); err != nil {
+	})
+	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("record reused extraction run: %w", err)
+	}
+	// One source row pointing at the prior run's set: no component rows
+	// are written for an unchanged inventory (ADR-045, Database section).
+	var runID *uuid.UUID
+	if run != nil {
+		runID = &run.ID
+	}
+	copied, err := queries.ReuseInventorySource(ctx, prior.SnapshotID, snapshot.ID, "sbom:"+depInventoryArtifactFilename, runID)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("reuse extracted inventory: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		_ = tx.Rollback()

@@ -67,17 +67,3 @@ WHERE id = sqlc.arg(id) AND revoked_at IS NOT NULL;
 SELECT COUNT(*)::bigint FROM snapshot_components
 WHERE snapshot_id = sqlc.arg(snapshot_id) AND labels ? sqlc.arg(label)::text;
 
--- name: RemoveSnapshotComponentSourceLabel :exec
--- Drops one artifact's provenance label from every component of the
--- snapshot (revocation, ADR-045 §5.3).
-UPDATE snapshot_components
-SET labels = labels - sqlc.arg(label)::text
-WHERE snapshot_id = sqlc.arg(snapshot_id) AND labels ? sqlc.arg(label)::text;
-
--- name: DeleteSnapshotComponentsWithoutSource :execrows
--- Components no remaining artifact reports leave the effective inventory.
-DELETE FROM snapshot_components
-WHERE snapshot_id = sqlc.arg(snapshot_id)
-  AND NOT EXISTS (
-    SELECT 1 FROM jsonb_object_keys(labels) AS k WHERE k LIKE 'sbom:%'
-  );

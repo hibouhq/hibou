@@ -755,13 +755,11 @@ func (s *Server) ingestSBOMArtifact(ctx context.Context, queries *store.Queries,
 // The key set is flat because the column is merged with jsonb `||`; see the
 // AttachComponentToSnapshot query.
 func componentProvenanceLabels(artifact store.SnapshotArtifact) json.RawMessage {
-	filename := strings.TrimSpace(artifact.Filename)
-	if filename == "" {
-		// Nothing worth recording — an unnamed upload tells us no more than the
-		// snapshot already does.
+	label := inventorySourceLabel(artifact)
+	if label == "" {
 		return nil
 	}
-	labels := map[string]any{"sbom:" + filename: true}
+	labels := map[string]any{label: true}
 	if kind := strings.TrimSpace(artifact.Kind); kind != "" {
 		labels["sbom_kind:"+kind] = true
 	}
@@ -781,27 +779,26 @@ func (s *Server) ingestCycloneDXSBOMArtifact(ctx context.Context, queries *store
 	}
 	componentIDsByBomRef := make(map[string]uuid.UUID, len(bomRefIndex))
 	provenance := componentProvenanceLabels(artifact.artifact)
+	doc := store.InventoryDocument{Rows: make([]store.InventoryRow, 0, len(components))}
 	for _, component := range components {
 		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem, component.Licenses)
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}
 		// The built-in extractor's properties (relationship, scope, module,
-		// registry) become labels next to the artifact's own (ADR-045 §5).
-		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID, componentLabelsWithProperties(provenance, component)); err != nil {
-			return fmt.Errorf("attach component %s to snapshot: %w", component.PURL, err)
-		}
+		// registry, layer) become labels next to the artifact's own (ADR-045 §5).
+		doc.Rows = append(doc.Rows, store.InventoryRow{ComponentID: storedComponent.ID, Labels: componentLabelsWithProperties(provenance, component)})
 		for _, bomRef := range component.BomRefs {
 			componentIDsByBomRef[bomRef] = storedComponent.ID
 		}
 	}
-	if err := upsertCycloneDXDependencyRoot(ctx, queries, snapshot.ID, rootBomRef, componentIDsByBomRef); err != nil {
-		return err
+	if rootBomRef != "" {
+		if componentID, ok := componentIDsByBomRef[rootBomRef]; ok {
+			doc.Root = &componentID
+		}
 	}
-	if err := upsertCycloneDXDependencies(ctx, queries, snapshot.ID, dependencies, componentIDsByBomRef); err != nil {
-		return err
-	}
-	return nil
+	doc.Edges = cycloneDXEdges(dependencies, componentIDsByBomRef)
+	return ingestInventoryDocument(ctx, queries, snapshot, artifact.artifact, doc)
 }
 
 func (s *Server) ingestSPDXSBOMArtifact(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact loadedSnapshotArtifact) error {
@@ -810,33 +807,52 @@ func (s *Server) ingestSPDXSBOMArtifact(ctx context.Context, queries *store.Quer
 		return fmt.Errorf("parse sbom artifact %s: %w", artifact.artifact.ID, err)
 	}
 	provenance := componentProvenanceLabels(artifact.artifact)
+	doc := store.InventoryDocument{Rows: make([]store.InventoryRow, 0, len(components))}
 	for _, component := range components {
 		storedComponent, err := queries.UpsertComponent(ctx, component.PURL, component.Name, component.Version, component.Ecosystem, component.Licenses)
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}
-		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID, provenance); err != nil {
-			return fmt.Errorf("attach component %s to snapshot: %w", component.PURL, err)
-		}
+		doc.Rows = append(doc.Rows, store.InventoryRow{ComponentID: storedComponent.ID, Labels: provenance})
+	}
+	return ingestInventoryDocument(ctx, queries, snapshot, artifact.artifact, doc)
+}
+
+// ingestInventoryDocument stores the artifact's rows as its own inventory
+// set, records it as a source of the snapshot and recomputes the
+// snapshot's effective inventory (ADR-045, Database section). An
+// unnamed artifact has no label to be known by and contributes nothing.
+func ingestInventoryDocument(ctx context.Context, queries *store.Queries, snapshot *store.Snapshot, artifact store.SnapshotArtifact, doc store.InventoryDocument) error {
+	label := inventorySourceLabel(artifact)
+	if label == "" || len(doc.Rows) == 0 {
+		return nil
+	}
+	var artifactID *uuid.UUID
+	if artifact.ID != uuid.Nil {
+		id := artifact.ID
+		artifactID = &id
+	}
+	if _, err := queries.IngestInventorySource(ctx, snapshot.ID, label, artifactID, nil, doc); err != nil {
+		return fmt.Errorf("ingest inventory source %s: %w", label, err)
 	}
 	return nil
 }
 
-func upsertCycloneDXDependencyRoot(ctx context.Context, queries *store.Queries, snapshotID uuid.UUID, rootBomRef string, componentIDsByBomRef map[string]uuid.UUID) error {
-	if rootBomRef == "" {
-		return nil
+// inventorySourceLabel is the provenance key an artifact's rows carry: its
+// filename, or its id for an unnamed upload, since every source of a
+// snapshot is known by a label (ADR-045 §5).
+func inventorySourceLabel(artifact store.SnapshotArtifact) string {
+	if filename := strings.TrimSpace(artifact.Filename); filename != "" {
+		return "sbom:" + filename
 	}
-	componentID, ok := componentIDsByBomRef[rootBomRef]
-	if !ok {
-		return nil
+	if artifact.ID != uuid.Nil {
+		return "sbom:" + artifact.ID.String()
 	}
-	if err := queries.UpsertSnapshotDependencyRoot(ctx, snapshotID, componentID); err != nil {
-		return fmt.Errorf("upsert snapshot dependency root %s: %w", rootBomRef, err)
-	}
-	return nil
+	return ""
 }
 
-func upsertCycloneDXDependencies(ctx context.Context, queries *store.Queries, snapshotID uuid.UUID, dependencies []sbom.ParsedDependency, componentIDsByBomRef map[string]uuid.UUID) error {
+func cycloneDXEdges(dependencies []sbom.ParsedDependency, componentIDsByBomRef map[string]uuid.UUID) []store.InventoryEdge {
+	var edges []store.InventoryEdge
 	for _, dependency := range dependencies {
 		componentID, ok := componentIDsByBomRef[dependency.Ref]
 		if !ok {
@@ -847,12 +863,10 @@ func upsertCycloneDXDependencies(ctx context.Context, queries *store.Queries, sn
 			if !ok || dependsOnID == componentID {
 				continue
 			}
-			if err := queries.UpsertComponentDependency(ctx, snapshotID, componentID, dependsOnID); err != nil {
-				return fmt.Errorf("upsert component dependency %s -> %s: %w", dependency.Ref, dependsOnRef, err)
-			}
+			edges = append(edges, store.InventoryEdge{ComponentID: componentID, DependsOnComponentID: dependsOnID})
 		}
 	}
-	return nil
+	return edges
 }
 
 func isClaimableSnapshotArtifact(artifact store.SnapshotArtifact) bool {

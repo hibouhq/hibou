@@ -45,7 +45,17 @@ type queryStore interface {
 	GetSnapshotCodeRefs(ctx context.Context, snapshotID uuid.UUID) (*store.SnapshotCodeRefs, error)
 	ApplyReachabilityFromCodeRefs(ctx context.Context, snapshotID uuid.UUID, refs store.SnapshotCodeRefs) (int64, int64, error)
 	CreateAuditLog(ctx context.Context, arg dbgen.CreateAuditLogParams) (dbgen.AuditLog, error)
+	// Scan reuse (ADR-045, Database section): matching once per inventory set.
+	FindReusableScan(ctx context.Context, snapshotID uuid.UUID, providers []string, notBefore time.Time) (*store.ReusableScan, error)
+	CopyMatchedVulnerabilities(ctx context.Context, fromSnapshotID, toSnapshotID uuid.UUID) ([]store.CopiedVulnerability, error)
+	MarkScanReused(ctx context.Context, scanID, fromScanID uuid.UUID) error
 }
+
+// scanReuseMaxAge bounds how old a reused scan may be. Advisory data
+// changes are checked exactly (the reused scan must postdate the last
+// advisory or range change); the bound covers what that check cannot see,
+// such as a provider's online answer at scan time.
+const scanReuseMaxAge = 24 * time.Hour
 
 type cacheClient interface {
 	QueryWithCache(ctx context.Context, prov provider.AdvisoryProvider, queries []provider.PackageQuery) ([]provider.AdvisoryResult, error)
@@ -106,6 +116,26 @@ func (s *Service) runScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 	components, err := s.queries.ListComponentsBySnapshot(ctx, snapshotID)
 	if err != nil {
 		return scanRecord.ID, s.failScan(ctx, scanRecord.ID, snapshotID, fmt.Errorf("list components: %w", err))
+	}
+
+	// The same inventory, already matched since the last advisory change:
+	// copy the matches instead of asking the providers and the ranges again
+	// (ADR-045, Database section). Rescans a person asked for run in full.
+	if prior := s.reusableScan(ctx, snapshotID, resolvedProviders, triggeredBy, triggeredByUserID, len(components)); prior != nil {
+		fresh, created, err := s.reuseScan(ctx, scanRecord.ID, snapshotID, prior, resolvedProviders)
+		if err == nil {
+			return s.finalizeScan(ctx, scanCompletion{
+				scanID:              scanRecord.ID,
+				snapshotID:          snapshotID,
+				resolvedProviders:   resolvedProviders,
+				startedAt:           startedAt,
+				providerSucceeded:   len(resolvedProviders),
+				freshMatchIDsByType: fresh,
+				created:             created,
+				triggeredByUserID:   triggeredByUserID,
+			})
+		}
+		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Str("reused_scan_id", prior.ScanID.String()).Msg("scan reuse failed; matching afresh")
 	}
 
 	packageQueries := buildPackageQueries(components)
@@ -307,6 +337,56 @@ func (s *Service) runScanProvider(ctx context.Context, scanID, snapshotID uuid.U
 
 	s.completeProvider(ctx, providerRecord, providerStart, int32(len(packageQueries)), int32(len(advisoryMap)), "complete", "") // #nosec G115 -- advisory counts are bounded by provider responses.
 	return &scanProviderResult{matchIDsByType: providerMatchIDsByType, created: providerCreated}, nil
+}
+
+// reusableScan finds a scan whose matches apply to the snapshot. Only
+// automatic scans of a non-empty inventory reuse: a rescan a person
+// triggered is a request for a fresh pass.
+func (s *Service) reusableScan(ctx context.Context, snapshotID uuid.UUID, providers []string, triggeredBy string, triggeredByUserID *uuid.UUID, components int) *store.ReusableScan {
+	if components == 0 || triggeredByUserID != nil || normalizeTriggeredBy(triggeredBy) != audit.ActorSystem {
+		return nil
+	}
+	prior, err := s.queries.FindReusableScan(ctx, snapshotID, providers, time.Now().Add(-scanReuseMaxAge))
+	if err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("look up reusable scan")
+		return nil
+	}
+	return prior
+}
+
+// reuseScan copies the prior scan's matches and records every provider
+// as complete without having asked it.
+func (s *Service) reuseScan(ctx context.Context, scanID, snapshotID uuid.UUID, prior *store.ReusableScan, providers []string) (map[string]map[uuid.UUID]struct{}, []createdFinding, error) {
+	startedAt := time.Now().UTC()
+	copied, err := s.queries.CopyMatchedVulnerabilities(ctx, prior.SnapshotID, snapshotID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("copy matches of scan %s: %w", prior.ScanID, err)
+	}
+	fresh := map[string]map[uuid.UUID]struct{}{"dependency": {}, "malware": {}}
+	created := make([]createdFinding, 0, len(copied))
+	for _, match := range copied {
+		if _, ok := fresh[match.Type]; !ok {
+			fresh[match.Type] = map[uuid.UUID]struct{}{}
+		}
+		fresh[match.Type][match.ID] = struct{}{}
+		finding := createdFinding{Identifier: match.Identifier, Severity: match.Severity, IsMalware: match.Type == "malware", Component: match.ComponentName}
+		if finding.Component != "" && match.ComponentVersion != "" {
+			finding.Component += "@" + match.ComponentVersion
+		}
+		created = append(created, finding)
+	}
+	for _, providerName := range providers {
+		providerRecord, err := s.queries.CreateScanProvider(ctx, dbgen.CreateScanProviderParams{ScanID: scanID, Provider: providerName, Status: "running"})
+		if err != nil {
+			return nil, nil, fmt.Errorf("create scan provider record: %w", err)
+		}
+		s.completeProvider(ctx, providerRecord, startedAt, 0, int32(len(copied)), "complete", "") // #nosec G115 -- copied match counts are bounded by the prior scan.
+	}
+	if err := s.queries.MarkScanReused(ctx, scanID, prior.ScanID); err != nil {
+		return nil, nil, fmt.Errorf("mark scan reused: %w", err)
+	}
+	s.log.Info().Str("snapshot_id", snapshotID.String()).Str("reused_scan_id", prior.ScanID.String()).Int("matches", len(copied)).Msg("advisory scan reused: same inventory set")
+	return fresh, created, nil
 }
 
 func (s *Service) finalizeScan(ctx context.Context, completion scanCompletion) (uuid.UUID, error) {

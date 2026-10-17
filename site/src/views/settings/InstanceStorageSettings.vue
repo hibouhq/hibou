@@ -84,6 +84,21 @@
               {{ formatCount(ledger.objects) }} objects · {{ storage.artifact_backend }}
             </div>
           </div>
+          <div
+            v-if="storage.inventory_sets"
+            class="rounded-xl border border-surface-border bg-surface-raised/40 p-4"
+            title="Dependency inventories are stored once per organization and shared by every snapshot with the same content (ADR-045). A snapshot count close to the set count means little is shared."
+          >
+            <div class="text-[11px] uppercase tracking-[0.16em] text-gray-500">
+              Inventory sets
+            </div>
+            <div class="mt-2 text-2xl font-semibold text-white">
+              {{ formatCount(storage.inventory_sets.sets) }}
+            </div>
+            <div class="mt-0.5 text-xs text-gray-500">
+              {{ formatCount(storage.inventory_sets.component_rows) }} rows · shared by {{ formatCount(storage.inventory_sets.snapshots_with_inventory) }} snapshots
+            </div>
+          </div>
           <div class="rounded-xl border border-surface-border bg-surface-raised/40 p-4">
             <div class="text-[11px] uppercase tracking-[0.16em] text-gray-500">
               Connections

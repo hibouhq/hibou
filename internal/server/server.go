@@ -1403,7 +1403,11 @@ func (s *Server) runRetentionPass(ctx context.Context) {
 				s.log.Warn().Err(eventsErr).Msg("advisory event partition maintenance")
 			}
 		}
-		return s.retentionWorker.Run(runCtx)
+		if err := s.retentionWorker.Run(runCtx); err != nil {
+			return err
+		}
+		s.collectInventorySets(runCtx)
+		return nil
 	})
 	// Shutdown cancellation is not a failure; keep the original filtering.
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -1412,6 +1416,32 @@ func (s *Server) runRetentionPass(ctx context.Context) {
 	}
 	if !ran {
 		s.log.Debug().Msg("another replica is running the retention pass; skipping this tick")
+	}
+}
+
+// collectInventorySets frees the inventory sets nothing references any
+// more (ADR-045, Database section): purged snapshots released theirs,
+// re-ingested sources replaced theirs. Bounded per pass so a backlog
+// never holds the retention lock for long.
+func (s *Server) collectInventorySets(ctx context.Context) {
+	if s.queries == nil {
+		return
+	}
+	const page, maxPages = 200, 50
+	var total int64
+	for range maxPages {
+		deleted, err := s.queries.CollectInventorySets(ctx, page)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("inventory set collection")
+			return
+		}
+		total += deleted
+		if deleted < page {
+			break
+		}
+	}
+	if total > 0 {
+		s.log.Info().Int64("sets", total).Msg("inventory sets collected")
 	}
 }
 
