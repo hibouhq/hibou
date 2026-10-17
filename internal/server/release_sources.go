@@ -111,11 +111,16 @@ func (s *Server) handleListReleaseSources(w http.ResponseWriter, r *http.Request
 		}
 		if entry.Origin == "" {
 			entry.Origin = store.ArtifactOriginCI
-			if artifact.Filename == depInventoryArtifactFilename {
-				entry.Origin = store.ArtifactOriginServer
-			}
 		}
 		if count, err := s.queries.CountSnapshotComponentsBySourceLabel(r.Context(), *release.SnapshotID, "sbom:"+artifact.Filename); err == nil {
+			entry.ComponentCount = count
+		}
+		response.Sources = append(response.Sources, entry)
+	}
+	// The server's own extraction stores no file: its run row is the source.
+	if run, err := s.queries.GetDepExtractionRunBySnapshot(r.Context(), *release.SnapshotID); err == nil && run != nil {
+		entry := releaseSourceResponse{ID: run.ID, Filename: depInventoryArtifactFilename, Tool: depinventory.ToolName, ToolVersion: run.ExtractorVersion, ExtractorVersion: run.ExtractorVersion, Origin: store.ArtifactOriginServer, SHA256: run.SHA256, CreatedAt: run.CreatedAt, AfterRelease: run.CreatedAt.After(releaseDate.Add(time.Hour))}
+		if count, err := s.queries.CountSnapshotComponentsBySourceLabel(r.Context(), *release.SnapshotID, "sbom:"+depInventoryArtifactFilename); err == nil {
 			entry.ComponentCount = count
 		}
 		response.Sources = append(response.Sources, entry)

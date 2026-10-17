@@ -269,10 +269,10 @@ a release tag, at enrolment, or on the admin endpoint
 and attempt rules, a blobless single-ref clone with only the recognised
 manifest paths checked out (`secretscan.CheckoutManifests`), an input
 digest over the selected blobs plus the extractor version with reuse of
-the earlier document on a hit, the CycloneDX document stored as a snapshot
-artifact (`hibou-depinventory.cdx.json`) so the existing artifact
-processing ingests it and the advisory scan, releases, coverage and gate
-follow, the producer run `dependency-inventory:hibou` with the modules as
+the earlier document on a hit, the CycloneDX document ingested directly into
+the snapshot's components, labels and graph (no object is stored: the
+rows are the inventory and exports regenerate a document from them) so
+the advisory scan, releases, coverage and gate follow, the producer run `dependency-inventory:hibou` with the modules as
 scope paths and partial reasons, and the queue on the instance jobs view.
 On repositories with CI uploads the extracted artifact waits on the
 pending placeholder for CI to adopt the commit, the same rule as secret

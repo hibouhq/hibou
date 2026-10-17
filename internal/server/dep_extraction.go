@@ -1,8 +1,9 @@
 package server
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,17 +30,20 @@ import (
 // components, the dependency graph, advisory scans, releases, coverage and
 // gates all follow without a second pipeline.
 //
-// Digest reuse: the inventory is a pure function of the recognised files'
-// blob ids and the extractor version. A later commit with the same digest
-// gets a copy of the earlier document and no extraction.
+// Nothing is written to the object store: the inventory is ingested
+// straight into the snapshot's components, labels and dependency graph, and
+// the run row keeps the digest, extractor version and module completeness.
+// Exports regenerate a document from the rows. Only what a user uploads or
+// records (CI SBOMs, deliverables) is stored as a file.
 
 const (
 	// depInventoryProducer is the producer key of server-side extraction
 	// (ADR-034 §2, ADR-045 §5).
 	depInventoryProducer = "dependency-inventory:hibou"
-	// depInventoryArtifactFilename names the stored document; the ingestion
-	// labels every component with it ("sbom:<filename>"), which is how the
-	// Sources column tells extraction from an upload.
+	// depInventoryArtifactFilename is the source name the ingestion labels
+	// every component with ("sbom:<filename>"), which is how the Sources
+	// column and the shipped rule tell extraction from an upload. No file of
+	// that name is stored.
 	depInventoryArtifactFilename = "hibou-depinventory.cdx.json"
 )
 
@@ -73,7 +77,7 @@ func (s *Server) runDepExtractionPass(ctx context.Context) {
 }
 
 func (s *Server) startNextDepExtractionJob(ctx context.Context) (bool, error) {
-	if s.depExtractionSlots == nil || s.objStore == nil || s.isDraining() {
+	if s.depExtractionSlots == nil || s.isDraining() {
 		return false, nil
 	}
 	select {
@@ -243,19 +247,20 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 		return &snapshot.ID, nil
 	}
 
-	// Digest reuse: same inputs, same extractor, same document.
+	// Digest reuse: same inputs, same extractor, same rows. The earlier
+	// snapshot's extraction rows are copied; nothing is re-read or stored.
 	if !checkout.TreeTruncated {
 		prior, err := s.queries.GetLatestDepExtractionRunByDigest(ctx, repo.ID, checkout.Digest, depinventory.Version)
 		if err != nil {
 			return nil, fmt.Errorf("look up extraction by digest: %w", err)
 		}
 		if prior != nil && prior.SnapshotID != snapshot.ID {
-			if reused, err := s.reuseExtractedInventory(ctx, repo, snapshot, commit, checkout.Digest, prior); err == nil && reused {
+			if err := s.reuseExtractedInventory(ctx, repo, snapshot, commit, checkout.Digest, prior); err == nil {
 				if snapshot.Status == store.SnapshotStatusPending {
 					s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 				}
 				return &snapshot.ID, nil
-			} else if err != nil {
+			} else {
 				s.log.Warn().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("digest reuse failed; extracting instead")
 			}
 		}
@@ -276,20 +281,18 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	if err != nil {
 		return &snapshot.ID, fmt.Errorf("render inventory: %w", err)
 	}
-	artifactID, params, err := s.storeInventoryArtifact(ctx, snapshot.ID, document)
-	if err != nil {
+	if err := s.ingestExtractedInventory(ctx, snapshot, document); err != nil {
 		return &snapshot.ID, err
 	}
+	sum := sha256.Sum256(document)
 	if _, err := s.queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
 		RepoID:           repo.ID,
 		SnapshotID:       snapshot.ID,
 		CommitSHA:        commit,
 		InputDigest:      checkout.Digest,
 		ExtractorVersion: depinventory.Version,
-		ArtifactID:       artifactID,
-		ObjectKey:        params.ObjectKey,
-		SHA256:           *params.SHA256,
-		SizeBytes:        params.SizeBytes,
+		SHA256:           hex.EncodeToString(sum[:]),
+		SizeBytes:        int64(len(document)),
 		ComponentCount:   len(inv.Components),
 		Modules:          extractionModules(inv),
 		Updaters:         extractionUpdaters(inv),
@@ -299,16 +302,14 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	s.recordDepExtractionProducerRun(ctx, snapshot.ID, inv, nil, nil)
 	if snapshot.Status == store.SnapshotStatusPending {
 		s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
-	} else if err := s.ingestInventoryNow(ctx, snapshot, artifactID, params, document); err != nil {
-		return &snapshot.ID, err
 	}
 	s.log.Info().Str("repo", repo.Slug).Str("ref", job.RefName).Str("commit", shortSHA(commit)).Int("components", len(inv.Components)).Int("modules", len(inv.Modules)).Dur("duration", inv.Duration).Msg("dependency inventory extracted")
 	return &snapshot.ID, nil
 }
 
 // snapshotHasCIInventory reports whether an inventory from the CI run of
-// the built-in extractor (uploaded under its tool name, not the server's
-// own file name) exists for the snapshot.
+// the built-in extractor (uploaded under its tool name) exists for the
+// snapshot.
 func (s *Server) snapshotHasCIInventory(ctx context.Context, snapshotID uuid.UUID) (bool, error) {
 	artifacts, err := s.queries.ListSnapshotArtifactsBySnapshot(ctx, snapshotID)
 	if err != nil {
@@ -318,7 +319,8 @@ func (s *Server) snapshotHasCIInventory(ctx context.Context, snapshotID uuid.UUI
 		if artifact.Kind != "sbom" || artifact.ToolName == nil || *artifact.ToolName != depinventory.ToolName {
 			continue
 		}
-		if artifact.Filename != depInventoryArtifactFilename {
+		// A deliverable recorded with hibou release scan is not a CI run.
+		if artifact.Origin != store.ArtifactOriginManual {
 			return true, nil
 		}
 	}
@@ -423,93 +425,49 @@ func (s *Server) resolveDepExtractionSnapshot(ctx context.Context, job *store.De
 	return snapshot, nil
 }
 
-// storeInventoryArtifact writes the document to the object store under the
-// snapshot and records the artifact row, as an upload would.
-func (s *Server) storeInventoryArtifact(ctx context.Context, snapshotID uuid.UUID, document []byte) (*uuid.UUID, store.CreateSnapshotArtifactParams, error) {
-	params := buildSnapshotArtifactParams(snapshotID, "sbom", "cyclonedx-json", depinventory.ToolName, depInventoryArtifactFilename, document)
-	contentType := ""
-	if params.ContentType != nil {
-		contentType = *params.ContentType
-	}
-	if err := s.objStore.Put(ctx, params.ObjectKey, bytes.NewReader(document), contentType); err != nil {
-		return nil, params, fmt.Errorf("store inventory document: %w", err)
-	}
+// reuseExtractedInventory copies an earlier run's rows under this snapshot
+// and records a run that points back to it.
+func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Repository, snapshot *store.Snapshot, commit, digest string, prior *store.DepExtractionRun) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, params, err
+		return err
 	}
-	defer func() { _ = tx.Rollback() }()
 	queries := s.queries.WithTx(tx)
-	if err := queries.LockSnapshotForUpdate(ctx, snapshotID); err != nil {
-		return nil, params, err
-	}
-	created, err := queries.CreateSnapshotArtifact(ctx, params)
+	copied, err := queries.CopyExtractedInventory(ctx, prior.SnapshotID, snapshot.ID, "sbom:"+depInventoryArtifactFilename)
 	if err != nil {
-		return nil, params, fmt.Errorf("record inventory artifact: %w", err)
-	}
-	var artifactID *uuid.UUID
-	if created != nil {
-		artifactID = &created.ID
-		if err := queries.AddSnapshotArtifactBytes(ctx, snapshotID, params.SizeBytes); err != nil {
-			return nil, params, err
-		}
-		toolVersion := depinventory.Version
-		scope := store.ProducerScopeFull
-		if err := queries.SetSnapshotArtifactRunDeclaration(ctx, created.ID, store.ArtifactRunDeclaration{Scope: &scope, ToolVersion: &toolVersion}); err != nil {
-			return nil, params, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, params, err
-	}
-	return artifactID, params, nil
-}
-
-// reuseExtractedInventory copies an earlier run's document under this
-// snapshot. The object is copied, not shared: retention deletes a purged
-// snapshot's objects by key, and a shared key would leave the newer
-// snapshot pointing at nothing.
-func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Repository, snapshot *store.Snapshot, commit, digest string, prior *store.DepExtractionRun) (bool, error) {
-	reader, err := s.objStore.Get(ctx, prior.ObjectKey)
-	if err != nil {
-		return false, fmt.Errorf("read earlier inventory document: %w", err)
-	}
-	defer reader.Close()
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(reader); err != nil {
-		return false, fmt.Errorf("read earlier inventory document: %w", err)
-	}
-	document := buf.Bytes()
-	artifactID, params, err := s.storeInventoryArtifact(ctx, snapshot.ID, document)
-	if err != nil {
-		return false, err
+		_ = tx.Rollback()
+		return fmt.Errorf("copy extracted inventory: %w", err)
 	}
 	priorID := prior.ID
-	if _, err := s.queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
+	if _, err := queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
 		RepoID:           repo.ID,
 		SnapshotID:       snapshot.ID,
 		CommitSHA:        commit,
 		InputDigest:      digest,
 		ExtractorVersion: depinventory.Version,
-		ArtifactID:       artifactID,
-		ObjectKey:        params.ObjectKey,
-		SHA256:           *params.SHA256,
-		SizeBytes:        params.SizeBytes,
+		SHA256:           prior.SHA256,
+		SizeBytes:        prior.SizeBytes,
 		ComponentCount:   prior.ComponentCount,
 		Modules:          prior.Modules,
 		Updaters:         prior.Updaters,
 		ReusedFrom:       &priorID,
 	}); err != nil {
-		return false, fmt.Errorf("record reused extraction run: %w", err)
+		_ = tx.Rollback()
+		return fmt.Errorf("record reused extraction run: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return err
 	}
 	s.recordDepExtractionProducerRunFromModules(ctx, snapshot.ID, prior.Modules, nil)
-	if snapshot.Status != store.SnapshotStatusPending {
-		if err := s.ingestInventoryNow(ctx, snapshot, artifactID, params, document); err != nil {
-			return false, err
-		}
+	s.afterArtifactIngest(ctx, snapshot)
+	if copied > 0 {
+		s.enqueueAdvisoryScan(snapshot.ID, "system")
 	}
-	s.log.Info().Str("repo", repo.Slug).Str("commit", shortSHA(commit)).Str("reused_from", prior.SnapshotID.String()).Msg("dependency inventory reused by digest")
-	return true, nil
+	s.reconcileReleasesForSnapshot(ctx, snapshot.ID)
+	s.refreshScanCoverageForSnapshot(ctx, snapshot.ID)
+	s.log.Info().Str("repo", repo.Slug).Str("commit", shortSHA(commit)).Str("reused_from", prior.SnapshotID.String()).Int("components", copied).Msg("dependency inventory reused by digest")
+	return nil
 }
 
 func extractionModules(inv *depinventory.Inventory) []store.DepExtractionModule {
@@ -909,6 +867,35 @@ func (s *Server) enqueueReleaseExtraction(ctx context.Context, repo *store.Repos
 		}
 	}
 	return s.queries.EnqueueDepExtractionJob(ctx, params)
+}
+
+// ingestExtractedInventory ingests an extraction's document directly, with
+// no stored object: the components, labels and graph are the inventory.
+// A pending snapshot gets it too; completion never removes components.
+func (s *Server) ingestExtractedInventory(ctx context.Context, snapshot *store.Snapshot, document []byte) error {
+	format, tool := "cyclonedx-json", depinventory.ToolName
+	artifact := store.SnapshotArtifact{SnapshotID: snapshot.ID, Kind: "sbom", Format: &format, ToolName: &tool, Filename: depInventoryArtifactFilename, Origin: store.ArtifactOriginServer}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	queries := s.queries.WithTx(tx)
+	ingested, err := s.ingestSBOMArtifact(ctx, queries, snapshot, loadedSnapshotArtifact{artifact: artifact, content: document})
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("ingest inventory: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	s.afterArtifactIngest(ctx, snapshot)
+	if ingested > 0 {
+		s.enqueueAdvisoryScan(snapshot.ID, "system")
+	}
+	s.reconcileReleasesForSnapshot(ctx, snapshot.ID)
+	s.refreshScanCoverageForSnapshot(ctx, snapshot.ID)
+	return nil
 }
 
 // ingestInventoryNow ingests the document into a snapshot that is past

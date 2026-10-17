@@ -36,6 +36,76 @@ func (q *Queries) AttachComponentToSnapshot(ctx context.Context, arg AttachCompo
 	return err
 }
 
+const copySnapshotDependencyRoot = `-- name: CopySnapshotDependencyRoot :exec
+INSERT INTO snapshot_dependency_roots (snapshot_id, component_id)
+SELECT $1, r.component_id FROM snapshot_dependency_roots r WHERE r.snapshot_id = $2
+ON CONFLICT (snapshot_id) DO NOTHING
+`
+
+type CopySnapshotDependencyRootParams struct {
+	ToSnapshotID   uuid.UUID `json:"to_snapshot_id"`
+	FromSnapshotID uuid.UUID `json:"from_snapshot_id"`
+}
+
+func (q *Queries) CopySnapshotDependencyRoot(ctx context.Context, arg CopySnapshotDependencyRootParams) error {
+	_, err := q.db.ExecContext(ctx, copySnapshotDependencyRoot, arg.ToSnapshotID, arg.FromSnapshotID)
+	return err
+}
+
+const copySnapshotExtractionComponents = `-- name: CopySnapshotExtractionComponents :execrows
+INSERT INTO snapshot_components (snapshot_id, component_id, labels)
+SELECT $1, sc.component_id,
+       (SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
+        FROM jsonb_each(sc.labels) e
+        WHERE e.key = $2::text
+           OR e.key LIKE 'relationship:%' OR e.key LIKE 'scope:%' OR e.key LIKE 'module:%'
+           OR e.key LIKE 'path:%' OR e.key LIKE 'resolution:%' OR e.key LIKE 'registry:%'
+           OR e.key LIKE 'constraint:%')
+FROM snapshot_components sc
+WHERE sc.snapshot_id = $3 AND sc.labels ? $2::text
+ON CONFLICT (snapshot_id, component_id) DO UPDATE
+SET labels = snapshot_components.labels || EXCLUDED.labels
+`
+
+type CopySnapshotExtractionComponentsParams struct {
+	ToSnapshotID   uuid.UUID `json:"to_snapshot_id"`
+	SourceLabel    string    `json:"source_label"`
+	FromSnapshotID uuid.UUID `json:"from_snapshot_id"`
+}
+
+// Digest reuse without a stored document (ADR-045 §4.1): copies the
+// built-in extractor's rows from an earlier snapshot, keeping only the
+// labels the extractor wrote (its source label and the provenance keys),
+// never another artifact's.
+func (q *Queries) CopySnapshotExtractionComponents(ctx context.Context, arg CopySnapshotExtractionComponentsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, copySnapshotExtractionComponents, arg.ToSnapshotID, arg.SourceLabel, arg.FromSnapshotID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const copySnapshotExtractionDependencies = `-- name: CopySnapshotExtractionDependencies :exec
+INSERT INTO component_dependencies (snapshot_id, component_id, depends_on_component_id)
+SELECT $1, cd.component_id, cd.depends_on_component_id
+FROM component_dependencies cd
+JOIN snapshot_components a ON a.snapshot_id = cd.snapshot_id AND a.component_id = cd.component_id AND a.labels ? $2::text
+JOIN snapshot_components b ON b.snapshot_id = cd.snapshot_id AND b.component_id = cd.depends_on_component_id AND b.labels ? $2::text
+WHERE cd.snapshot_id = $3
+ON CONFLICT (snapshot_id, component_id, depends_on_component_id) DO NOTHING
+`
+
+type CopySnapshotExtractionDependenciesParams struct {
+	ToSnapshotID   uuid.UUID `json:"to_snapshot_id"`
+	SourceLabel    string    `json:"source_label"`
+	FromSnapshotID uuid.UUID `json:"from_snapshot_id"`
+}
+
+func (q *Queries) CopySnapshotExtractionDependencies(ctx context.Context, arg CopySnapshotExtractionDependenciesParams) error {
+	_, err := q.db.ExecContext(ctx, copySnapshotExtractionDependencies, arg.ToSnapshotID, arg.SourceLabel, arg.FromSnapshotID)
+	return err
+}
+
 const getSnapshotDependencyRoot = `-- name: GetSnapshotDependencyRoot :one
 SELECT c.purl
 FROM snapshot_dependency_roots sdr

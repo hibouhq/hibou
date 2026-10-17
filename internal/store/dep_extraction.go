@@ -400,3 +400,20 @@ func (q *Queries) ListOutdatedDepExtractionRuns(ctx context.Context, currentVers
 	}
 	return out, nil
 }
+
+// CopyExtractedInventory copies the built-in extractor's components,
+// edges and root from one snapshot to another (digest reuse, ADR-045
+// §4.1). Returns the number of components copied.
+func (q *Queries) CopyExtractedInventory(ctx context.Context, fromSnapshotID, toSnapshotID uuid.UUID, sourceLabel string) (int, error) {
+	rows, err := q.db.CopySnapshotExtractionComponents(ctx, dbgen.CopySnapshotExtractionComponentsParams{ToSnapshotID: toSnapshotID, SourceLabel: sourceLabel, FromSnapshotID: fromSnapshotID})
+	if err != nil {
+		return 0, err
+	}
+	if err := q.db.CopySnapshotExtractionDependencies(ctx, dbgen.CopySnapshotExtractionDependenciesParams{ToSnapshotID: toSnapshotID, SourceLabel: sourceLabel, FromSnapshotID: fromSnapshotID}); err != nil {
+		return 0, err
+	}
+	if err := q.db.CopySnapshotDependencyRoot(ctx, dbgen.CopySnapshotDependencyRootParams{ToSnapshotID: toSnapshotID, FromSnapshotID: fromSnapshotID}); err != nil {
+		return 0, err
+	}
+	return int(rows), nil
+}
