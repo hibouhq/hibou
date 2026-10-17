@@ -18,10 +18,27 @@ restore (admins in a user session only), the Releases tab's sources panel
 and command; `hibou deps list`, `hibou vulns list`, `hibou deps diff`;
 `hibou deps verify` offline with the integrity check and the blind-spot
 notes; and from ADR-048 `hibou deps check`, `hibou deps cooldown init`,
-`hibou deps not-shipped`. Not yet: the offline advisory database (step 6),
-SBOM signature verification in `verify`, identification of jars by SHA-1
-against Maven Central (operator opt-in), and layer attribution inside
-images.
+`hibou deps not-shipped`.
+
+**Implemented (2026-10-17, rollout step 6 and the remaining holds).** The
+offline advisory database: `hibou vulns db export` writes the
+organization's advisories (ranges, ratings, aliases, exploited-catalog
+flag, EPSS) as one newline-delimited JSON file, audit-logged, and `hibou
+deps scan --advisory-db FILE` matches against it with the server's own
+version comparison and rating choice, warning when the export is older
+than seven days; what the file cannot carry (VEX, not-shipped lists,
+package signals) is said in the output rather than guessed. `hibou deps
+verify` accepts an in-toto attestation (a DSSE envelope as `cosign attest`
+writes it, or a bare statement) in place of the SBOM, verifies the
+signature against a PEM public key given with `--key` (ECDSA, Ed25519,
+RSA), checks the statement's subject digest against the deliverable and
+exposes `--fail-on signature`; keyless signatures are reported as not
+checked, since they need the Sigstore trust root. Jars without Maven
+metadata are identified by SHA-1 against Maven Central with
+`--maven-central`, an opt-in because a hash leaves the machine. Images:
+layer attribution and the attached SBOMs of ADR-045 §10 are read by
+`deps scan --image` and `release scan --image` (`--no-attached-sbom` to
+skip the registry lookups).
 
 
 Proposed (2026-10-15). Second of three related ADRs; depends on
@@ -99,11 +116,12 @@ hibou deps scan [TARGET...] [--image REF|TAR] [--git-ref TAG|BRANCH|SHA]
   KEV, EPSS and malicious-package data, and, when `--repo` is given or
   inferred from the git remote, the repository's triage decisions, VEX
   statements and not-shipped list, read-only.
-- **`--offline`**: inventory only, no vulnerabilities. A downloadable
-  advisory database for fully offline matching (like Trivy's DB, shipped
-  through the ADR-035 bundle mechanism) is a later option; querying public
-  OSV.dev directly from the CLI is rejected because it bypasses org triage,
-  VEX and egress policy.
+- **`--offline`**: inventory only, no vulnerabilities. **`--advisory-db
+  FILE`**: fully offline matching against a database exported from the
+  server with `hibou vulns db export` (the organization's advisory view,
+  no repository data), the counterpart of the ADR-035 offline bundles;
+  querying public OSV.dev directly from the CLI is rejected because it
+  bypasses org triage, VEX and egress policy.
 - **Output**: a table on a terminal; `--format json|cyclonedx|sarif`.
   `cyclonedx` includes vulnerabilities as CycloneDX VEX, so the output is a
   valid SBOM that `hibou upload` accepts later.
@@ -314,8 +332,11 @@ Exit codes follow §2: `0` by default, `1` when `--fail-on` matches
 
 Hibou's own exported release SBOMs include the deliverables' digests recorded
 by `hibou release scan`, so a client can verify a Hibou-produced SBOM the same
-way. Verifying the SBOM's signature (cosign, in-toto attestations) is a later
-addition; until then `verify` says what the SBOM claims, not who signed it.
+way. `--sbom` also takes an in-toto attestation (a DSSE envelope or a bare
+statement) and `--key` verifies its signature against the signer's public
+key; the statement's subject digest is the integrity check. Keyless
+(Fulcio and Rekor) verification is not done: without a key, `verify` says
+what the attestation claims, not who signed it.
 
 ### 6. Every UI action has a CLI equivalent
 

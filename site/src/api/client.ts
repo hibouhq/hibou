@@ -1371,6 +1371,10 @@ export interface ComponentWithVulns {
   shipped_ignored?: string
   /** Declared range of an unresolved component (ADR-045 §2.2). */
   constraint?: string
+  /** Image layer that introduced the component, when an image source recorded it (ADR-045 §10). */
+  layer?: number
+  /** The layer belongs to the base image rather than the application's own layers. */
+  base_image?: boolean
 }
 
 /** One package version's signals from deps.dev (ADR-048 §2). */

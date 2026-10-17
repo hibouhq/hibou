@@ -96,6 +96,19 @@ type Component struct {
 	// the format does not record it. Private packages are never sent to
 	// third-party APIs.
 	Registry string
+	// Layer says which image layer introduced the component when the
+	// source is a container image (ADR-045 §10); nil otherwise.
+	Layer *LayerInfo
+}
+
+// LayerInfo attributes a component to an image layer: the index in the
+// image's history, the layer's diff ID, the build command when the image
+// records one, and whether the layer belongs to the base image.
+type LayerInfo struct {
+	Index     int    `json:"index"`
+	DiffID    string `json:"diff_id,omitempty"`
+	Command   string `json:"command,omitempty"`
+	BaseImage bool   `json:"base_image"`
 }
 
 const (
@@ -120,6 +133,9 @@ type Module struct {
 type Inventory struct {
 	Components []Component
 	Modules    []Module
+	// Edges are the parent edges the lockfiles state, so an indirect
+	// dependency traces back to the direct one that pulled it in.
+	Edges []Edge
 	// Extractors that ran, with their failures if any.
 	Extractors []ExtractorStatus
 	// Errors from files the extractors could not read; the inventory is
@@ -332,6 +348,7 @@ func Extract(ctx context.Context, root string, opts Options) (*Inventory, error)
 	})...)
 	inv.Components = markUnresolvedPomRanges(absRoot, inv.Components)
 	inv.Components = annotateRelationships(absRoot, inv.Components)
+	inv.Edges = extractEdges(absRoot, inv.Components)
 	inv.Modules = buildModules(inv.Components)
 	inv.InstallConfig = DetectInstallConfig(absRoot, inv.Modules)
 	inv.Updaters = DetectUpdaterConfig(absRoot)

@@ -713,6 +713,8 @@ func (s *Server) routes(siteFS fs.FS) {
 					// Organization not-shipped list (ADR-045 §6).
 					// Stateless matching for the CLI's local scans (ADR-046 §2).
 					r.Post("/advisories/match", s.handleMatchAdvisories)
+					// Offline advisory database for air-gapped scans (ADR-046 step 6).
+					r.Get("/advisories/export", s.handleExportAdvisories)
 					r.Get("/dependencies/not-shipped", s.handleListOrgNotShipped)
 					r.Post("/dependencies/not-shipped", s.handleAddOrgNotShipped)
 					r.Delete("/dependencies/not-shipped/{entryID}", s.handleDeleteOrgNotShipped)

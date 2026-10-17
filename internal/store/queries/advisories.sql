@@ -105,3 +105,13 @@ SELECT * FROM affected_ranges WHERE ecosystem = $1 AND package_name = $2;
 
 -- name: DeleteAffectedRangesByAdvisoryAndSource :exec
 DELETE FROM affected_ranges WHERE advisory_id = $1 AND source = $2;
+
+-- name: ListAdvisoryIDsForExport :many
+-- Keyset page of advisories with a range in the ecosystems, for the
+-- offline advisory database (ADR-046 step 6). An empty list means every
+-- ecosystem.
+SELECT DISTINCT advisory_id FROM affected_ranges
+WHERE (COALESCE(array_length(@ecosystems::text[], 1), 0) = 0 OR ecosystem = ANY(@ecosystems::text[]))
+  AND advisory_id > @after_id
+ORDER BY advisory_id
+LIMIT @page_size;

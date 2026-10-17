@@ -125,10 +125,35 @@ hibou deps list --repo api --release v1.2.3 --filter 'relationship:direct'
 hibou vulns list --repo api --pr 42
 hibou deps diff --repo api v1.2.3 v1.3.0
 hibou deps verify dist/app.war --sbom vendor-app.cdx.json --fail-on undeclared
+hibou deps verify dist/app.war --sbom app.intoto.json --key cosign.pub --fail-on signature
+hibou vulns db export --out advisories.ndjson      # then, on an air-gapped runner:
+hibou deps scan --advisory-db advisories.ndjson
 ```
 
 Only purls and versions reach the server; file contents never do. Exit codes:
 `0` whatever is found, `1` when `--fail-on` matches, `2` on errors.
+
+**Air-gapped runners.** `hibou vulns db export` writes the organization's
+advisories (ranges, ratings, aliases, exploited-catalog flag, EPSS) as one
+file; `hibou deps scan --advisory-db` matches against it with the same
+version comparison as the server and warns when the export is more than
+seven days old. The file carries no repository data, so VEX statements,
+not-shipped lists and package signals are absent from an offline scan and
+the output says so.
+
+**Attestations.** `hibou deps verify --sbom` accepts an in-toto
+attestation of the SBOM (the DSSE envelope `cosign attest` writes, or a
+bare statement). With `--key`, the signature is checked against that
+public key (ECDSA, Ed25519 or RSA) and the statement's subject digest
+against the deliverable; without it the signature is reported as not
+checked. Keyless signatures need the Sigstore trust root and are not
+verified.
+
+**Jars without metadata.** A jar that lost its `pom.properties` (shaded,
+repackaged) is listed as not identified. `--maven-central` on `deps scan`
+and `release scan` identifies it by the SHA-1 of its bytes against Maven
+Central; it is an opt-in because the hash leaves the machine
+(`HIBOU_MAVEN_CENTRAL_URL` points it at a mirror).
 
 ### Deliverables
 
@@ -141,7 +166,7 @@ Only purls and versions reach the server; file contents never do. Exit codes:
 | Rust binary | The full set when built with `cargo auditable` |
 | Wheel, virtualenv, `site-packages` archive | Every installed package's metadata |
 | `node_modules` archive, npm tarball | Installed packages with exact versions |
-| Container image (reference or `docker save` tarball) | OS packages (dpkg, apk, rpm) and language packages of the squashed filesystem |
+| Container image (reference or `docker save` tarball) | OS packages (dpkg, apk, rpm) and language packages, each attributed to the layer that introduced it, with the base image told apart from the application's layers; the SBOMs attached to the image in its registry (OCI referrers, cosign `.sbom` and `.att` tags, BuildKit attestations) add what the scan did not see |
 | Any zip or tar of everything | All of the above, wherever it sits; nested archives included |
 
 Nothing is silently ignored: files no extractor recognises (a `.dll`, a

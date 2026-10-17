@@ -169,6 +169,7 @@ var routeScopes = map[string]routeScope{
 	"POST " + orgRoute + "/policy/packages/acceptances":                needsOrgWide(apitoken.CapTriage, apitoken.AccessWrite),
 	"DELETE " + orgRoute + "/policy/packages/acceptances":              needsOrgWide(apitoken.CapTriage, apitoken.AccessWrite),
 	"POST " + orgRoute + "/advisories/match":                           needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
+	"GET " + orgRoute + "/advisories/export":                           needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/dependencies/not-shipped":                    needsOrgWide(apitoken.CapComponents, apitoken.AccessRead),
 	"POST " + orgRoute + "/dependencies/not-shipped":                   needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 	"DELETE " + orgRoute + "/dependencies/not-shipped/{entryID}":       needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),

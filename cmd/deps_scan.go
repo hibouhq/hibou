@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hibouhq/hibou/internal/advisorydb"
 	"github.com/hibouhq/hibou/internal/cliclient"
 	"github.com/hibouhq/hibou/internal/depinventory"
 )
@@ -34,6 +35,14 @@ var (
 	scanExclude    []string
 	scanQuiet      bool
 	scanFailOnExit = 1
+	// scanAdvisoryDB matches against an exported database instead of the
+	// server (ADR-046 step 6).
+	scanAdvisoryDB string
+	// scanMavenCentral sends the SHA-1 of jars without Maven metadata to
+	// Maven Central (opt-in: a hash leaves the machine).
+	scanMavenCentral bool
+	// scanNoAttachedSBOM skips the SBOMs the registry holds for an image.
+	scanNoAttachedSBOM bool
 )
 
 var depsScanCmd = &cobra.Command{
@@ -54,7 +63,9 @@ Examples:
   hibou deps scan --git-ref v1.2.3
   hibou deps scan dist/app.war --repo api --release v1.2.3
   hibou deps scan --image registry.example/app:1.2.3 --format cyclonedx > app.cdx.json
-  hibou deps scan --fail-on 'severity:critical shipped:yes'`,
+  hibou deps scan --fail-on 'severity:critical shipped:yes'
+  hibou deps scan --advisory-db advisories.ndjson    # air-gapped: hibou vulns db export wrote the file
+  hibou deps scan dist/ --maven-central              # identify jars without metadata by SHA-1`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		report, err := runDepsScan(cmd.Context(), args)
@@ -119,6 +130,17 @@ func init() {
 	depsScanCmd.Flags().StringVar(&scanRelease, "release", "", "Release version the scan is about (read-only context, named in the audit entry)")
 	depsScanCmd.Flags().StringArrayVar(&scanExclude, "exclude", nil, "Path globs not inventoried (repeatable), e.g. examples/**")
 	depsScanCmd.Flags().BoolVar(&scanQuiet, "quiet", false, "Table output: components with findings only")
+	depsScanCmd.Flags().StringVar(&scanAdvisoryDB, "advisory-db", "", "Match against an exported advisory database (hibou vulns db export) instead of the server: no network, no triage context")
+	depsScanCmd.Flags().BoolVar(&scanMavenCentral, "maven-central", false, "Identify jars without Maven metadata by their SHA-1 against Maven Central (sends hashes to search.maven.org, or HIBOU_MAVEN_CENTRAL_URL)")
+	depsScanCmd.Flags().BoolVar(&scanNoAttachedSBOM, "no-attached-sbom", false, "Do not read the SBOMs attached to the image in its registry (referrers, cosign tags, BuildKit attestations)")
+}
+
+// mavenCentralLookup is the jar lookup when the user opted in.
+func mavenCentralLookup(enabled bool) depinventory.JarLookup {
+	if !enabled {
+		return nil
+	}
+	return depinventory.MavenCentralLookup(os.Getenv("HIBOU_MAVEN_CENTRAL_URL"), nil)
 }
 
 // scanRow is one component with everything the server said about it.
@@ -163,7 +185,12 @@ type scanReport struct {
 	Repo              string                       `json:"repo,omitempty"`
 	Summary           scanSummary                  `json:"summary"`
 	Image             *depinventory.ImageInventory `json:"image,omitempty"`
-	Duration          time.Duration                `json:"duration"`
+	// AdvisoryDB names the local database the rows were matched against,
+	// with its export time, when --advisory-db was used.
+	AdvisoryDB           string        `json:"advisory_db,omitempty"`
+	AdvisoryDBExportedAt string        `json:"advisory_db_exported_at,omitempty"`
+	AdvisoryDBAdvisories int           `json:"advisory_db_advisories,omitempty"`
+	Duration             time.Duration `json:"duration"`
 }
 
 type scanSummary struct {
@@ -206,9 +233,12 @@ func runDepsScan(ctx context.Context, targets []string) (*scanReport, error) {
 	}
 	started := time.Now()
 	warn := func(message string) { fmt.Fprintln(os.Stderr, "warning:", message) }
-	opts := depinventory.ScanOptions{Exclude: scanExclude, Warn: warn}
+	opts := depinventory.ScanOptions{Exclude: scanExclude, Warn: warn, JarLookup: mavenCentralLookup(scanMavenCentral), SkipAttachedSBOMs: scanNoAttachedSBOM}
 	var inv *depinventory.ArtifactInventory
 	report := &scanReport{Offline: scanOffline}
+	if scanAdvisoryDB != "" && scanOffline {
+		return nil, errors.New("--advisory-db and --offline exclude each other: the database is the offline match")
+	}
 	switch {
 	case scanImageRef != "":
 		if len(targets) > 0 || scanGitRef != "" {
@@ -253,7 +283,13 @@ func runDepsScan(ctx context.Context, targets []string) (*scanReport, error) {
 		report.Rows = append(report.Rows, scanRow{Component: component, Shipped: true, Advisories: []scanAdvisory{}})
 	}
 
-	if !scanOffline && len(report.Rows) > 0 {
+	switch {
+	case len(report.Rows) == 0:
+	case scanAdvisoryDB != "":
+		if err := matchRowsOffline(report, scanAdvisoryDB, warn); err != nil {
+			return nil, err
+		}
+	case !scanOffline:
 		if err := matchRows(report); err != nil {
 			return nil, err
 		}
@@ -344,6 +380,52 @@ func matchRows(report *scanReport) error {
 	}
 	report.Matched = true
 	return nil
+}
+
+// matchRowsOffline matches against an exported advisory database
+// (ADR-046 step 6). What the file cannot carry stays unknown: triage, VEX,
+// not-shipped lists and package signals need the server.
+func matchRowsOffline(report *scanReport, path string, warn func(string)) error {
+	db, err := advisorydb.Load(path)
+	if err != nil {
+		return fmt.Errorf("advisory database: %w", err)
+	}
+	now := time.Now()
+	if db.Stale(now) {
+		warn(fmt.Sprintf("advisory database exported %s ago (%s): re-export it with 'hibou vulns db export'", humanAge(db.Age(now)), db.Header.ExportedAt.Format("2 Jan 2006")))
+	}
+	for i := range report.Rows {
+		row := &report.Rows[i]
+		if row.Version == "" {
+			continue
+		}
+		match := db.Match(row.Purl)
+		row.Supported = match.Supported
+		row.Advisories = make([]scanAdvisory, 0, len(match.Advisories))
+		for _, a := range match.Advisories {
+			row.Advisories = append(row.Advisories, scanAdvisory{
+				ID: a.ID, CanonicalID: a.CanonicalID, Title: a.Title, Severity: a.Severity, CVSS: a.CVSS,
+				IsMalware: a.IsMalware, KEV: a.KEV, EPSS: a.EPSS, FixedVersions: a.FixedVersions,
+			})
+		}
+	}
+	report.Matched = true
+	report.AdvisoryDB = path
+	report.AdvisoryDBExportedAt = db.Header.ExportedAt.UTC().Format(time.RFC3339)
+	report.AdvisoryDBAdvisories = db.Advisories()
+	return nil
+}
+
+func humanAge(age time.Duration) string {
+	days := int(age.Hours() / 24)
+	switch {
+	case days >= 2:
+		return fmt.Sprintf("%d days", days)
+	case age >= time.Hour:
+		return fmt.Sprintf("%d hours", int(age.Hours()))
+	default:
+		return fmt.Sprintf("%d minutes", int(age.Minutes()))
+	}
 }
 
 func applyShortcutFilters(report *scanReport) {
@@ -601,7 +683,39 @@ func writeScanTable(w *os.File, report *scanReport) error {
 	if s.Unidentified > 0 {
 		fmt.Fprintf(w, "%d file(s) not identified (listed at the end)\n", s.Unidentified)
 	}
-	if !report.Matched {
+	if image := report.Image; image != nil {
+		if image.BaseImage != "" {
+			fmt.Fprintf(w, "base image: %s\n", image.BaseImage)
+		}
+		baseLayers, appLayers := 0, 0
+		for _, layer := range image.Layers {
+			if layer.Empty {
+				continue
+			}
+			if layer.BaseImage {
+				baseLayers++
+			} else {
+				appLayers++
+			}
+		}
+		fmt.Fprintf(w, "layers: %d in the base image, %d of the application", baseLayers, appLayers)
+		if baseLayers+appLayers > 0 && baseLayers == 0 {
+			fmt.Fprint(w, " (no CMD or ENTRYPOINT in the history to tell the base image apart)")
+		}
+		fmt.Fprintln(w)
+		for _, attached := range image.AttachedSBOMs {
+			signed := "unsigned"
+			if attached.Signed {
+				signed = "signed, not verified here (hibou deps verify --key)"
+			}
+			fmt.Fprintf(w, "attached SBOM (%s, %s, %s): %d components, %d not seen by the scan\n", attached.Source, attached.Format, signed, attached.Components, attached.Added)
+		}
+	}
+	switch {
+	case report.AdvisoryDB != "":
+		fmt.Fprintf(w, "matched against %s: %d advisories exported %s\n", report.AdvisoryDB, report.AdvisoryDBAdvisories, shortDate(report.AdvisoryDBExportedAt))
+		fmt.Fprintln(w, "no triage context: VEX statements, not-shipped lists and package signals need the server")
+	case !report.Matched:
 		fmt.Fprintln(w, "inventory only: no server match (offline)")
 	}
 	fmt.Fprintln(w)
@@ -760,6 +874,13 @@ func rowDetail(row scanRow) string {
 	}
 	if row.Unpublished {
 		parts = append(parts, "unpublished")
+	}
+	if row.Layer != nil {
+		if row.Layer.BaseImage {
+			parts = append(parts, fmt.Sprintf("layer %d (base image)", row.Layer.Index))
+		} else {
+			parts = append(parts, fmt.Sprintf("layer %d", row.Layer.Index))
+		}
 	}
 	return strings.Join(parts, "; ")
 }

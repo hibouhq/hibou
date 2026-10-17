@@ -317,16 +317,39 @@ registry reference or a tarball) and C1 as metadata on the source
 inventory (§10); the CLI of ADR-046 (`deps scan`, `deps list`, `vulns
 list`, `deps diff`, `deps verify`, `release scan` with plausibility checks
 and additive recording, `release sources` with revoke and restore); and
-the Releases tab's sources panel with the ready-to-copy command. Not yet:
-layer attribution inside images and SBOMs attached to images (C5, §10);
-the Database section's dedicated source tables, views and backfill
-(migration steps 1–2) and the query rewrites (step 3): the current model
-records every source as a snapshot artifact with a provenance label per
-component, with origin, metadata and revocation on the artifact, which
-covers §5.3 without the new tables; the rewrite stays conditioned on a
-measured need, as the section says. Throttling of the upgrade pass is a
-fixed page per pass with one job per repository, rather than per-org
-accounting.
+the Releases tab's sources panel with the ready-to-copy command; parent
+edges read from npm, pnpm, Yarn, Cargo, uv and Poetry lockfiles, so an
+indirect dependency traces back to the direct one that pulled it in and
+"where is it used" answers for it (Maven, Gradle and Go carry no such
+graph in their files; resolve mode or `go mod graph` would be the source).
+
+**Increment 4 (2026-10-17, rollout step 10 completed).** Containers: every
+component of an image is attributed to the layer that introduced it, with
+the base image told apart from the application layers (the engine's
+heuristic: the last `CMD` or `ENTRYPOINT` before the application's own
+layers, plus the `org.opencontainers.image.base.name` label when the
+builder set it), carried as `hibou:layer`, `hibou:layer_digest` and
+`hibou:base_image` properties into the snapshot labels, shown in the
+Dependencies tab's provenance and in the CLI (§10, C2 and C3); C5 through
+the CLI's `--image`: the SBOMs the registry holds for the image are read
+from OCI referrers, the cosign tag convention (`.sbom` and `.att`) and
+BuildKit attestation manifests, in-toto statements and DSSE envelopes
+unwrapped, and their components join the inventory as their own source
+when the filesystem scan did not see them; the server never pulls images
+(C4 stays out). Jars without Maven metadata can be identified by SHA-1
+against Maven Central on explicit opt-in (`--maven-central`), since a hash
+leaves the machine.
+
+Not implemented, by decision rather than omission: the Database section's
+dedicated tables (option B). Storage stays the per-snapshot model with the
+row copy on digest reuse and the provenance labels per component, which
+covers §5.3 (origin, metadata and revocation live on the artifact) and
+keeps the eighteen queries unchanged. The move to B is a migration on its
+own, to be scheduled when the rows-written-per-day figure of the storage
+usage view (ADR-039) shows a repository that retention (ADR-014) does not
+keep within budget; §4.1.1's row-sharing claim holds only for identical
+inventories until then. Throttling of the upgrade pass is a fixed page per
+pass with one job per repository, rather than per-org accounting.
 
 Rationale: both are Go and Apache-2.0, so they keep the single binary
 (ADR-001), run in-process on the server and in the CLI with identical results,

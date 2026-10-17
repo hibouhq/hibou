@@ -48,6 +48,9 @@ const (
 	// ActionAdvisoryMatch: a stateless match of purls (ADR-046 §2): who,
 	// when, how many.
 	ActionAdvisoryMatch = "advisory.match"
+	// ActionAdvisoryExport: an offline advisory database was exported
+	// (ADR-046 step 6): who, when, which ecosystems, how many advisories.
+	ActionAdvisoryExport = "advisory.export"
 	// Release deliverable sources (ADR-046 §4): an inventory recorded on a
 	// release from files analysed locally, and its revocation.
 	ActionReleaseSourceAdded    = "release.source_added"

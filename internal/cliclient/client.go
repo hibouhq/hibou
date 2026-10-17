@@ -160,11 +160,40 @@ func (c *Client) Post(path string, body any, out any) error {
 	return c.do(http.MethodPost, path, body, out)
 }
 
-// PostRaw performs an authenticated POST request with a raw reader body.
 // Delete sends a DELETE; a 204 has no body to decode.
 func (c *Client) Delete(path string) error {
 	return c.do(http.MethodDelete, path, nil, nil)
 }
+
+// GetStream performs an authenticated GET and returns the raw body of a
+// 2xx response, for exports too large to hold in memory. The caller
+// closes it. A non-2xx response is read and returned as an error.
+func (c *Client) GetStream(path string, accept string) (io.ReadCloser, error) {
+	req, err := http.NewRequest(http.MethodGet, c.Server+"/api/v1"+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		var apiResp APIResponse
+		if json.Unmarshal(respBody, &apiResp) == nil && apiResp.Error != "" {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, apiResp.Error)
+		}
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return resp.Body, nil
+}
+
+// PostRaw performs an authenticated POST request with a raw reader body.
 
 func (c *Client) PostRaw(path string, contentType string, body io.Reader, out any) error {
 	url := c.Server + "/api/v1" + path

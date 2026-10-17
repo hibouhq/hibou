@@ -318,6 +318,46 @@ func (q *Queries) ListAdvisoriesByPackage(ctx context.Context, arg ListAdvisorie
 	return items, nil
 }
 
+const listAdvisoryIDsForExport = `-- name: ListAdvisoryIDsForExport :many
+SELECT DISTINCT advisory_id FROM affected_ranges
+WHERE (COALESCE(array_length($1::text[], 1), 0) = 0 OR ecosystem = ANY($1::text[]))
+  AND advisory_id > $2
+ORDER BY advisory_id
+LIMIT $3
+`
+
+type ListAdvisoryIDsForExportParams struct {
+	Ecosystems []string  `json:"ecosystems"`
+	AfterID    uuid.UUID `json:"after_id"`
+	PageSize   int32     `json:"page_size"`
+}
+
+// Keyset page of advisories with a range in the ecosystems, for the
+// offline advisory database (ADR-046 step 6). An empty list means every
+// ecosystem.
+func (q *Queries) ListAdvisoryIDsForExport(ctx context.Context, arg ListAdvisoryIDsForExportParams) ([]uuid.UUID, error) {
+	rows, err := q.db.QueryContext(ctx, listAdvisoryIDsForExport, pq.Array(arg.Ecosystems), arg.AfterID, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var advisory_id uuid.UUID
+		if err := rows.Scan(&advisory_id); err != nil {
+			return nil, err
+		}
+		items = append(items, advisory_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAffectedRangesByAdvisory = `-- name: ListAffectedRangesByAdvisory :many
 SELECT id, advisory_id, ecosystem, package_name, introduced, fixed, last_affected, source, created_at, release, vulnerable_symbols FROM affected_ranges WHERE advisory_id = $1
 `

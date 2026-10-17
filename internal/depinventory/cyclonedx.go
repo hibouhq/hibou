@@ -3,6 +3,7 @@ package depinventory
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -23,6 +24,12 @@ const (
 	// PropertyConstraint carries the declared range of an unresolved
 	// component (ADR-045 §2.2).
 	PropertyConstraint = "hibou:constraint"
+	// PropertyLayer is the index of the image layer that introduced the
+	// component and PropertyBaseImage says whether that layer belongs to
+	// the base image (ADR-045 §10).
+	PropertyLayer       = "hibou:layer"
+	PropertyLayerDigest = "hibou:layer_digest"
+	PropertyBaseImage   = "hibou:base_image"
 	// ToolName is what the producer run and the component sources show.
 	ToolName = "hibou-depinventory"
 )
@@ -111,6 +118,13 @@ func ToCycloneDX(inv *Inventory, rootName, toolVersion string, now time.Time) ([
 			if component.Registry != "" {
 				props = append(props, cdxProperty{Name: PropertyRegistry, Value: component.Registry})
 			}
+			if component.Layer != nil {
+				props = append(props, cdxProperty{Name: PropertyLayer, Value: strconv.Itoa(component.Layer.Index)})
+				if component.Layer.DiffID != "" {
+					props = append(props, cdxProperty{Name: PropertyLayerDigest, Value: component.Layer.DiffID})
+				}
+				props = append(props, cdxProperty{Name: PropertyBaseImage, Value: strconv.FormatBool(component.Layer.BaseImage)})
+			}
 			for _, scope := range component.Scopes {
 				props = append(props, cdxProperty{Name: PropertyScope, Value: scope})
 			}
@@ -133,6 +147,26 @@ func ToCycloneDX(inv *Inventory, rootName, toolVersion string, now time.Time) ([
 	for _, module := range inv.Modules {
 		deps := uniqueSorted(directByModule[module.Path])
 		doc.Dependencies = append(doc.Dependencies, cdxDependency{Ref: moduleRef(module.Path), DependsOn: deps})
+	}
+	// Parent edges from the lockfiles: the path from a module to an
+	// indirect dependency, which "where is it used" walks.
+	children := map[string][]string{}
+	for _, edge := range inv.Edges {
+		if _, known := seen[edge.From]; !known {
+			continue
+		}
+		if _, known := seen[edge.To]; !known {
+			continue
+		}
+		children[edge.From] = append(children[edge.From], edge.To)
+	}
+	parents := make([]string, 0, len(children))
+	for from := range children {
+		parents = append(parents, from)
+	}
+	sort.Strings(parents)
+	for _, from := range parents {
+		doc.Dependencies = append(doc.Dependencies, cdxDependency{Ref: from, DependsOn: uniqueSorted(children[from])})
 	}
 	return json.MarshalIndent(doc, "", "  ")
 }

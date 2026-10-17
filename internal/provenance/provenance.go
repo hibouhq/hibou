@@ -12,6 +12,7 @@ package provenance
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hibouhq/hibou/internal/depinventory"
@@ -26,6 +27,8 @@ var PropertyLabelPrefixes = map[string]string{
 	depinventory.PropertyRegistry:     "registry:",
 	depinventory.PropertyPath:         "path:",
 	depinventory.PropertyConstraint:   "constraint:",
+	depinventory.PropertyLayer:        "layer:",
+	depinventory.PropertyBaseImage:    "base_image:",
 }
 
 // Provenance is what the label set says about one component, in the
@@ -57,6 +60,12 @@ type Provenance struct {
 	Shipped        bool   `json:"shipped"`
 	ShippedReason  string `json:"shipped_reason,omitempty"`
 	ShippedIgnored string `json:"shipped_ignored,omitempty"`
+	// Layer is the image layer that introduced the component when an
+	// image source recorded it (ADR-045 §10); BaseImage says the layer
+	// belongs to the base image, so a base image update and an
+	// application fix are distinguishable.
+	Layer     *int `json:"layer,omitempty"`
+	BaseImage bool `json:"base_image,omitempty"`
 	// Paths are the manifest paths that declare the component, for the
 	// not-shipped path patterns.
 	Paths []string `json:"-"`
@@ -114,6 +123,14 @@ func FromLabels(raw json.RawMessage) Provenance {
 			}
 		case strings.HasPrefix(key, "sbom:"):
 			out.InventorySources = append(out.InventorySources, strings.TrimPrefix(key, "sbom:"))
+		case strings.HasPrefix(key, "layer:"):
+			// Several image sources may report the component: the lowest
+			// layer is where it first appeared.
+			if index, err := strconv.Atoi(strings.TrimPrefix(key, "layer:")); err == nil && (out.Layer == nil || index < *out.Layer) {
+				out.Layer = &index
+			}
+		case key == "base_image:true":
+			out.BaseImage = true
 		}
 	}
 	switch {

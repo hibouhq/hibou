@@ -23,7 +23,8 @@ var depsCmd = &cobra.Command{
   hibou deps scan                     analyse a directory, a lockfile, an archive, a binary, an image
   hibou deps list --repo api          what Hibou knows about a ref, tag, release or PR
   hibou deps diff --repo api v1 v2    what changed between two refs
-  hibou deps verify app.war --sbom x  does an SBOM describe this deliverable? (offline)
+  hibou deps verify app.war --sbom x  does an SBOM (or its attestation) describe this deliverable? (offline)
+  hibou deps scan --advisory-db FILE  match against an exported advisory database, no server (hibou vulns db export)
   hibou deps check                    would the package policy hold anything in this tree? (CI pre-install step)
   hibou deps cooldown init            write the install-time cooldown settings (npm, pnpm, Yarn, Bun, uv, pip)
   hibou deps not-shipped ...          the repository's not-shipped list
@@ -40,14 +41,15 @@ var (
 )
 
 func init() {
-	for _, c := range []*cobra.Command{depsScanCmd, depsListCmd, depsDiffCmd, depsCheckCmd, depsNotShippedCmd, vulnsListCmd} {
+	for _, c := range []*cobra.Command{depsScanCmd, depsListCmd, depsDiffCmd, depsCheckCmd, depsNotShippedCmd, vulnsListCmd, vulnsDBExportCmd} {
 		c.PersistentFlags().StringVar(&depsOrg, "org", "", "Organization (provider/slug); default from 'hibou config set-org' or HIBOU_ORG")
 		c.PersistentFlags().StringVar(&depsRepo, "repo", "", "Repository slug; default from the git remote of the current directory")
 		c.PersistentFlags().StringVar(&depsServer, "server", "", "Hibou server URL (default HIBOU_SERVER or the stored login)")
 		c.PersistentFlags().StringVar(&depsToken, "token", "", "API token (default HIBOU_TOKEN or the stored login)")
 	}
 	depsCmd.AddCommand(depsScanCmd, depsListCmd, depsDiffCmd, depsVerifyCmd, depsCheckCmd, depsCooldownCmd, depsNotShippedCmd)
-	vulnsCmd.AddCommand(vulnsListCmd)
+	vulnsDBCmd.AddCommand(vulnsDBExportCmd)
+	vulnsCmd.AddCommand(vulnsListCmd, vulnsDBCmd)
 }
 
 var vulnsCmd = &cobra.Command{

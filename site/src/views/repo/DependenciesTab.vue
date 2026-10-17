@@ -672,6 +672,7 @@ function provenanceLine(component: ComponentWithVulns): string {
     parts.push(`in ${component.modules.join(', ')}`)
   }
   if (component.registry === 'private') parts.push('private registry')
+  if (component.layer !== undefined) parts.push(component.base_image ? `base image layer ${component.layer}` : `layer ${component.layer}`)
   if (component.shipped === false) parts.push('not shipped')
   return parts.join(' · ')
 }
@@ -777,6 +778,11 @@ function provenanceTitle(component: ComponentWithVulns): string {
   if (component.relationship === 'unknown') lines.push('Unknown: no inventory source could tell whether this is a direct dependency.')
   if (component.resolution === 'declared') lines.push('Declared only: the version comes from a manifest, not a lockfile.')
   if (component.inventory_sources?.length) lines.push(`Reported by ${component.inventory_sources.join(', ')}`)
+  if (component.layer !== undefined) {
+    lines.push(component.base_image
+      ? `Introduced by image layer ${component.layer}, part of the base image: a base image update fixes it, not an application change.`
+      : `Introduced by image layer ${component.layer}, one of the application's own layers.`)
+  }
   if (component.shipped === false) lines.push(`Not shipped: ${component.shipped_reason || 'does not reach clients'}. Listed, never hidden.`)
   return lines.join('\n')
 }

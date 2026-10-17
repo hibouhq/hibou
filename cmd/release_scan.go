@@ -32,6 +32,10 @@ var (
 	releaseScanReason string
 	releaseScanForce  bool
 	releaseScanAll    bool
+	// releaseScanMavenCentral and releaseScanNoAttachedSBOM mirror the
+	// deps scan options for the deliverables analysed here.
+	releaseScanMavenCentral   bool
+	releaseScanNoAttachedSBOM bool
 )
 
 var releaseScanCmd = &cobra.Command{
@@ -131,7 +135,7 @@ func recordReleaseDeliverables(ctx context.Context, client *cliclient.Client, re
 		ctx = context.Background()
 	}
 	warn := func(message string) { fmt.Fprintln(os.Stderr, "warning:", message) }
-	opts := depinventory.ScanOptions{Warn: warn}
+	opts := depinventory.ScanOptions{Warn: warn, JarLookup: mavenCentralLookup(releaseScanMavenCentral), SkipAttachedSBOMs: releaseScanNoAttachedSBOM}
 	targets := []depinventory.TargetSummary{}
 	var components []depinventory.Component
 	if len(files) > 0 {
@@ -154,6 +158,12 @@ func recordReleaseDeliverables(ctx context.Context, client *cliclient.Client, re
 		}
 		components = append(components, image.Inventory.Components...)
 		targets = append(targets, image.Inventory.Targets...)
+		if image.BaseImage != "" {
+			fmt.Printf("  base image %s\n", image.BaseImage)
+		}
+		for _, attached := range image.AttachedSBOMs {
+			fmt.Printf("  attached SBOM (%s, %s): %d components, %d not seen by the scan\n", attached.Source, attached.Format, attached.Components, attached.Added)
+		}
 	}
 	if len(components) == 0 {
 		return exitError{2, errors.New("no component found in the deliverables; nothing to record")}
@@ -397,6 +407,8 @@ func init() {
 	releaseScanCmd.Flags().StringVar(&releaseScanReason, "reason", "", "Why the deliverable is recorded despite a mismatch (stored with the source)")
 	releaseScanCmd.Flags().BoolVar(&releaseScanForce, "force", false, "Record despite a plausibility mismatch (needs --reason)")
 	releaseScanCmd.Flags().BoolVar(&releaseScanAll, "all", false, "Queue the server extraction of every release without an inventory")
+	releaseScanCmd.Flags().BoolVar(&releaseScanMavenCentral, "maven-central", false, "Identify jars without Maven metadata by their SHA-1 against Maven Central (sends hashes out)")
+	releaseScanCmd.Flags().BoolVar(&releaseScanNoAttachedSBOM, "no-attached-sbom", false, "Do not read the SBOMs attached to the image in its registry")
 	releaseSourcesCmd.Flags().StringVar(&releaseScanRepo, "repo", "", "Repository slug (default: the git remote)")
 	releaseSourcesCmd.Flags().StringVar(&readFormat, "format", "table", "Output: table, json")
 	revoke := releaseSourceAction("revoke")

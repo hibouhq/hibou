@@ -241,6 +241,15 @@ func (q *Queries) GetAdvisoriesByIDs(ctx context.Context, ids []uuid.UUID) ([]db
 	return q.db.GetAdvisoriesByIDs(ctx, ids)
 }
 
+// ListAdvisoryIDsForExport pages the advisories with a range in the
+// ecosystems (every ecosystem when empty), by id after afterID.
+func (q *Queries) ListAdvisoryIDsForExport(ctx context.Context, ecosystems []string, afterID uuid.UUID, pageSize int32) ([]uuid.UUID, error) {
+	if ecosystems == nil {
+		ecosystems = []string{}
+	}
+	return q.db.ListAdvisoryIDsForExport(ctx, dbgen.ListAdvisoryIDsForExportParams{Ecosystems: ecosystems, AfterID: afterID, PageSize: pageSize})
+}
+
 func (q *Queries) ListVulnerabilitySummaryBySnapshot(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListVulnerabilitySummaryBySnapshotRow, error) {
 	return q.db.ListVulnerabilitySummaryBySnapshot(ctx, snapshotID)
 }

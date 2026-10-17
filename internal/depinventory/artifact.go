@@ -18,13 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	scalibrimage "github.com/google/osv-scalibr/artifact/image"
 	cpb "github.com/google/osv-scalibr/binary/proto/config_go_proto"
+	"github.com/google/osv-scalibr/extractor"
 	"github.com/google/osv-scalibr/extractor/filesystem"
 	"github.com/google/osv-scalibr/extractor/filesystem/language/golang/gobinary"
 	"github.com/google/osv-scalibr/extractor/filesystem/language/java/archive"
@@ -35,6 +30,7 @@ import (
 	"github.com/google/osv-scalibr/extractor/filesystem/os/dpkg"
 	"github.com/google/osv-scalibr/extractor/filesystem/os/rpm"
 	scalibrfs "github.com/google/osv-scalibr/fs"
+	"github.com/google/osv-scalibr/inventory"
 	"github.com/google/osv-scalibr/plugin"
 	"github.com/google/osv-scalibr/stats"
 
@@ -113,6 +109,12 @@ type ScanOptions struct {
 	Warn     func(string)
 	// KeepUnidentified caps the listed unidentified files (default 500).
 	KeepUnidentified int
+	// JarLookup identifies jars without Maven metadata by their SHA-1
+	// (ADR-046): nil unless the user opted in, since it sends hashes out.
+	JarLookup JarLookup
+	// AttachedSBOMs reads the SBOMs attached to an image in its registry
+	// (ADR-045 §10, C5); on by default for registry references.
+	SkipAttachedSBOMs bool
 }
 
 func (o ScanOptions) withDefaults() ScanOptions {
@@ -287,59 +289,11 @@ func extractArtifacts(ctx context.Context, root string, opts ScanOptions) ([]Com
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg := &cpb.PluginConfig{}
-	extractors := make([]filesystem.Extractor, 0, len(artifactExtractors))
-	names := make([]string, 0, len(artifactExtractors))
-	for name := range artifactExtractors {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		ext, err := artifactExtractors[name](cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("build extractor %s: %w", name, err)
-		}
-		if err := plugin.ValidateRequirements(ext, offlineCapabilities); err != nil {
-			return nil, nil, fmt.Errorf("extractor %s is not offline-capable: %w", name, err)
-		}
-		extractors = append(extractors, ext)
-	}
-	run := &filesystem.Config{
-		Extractors:   extractors,
-		ScanRoots:    scalibrfs.RealFSScanRoots(absRoot),
-		SkipDirRegex: regexp.MustCompile(`(^|[\\/])\.git$`),
-		MaxFileSize:  DefaultMaxFileSize * 8,
-		ReadSymlinks: false,
-		Stats:        stats.NoopCollector{},
-	}
-	packages, _, err := filesystem.Run(ctx, run)
+	packages, _, _, err := runArtifactExtractors(ctx, scalibrfs.RealFSScanRoots(absRoot))
 	if err != nil {
-		return nil, nil, fmt.Errorf("artifact extraction failed: %w", err)
+		return nil, nil, err
 	}
-	var components []Component
-	identified := map[string]bool{}
-	for _, pkg := range packages.Packages {
-		component, ok := toComponent(pkg)
-		if !ok {
-			continue
-		}
-		// package.json only counts for installed packages; a project's own
-		// manifest is not a dependency.
-		if component.Extractor == packagejson.Name && !strings.Contains(component.Path, "node_modules/") {
-			continue
-		}
-		// A jar without Maven metadata gets a name from its file name and no
-		// group: that is a guess, listed as not identified instead.
-		if component.Extractor == archive.Name && (component.Version == "" || !strings.Contains(component.Name, ":")) {
-			continue
-		}
-		component.Resolution = ResolutionArtifact
-		if component.Extractor == dpkg.Name || component.Extractor == apk.Name || component.Extractor == rpm.Name {
-			component.Relationship = RelationshipUnknown
-		}
-		identified[component.Path] = true
-		components = append(components, component)
-	}
+	components, identified := componentsFromPackages(packages.Packages)
 	var unidentified []Unidentified
 	_ = filepath.WalkDir(absRoot, func(p string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil || d.IsDir() || !d.Type().IsRegular() {
@@ -365,8 +319,83 @@ func extractArtifacts(ctx context.Context, root string, opts ScanOptions) ([]Com
 		return nil
 	})
 	// A jar whose metadata the extractor read is identified through the
-	// components that name it as their path.
+	// components that name it as their path. The rest can be identified
+	// by hash when the user opted in (ADR-046).
+	if opts.JarLookup != nil {
+		found, rest := identifyJars(ctx, os.DirFS(absRoot), unidentified, opts)
+		components = append(components, found...)
+		unidentified = rest
+	}
 	return components, unidentified, nil
+}
+
+// runArtifactExtractors runs the artifact extractors over the scan roots
+// and returns the raw packages with the extractor list and config, which
+// image layer tracing reuses.
+func runArtifactExtractors(ctx context.Context, roots []*scalibrfs.ScanRoot) (inventory.Inventory, []filesystem.Extractor, *filesystem.Config, error) {
+	cfg := &cpb.PluginConfig{}
+	extractors := make([]filesystem.Extractor, 0, len(artifactExtractors))
+	names := make([]string, 0, len(artifactExtractors))
+	for name := range artifactExtractors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ext, err := artifactExtractors[name](cfg)
+		if err != nil {
+			return inventory.Inventory{}, nil, nil, fmt.Errorf("build extractor %s: %w", name, err)
+		}
+		if err := plugin.ValidateRequirements(ext, offlineCapabilities); err != nil {
+			return inventory.Inventory{}, nil, nil, fmt.Errorf("extractor %s is not offline-capable: %w", name, err)
+		}
+		extractors = append(extractors, ext)
+	}
+	run := &filesystem.Config{
+		Extractors:   extractors,
+		ScanRoots:    roots,
+		SkipDirRegex: regexp.MustCompile(`(^|[\\/])\.git$`),
+		MaxFileSize:  DefaultMaxFileSize * 8,
+		ReadSymlinks: false,
+		Stats:        stats.NoopCollector{},
+	}
+	packages, _, err := filesystem.Run(ctx, run)
+	if err != nil {
+		return inventory.Inventory{}, nil, nil, fmt.Errorf("artifact extraction failed: %w", err)
+	}
+	return packages, extractors, run, nil
+}
+
+// componentsFromPackages converts the engine's packages to components and
+// returns the paths they identified.
+func componentsFromPackages(packages []*extractor.Package) ([]Component, map[string]bool) {
+	var components []Component
+	identified := map[string]bool{}
+	for _, pkg := range packages {
+		component, ok := toComponent(pkg)
+		if !ok {
+			continue
+		}
+		// package.json only counts for installed packages; a project's own
+		// manifest is not a dependency.
+		if component.Extractor == packagejson.Name && !strings.Contains(component.Path, "node_modules/") {
+			continue
+		}
+		// A jar without Maven metadata gets a name from its file name and no
+		// group: that is a guess, listed as not identified instead.
+		if component.Extractor == archive.Name && (component.Version == "" || !strings.Contains(component.Name, ":")) {
+			continue
+		}
+		component.Resolution = ResolutionArtifact
+		if component.Extractor == dpkg.Name || component.Extractor == apk.Name || component.Extractor == rpm.Name {
+			component.Relationship = RelationshipUnknown
+		}
+		if pkg.LayerMetadata != nil {
+			component.Layer = &LayerInfo{Index: pkg.LayerMetadata.Index, DiffID: pkg.LayerMetadata.DiffID.String(), Command: strings.TrimSpace(pkg.LayerMetadata.Command)}
+		}
+		identified[component.Path] = true
+		components = append(components, component)
+	}
+	return components, identified
 }
 
 func (inv *ArtifactInventory) addUnidentified(entries []Unidentified, opts ScanOptions) {
@@ -472,8 +501,12 @@ func isBinary(target string) bool {
 	defer f.Close()
 	head := make([]byte, 4)
 	n, _ := io.ReadFull(f, head)
+	return hasBinaryMagic(head[:n])
+}
+
+func hasBinaryMagic(head []byte) bool {
 	for _, magic := range binaryMagic {
-		if n >= len(magic) && bytes.Equal(head[:len(magic)], magic) {
+		if len(head) >= len(magic) && bytes.Equal(head[:len(magic)], magic) {
 			return true
 		}
 	}
@@ -492,6 +525,12 @@ var textExtensions = map[string]bool{
 // libraries, executables, jars without metadata, bundles. Text and data
 // return "".
 func fileType(p string) string {
+	return fileTypeOf(p, func() bool { return isBinary(p) })
+}
+
+// fileTypeOf is fileType with the binary check supplied, for virtual
+// filesystems.
+func fileTypeOf(p string, isBin func() bool) string {
 	ext := strings.ToLower(filepath.Ext(p))
 	switch ext {
 	case ".dll", ".so", ".dylib", ".a", ".lib":
@@ -508,7 +547,7 @@ func fileType(p string) string {
 	case ".whl", ".egg", ".nupkg", ".gem", ".zip", ".tgz", ".tar", ".gz":
 		return "archive"
 	case "":
-		if isBinary(p) {
+		if isBin() {
 			return "executable"
 		}
 		return ""
@@ -704,7 +743,7 @@ func writeLimited(target string, r io.Reader, remaining int64) (int64, error) {
 	}
 	// Executables keep their bit so the Go binary extractor looks at them.
 	if isBinary(target) {
-		_ = os.Chmod(target, 0o700)
+		_ = os.Chmod(target, 0o700) // #nosec G302 -- owner-only; the extractor needs the executable bit on a temp copy
 	}
 	return n, nil
 }
@@ -752,97 +791,6 @@ func dedupeComponents(components []Component) []Component {
 		}
 		seen[key] = true
 		out = append(out, c)
-	}
-	return out
-}
-
-// ---- Container images (ADR-045 §10, C2 and C3) ----
-
-// ImageInventory is a scanned image.
-type ImageInventory struct {
-	Reference string            `json:"reference"`
-	Digest    string            `json:"digest,omitempty"`
-	Labels    map[string]string `json:"labels,omitempty"`
-	Inventory *ArtifactInventory
-}
-
-// ScanImage analyses a container image: a local tarball (docker save,
-// OCI layout tar) or a registry reference pulled with the user's own
-// credentials. OS packages (dpkg, apk) and language packages of every
-// layer are read from the squashed filesystem; layer attribution is a
-// later step.
-func ScanImage(ctx context.Context, reference string, opts ScanOptions) (*ImageInventory, error) {
-	opts = opts.withDefaults()
-	var img v1.Image
-	var err error
-	if info, statErr := os.Stat(reference); statErr == nil && !info.IsDir() {
-		img, err = tarball.ImageFromPath(reference, nil)
-		if err != nil {
-			return nil, fmt.Errorf("read image tarball: %w", err)
-		}
-	} else {
-		ref, parseErr := name.ParseReference(reference)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse image reference: %w", parseErr)
-		}
-		img, err = remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx))
-		if err != nil {
-			return nil, fmt.Errorf("pull image %s: %w", reference, err)
-		}
-	}
-	out := &ImageInventory{Reference: reference}
-	if digest, err := img.Digest(); err == nil {
-		out.Digest = digest.String()
-	}
-	if config, err := img.ConfigFile(); err == nil && config != nil {
-		out.Labels = config.Config.Labels
-	}
-	fsys, err := scalibrimage.NewFromImage(img)
-	if err != nil {
-		return nil, fmt.Errorf("unpack image: %w", err)
-	}
-	root := ""
-	if dir, ok := fsys.(interface{ Path() string }); ok {
-		root = dir.Path()
-	}
-	if root == "" {
-		// DirFS is a string path type in SCALIBR; recover it through its
-		// textual form.
-		root = strings.TrimPrefix(fmt.Sprint(fsys), "DirFS(")
-		root = strings.TrimSuffix(root, ")")
-	}
-	defer func() { _ = os.RemoveAll(root) }()
-	components, unidentified, err := extractArtifacts(ctx, root, opts)
-	if err != nil {
-		return nil, err
-	}
-	for i := range components {
-		components[i].Path = reference + "!/" + components[i].Path
-		components[i].Module = reference
-	}
-	inv := &ArtifactInventory{Components: dedupeComponents(components), Unidentified: []Unidentified{}}
-	sortComponents(inv.Components)
-	inv.addUnidentified(unidentified, opts)
-	inv.Modules = buildModules(inv.Components)
-	inv.Targets = []TargetSummary{{Path: reference, Kind: KindImage, Components: len(inv.Components), SHA256: strings.TrimPrefix(out.Digest, "sha256:"), Metadata: imageMetadata(out.Labels)}}
-	out.Inventory = inv
-	return out, nil
-}
-
-func imageMetadata(labels map[string]string) map[string]string {
-	out := map[string]string{}
-	for key, value := range labels {
-		switch key {
-		case "org.opencontainers.image.revision":
-			out["revision"] = value
-		case "org.opencontainers.image.version":
-			out["version"] = value
-		case "org.opencontainers.image.source":
-			out["source"] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }

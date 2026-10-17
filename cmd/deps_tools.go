@@ -26,6 +26,8 @@ var (
 	verifySBOM   string
 	verifyFormat string
 	verifyFailOn string
+	// verifyKey is the PEM public key that signed the attestation.
+	verifyKey string
 )
 
 var depsVerifyCmd = &cobra.Command{
@@ -35,13 +37,20 @@ var depsVerifyCmd = &cobra.Command{
 Undeclared (found, absent from the SBOM) is strong evidence; not found
 (declared, absent from the deliverable) is weak, since extraction has
 known blind spots, and is reported with the blind spot that applies.
-Exit 0 by default; --fail-on undeclared|mismatch|integrity returns 1.`,
+
+--sbom takes a CycloneDX or SPDX document, or an in-toto attestation of
+one (a DSSE envelope as cosign attest writes it, or a bare statement).
+With --key, the envelope's signature is verified against that PEM public
+key (ECDSA, Ed25519 or RSA); keyless signatures need the Sigstore trust
+root and are reported as not checked. The statement's subject digest is
+checked against the deliverable.
+Exit 0 by default; --fail-on undeclared|mismatch|integrity|signature returns 1.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if verifySBOM == "" {
 			return exitError{2, errors.New("--sbom is required")}
 		}
-		result, err := verifyDeliverable(cmd.Context(), args[0], verifySBOM)
+		result, err := verifyDeliverable(cmd.Context(), args[0], verifySBOM, verifyKey)
 		if err != nil {
 			return exitError{2, err}
 		}
@@ -66,6 +75,10 @@ Exit 0 by default; --fail-on undeclared|mismatch|integrity returns 1.`,
 				if result.Integrity == "mismatch" {
 					return exitError{1, errors.New("the deliverable's digest does not match the SBOM")}
 				}
+			case "signature":
+				if result.Signature != "verified" {
+					return exitError{1, fmt.Errorf("signature: %s", result.Signature)}
+				}
 			}
 		}
 		return nil
@@ -82,24 +95,63 @@ type verifyEntry struct {
 }
 
 type verifyResult struct {
-	Deliverable  string        `json:"deliverable"`
-	SBOM         string        `json:"sbom"`
-	Matched      int           `json:"matched"`
-	Undeclared   []verifyEntry `json:"undeclared"`
-	Mismatched   []verifyEntry `json:"mismatched"`
-	NotFound     []verifyEntry `json:"not_found"`
-	Integrity    string        `json:"integrity"`
-	Unidentified int           `json:"unidentified"`
-	BlindSpots   []string      `json:"blind_spots,omitempty"`
+	Deliverable string        `json:"deliverable"`
+	SBOM        string        `json:"sbom"`
+	Matched     int           `json:"matched"`
+	Undeclared  []verifyEntry `json:"undeclared"`
+	Mismatched  []verifyEntry `json:"mismatched"`
+	NotFound    []verifyEntry `json:"not_found"`
+	Integrity   string        `json:"integrity"`
+	// Signature is "verified", "invalid: <why>", "not checked: <why>",
+	// "unsigned" for a bare statement, or "none" for a plain SBOM.
+	Signature     string   `json:"signature"`
+	PredicateType string   `json:"predicate_type,omitempty"`
+	Unidentified  int      `json:"unidentified"`
+	BlindSpots    []string `json:"blind_spots,omitempty"`
 }
 
-func verifyDeliverable(ctx context.Context, deliverable, sbomPath string) (*verifyResult, error) {
+func verifyDeliverable(ctx context.Context, deliverable, sbomPath, keyPath string) (*verifyResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	data, err := os.ReadFile(sbomPath) // #nosec G304 -- a file the user named
 	if err != nil {
 		return nil, err
+	}
+	// An attestation wraps the SBOM: unwrap it, verify what can be
+	// verified, and keep the subject digests for the integrity check.
+	signature, predicateType := "none", ""
+	var subjects []string
+	if depinventory.IsAttestation(data) {
+		statement, envelope, err := depinventory.ParseAttestation(data)
+		if err != nil {
+			return nil, fmt.Errorf("attestation: %w", err)
+		}
+		document, _, err := statement.SBOM()
+		if err != nil {
+			return nil, fmt.Errorf("attestation: %w", err)
+		}
+		predicateType = statement.PredicateType
+		subjects = statement.SubjectSHA256()
+		switch {
+		case envelope == nil:
+			signature = "unsigned"
+		case keyPath == "":
+			signature = "not checked: pass --key with the signer's public key (keyless signatures need the Sigstore trust root)"
+		default:
+			pemKey, err := os.ReadFile(keyPath) // #nosec G304 -- a file the user named
+			if err != nil {
+				return nil, fmt.Errorf("--key: %w", err)
+			}
+			if err := depinventory.VerifyEnvelope(envelope, pemKey); err != nil {
+				signature = "invalid: " + err.Error()
+			} else {
+				signature = "verified"
+			}
+		}
+		data = document
+	} else if keyPath != "" {
+		signature = "not checked: the SBOM is not an attestation"
 	}
 	var declared []sbom.ParsedComponent
 	var probe struct {
@@ -126,7 +178,7 @@ func verifyDeliverable(ctx context.Context, deliverable, sbomPath string) (*veri
 	if err != nil {
 		return nil, err
 	}
-	result := &verifyResult{Deliverable: deliverable, SBOM: sbomPath, Undeclared: []verifyEntry{}, Mismatched: []verifyEntry{}, NotFound: []verifyEntry{}, Unidentified: inv.UnidentifiedCount, Integrity: "not declared"}
+	result := &verifyResult{Deliverable: deliverable, SBOM: sbomPath, Undeclared: []verifyEntry{}, Mismatched: []verifyEntry{}, NotFound: []verifyEntry{}, Unidentified: inv.UnidentifiedCount, Integrity: "not declared", Signature: signature, PredicateType: predicateType}
 
 	identity := func(ecosystem, name string) string {
 		return strings.ToLower(ecosystem) + "|" + strings.ToLower(name)
@@ -172,7 +224,18 @@ func verifyDeliverable(ctx context.Context, deliverable, sbomPath string) (*veri
 	sort.Slice(result.Mismatched, func(i, j int) bool { return result.Mismatched[i].Name < result.Mismatched[j].Name })
 	sort.Slice(result.NotFound, func(i, j int) bool { return result.NotFound[i].Name < result.NotFound[j].Name })
 
-	// Integrity: the file's sha256 against metadata.component.hashes.
+	// Integrity: the file's sha256 against the attestation's subject, else
+	// against metadata.component.hashes.
+	if len(subjects) > 0 {
+		digest, err := sha256File(deliverable)
+		result.Integrity = "mismatch"
+		for _, subject := range subjects {
+			if err == nil && strings.EqualFold(digest, subject) {
+				result.Integrity = "ok"
+			}
+		}
+		return result, nil
+	}
 	for _, hash := range probe.Metadata.Component.Hashes {
 		if strings.EqualFold(hash.Alg, "SHA-256") {
 			digest, err := sha256File(deliverable)
@@ -223,6 +286,9 @@ func printVerify(result *verifyResult) {
 		fmt.Printf(" · %d files not identified", result.Unidentified)
 	}
 	fmt.Println()
+	if result.Signature != "none" {
+		fmt.Printf("attestation %s · signature %s\n", result.PredicateType, result.Signature)
+	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, e := range result.Undeclared {
 		fmt.Fprintf(tw, "UNDECLARED\t%s\t%s\tin the deliverable (%s), absent from the SBOM\n", e.Name, e.Found, e.Path)
@@ -556,7 +622,8 @@ var depsNotShippedRemoveCmd = &cobra.Command{
 func init() {
 	depsVerifyCmd.Flags().StringVar(&verifySBOM, "sbom", "", "The SBOM (CycloneDX or SPDX JSON) to verify against")
 	depsVerifyCmd.Flags().StringVar(&verifyFormat, "format", "table", "Output: table, json")
-	depsVerifyCmd.Flags().StringVar(&verifyFailOn, "fail-on", "", "Exit 1 on: undeclared, mismatch, integrity (comma-separated)")
+	depsVerifyCmd.Flags().StringVar(&verifyFailOn, "fail-on", "", "Exit 1 on: undeclared, mismatch, integrity, signature (comma-separated)")
+	depsVerifyCmd.Flags().StringVar(&verifyKey, "key", "", "PEM public key that signed the attestation given to --sbom")
 	depsCheckCmd.Flags().StringVar(&checkFailOn, "fail-on", "deny", "Exit 1 on: deny, hold (comma-separated)")
 	depsCheckCmd.Flags().StringVar(&checkFormat, "format", "table", "Output: table, json")
 	depsCooldownInitCmd.Flags().StringVar(&cooldownWindow, "window", "7d", "Cooldown window in days")

@@ -42,10 +42,14 @@ developed, ignored by this repository's git): the Java core (decision
 cache, circuit breaker, pre-filter, purl mapper, packument filter, policy
 client), the Groovy adapter with `beforeDownload`, `altResponse` and the
 reload, status and metrics executions, unit tests of the safety budget,
-the bench compose file and the compatibility script. **Not yet:** the
+the bench compose file and the compatibility script; its CI builds and
+tests it on GitHub and `v0.1.0-alpha.1` is published as a pre-release with
+the jar, the Groovy adapter and the example properties. **Not yet:** the
 plugin has not run against an Artifactory, so the bench numbers of
-§3.1.1 are not recorded and no plugin release exists; packument filtering
-and the download backstop are untested outside the unit tests.
+§3.1.1 are not recorded and the alpha stays an alpha; packument filtering
+and the download backstop are untested outside the unit tests. This is
+the one item of ADR-045, ADR-046 and ADR-048 that needs an environment
+this repository does not have.
 
 Builds on the dependency inventory ([ADR-045](045-built-in-dependency-inventory.md)),
 the malware block and exploited-catalog gate
