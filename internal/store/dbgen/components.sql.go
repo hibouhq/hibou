@@ -87,6 +87,41 @@ func (q *Queries) ListComponentDependencyEdgesBySnapshot(ctx context.Context, sn
 	return items, nil
 }
 
+const listSnapshotComponentLabels = `-- name: ListSnapshotComponentLabels :many
+SELECT component_id, labels FROM snapshot_components WHERE snapshot_id = $1
+`
+
+type ListSnapshotComponentLabelsRow struct {
+	ComponentID uuid.UUID       `json:"component_id"`
+	Labels      json.RawMessage `json:"labels"`
+}
+
+// The provenance labels of every component in a snapshot (ADR-045 §5):
+// which artifacts reported it and, from the built-in extractor, its
+// relationship, scopes, modules and registry.
+func (q *Queries) ListSnapshotComponentLabels(ctx context.Context, snapshotID uuid.UUID) ([]ListSnapshotComponentLabelsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSnapshotComponentLabels, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSnapshotComponentLabelsRow{}
+	for rows.Next() {
+		var i ListSnapshotComponentLabelsRow
+		if err := rows.Scan(&i.ComponentID, &i.Labels); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertComponent = `-- name: UpsertComponent :one
 INSERT INTO components (purl, name, version, ecosystem, licenses)
 VALUES ($1, $2, $3, $4, $5)

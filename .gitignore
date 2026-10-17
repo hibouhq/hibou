@@ -88,3 +88,5 @@ id_ecdsa*
 /hibou-sample-project/
 /hibou-upload-action/
 /hibou-ide/
+# The Hibou Artifactory plugin (package policy at the proxy) is its own repository (ADR-048 §3.1.1), nested here while developed
+/hibou-artifactory-plugin/

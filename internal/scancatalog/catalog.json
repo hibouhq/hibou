@@ -3,6 +3,58 @@
   "revision": "2026-10-10.1",
   "scanners": [
     {
+      "id": "hibou-deps",
+      "name": "Hibou dependency inventory",
+      "engine": "hibou-deps",
+      "engine_version": "osv-scalibr-v0.5.3+hibou-1",
+      "adapter_version": "1",
+      "license": "AGPL-3.0",
+      "support_status": "supported",
+      "prerelease": false,
+      "producer_names": [
+        "hibou-depinventory"
+      ],
+      "homepage": "https://github.com/google/osv-scalibr",
+      "notes": "Runs the server's own lockfile and manifest extractor in-process (ADR-045 §4.2): no download, no checksum, the version is the CLI's. When a repository runs it in CI, the server-side extraction of the same commit is skipped. Optional resolve mode (--deps-resolve maven|gradle, --deps-graph FILE) records what the build resolves for ecosystems without a lockfile.",
+      "distributions": [
+        {
+          "kind": "builtin"
+        }
+      ],
+      "rulesets": [],
+      "capabilities": [
+        { "language": "go", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" },
+        { "language": "javascript", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" },
+        { "language": "typescript", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" },
+        { "language": "python", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" },
+        { "language": "java", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" },
+        { "language": "kotlin", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" },
+        { "language": "rust", "capability": "dependency-inventory", "evidence": "measured:corpus-2026-10-16" }
+      ],
+      "applicability": {
+        "manifests": ["go.mod", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "uv.lock", "poetry.lock", "pdm.lock", "Pipfile.lock", "pylock.toml", "requirements.txt", "Cargo.lock", "gradle.lockfile", "verification-metadata.xml", "pom.xml"]
+      },
+      "stages": {
+        "requires": [],
+        "produces": ["sbom"]
+      },
+      "diff_support": "none",
+      "resources": {
+        "cpu": 1,
+        "memory_mb": 512,
+        "timeout_seconds": 300
+      },
+      "exit_codes": {},
+      "command": {
+        "args": []
+      },
+      "sarif": {
+        "fingerprint": "none",
+        "paths": "none",
+        "code_flows": "none"
+      }
+    },
+    {
       "id": "opengrep",
       "name": "OpenGrep",
       "engine": "opengrep",

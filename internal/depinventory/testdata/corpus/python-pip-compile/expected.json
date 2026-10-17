@@ -1,0 +1,22 @@
+{
+  "modules": [
+    {
+      "path": ".",
+      "complete": true
+    }
+  ],
+  "components": [
+    {
+      "purl": "pkg:pypi/asgiref@3.7.2",
+      "relationship": "indirect"
+    },
+    {
+      "purl": "pkg:pypi/django@4.2.7",
+      "relationship": "direct"
+    },
+    {
+      "purl": "pkg:pypi/sqlparse@0.4.4",
+      "relationship": "indirect"
+    }
+  ]
+}

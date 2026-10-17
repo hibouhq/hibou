@@ -153,6 +153,10 @@ var ErrUnavailable = errors.New("artifact unavailable under the scanner distribu
 func (c DistributionConfig) Resolve(scanner *Scanner, distribution *Distribution) (Location, error) {
 	c = c.Normalize()
 	location := Location{ScannerID: scanner.ID, SHA256: distribution.SHA256}
+	if distribution.Kind == KindBuiltin {
+		location.Source = "builtin"
+		return location, nil
+	}
 	relative := artifactPath(distribution)
 	if relative == "" {
 		return location, fmt.Errorf("%w: %s has no artifact name", ErrUnavailable, distribution.URL)

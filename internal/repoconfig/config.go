@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hibouhq/hibou/internal/cooldown"
+	"github.com/hibouhq/hibou/internal/shipped"
+
 	"go.yaml.in/yaml/v3"
 
 	"github.com/hibouhq/hibou/internal/cwe"
@@ -26,6 +29,140 @@ type RepoConfig struct {
 	// name. It describes coverage only: which scanners are enabled or
 	// required stays hibou state (ADR-035 D10/D11).
 	Scanners map[string]ScannerRun `yaml:"scanners,omitempty" json:"scanners,omitempty"`
+	// Dependencies configures the built-in inventory (ADR-045 §8) and the
+	// package signals policy (ADR-048 §3–4).
+	Dependencies *DependenciesConfig `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
+}
+
+// DependenciesConfig is the `dependencies` section of .hibou.yaml.
+type DependenciesConfig struct {
+	// Branches are extracted on every push besides the default branch
+	// (ADR-045 §4.1.1); glob patterns such as "release/*".
+	Branches []string `yaml:"branches,omitempty" json:"branches,omitempty"`
+	// PrivateNamespaces are purl patterns never sent to third-party APIs
+	// (ADR-048 §4): "pkg:npm/@acme/*", "pkg:maven/com.acme.*".
+	PrivateNamespaces []string        `yaml:"private_namespaces,omitempty" json:"private_namespaces,omitempty"`
+	Cooldown          *CooldownConfig `yaml:"cooldown,omitempty" json:"cooldown,omitempty"`
+	// NotShipped marks components that never reach clients (ADR-045 §6):
+	// purl globs ("pkg:npm/@types/*"), regular expressions
+	// ("re:^pkg:npm/eslint(-.*)?$"), ecosystems ("ecosystem:terraform") or
+	// repository paths ("tools/**"). They stay listed with shipped: no;
+	// nothing is hidden.
+	NotShipped []string `yaml:"not_shipped,omitempty" json:"not_shipped,omitempty"`
+	// Shipped cancels not-shipped entries from the organization or the
+	// defaults, with the same pattern syntax: a published Terraform module
+	// lists "ecosystem:terraform" here.
+	Shipped []string `yaml:"shipped,omitempty" json:"shipped,omitempty"`
+	// Exclude lists repository path globs never inventoried at all
+	// (fixtures, examples): "examples/**" (ADR-045 §8).
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
+	// SBOMCovers declares which paths an uploaded SBOM describes when it
+	// covers only part of the repository ("backend/**"); the other modules
+	// follow the not-shipped lists (ADR-045 §6). Empty means the whole
+	// product.
+	SBOMCovers []string `yaml:"sbom_covers,omitempty" json:"sbom_covers,omitempty"`
+	// GateNotShipped says which findings on not-shipped components still
+	// block a PR or a release (ADR-045 §6). Malicious packages always do.
+	GateNotShipped *GateNotShippedConfig `yaml:"gate_not_shipped,omitempty" json:"gate_not_shipped,omitempty"`
+}
+
+// GateNotShippedConfig is `dependencies.gate_not_shipped` (ADR-045 §6).
+type GateNotShippedConfig struct {
+	// KEV: a known-exploited finding blocks even on a not-shipped
+	// component. Default true.
+	KEV *bool `yaml:"kev,omitempty" json:"kev,omitempty"`
+	// EPSSMin blocks at or above this exploitation probability (0 to 1).
+	// Unset means off.
+	EPSSMin *float64 `yaml:"epss_min,omitempty" json:"epss_min,omitempty"`
+	// MinSeverity blocks at or above this severity: off (default), low,
+	// medium, high, critical.
+	MinSeverity string `yaml:"min_severity,omitempty" json:"min_severity,omitempty"`
+	// FixableOnly limits the severity rule to findings with a fix.
+	FixableOnly bool `yaml:"fixable_only,omitempty" json:"fixable_only,omitempty"`
+}
+
+// KEVValue is the KEV rule with its default.
+func (g *GateNotShippedConfig) KEVValue() bool {
+	return g == nil || g.KEV == nil || *g.KEV
+}
+
+// CooldownConfig is the release cooldown policy (ADR-048 §3). A repository
+// can be stricter than the organization, never looser.
+type CooldownConfig struct {
+	// Window: "auto" uses deps.dev's own cooldown end, "off" disables the
+	// check, a duration ("7d", "72h") counts from the publish date.
+	Window string `yaml:"window,omitempty" json:"window,omitempty"`
+	// Enforcement: inherit (the gate's), advisory, blocking.
+	Enforcement string `yaml:"enforcement,omitempty" json:"enforcement,omitempty"`
+	// InstallConfig: require | warn | off, whether a missing install-time
+	// cooldown setting (npm min-release-age and friends) is a coverage gap,
+	// a warning, or ignored (ADR-048 §3.1).
+	InstallConfig string `yaml:"install_config,omitempty" json:"install_config,omitempty"`
+}
+
+const (
+	CooldownWindowAuto = cooldown.WindowAuto
+	CooldownWindowOff  = cooldown.WindowOff
+)
+
+// ParseCooldownWindow is cooldown.ParseWindow, kept here so config callers
+// need one import.
+func ParseCooldownWindow(value string) (mode string, duration time.Duration, ok bool, err error) {
+	return cooldown.ParseWindow(value)
+}
+
+func validateDependenciesConfig(cfg *DependenciesConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	for i, pattern := range cfg.Branches {
+		if strings.TrimSpace(pattern) == "" {
+			return fmt.Errorf("dependencies.branches[%d]: empty pattern", i)
+		}
+	}
+	for i, pattern := range cfg.PrivateNamespaces {
+		if !strings.HasPrefix(strings.TrimSpace(pattern), "pkg:") {
+			return fmt.Errorf("dependencies.private_namespaces[%d]: %q must be a purl pattern (pkg:type/name)", i, pattern)
+		}
+	}
+	if _, err := shipped.Parse(cfg.NotShipped); err != nil {
+		return fmt.Errorf("dependencies.%w", err)
+	}
+	if _, err := shipped.Parse(cfg.Shipped); err != nil {
+		return fmt.Errorf("dependencies.shipped: %w", err)
+	}
+	for i, pattern := range append(append([]string{}, cfg.Exclude...), cfg.SBOMCovers...) {
+		if strings.TrimSpace(pattern) == "" {
+			return fmt.Errorf("dependencies.exclude/sbom_covers[%d]: empty pattern", i)
+		}
+	}
+	if g := cfg.GateNotShipped; g != nil {
+		if g.EPSSMin != nil && (*g.EPSSMin < 0 || *g.EPSSMin > 1) {
+			return fmt.Errorf("dependencies.gate_not_shipped.epss_min must be between 0 and 1, got %v", *g.EPSSMin)
+		}
+		switch strings.ToLower(strings.TrimSpace(g.MinSeverity)) {
+		case "", "off", "low", "medium", "high", "critical":
+		default:
+			return fmt.Errorf("dependencies.gate_not_shipped.min_severity must be off, low, medium, high or critical, got %q", g.MinSeverity)
+		}
+	}
+	if cfg.Cooldown == nil {
+		return nil
+	}
+	if _, _, _, err := ParseCooldownWindow(cfg.Cooldown.Window); err != nil {
+		return fmt.Errorf("dependencies.cooldown.window: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Cooldown.Enforcement)) {
+	case "", "inherit", "advisory", "blocking":
+	default:
+		return fmt.Errorf("dependencies.cooldown.enforcement must be inherit, advisory or blocking, got %q", cfg.Cooldown.Enforcement)
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Cooldown.InstallConfig)) {
+	case "", "require", "warn", "off":
+	default:
+		return fmt.Errorf("dependencies.cooldown.install_config must be require, warn or off, got %q", cfg.Cooldown.InstallConfig)
+	}
+	return nil
 }
 
 // Scanner run scopes accepted in .hibou.yaml.
@@ -257,6 +394,27 @@ func DefaultYAML() []byte {
 		"    #   grace: 2",
 		"    #   diff_minimum: 80",
 		"",
+		"# Dependency inventory and package signals (ADR-045, ADR-048).",
+		"# dependencies:",
+		"#   branches: [develop, \"release/*\"]   # extracted on every push, besides the default branch",
+		"#   private_namespaces: [\"pkg:npm/@acme/*\"]  # never sent to third-party APIs",
+		"#   cooldown:",
+		"#     window: auto            # auto (deps.dev's end) | off | 7d",
+		"#     enforcement: inherit    # inherit | advisory | blocking",
+		"#     install_config: warn    # require | warn | off",
+		"#   not_shipped:              # listed with shipped: no, never hidden (ADR-045 §6)",
+		"#     - \"pkg:npm/@types/*\"",
+		"#     - \"re:^pkg:npm/eslint(-.*)?@\"",
+		"#     - \"tools/**\"",
+		"#   shipped: [\"ecosystem:terraform\"]   # cancels an org or default entry: this repo ships IaC",
+		"#   exclude: [\"examples/**\", \"testdata/**\"]   # not inventoried at all",
+		"#   sbom_covers: [\"backend/**\"]   # what an uploaded SBOM describes; omitted = whole product",
+		"#   gate_not_shipped:         # findings on not-shipped components that still block",
+		"#     kev: true               # default: true; malware always blocks",
+		"#     epss_min: 0.5           # default: off",
+		"#     min_severity: off       # off | low | medium | high | critical",
+		"#     fixable_only: true",
+		"",
 		"# Exclude files from coverage metrics:",
 		"# coverage:",
 		"#   exclude:",
@@ -325,6 +483,9 @@ func (c *RepoConfig) validate() error {
 		return err
 	}
 
+	if err := validateDependenciesConfig(c.Dependencies); err != nil {
+		return err
+	}
 	if err := validateReleasesConfig(c.Releases); err != nil {
 		return err
 	}

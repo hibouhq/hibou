@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/cooldown"
 	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/license"
+	"github.com/hibouhq/hibou/internal/shipped"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -27,6 +30,10 @@ type GateResult struct {
 	// internal/server/repos.go when merging a persisted verdict), so an
 	// informational line there would turn a green check red.
 	Notes []string `json:"notes,omitempty"`
+	// Dependencies is what the PR changes in the inventory and what the
+	// package policy said about it (ADR-045 §4.1.2, ADR-048 §3). Nil when
+	// not evaluated.
+	Dependencies *DependencyDelta `json:"dependencies,omitempty"`
 }
 
 type GateStore interface {
@@ -49,11 +56,28 @@ type GateConfig struct {
 	// cannot tell an introduced dependency from one that has been on the target
 	// branch for a year, so it falls back to whole-tree evaluation.
 	BaseSnapshotID uuid.UUID
+	// Cooldown is the repository's `dependencies.cooldown` (ADR-048 §3);
+	// nil applies the instance default with inherited enforcement.
+	Cooldown *CooldownGate
+	// PrivateNamespaces are the repository's purl patterns never sent to a
+	// third party (ADR-048 §4), on top of the instance's.
+	PrivateNamespaces []string
+	// NotShipped says which findings on not-shipped components still block
+	// (ADR-045 §6); nil applies the defaults (malware and KEV block).
+	NotShipped *NotShippedGate
+}
+
+// NotShippedGate is `dependencies.gate_not_shipped` (ADR-045 §6).
+type NotShippedGate struct {
+	KEV         bool
+	EPSSMin     *float64
+	MinSeverity string
+	FixableOnly bool
 }
 
 // Configured reports whether any file-managed section carries thresholds.
 func (c *GateConfig) Configured() bool {
-	return c != nil && (c.Code != nil || c.CWE != nil || c.Vulnerabilities != nil || c.Licenses != nil || c.Secrets != nil)
+	return c != nil && (c.Code != nil || c.CWE != nil || c.Vulnerabilities != nil || c.Licenses != nil || c.Secrets != nil || c.Cooldown != nil)
 }
 
 // SecretsGate caps NEW secret findings introduced by the PR. Accepted findings
@@ -142,6 +166,23 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	if err != nil {
 		return nil, err
 	}
+	cfg = s.withOrgDependencyDefaults(ctx, orgID, cfg)
+
+	// Findings on not-shipped components (ADR-045 §6) are informational
+	// unless the not-shipped gate says they block: malware always, KEV by
+	// default, EPSS and severity on request.
+	var notes []string
+	if cfg != nil && cfg.HeadSnapshotID != uuid.Nil && s.shippingLookup != nil {
+		filtered, informational, err := s.partitionNotShipped(ctx, orgID, repoID, cfg, delta.New)
+		if err != nil {
+			s.log.Warn().Err(err).Str("snapshot_id", cfg.HeadSnapshotID.String()).Msg("shipped attribute for the gate")
+		} else if len(informational) > 0 {
+			shallow := *delta
+			shallow.New = filtered
+			delta = &shallow
+			notes = append(notes, notShippedNote(informational))
+		}
+	}
 
 	// Reachability-aware gating (org opt-in): a finding whose vulnerable
 	// symbol is provably never called (govulncheck) is not merge-blocking
@@ -168,7 +209,6 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 	// Malware blocks unconditionally — before any configured gate section: a
 	// malicious package is never acceptable, whether or not the repo has a
 	// vulnerabilities gate (or any gate) configured.
-	var notes []string
 	// Set when a license policy (from either source) actually governs this
 	// evaluation, so Configured can account for a policy the repo never declared.
 	licensePolicyApplied := false
@@ -225,6 +265,22 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 			}
 		}
 	}
+	// What the PR changes in the inventory, judged by the package policy
+	// (ADR-048 §3): holds and denies are reasons or notes per enforcement.
+	dependencies, dependencyReasons, dependencyNotes := s.evaluateDependencyDelta(ctx, repoID, orgID, cfg, delta)
+	// Whether the package manager itself would have refused the version
+	// (ADR-048 §3.1): a repository fact, checked whatever the PR changes.
+	gaps, gapReasons, gapNotes := s.evaluateInstallConfig(ctx, cfg)
+	if len(gaps) > 0 {
+		if dependencies == nil {
+			dependencies = &DependencyDelta{Changes: []DependencyChange{}}
+		}
+		dependencies.InstallGaps = gaps
+	}
+	dependencyReasons = append(dependencyReasons, gapReasons...)
+	reasons = append(reasons, dependencyReasons...)
+	notes = append(notes, dependencyNotes...)
+	notes = append(notes, gapNotes...)
 	return &GateResult{
 		Passed: len(reasons) == 0,
 		// An org license policy is a configured threshold even though it appears
@@ -232,9 +288,10 @@ func (s *Service) EvaluateGatesWithConfig(ctx context.Context, repoID, orgID uui
 		// repo governed solely by the org policy reports Configured=false and
 		// the compare view renders "no thresholds configured" over a gate that
 		// is enforcing.
-		Configured: len(gates) > 0 || cfg.Configured() || licensePolicyApplied,
-		Reasons:    reasons,
-		Notes:      notes,
+		Configured:   len(gates) > 0 || cfg.Configured() || licensePolicyApplied || len(dependencyReasons) > 0,
+		Reasons:      reasons,
+		Notes:        notes,
+		Dependencies: dependencies,
 	}, nil
 }
 
@@ -959,4 +1016,225 @@ func countVulnerabilitiesBySeverity(vulns []store.Vulnerability, allowed []strin
 		}
 	}
 	return count
+}
+
+// shippingLookup decides the shipped attribute of a snapshot's components;
+// the server installs it (SetShippingLookup). Keyed by component id.
+type shippingLookup func(ctx context.Context, orgID, repoID, snapshotID uuid.UUID) (map[uuid.UUID]shipped.Decision, error)
+
+// SetShippingLookup installs the shipped-attribute resolver (ADR-045 §6).
+func (s *Service) SetShippingLookup(lookup func(ctx context.Context, orgID, repoID, snapshotID uuid.UUID) (map[uuid.UUID]shipped.Decision, error)) {
+	if s == nil {
+		return
+	}
+	s.shippingLookup = lookup
+}
+
+// epssLister is satisfied by the store when the EPSS mirror is available.
+type epssLister interface {
+	ListEPSSForAdvisories(ctx context.Context, advisoryIDs []uuid.UUID) ([]dbgen.ListEPSSForAdvisoriesRow, error)
+}
+
+var notShippedSeverityRank = map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+// partitionNotShipped splits the new findings into those the gate counts
+// and those on not-shipped components that stay informational.
+func (s *Service) partitionNotShipped(ctx context.Context, orgID, repoID uuid.UUID, cfg *GateConfig, newVulns []store.Vulnerability) (counted, informational []store.Vulnerability, err error) {
+	decisions, err := s.shippingLookup(ctx, orgID, repoID, cfg.HeadSnapshotID)
+	if err != nil {
+		return newVulns, nil, err
+	}
+	gate := cfg.NotShipped
+	if gate == nil {
+		gate = &NotShippedGate{KEV: true}
+	}
+	var candidates []store.Vulnerability
+	for _, vuln := range newVulns {
+		if vuln.ComponentID == nil {
+			continue
+		}
+		if decision, ok := decisions[*vuln.ComponentID]; ok && !decision.Shipped {
+			candidates = append(candidates, vuln)
+		}
+	}
+	if len(candidates) == 0 {
+		return newVulns, nil, nil
+	}
+	blocking := make(map[string]bool, len(candidates))
+	// Malware always blocks: it runs on developer machines and CI runners
+	// the moment it is installed.
+	for _, vuln := range candidates {
+		if strings.EqualFold(strings.TrimSpace(vuln.Type), "malware") {
+			blocking[vuln.Fingerprint] = true
+		}
+	}
+	if gate.KEV {
+		listed, err := s.kevListedFingerprints(ctx, candidates)
+		if err != nil {
+			return newVulns, nil, err
+		}
+		for fingerprint := range listed {
+			blocking[fingerprint] = true
+		}
+	}
+	if gate.EPSSMin != nil {
+		if lister, ok := s.store.(epssLister); ok {
+			ids := make([]uuid.UUID, 0, len(candidates))
+			for _, vuln := range candidates {
+				if vuln.AdvisoryID != nil {
+					ids = append(ids, *vuln.AdvisoryID)
+				}
+			}
+			rows, err := lister.ListEPSSForAdvisories(ctx, ids)
+			if err != nil {
+				return newVulns, nil, err
+			}
+			scores := make(map[uuid.UUID]float64, len(rows))
+			for _, row := range rows {
+				if score, parseErr := strconv.ParseFloat(row.Score, 64); parseErr == nil {
+					scores[row.AdvisoryID] = score
+				}
+			}
+			for _, vuln := range candidates {
+				if vuln.AdvisoryID != nil && scores[*vuln.AdvisoryID] >= *gate.EPSSMin {
+					blocking[vuln.Fingerprint] = true
+				}
+			}
+		}
+	}
+	if minimum := notShippedSeverityRank[gate.MinSeverity]; minimum > 0 {
+		for _, vuln := range candidates {
+			if notShippedSeverityRank[strings.ToLower(strings.TrimSpace(string(vuln.Severity)))] < minimum {
+				continue
+			}
+			if gate.FixableOnly && !vuln.HasRemediation {
+				continue
+			}
+			blocking[vuln.Fingerprint] = true
+		}
+	}
+	informationalSet := make(map[string]bool, len(candidates))
+	for _, vuln := range candidates {
+		if !blocking[vuln.Fingerprint] {
+			informationalSet[vuln.Fingerprint] = true
+			informational = append(informational, vuln)
+		}
+	}
+	if len(informational) == 0 {
+		return newVulns, nil, nil
+	}
+	counted = make([]store.Vulnerability, 0, len(newVulns)-len(informational))
+	for _, vuln := range newVulns {
+		if !informationalSet[vuln.Fingerprint] {
+			counted = append(counted, vuln)
+		}
+	}
+	return counted, informational, nil
+}
+
+func notShippedNote(informational []store.Vulnerability) string {
+	labels := make([]string, 0, 5)
+	for i, vuln := range informational {
+		if i == 5 {
+			labels = append(labels, fmt.Sprintf("and %d more", len(informational)-5))
+			break
+		}
+		labels = append(labels, vulnLabel(vuln))
+	}
+	return fmt.Sprintf("Informational, not shipped: %d finding(s) on dev, test or build dependencies are listed but not counted (%s). `dependencies.gate_not_shipped` changes what blocks.", len(informational), strings.Join(labels, ", "))
+}
+
+// kevListedFingerprints returns the fingerprints of the findings whose
+// advisory is on an exploited-vulnerabilities catalog.
+func (s *Service) kevListedFingerprints(ctx context.Context, vulns []store.Vulnerability) (map[string]struct{}, error) {
+	lister, ok := s.store.(kevLister)
+	if !ok {
+		return nil, nil
+	}
+	advisoryIDs := make([]uuid.UUID, 0, len(vulns))
+	identifiers := make([]string, 0, len(vulns))
+	for _, vuln := range vulns {
+		if !isAdvisoryBackedFinding(vuln) {
+			continue
+		}
+		if vuln.AdvisoryID != nil {
+			advisoryIDs = append(advisoryIDs, *vuln.AdvisoryID)
+		} else if id := strings.ToUpper(strings.TrimSpace(vuln.PrimaryIdentifierValue)); id != "" {
+			identifiers = append(identifiers, id)
+		}
+	}
+	if len(advisoryIDs) == 0 && len(identifiers) == 0 {
+		return nil, nil
+	}
+	listedAdvisories, err := lister.FilterKEVAdvisoryIDs(ctx, advisoryIDs)
+	if err != nil {
+		return nil, fmt.Errorf("kev advisory lookup: %w", err)
+	}
+	listedIdentifiers, err := lister.FilterKEVIdentifiers(ctx, identifiers)
+	if err != nil {
+		return nil, fmt.Errorf("kev identifier lookup: %w", err)
+	}
+	advisoryHits := make(map[uuid.UUID]struct{}, len(listedAdvisories))
+	for _, id := range listedAdvisories {
+		advisoryHits[id] = struct{}{}
+	}
+	identifierHits := make(map[string]struct{}, len(listedIdentifiers))
+	for _, id := range listedIdentifiers {
+		identifierHits[id] = struct{}{}
+	}
+	out := make(map[string]struct{})
+	for _, vuln := range vulns {
+		if !isAdvisoryBackedFinding(vuln) {
+			continue
+		}
+		var hit bool
+		if vuln.AdvisoryID != nil {
+			_, hit = advisoryHits[*vuln.AdvisoryID]
+		} else {
+			_, hit = identifierHits[strings.ToUpper(strings.TrimSpace(vuln.PrimaryIdentifierValue))]
+		}
+		if hit {
+			out[vuln.Fingerprint] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+// withOrgDependencyDefaults applies the organization's dependency policy
+// (ADR-048 §3) under the repository's: the organization sets the floor, a
+// repository can only tighten.
+func (s *Service) withOrgDependencyDefaults(ctx context.Context, orgID uuid.UUID, cfg *GateConfig) *GateConfig {
+	org, err := s.gateStore.GetOrganizationByID(ctx, orgID)
+	if err != nil || org == nil {
+		return cfg
+	}
+	defaults := cooldown.ParseOrgDefaults(org.Settings)
+	if defaults.Window == "" && defaults.Enforcement == "" && defaults.InstallConfig == "" && len(defaults.PrivateNamespaces) == 0 {
+		return cfg
+	}
+	merged := &GateConfig{}
+	if cfg != nil {
+		shallow := *cfg
+		merged = &shallow
+	}
+	gate := &CooldownGate{}
+	if merged.Cooldown != nil {
+		shallow := *merged.Cooldown
+		gate = &shallow
+	}
+	repoWindow := ""
+	if gate.WindowMode != "" {
+		repoWindow = gate.WindowMode
+		if gate.WindowMode == cooldown.WindowDuration {
+			repoWindow = gate.WindowDuration.String()
+		}
+	}
+	if mode, duration, ok, err := cooldown.ParseWindow(cooldown.StricterWindow(defaults.Window, repoWindow)); err == nil && ok {
+		gate.WindowMode, gate.WindowDuration = mode, duration
+	}
+	gate.Enforcement = cooldown.StricterEnforcement(defaults.Enforcement, gate.Enforcement)
+	gate.InstallConfig = cooldown.StricterInstallConfig(defaults.InstallConfig, gate.InstallConfig)
+	merged.Cooldown = gate
+	merged.PrivateNamespaces = append(append([]string{}, defaults.PrivateNamespaces...), merged.PrivateNamespaces...)
+	return merged
 }

@@ -80,3 +80,33 @@ func packageNameFromPURL(purl string) string {
 	}
 	return strings.Join(parts, separator)
 }
+
+// PackageNameFromPURL is the advisory-facing name of a package URL:
+// "@scope/name", "group:artifact", a Go module path, else the bare name.
+func PackageNameFromPURL(purl string) string {
+	return packageNameFromPURL(purl)
+}
+
+// EcosystemFromPURL maps a package URL's type to the ecosystem name hibou
+// stores ("golang" and "gomod" become "go").
+func EcosystemFromPURL(purl string) string {
+	return ecosystemFromPURL(purl)
+}
+
+// VersionFromPURL returns the decoded version of a package URL, "" when it
+// has none.
+func VersionFromPURL(purl string) string {
+	trimmed := strings.TrimSpace(purl)
+	if idx := strings.IndexAny(trimmed, "#?"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	idx := strings.LastIndex(trimmed, "@")
+	if idx < 0 || idx < strings.Index(trimmed, "/") {
+		return ""
+	}
+	version, err := url.PathUnescape(trimmed[idx+1:])
+	if err != nil {
+		version = trimmed[idx+1:]
+	}
+	return strings.TrimSpace(version)
+}

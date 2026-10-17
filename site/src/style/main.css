@@ -192,6 +192,52 @@
     filter: brightness(1.3);
   }
 
+  /* Package signal badges (ADR-048) — attributes of a version from deps.dev:
+     cooldown, deprecation, low usage, unpublished. Same shape as source
+     badges; the colour says urgency, not severity. */
+  .signal-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 0.25rem;
+    padding: 0.05rem 0.4rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  /* In tables the signal is an icon only; the badge form is for detail views. */
+  .signal-icon {
+    width: 0.875rem;
+    height: 0.875rem;
+    flex: none;
+    cursor: help;
+    background: transparent !important;
+  }
+
+  .signal-cooldown {
+    background: rgb(210 153 34 / 0.14);
+    color: #d29922;
+  }
+
+  .signal-unpublished {
+    background: rgb(248 81 73 / 0.14);
+    color: #f85149;
+  }
+
+  .signal-deprecated {
+    background: rgb(139 148 158 / 0.16);
+    color: #8b949e;
+  }
+
+  .signal-low-usage {
+    background: rgb(219 109 40 / 0.14);
+    color: #db6d28;
+  }
+
   .source-trivy {
     background: rgb(63 185 80 / 0.12);
     color: #3fb950;

@@ -247,6 +247,7 @@ func (s *Server) toDiagnostic(server string, d document, p placedFinding) diagno
 	for _, c := range f.CWEs {
 		tags = append(tags, fmt.Sprintf("CWE-%d", c.ID))
 	}
+	tags = append(tags, signalTags(f.Signals)...)
 	if len(tags) > 0 {
 		msg += " [" + strings.Join(tags, ", ") + "]"
 	}
@@ -287,6 +288,37 @@ func (s *Server) toDiagnostic(server string, d document, p placedFinding) diagno
 		diag.CodeDescription = &codeDescription{Href: findingURL(server, *repo, f.Fingerprint)}
 	}
 	return diag
+}
+
+// signalTags turns the registry's view of the version into diagnostic
+// tags (ADR-048 §8): a fix bumped to a version in cooldown is held by the
+// gate, a deprecated or unpublished one needs another target.
+func signalTags(s *apiSignals) []string {
+	if s == nil {
+		return nil
+	}
+	var tags []string
+	if s.InCooldown {
+		tag := "in cooldown"
+		if s.CooldownUntil != nil {
+			tag += " until " + s.CooldownUntil.Format("2 Jan")
+		}
+		tags = append(tags, tag)
+	}
+	if s.Unpublished {
+		tags = append(tags, "unpublished")
+	}
+	if s.Deprecated {
+		tags = append(tags, "deprecated")
+	}
+	if s.LowUsage {
+		tag := "low usage"
+		if len(s.Alternatives) > 0 {
+			tag += ", did you mean " + strings.Join(s.Alternatives, ", ") + "?"
+		}
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 func (w *workspace) repoRef() *repoRef {

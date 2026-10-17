@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/packagepolicy"
 	"github.com/hibouhq/hibou/internal/presence"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -48,6 +49,13 @@ type Service struct {
 	vexStore        VEXStore
 	presenceOptions PresenceOptionsFunc
 	log             zerolog.Logger
+	// packagePolicy and defaultPolicy enable the dependency delta and the
+	// cooldown gate (ADR-048 §3); nil leaves them out of the verdict.
+	packagePolicy func(ctx context.Context, req packagepolicy.Request) ([]packagepolicy.Decision, error)
+	defaultPolicy packagepolicy.Policy
+	// shippingLookup decides which components ship (ADR-045 §6), so the
+	// gate can leave dev and test findings informational.
+	shippingLookup shippingLookup
 }
 
 func NewService(store DeltaStore, log zerolog.Logger, vexStore ...VEXStore) *Service {

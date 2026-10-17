@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -33,6 +34,16 @@ type SnapshotArtifact struct {
 	// produced it (ADR-035 §4); nil for unplanned reports.
 	PlanID    *uuid.UUID `json:"plan_id,omitempty"`
 	PlanJobID *string    `json:"plan_job_id,omitempty"`
+	// Origin (ADR-045 §5.2): ci, hibou (server extraction) or manual (a
+	// deliverable recorded by the CLI). Metadata carries what the CLI
+	// checked about a deliverable; a revoked artifact stays, immutable,
+	// out of the effective inventory (ADR-046 §4.3).
+	Origin       string          `json:"origin"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	CreatedBy    *uuid.UUID      `json:"created_by,omitempty"`
+	RevokedAt    *time.Time      `json:"revoked_at,omitempty"`
+	RevokedBy    *uuid.UUID      `json:"revoked_by,omitempty"`
+	RevokeReason *string         `json:"revoke_reason,omitempty"`
 }
 
 type CreateSnapshotArtifactParams struct {
@@ -129,6 +140,12 @@ func snapshotArtifactFromRow(row dbgen.SnapshotArtifact) *SnapshotArtifact {
 		ConfigDigest: stringPtrFromNull(row.ConfigDigest),
 		PlanID:       uuidPtrFromNull(row.PlanID),
 		PlanJobID:    stringPtrFromNull(row.PlanJobID),
+		Origin:       row.Origin,
+		Metadata:     row.Metadata,
+		CreatedBy:    uuidPtrFromNull(row.CreatedBy),
+		RevokedAt:    timePtrFromNull(row.RevokedAt),
+		RevokedBy:    uuidPtrFromNull(row.RevokedBy),
+		RevokeReason: stringPtrFromNull(row.RevokeReason),
 	}
 }
 

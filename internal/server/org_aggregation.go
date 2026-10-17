@@ -142,6 +142,7 @@ func (s *Server) handleListOrgVulnerabilities(w http.ResponseWriter, r *http.Req
 	s.attachKEV(r.Context(), vulnerabilities)
 	s.attachCWEs(r.Context(), vulnerabilities)
 	s.attachRiskMetrics(r.Context(), vulnerabilities, false)
+	s.attachPackageSignals(r.Context(), vulnerabilities)
 	responses := make([]orgVulnerabilityResponse, len(vulnerabilities))
 	for i := range vulnerabilities {
 		vuln := vulnerabilities[i]
@@ -193,7 +194,7 @@ func (s *Server) handleListOrgComponents(w http.ResponseWriter, r *http.Request)
 			api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerability matches")
 			return
 		}
-		responses, err := s.buildComponentResponses(r, components, vulnerabilities, nil, nil)
+		responses, err := s.buildComponentResponses(r, components, vulnerabilities, nil, nil, nil, nil)
 		if err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to load advisories")
 			return

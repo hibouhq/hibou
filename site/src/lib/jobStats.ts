@@ -5,6 +5,7 @@ import type { InstanceJobBaseline, InstanceJobStatsBucket } from '@/api/client'
 
 const KIND_LABELS: Record<string, string> = {
   secret_scan: 'Secret scans',
+  dep_extraction: 'Dependency extraction',
   artifact_processing: 'Artifact processing',
   advisory_scan: 'Advisory scans',
 }

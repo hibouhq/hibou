@@ -46,6 +46,17 @@
           v-if="!loading"
           class="text-xs text-gray-500"
         >{{ total }} release{{ total === 1 ? '' : 's' }}</span>
+        <!-- ADR-045 §4.3: every release without an inventory, newest first. -->
+        <button
+          class="inline-flex h-8 items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-2.5 text-sm text-gray-400 transition hover:text-gray-200 disabled:opacity-50"
+          type="button"
+          :disabled="backfilling || total === 0"
+          title="Queue a dependency extraction for every release that has no inventory yet"
+          @click="backfillReleases"
+        >
+          <PackageSearch class="h-3.5 w-3.5" />
+          {{ backfilling ? 'Queuing…' : 'Backfill dependencies' }}
+        </button>
       </div>
     </div>
 
@@ -327,6 +338,106 @@
                   />
                   {{ rescanning === release.id ? 'Re-scanning…' : 'Re-scan' }}
                 </button>
+                <!-- Built-in inventory for a release tagged before onboarding or
+                     without an SBOM (ADR-045 §4.3): extracted from the tag's
+                     lockfiles, onto the release's pinned snapshot. -->
+                <button
+                  class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  type="button"
+                  :disabled="extractingRelease === release.id"
+                  title="Extract this release's dependencies from its tag's lockfiles and manifests"
+                  @click="extractRelease(release)"
+                >
+                  <PackageSearch class="h-3.5 w-3.5" />
+                  {{ extractingRelease === release.id ? 'Queued…' : 'Extract dependencies' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Inventory sources (ADR-046 §4): every artifact behind the
+                 release's components, with its origin; deliverables are
+                 recorded by the CLI, never uploaded through the browser. -->
+            <div class="mb-4">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+                  Inventory sources
+                </h3>
+                <button
+                  type="button"
+                  class="text-xs text-gray-400 transition hover:text-white"
+                  @click="toggleSources(release)"
+                >
+                  {{ sources[release.id] ? 'Hide' : 'Show' }}
+                </button>
+              </div>
+              <div
+                v-if="sources[release.id]"
+                class="mt-2 space-y-2"
+              >
+                <ul
+                  v-if="sources[release.id]!.sources.length > 0"
+                  class="divide-y divide-surface-border-subtle rounded-md border border-surface-border bg-surface-overlay text-xs"
+                >
+                  <li
+                    v-for="source in sources[release.id]!.sources"
+                    :key="source.id"
+                    class="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+                    :class="source.revoked ? 'opacity-60' : ''"
+                  >
+                    <span class="flex flex-wrap items-center gap-2">
+                      <span class="font-mono text-gray-200">{{ source.filename }}</span>
+                      <span class="rounded border border-surface-border px-1 py-px text-[10px] uppercase tracking-wide text-gray-500">{{ source.origin }}</span>
+                      <span class="text-gray-500">{{ source.component_count }} components</span>
+                      <span
+                        v-if="source.extractor_version"
+                        class="text-gray-500"
+                        :title="sources[release.id]!.current_extractor_version && source.extractor_version !== sources[release.id]!.current_extractor_version ? `current: ${sources[release.id]!.current_extractor_version}` : ''"
+                      >extractor {{ source.extractor_version }}{{ sources[release.id]!.current_extractor_version && source.extractor_version !== sources[release.id]!.current_extractor_version ? ' (older)' : '' }}</span>
+                      <span
+                        v-if="source.after_release"
+                        class="text-warn"
+                        title="Recorded after the release date, unlike sources recorded by the build itself"
+                      >added {{ formatDateTime(source.created_at) }}, after the release</span>
+                      <span
+                        v-if="source.revoked"
+                        class="text-danger"
+                      >revoked: {{ source.revoke_reason }}</span>
+                    </span>
+                    <span
+                      v-if="sources[release.id]!.can_revoke && source.origin === 'manual'"
+                      class="flex items-center gap-2"
+                    >
+                      <button
+                        v-if="!source.revoked"
+                        type="button"
+                        class="text-gray-500 transition hover:text-danger"
+                        @click="revokeSource(release, source)"
+                      >
+                        revoke
+                      </button>
+                      <button
+                        v-else
+                        type="button"
+                        class="text-gray-500 transition hover:text-white"
+                        @click="restoreSource(release, source)"
+                      >
+                        restore
+                      </button>
+                    </span>
+                  </li>
+                </ul>
+                <p
+                  v-else
+                  class="text-xs text-gray-500"
+                >
+                  No inventory source yet: extract the tag, upload an SBOM from CI, or record the deliverables.
+                </p>
+                <!-- "Add deliverables": the CLI analyses them locally so
+                     proprietary binaries never reach Hibou (ADR-046 §4.1). -->
+                <div class="rounded-md border border-surface-border bg-surface-overlay px-3 py-2 text-xs text-gray-400">
+                  <span class="text-gray-300">Add deliverables</span> (WAR, Go binary, image, zip of everything): analysed on your machine, only the inventory is recorded.
+                  <code class="mt-1 block select-all font-mono text-[11px] text-gray-200">{{ sources[release.id]!.record_command }}</code>
+                </div>
               </div>
             </div>
 
@@ -450,23 +561,11 @@
 
 <script setup lang="ts">
 import { safeHref } from '@/lib/safeUrl'
-import {
-  ChevronDown,
-  ExternalLink,
-  Flame,
-  RefreshCw,
-  Rocket,
-  Search,
-  ShieldAlert,
-  Tag,
-  TriangleAlert,
-  Users,
-  X,
-} from 'lucide-vue-next'
+import { ChevronDown, ExternalLink, Flame, PackageSearch, RefreshCw, Rocket, Search, ShieldAlert, Tag, TriangleAlert, Users, X } from 'lucide-vue-next'
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type Client, type ReleaseClient, type ReleaseWithRisk } from '@/api/client'
+import { api, type Client, type ReleaseClient, type ReleaseSource, type ReleaseSources, type ReleaseWithRisk } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
@@ -633,6 +732,75 @@ async function resolveDivergence(release: ReleaseWithRisk, action: 'adopt' | 'ke
     pushToast({ title: 'Failed to resolve divergence', description: err instanceof Error ? err.message : undefined, tone: 'error' })
   } finally {
     resolvingDivergence.value = false
+  }
+}
+
+const extractingRelease = ref<string | null>(null)
+
+// Inventory sources per release, loaded on demand (ADR-046 §4).
+const sources = ref<Record<string, ReleaseSources | undefined>>({})
+
+async function loadSources(release: ReleaseWithRisk) {
+  try {
+    const response = await api.getReleaseSources(provider.value, orgSlug.value, repoSlug.value, release.id)
+    sources.value = { ...sources.value, [release.id]: response.data }
+  } catch (err) {
+    pushToast({ title: 'Sources could not be loaded', description: err instanceof Error ? err.message : undefined, tone: 'error' })
+  }
+}
+
+async function toggleSources(release: ReleaseWithRisk) {
+  if (sources.value[release.id]) {
+    sources.value = { ...sources.value, [release.id]: undefined }
+    return
+  }
+  await loadSources(release)
+}
+
+async function revokeSource(release: ReleaseWithRisk, source: ReleaseSource) {
+  const reason = window.prompt(`Why revoke ${source.filename}? The reason is audit-logged; its components leave the release unless another source reports them.`)
+  if (!reason || !reason.trim()) return
+  try {
+    await api.revokeReleaseSource(provider.value, orgSlug.value, repoSlug.value, release.id, source.id, reason.trim())
+    pushToast({ title: 'Source revoked', description: `${source.filename} no longer counts for ${release.version}.`, tone: 'success' })
+    await loadSources(release)
+  } catch (err) {
+    pushToast({ title: 'Revocation failed', description: err instanceof Error ? err.message : undefined, tone: 'error' })
+  }
+}
+
+async function restoreSource(release: ReleaseWithRisk, source: ReleaseSource) {
+  try {
+    await api.restoreReleaseSource(provider.value, orgSlug.value, repoSlug.value, release.id, source.id)
+    pushToast({ title: 'Source restored', description: `${source.filename} counts again for ${release.version}.`, tone: 'success' })
+    await loadSources(release)
+  } catch (err) {
+    pushToast({ title: 'Restore failed', description: err instanceof Error ? err.message : undefined, tone: 'error' })
+  }
+}
+const backfilling = ref(false)
+
+async function extractRelease(release: ReleaseWithRisk) {
+  extractingRelease.value = release.id
+  try {
+    await api.extractReleaseDependencies(provider.value, orgSlug.value, repoSlug.value, release.id)
+    pushToast({ title: 'Extraction queued', description: `Dependencies of ${release.version} will be extracted from its tag; reload in a moment.`, tone: 'success' })
+  } catch (err) {
+    pushToast({ title: 'Extraction failed to queue', description: err instanceof Error ? err.message : undefined, tone: 'error' })
+  } finally {
+    extractingRelease.value = null
+  }
+}
+
+async function backfillReleases() {
+  backfilling.value = true
+  try {
+    const response = await api.extractAllReleases(provider.value, orgSlug.value, repoSlug.value)
+    pushToast({ title: 'Backfill queued', description: `${response.data.queued} release(s) queued, ${response.data.skipped} already inventoried.`, tone: 'success' })
+  } catch (err) {
+    pushToast({ title: 'Backfill failed to queue', description: err instanceof Error ? err.message : undefined, tone: 'error' })
+  } finally {
+    backfilling.value = false
   }
 }
 

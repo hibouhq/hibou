@@ -107,6 +107,9 @@ WHERE v.snapshot_id = $1
   AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(v.language, '') = ANY(@languages::text[]))
   AND (@file_query::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
   AND (@search::text = '' OR (v.title ILIKE '%' || @search::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'))
+  AND (@shipped::text = ''
+       OR (@shipped::text = 'no' AND COALESCE(v.component_id = ANY(@not_shipped_component_ids::uuid[]), false))
+       OR (@shipped::text = 'yes' AND NOT COALESCE(v.component_id = ANY(@not_shipped_component_ids::uuid[]), false)))
   AND (@acceptance::text = ''
        OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)
@@ -176,6 +179,9 @@ WHERE v.snapshot_id = $1
   AND (COALESCE(array_length(@languages::text[], 1), 0) = 0 OR COALESCE(v.language, '') = ANY(@languages::text[]))
   AND (@file_query::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || @file_query::text || '%' ESCAPE '\')
   AND (@search::text = '' OR (v.title ILIKE '%' || @search::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || @search::text || '%' ESCAPE '\'))
+  AND (@shipped::text = ''
+       OR (@shipped::text = 'no' AND COALESCE(v.component_id = ANY(@not_shipped_component_ids::uuid[]), false))
+       OR (@shipped::text = 'yes' AND NOT COALESCE(v.component_id = ANY(@not_shipped_component_ids::uuid[]), false)))
   AND (@acceptance::text = ''
        OR (@acceptance::text = 'open' AND fa.fingerprint IS NULL)
        OR (@acceptance::text = 'accepted' AND fa.fingerprint IS NOT NULL)

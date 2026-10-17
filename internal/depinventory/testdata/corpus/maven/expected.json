@@ -1,0 +1,28 @@
+{
+  "modules": [
+    {
+      "path": ".",
+      "complete": false
+    }
+  ],
+  "components": [
+    {
+      "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.15.2",
+      "relationship": "direct",
+      "resolution": "declared"
+    },
+    {
+      "purl": "pkg:maven/commons-io/commons-io@2.15.1",
+      "relationship": "direct",
+      "resolution": "declared"
+    },
+    {
+      "purl": "pkg:maven/junit/junit@4.13.2",
+      "relationship": "direct",
+      "resolution": "declared",
+      "scopes": [
+        "test"
+      ]
+    }
+  ]
+}

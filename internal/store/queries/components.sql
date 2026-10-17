@@ -41,3 +41,9 @@ JOIN components source ON source.id = cd.component_id
 JOIN components dependency ON dependency.id = cd.depends_on_component_id
 WHERE cd.snapshot_id = $1
 ORDER BY source.purl ASC, dependency.purl ASC;
+
+-- name: ListSnapshotComponentLabels :many
+-- The provenance labels of every component in a snapshot (ADR-045 §5):
+-- which artifacts reported it and, from the built-in extractor, its
+-- relationship, scopes, modules and registry.
+SELECT component_id, labels FROM snapshot_components WHERE snapshot_id = $1;

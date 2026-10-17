@@ -84,6 +84,8 @@ type Config struct {
 	CVEFeed                      CVEFeedConfig
 	KEV                          KEVConfig
 	EPSS                         EPSSConfig
+	DepsDev                      DepsDevConfig
+	DepInventory                 DepInventoryConfig
 	Worker                       WorkerConfig
 	SecretScan                   SecretScanConfig
 	// ScannerDistribution controls where CI fetches bundled scanners from
@@ -205,6 +207,42 @@ type EPSSConfig struct {
 	Enabled  bool
 	URL      string
 	Interval time.Duration
+}
+
+// DepsDevConfig configures the package-signals sync from deps.dev
+// (ADR-048 §5–6). On by default like OSV, KEV and EPSS; it sends names and
+// versions of public open-source components to the API. URL points at an
+// egress proxy: deps.dev has no bulk export, so there is no mirror and an
+// offline instance switches it off and shows "not evaluated".
+type DepsDevConfig struct {
+	Enabled bool
+	URL     string
+	// Interval is how often a stored signal is refreshed; cooldown state is
+	// computed from stored timestamps, so a day is enough.
+	Interval time.Duration
+	// PrivateNamespaces lists purl patterns ("pkg:npm/@acme/*",
+	// "pkg:maven/com.acme.*") never sent to deps.dev: the API answers
+	// NOT_FOUND at critical risk for anything not on a public registry, and
+	// the name itself is a disclosure.
+	PrivateNamespaces []string
+}
+
+// DepInventoryConfig configures the built-in dependency inventory
+// (ADR-045 §4.1): a worker loop that checks out a repository's lockfiles
+// and manifests at a commit, blobless and sparse, and stores the extracted
+// CycloneDX document as a snapshot artifact. On by default: the checkout is
+// a few files, not the repository, and nothing from it is executed.
+type DepInventoryConfig struct {
+	Enabled bool
+	// OnPush enqueues an extraction for pushes to the default branch and to
+	// release tags; enrolment and the manual trigger work regardless.
+	OnPush  bool
+	TempDir string
+	// MaxConcurrency is per replica; scale by adding workers.
+	MaxConcurrency int
+	Timeout        time.Duration
+	MaxAttempts    int
+	PollInterval   time.Duration
 }
 
 // KEVSourceConfig is one catalog's switch and mirror override.
@@ -386,6 +424,17 @@ func Load() (Config, error) {
 	v.SetDefault("epss.enabled", true)
 	v.SetDefault("epss.url", "")
 	v.SetDefault("epss.interval", "24h")
+	v.SetDefault("depsdev.enabled", true)
+	v.SetDefault("depsdev.url", "")
+	v.SetDefault("depsdev.interval", "24h")
+	v.SetDefault("depsdev.private_namespaces", []string{})
+	v.SetDefault("dep_inventory.enabled", true)
+	v.SetDefault("dep_inventory.on_push", true)
+	v.SetDefault("dep_inventory.temp_dir", "")
+	v.SetDefault("dep_inventory.max_concurrency", 1)
+	v.SetDefault("dep_inventory.timeout", "5m")
+	v.SetDefault("dep_inventory.max_attempts", 3)
+	v.SetDefault("dep_inventory.poll_interval", "15s")
 	v.SetDefault("metrics.enabled", true)
 	// A dedicated port keeps /metrics off whatever forwards the application
 	// port; 0 serves it there, which needs metrics.bearer_token outside
@@ -477,6 +526,11 @@ func Load() (Config, error) {
 		return Config{}, errors.New("parsing epss.interval: must be a positive duration")
 	}
 
+	depsdevInterval, err := time.ParseDuration(v.GetString("depsdev.interval"))
+	if err != nil || depsdevInterval <= 0 {
+		return Config{}, errors.New("parsing depsdev.interval: must be a positive duration")
+	}
+
 	kevInterval, err := time.ParseDuration(v.GetString("kev.interval"))
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing kev.interval: %w", err)
@@ -513,6 +567,22 @@ func Load() (Config, error) {
 	secretScanMaxAttempts := v.GetInt("secret_scan.max_attempts")
 	if secretScanMaxAttempts < 1 || secretScanMaxAttempts > 100 {
 		return Config{}, errors.New("parsing secret_scan.max_attempts: must be between 1 and 100")
+	}
+	depInventoryTimeout, err := time.ParseDuration(v.GetString("dep_inventory.timeout"))
+	if err != nil || depInventoryTimeout <= 0 {
+		return Config{}, errors.New("parsing dep_inventory.timeout: must be a positive duration")
+	}
+	depInventoryPollInterval, err := time.ParseDuration(v.GetString("dep_inventory.poll_interval"))
+	if err != nil || depInventoryPollInterval <= 0 {
+		return Config{}, errors.New("parsing dep_inventory.poll_interval: must be a positive duration")
+	}
+	depInventoryMaxConcurrency := v.GetInt("dep_inventory.max_concurrency")
+	if depInventoryMaxConcurrency < 1 {
+		return Config{}, errors.New("parsing dep_inventory.max_concurrency: must be at least 1")
+	}
+	depInventoryMaxAttempts := v.GetInt("dep_inventory.max_attempts")
+	if depInventoryMaxAttempts < 1 || depInventoryMaxAttempts > 100 {
+		return Config{}, errors.New("parsing dep_inventory.max_attempts: must be between 1 and 100")
 	}
 	retentionPolicy, err := loadRetentionPolicy(v)
 	if err != nil {
@@ -607,6 +677,12 @@ func Load() (Config, error) {
 			URL:      strings.TrimSpace(v.GetString("epss.url")),
 			Interval: epssInterval,
 		},
+		DepsDev: DepsDevConfig{
+			Enabled:           v.GetBool("depsdev.enabled"),
+			URL:               strings.TrimSpace(v.GetString("depsdev.url")),
+			Interval:          depsdevInterval,
+			PrivateNamespaces: normalizeList(v.GetStringSlice("depsdev.private_namespaces")),
+		},
 		AdvisoryScan: AdvisoryScanConfig{
 			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),
 			Interval:  advisoryScanInterval,
@@ -625,6 +701,15 @@ func Load() (Config, error) {
 			MaxRepoMB:      v.GetInt("secret_scan.max_repo_mb"),
 			MaxAttempts:    secretScanMaxAttempts,
 			PollInterval:   secretScanPollInterval,
+		},
+		DepInventory: DepInventoryConfig{
+			Enabled:        v.GetBool("dep_inventory.enabled"),
+			OnPush:         v.GetBool("dep_inventory.on_push"),
+			TempDir:        strings.TrimSpace(v.GetString("dep_inventory.temp_dir")),
+			MaxConcurrency: depInventoryMaxConcurrency,
+			Timeout:        depInventoryTimeout,
+			MaxAttempts:    depInventoryMaxAttempts,
+			PollInterval:   depInventoryPollInterval,
 		},
 		Metrics:      metricsCfg,
 		StorageUsage: storageUsage,

@@ -105,41 +105,46 @@ WHERE v.snapshot_id = $1
   AND ($7::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || $7::text || '%' ESCAPE '\')
   AND ($8::text = '' OR (v.title ILIKE '%' || $8::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || $8::text || '%' ESCAPE '\'))
   AND ($9::text = ''
-       OR ($9::text = 'open' AND fa.fingerprint IS NULL)
-       OR ($9::text = 'accepted' AND fa.fingerprint IS NOT NULL)
-       OR ($9::text = 'disputed' AND fd.fingerprint IS NOT NULL)
-       OR fa.reason_kind::text = $9::text)
-  AND ($10::text = ''
-       OR ($10::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
+       OR ($9::text = 'no' AND COALESCE(v.component_id = ANY($10::uuid[]), false))
+       OR ($9::text = 'yes' AND NOT COALESCE(v.component_id = ANY($10::uuid[]), false)))
+  AND ($11::text = ''
+       OR ($11::text = 'open' AND fa.fingerprint IS NULL)
+       OR ($11::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR ($11::text = 'disputed' AND fd.fingerprint IS NOT NULL)
+       OR fa.reason_kind::text = $11::text)
+  AND ($12::text = ''
+       OR ($12::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id)))
-       OR ($10::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
+       OR ($12::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id)))))
-  AND (NOT $11::bool OR (
+  AND (NOT $13::bool OR (
        v.status != 'resolved'
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
 `
 
 type CountVulnerabilitiesBySnapshotParams struct {
-	SnapshotID uuid.UUID `json:"snapshot_id"`
-	Statuses   []string  `json:"statuses"`
-	Types      []string  `json:"types"`
-	Severities []string  `json:"severities"`
-	Scanners   []string  `json:"scanners"`
-	Languages  []string  `json:"languages"`
-	FileQuery  string    `json:"file_query"`
-	Search     string    `json:"search"`
-	Acceptance string    `json:"acceptance"`
-	Exploited  string    `json:"exploited"`
-	RiskOnly   bool      `json:"risk_only"`
+	SnapshotID             uuid.UUID   `json:"snapshot_id"`
+	Statuses               []string    `json:"statuses"`
+	Types                  []string    `json:"types"`
+	Severities             []string    `json:"severities"`
+	Scanners               []string    `json:"scanners"`
+	Languages              []string    `json:"languages"`
+	FileQuery              string      `json:"file_query"`
+	Search                 string      `json:"search"`
+	Shipped                string      `json:"shipped"`
+	NotShippedComponentIds []uuid.UUID `json:"not_shipped_component_ids"`
+	Acceptance             string      `json:"acceptance"`
+	Exploited              string      `json:"exploited"`
+	RiskOnly               bool        `json:"risk_only"`
 }
 
 func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountVulnerabilitiesBySnapshotParams) (int64, error) {
@@ -152,6 +157,8 @@ func (q *Queries) CountVulnerabilitiesBySnapshot(ctx context.Context, arg CountV
 		pq.Array(arg.Languages),
 		arg.FileQuery,
 		arg.Search,
+		arg.Shipped,
+		pq.Array(arg.NotShippedComponentIds),
 		arg.Acceptance,
 		arg.Exploited,
 		arg.RiskOnly,
@@ -1408,24 +1415,27 @@ WHERE v.snapshot_id = $1
   AND ($9::text = '' OR COALESCE(v.file_path, '') ILIKE '%' || $9::text || '%' ESCAPE '\')
   AND ($10::text = '' OR (v.title ILIKE '%' || $10::text || '%' ESCAPE '\' OR v.primary_identifier_value ILIKE '%' || $10::text || '%' ESCAPE '\'))
   AND ($11::text = ''
-       OR ($11::text = 'open' AND fa.fingerprint IS NULL)
-       OR ($11::text = 'accepted' AND fa.fingerprint IS NOT NULL)
-       OR ($11::text = 'disputed' AND fd.fingerprint IS NOT NULL)
-       OR fa.reason_kind::text = $11::text)
-  AND ($12::text = ''
-       OR ($12::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
+       OR ($11::text = 'no' AND COALESCE(v.component_id = ANY($12::uuid[]), false))
+       OR ($11::text = 'yes' AND NOT COALESCE(v.component_id = ANY($12::uuid[]), false)))
+  AND ($13::text = ''
+       OR ($13::text = 'open' AND fa.fingerprint IS NULL)
+       OR ($13::text = 'accepted' AND fa.fingerprint IS NOT NULL)
+       OR ($13::text = 'disputed' AND fd.fingerprint IS NOT NULL)
+       OR fa.reason_kind::text = $13::text)
+  AND ($14::text = ''
+       OR ($14::text = 'true' AND v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id)))
-       OR ($12::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
+       OR ($14::text = 'false' AND NOT (v.type::text IN ('dependency','container','malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
                     LEFT JOIN advisory_aliases al ON al.advisory_id = adv.id
                     JOIN kev_entries k2 ON k2.cve_id IN (upper(adv.canonical_id), upper(al.alias))
                     WHERE adv.id = v.advisory_id)))))
-  AND (NOT $13::bool OR (
+  AND (NOT $15::bool OR (
        v.status != 'resolved'
          AND (v.status != 'suppressed' OR fd.fingerprint IS NOT NULL)
          AND COALESCE(fa.reason_kind::text, '') != 'false_positive'))
@@ -1437,7 +1447,7 @@ ORDER BY
         AND (v.status = 'detected' OR (v.status = 'suppressed' AND fd.fingerprint IS NOT NULL))
         AND COALESCE(fa.reason_kind::text, '') <> 'false_positive'
     THEN 0 ELSE 1 END ASC,
-  CASE WHEN $14::text IN ('', 'detected_desc', 'severity_desc', 'risk_desc')
+  CASE WHEN $16::text IN ('', 'detected_desc', 'severity_desc', 'risk_desc')
        AND v.type::text IN ('dependency', 'container', 'malware') AND (
          EXISTS (SELECT 1 FROM kev_entries k WHERE k.cve_id = upper(v.primary_identifier_value))
          OR EXISTS (SELECT 1 FROM advisories adv
@@ -1446,37 +1456,39 @@ ORDER BY
                     WHERE adv.id = v.advisory_id))
     THEN 0 ELSE 1 END ASC,
   -- ADR-038 §5: Risk is KEV (above), then EPSS, then CVSS; unscored last.
-  CASE WHEN $14::text IN ('risk_desc', 'epss_desc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id)) END DESC NULLS LAST,
-  CASE WHEN $14::text IN ('risk_desc', 'cvss_desc') THEN v.cvss_score END DESC NULLS LAST,
-  CASE WHEN $14::text = 'risk_desc' THEN v.severity_rank END DESC,
-  CASE WHEN $14::text IN ('risk_asc', 'epss_asc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id)) END ASC NULLS FIRST,
-  CASE WHEN $14::text IN ('risk_asc', 'cvss_asc') THEN v.cvss_score END ASC NULLS FIRST,
-  CASE WHEN $14::text = 'risk_asc' THEN v.severity_rank END ASC,
-  CASE WHEN $14::text = 'severity_asc' THEN v.severity_rank END ASC,
-  CASE WHEN $14::text = 'severity_desc' THEN v.severity_rank END DESC,
-  CASE WHEN $14::text = 'status_asc' THEN v.status END ASC,
-  CASE WHEN $14::text = 'status_desc' THEN v.status END DESC,
-  CASE WHEN $14::text = 'detected_asc' THEN v.detected_at END ASC,
-  CASE WHEN $14::text = 'detected_desc' OR $14::text = '' THEN v.detected_at END DESC,
+  CASE WHEN $16::text IN ('risk_desc', 'epss_desc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id)) END DESC NULLS LAST,
+  CASE WHEN $16::text IN ('risk_desc', 'cvss_desc') THEN v.cvss_score END DESC NULLS LAST,
+  CASE WHEN $16::text = 'risk_desc' THEN v.severity_rank END DESC,
+  CASE WHEN $16::text IN ('risk_asc', 'epss_asc') THEN GREATEST((SELECT e.score FROM epss_scores e WHERE e.cve_id = upper(v.primary_identifier_value)), (SELECT max(e.score) FROM advisory_aliases al JOIN epss_scores e ON e.cve_id = upper(al.alias) WHERE al.advisory_id = v.advisory_id)) END ASC NULLS FIRST,
+  CASE WHEN $16::text IN ('risk_asc', 'cvss_asc') THEN v.cvss_score END ASC NULLS FIRST,
+  CASE WHEN $16::text = 'risk_asc' THEN v.severity_rank END ASC,
+  CASE WHEN $16::text = 'severity_asc' THEN v.severity_rank END ASC,
+  CASE WHEN $16::text = 'severity_desc' THEN v.severity_rank END DESC,
+  CASE WHEN $16::text = 'status_asc' THEN v.status END ASC,
+  CASE WHEN $16::text = 'status_desc' THEN v.status END DESC,
+  CASE WHEN $16::text = 'detected_asc' THEN v.detected_at END ASC,
+  CASE WHEN $16::text = 'detected_desc' OR $16::text = '' THEN v.detected_at END DESC,
   v.id DESC
 LIMIT $2 OFFSET $3
 `
 
 type ListVulnerabilitiesBySnapshotParams struct {
-	SnapshotID uuid.UUID `json:"snapshot_id"`
-	Limit      int32     `json:"limit"`
-	Offset     int32     `json:"offset"`
-	Statuses   []string  `json:"statuses"`
-	Types      []string  `json:"types"`
-	Severities []string  `json:"severities"`
-	Scanners   []string  `json:"scanners"`
-	Languages  []string  `json:"languages"`
-	FileQuery  string    `json:"file_query"`
-	Search     string    `json:"search"`
-	Acceptance string    `json:"acceptance"`
-	Exploited  string    `json:"exploited"`
-	RiskOnly   bool      `json:"risk_only"`
-	Sort       string    `json:"sort"`
+	SnapshotID             uuid.UUID   `json:"snapshot_id"`
+	Limit                  int32       `json:"limit"`
+	Offset                 int32       `json:"offset"`
+	Statuses               []string    `json:"statuses"`
+	Types                  []string    `json:"types"`
+	Severities             []string    `json:"severities"`
+	Scanners               []string    `json:"scanners"`
+	Languages              []string    `json:"languages"`
+	FileQuery              string      `json:"file_query"`
+	Search                 string      `json:"search"`
+	Shipped                string      `json:"shipped"`
+	NotShippedComponentIds []uuid.UUID `json:"not_shipped_component_ids"`
+	Acceptance             string      `json:"acceptance"`
+	Exploited              string      `json:"exploited"`
+	RiskOnly               bool        `json:"risk_only"`
+	Sort                   string      `json:"sort"`
 }
 
 type ListVulnerabilitiesBySnapshotRow struct {
@@ -1507,6 +1519,8 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, arg ListVul
 		pq.Array(arg.Languages),
 		arg.FileQuery,
 		arg.Search,
+		arg.Shipped,
+		pq.Array(arg.NotShippedComponentIds),
 		arg.Acceptance,
 		arg.Exploited,
 		arg.RiskOnly,

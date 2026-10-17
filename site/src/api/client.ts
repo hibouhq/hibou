@@ -804,6 +804,43 @@ export interface OrgSettings {
   vex_reachability_analysis: boolean
   default_tlp_label: string
   login_tokens: LoginTokensPolicy
+  /** Dependency policy (ADR-048 §3, ADR-045 §6): the org floor a repository can only tighten. */
+  dependency_cooldown_window?: string
+  dependency_cooldown_enforcement?: '' | 'inherit' | 'advisory' | 'blocking' | string
+  dependency_install_config?: '' | 'require' | 'warn' | 'off' | string
+  dependency_private_namespaces?: string[]
+  trusted_declared_scopes?: string[]
+}
+
+/** One not-shipped list entry with where it comes from (ADR-045 §6). */
+export interface ShippingEntry {
+  id?: string
+  pattern: string
+  reason?: string
+  source: 'default' | 'organization' | 'repository' | '.hibou.yaml' | string
+  created_by?: string
+  created_at?: string
+  overridden?: boolean
+}
+
+export interface ShippingInfo {
+  entries: ShippingEntry[]
+  overrides?: string[]
+  uploaded_sbom: boolean
+  sbom_covers?: string[]
+  undeclared_modules?: string[]
+  trusted_declared_scopes?: string[]
+  can_edit: boolean
+}
+
+export interface NotShippedEntry {
+  id: string
+  org_id: string
+  repo_id?: string
+  pattern: string
+  reason: string
+  created_by?: string
+  created_at: string
 }
 
 // Effective .hibou.yml configuration (or its DB-backed fallback) as the
@@ -930,6 +967,11 @@ export interface Vulnerability {
   reachability?: string
   // Open PRs whose latest gate run resolves this fingerprint.
   fixed_in_prs?: Array<{ fingerprint: string; ref_name: string; number?: string; title?: string; verified_base_sha?: string }>
+  /** deps.dev signals of the affected package version (ADR-048 §8); absent means not evaluated. */
+  signals?: ComponentSignals
+  /** Whether the affected component reaches clients (ADR-045 §6); absent when not computed. */
+  shipped?: boolean
+  shipped_reason?: string
   solution?: string
   // Provenance (ADR-020): who produced this finding. 'scanner' is an ingested
   // tool report, 'human' a person, 'agent' an API token acting for an agent.
@@ -1211,6 +1253,23 @@ export interface FindingDetail {
   dispute?: FindingDispute
   vex?: Array<{ status: string; justification?: string; source: string; statement?: string }>
   occurrences: Array<{ ref_name: string; ref_type: string; commit_sha: string; snapshot_at: string; status: string }>
+  /** deps.dev signals of the affected package version (ADR-048); absent means not evaluated. */
+  signals?: ComponentSignals
+  /** Package policy verdict on each proposed upgrade target (ADR-048 §8). */
+  remediation?: RemediationVersion[]
+}
+
+export interface RemediationVersion {
+  version: string
+  purl: string
+  /** advisory (fixed_versions) or deps.dev (recommended version). */
+  source: 'advisory' | 'deps.dev' | string
+  decision?: 'allow' | 'hold' | 'deny' | string
+  in_cooldown: boolean
+  cooldown_until?: string
+  reason?: string
+  warnings?: string[]
+  evaluated: boolean
 }
 
 export interface CreatedApiKey {
@@ -1274,6 +1333,8 @@ export interface Advisory {
   // Optional enriched fields — populated once the backend exposes them
   // (see TODO-BACKEND-deps-nodata.md). Rendered with graceful fallbacks.
   summary?: string
+  /** The finding this advisory raised on the component in this snapshot; opens it in the findings view. */
+  fingerprint?: string
   fixed_versions?: string[]
   references?: string[]
   source?: string
@@ -1293,6 +1354,41 @@ export interface ComponentWithVulns {
   fixed_versions?: string[]
   usage_paths?: string[][]
   licenses?: string[]
+  /** deps.dev package signals (ADR-048); absent means not evaluated, never clean. */
+  signals?: ComponentSignals
+  /** Inventory provenance (ADR-045 §5). Absent fields mean no source said. */
+  relationship?: 'direct' | 'indirect' | 'unknown'
+  scopes?: string[]
+  modules?: string[]
+  resolution?: 'recorded' | 'declared'
+  registry?: 'public' | 'private'
+  /** Artifacts that reported the component: uploaded SBOM file names, or the extractor's document. */
+  inventory_sources?: string[]
+  /** Whether the component reaches clients (ADR-045 §6); false stays listed, never hidden. */
+  shipped?: boolean
+  shipped_reason?: string
+  /** A list pattern overruled by an uploaded SBOM that reports the component. */
+  shipped_ignored?: string
+  /** Declared range of an unresolved component (ADR-045 §2.2). */
+  constraint?: string
+}
+
+/** One package version's signals from deps.dev (ADR-048 §2). */
+export interface ComponentSignals {
+  published_at?: string
+  /** Set only while the cooldown is still running; the server computes it at read time. */
+  cooldown_until?: string
+  in_cooldown: boolean
+  deprecated: boolean
+  deprecated_reason?: string
+  low_usage: boolean
+  /** Popular packages deps.dev suggests instead of a low-usage look-alike. */
+  alternatives?: string[]
+  /** The version is no longer on the public registry. */
+  unpublished: boolean
+  recommended_version?: string
+  source: string
+  fetched_at: string
 }
 
 export interface ComponentUpdate {
@@ -2059,11 +2155,122 @@ export interface KEVHealth {
   interval_seconds?: number
 }
 
+/** Package-signals sync state (ADR-048 §6): a live provider's "last pass". */
+export interface DepsDevHealth {
+  /** When the loop last completed a pass, successful or not. */
+  at: string
+  succeeded_at?: string
+  duration_ms?: number
+  candidates?: number
+  private?: number
+  unsupported?: number
+  looked_up?: number
+  stored?: number
+  error?: string
+  failing_since?: string
+  interval_seconds?: number
+  url?: string
+}
+
+/** A built-in dependency extraction job (ADR-045 §4.1). */
+export interface DepExtractionJob {
+  id: string
+  repo_id: string
+  ref_name: string
+  commit_sha?: string
+  reason: 'push' | 'release' | 'enrollment' | 'manual' | 'lazy' | string
+  snapshot_id?: string
+  status: 'pending' | 'processing' | 'complete' | 'failed'
+  attempts: number
+  last_error?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+}
+
+export interface DepExtractionModule {
+  path: string
+  files: string[]
+  complete: boolean
+  reason?: string
+  ecosystems: string[]
+  /** Install-time cooldown setting per package manager (ADR-048 §3.1). */
+  install_config?: DepInstallConfig[]
+}
+
+export interface DepInstallConfig {
+  tool: string
+  path: string
+  setting: string
+  present: boolean
+  window_seconds?: number
+  value?: string
+  note?: string
+}
+
+export interface DepUpdaterConfig {
+  tool: 'renovate' | 'dependabot' | string
+  path: string
+  present: boolean
+  window_seconds?: number
+  value?: string
+}
+
+export interface DepExtractionRun {
+  id: string
+  snapshot_id: string
+  commit_sha: string
+  extractor_version: string
+  component_count: number
+  modules: DepExtractionModule[]
+  updaters?: DepUpdaterConfig[]
+  reused_from?: string
+  created_at: string
+}
+
+/** One inventory source of a release (ADR-046 §4): an artifact with its origin and state. */
+export interface ReleaseSource {
+  id: string
+  filename: string
+  tool: string
+  tool_version?: string
+  origin: 'ci' | 'hibou' | 'manual' | string
+  sha256?: string
+  component_count: number
+  created_at: string
+  /** Recorded after the release date: retroactive evidence. */
+  after_release: boolean
+  revoked: boolean
+  revoke_reason?: string
+  revoked_at?: string
+  metadata?: Record<string, unknown>
+  extractor_version?: string
+}
+
+export interface ReleaseSources {
+  sources: ReleaseSource[]
+  components: Array<{ purl: string; name: string; version: string }>
+  current_extractor_version?: string
+  /** The ready-to-copy command to record deliverables (ADR-046 §4.1). */
+  record_command: string
+  can_revoke: boolean
+}
+
+export interface DepExtractionStatus {
+  enabled: boolean
+  ref: string
+  job?: DepExtractionJob
+  run?: DepExtractionRun
+  /** What this server extracts with; an older run is re-extracted by the upgrade pass. */
+  current_extractor_version?: string
+}
+
 export interface AdvisoryActivity {
   events: AdvisoryActivityEvent[]
   health: FeedHealth | null
   corpus: CorpusState | null
   kev?: KEVHealth | null
+  depsdev?: DepsDevHealth | null
 }
 
 export interface InstanceMembership {
@@ -3302,6 +3509,71 @@ class ApiClient {
     return this.request<ApiResponse<SecretScanJob[]>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/secrets/jobs`,
     )
+  }
+
+  /** Latest built-in dependency extraction for a ref (ADR-045). */
+  getDependencyShipping(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {
+    const query = new URLSearchParams()
+    if (params?.ref) query.set('ref', params.ref)
+    if (params?.snapshot) query.set('snapshot', params.snapshot)
+    const qs = query.toString() ? `?${query.toString()}` : ''
+    return this.request<ApiResponse<ShippingInfo>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/dependencies/shipping${qs}`)
+  }
+
+  addNotShippedEntries(provider: string, slug: string, repoSlug: string, entries: Array<{ pattern: string; reason: string }>) {
+    return this.request<ApiResponse<NotShippedEntry[]>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/dependencies/not-shipped`, {
+      method: 'POST',
+      body: JSON.stringify({ entries }),
+    })
+  }
+
+  deleteNotShippedEntry(provider: string, slug: string, repoSlug: string, entryID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}/dependencies/not-shipped/${entryID}`, { method: 'DELETE' })
+  }
+
+  listOrgNotShipped(provider: string, slug: string) {
+    return this.request<ApiResponse<NotShippedEntry[]>>(`/orgs/${provider}/${slug}/dependencies/not-shipped`)
+  }
+
+  addOrgNotShippedEntries(provider: string, slug: string, entries: Array<{ pattern: string; reason: string }>) {
+    return this.request<ApiResponse<NotShippedEntry[]>>(`/orgs/${provider}/${slug}/dependencies/not-shipped`, {
+      method: 'POST',
+      body: JSON.stringify({ entries }),
+    })
+  }
+
+  deleteOrgNotShippedEntry(provider: string, slug: string, entryID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/dependencies/not-shipped/${entryID}`, { method: 'DELETE' })
+  }
+
+  getDependencyExtraction(provider: string, slug: string, repoSlug: string, ref?: string) {
+    const qs = ref ? `?ref=${encodeURIComponent(ref)}` : ''
+    return this.request<ApiResponse<DepExtractionStatus>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/dependencies/extraction${qs}`)
+  }
+
+  triggerDependencyExtraction(provider: string, slug: string, repoSlug: string, ref?: string) {
+    const qs = ref ? `?ref=${encodeURIComponent(ref)}` : ''
+    return this.request<ApiResponse<DepExtractionJob>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/dependencies/extract${qs}`, { method: 'POST' })
+  }
+
+  getReleaseSources(provider: string, slug: string, repoSlug: string, releaseID: string) {
+    return this.request<ApiResponse<ReleaseSources>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseID}/sources`)
+  }
+
+  revokeReleaseSource(provider: string, slug: string, repoSlug: string, releaseID: string, sourceID: string, reason: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseID}/sources/${sourceID}/revoke`, { method: 'POST', body: JSON.stringify({ reason }) })
+  }
+
+  restoreReleaseSource(provider: string, slug: string, repoSlug: string, releaseID: string, sourceID: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseID}/sources/${sourceID}/restore`, { method: 'POST', body: JSON.stringify({}) })
+  }
+
+  extractReleaseDependencies(provider: string, slug: string, repoSlug: string, releaseID: string) {
+    return this.request<ApiResponse<DepExtractionJob>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/${releaseID}/extract`, { method: 'POST' })
+  }
+
+  extractAllReleases(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<{ queued: number; skipped: number }>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/extract-all`, { method: 'POST' })
   }
 
   triggerComponentScan(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {

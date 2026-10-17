@@ -161,6 +161,11 @@ func (c *Client) Post(path string, body any, out any) error {
 }
 
 // PostRaw performs an authenticated POST request with a raw reader body.
+// Delete sends a DELETE; a 204 has no body to decode.
+func (c *Client) Delete(path string) error {
+	return c.do(http.MethodDelete, path, nil, nil)
+}
+
 func (c *Client) PostRaw(path string, contentType string, body io.Reader, out any) error {
 	url := c.Server + "/api/v1" + path
 	req, err := http.NewRequest(http.MethodPost, url, body)

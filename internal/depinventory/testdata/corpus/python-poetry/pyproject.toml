@@ -1,0 +1,10 @@
+[tool.poetry]
+name = "app"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+flask = "^3.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"

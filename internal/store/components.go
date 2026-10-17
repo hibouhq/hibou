@@ -47,3 +47,17 @@ func (q *Queries) UpsertSnapshotDependencyRoot(ctx context.Context, snapshotID, 
 		ComponentID: componentID,
 	})
 }
+
+// ListSnapshotComponentLabels returns each component's provenance labels in
+// the snapshot, keyed by component id.
+func (q *Queries) ListSnapshotComponentLabels(ctx context.Context, snapshotID uuid.UUID) (map[uuid.UUID]json.RawMessage, error) {
+	rows, err := q.db.ListSnapshotComponentLabels(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]json.RawMessage, len(rows))
+	for _, row := range rows {
+		out[row.ComponentID] = row.Labels
+	}
+	return out, nil
+}

@@ -148,7 +148,11 @@ var serveCmd = &cobra.Command{
 
 		if cfg.MCPEnabled {
 			mcpDelta := delta.NewService(delta.NewStoreAdapter(queries), log)
-			mcpSrv := hiboumcp.New(queries, mcpDelta, log, version.Version)
+			var mcpOptions []hiboumcp.Option
+			if policy := srv.PackagePolicy(); policy != nil {
+				mcpOptions = append(mcpOptions, hiboumcp.WithPackagePolicy(policy))
+			}
+			mcpSrv := hiboumcp.New(queries, mcpDelta, log, version.Version, mcpOptions...)
 			// The sign-in allowlist applies to MCP keys as to the HTTP API.
 			mcpHTTP := hiboumcp.NewHTTPServer(mcpSrv, queries, cfg.MCPPort, log, hiboumcp.WithUserAllowed(authMgr.UserAllowed))
 			services++

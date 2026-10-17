@@ -47,7 +47,9 @@ func TestResolveDefaultsAndRepoChoices(t *testing.T) {
 	if got["opengrep"].State != StateDisabled || got["opengrep-interfile"].State != StateEnabled {
 		t.Fatalf("repo choices = %+v", got)
 	}
-	if enabled := Enabled(Resolve(in)); len(enabled) != 2 {
+	// opengrep-interfile and spotbugs from the choices above, plus the
+	// built-in dependency inventory, recommended by default (ADR-045 §4.2).
+	if enabled := Enabled(Resolve(in)); len(enabled) != 3 || got["hibou-deps"].State != StateRecommended {
 		t.Fatalf("enabled = %v", enabled)
 	}
 }

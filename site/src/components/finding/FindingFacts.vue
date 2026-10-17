@@ -23,6 +23,14 @@
           rel="noopener noreferrer"
           class="text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent"
         >{{ fact.value }}</a>
+        <RouterLink
+          v-else-if="fact.to"
+          :to="fact.to"
+          class="text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent"
+          @click="emit('navigate')"
+        >
+          {{ fact.value }}
+        </RouterLink>
         <template v-else>
           {{ fact.value }}
         </template>
@@ -33,6 +41,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import type { Fact } from '@/components/finding/facts'
 
@@ -40,6 +49,8 @@ import type { Fact } from '@/components/finding/facts'
 // dropped rather than rendered as dashes: a fact a scanner never reported is
 // noise, not information.
 const props = defineProps<{ facts: Fact[] }>()
+/** Fired when an in-app fact link is followed, so a modal can close itself. */
+const emit = defineEmits<{ (event: 'navigate'): void }>()
 
 const visibleFacts = computed(() =>
   props.facts.filter((fact) => fact.value !== undefined && fact.value !== null && String(fact.value).trim() !== ''),

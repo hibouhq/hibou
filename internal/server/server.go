@@ -42,9 +42,11 @@ import (
 	"github.com/hibouhq/hibou/internal/notify"
 	"github.com/hibouhq/hibou/internal/objstore"
 	"github.com/hibouhq/hibou/internal/orgprovision"
+	"github.com/hibouhq/hibou/internal/packagepolicy"
 	"github.com/hibouhq/hibou/internal/permissionsync"
 	"github.com/hibouhq/hibou/internal/presence"
 	"github.com/hibouhq/hibou/internal/provider"
+	"github.com/hibouhq/hibou/internal/provider/depsdev"
 	"github.com/hibouhq/hibou/internal/provider/osv"
 	"github.com/hibouhq/hibou/internal/provider/trivy"
 	"github.com/hibouhq/hibou/internal/rbac"
@@ -54,6 +56,7 @@ import (
 	"github.com/hibouhq/hibou/internal/scancatalog"
 	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/secretscan"
+	"github.com/hibouhq/hibou/internal/shipped"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/toolcatalog"
 	"github.com/hibouhq/hibou/internal/updatecheck"
@@ -92,6 +95,13 @@ type Server struct {
 	advisoryProviders  []string
 	secretScanner      *secretscan.Scanner
 	secretScanSlots    chan struct{}
+	depExtractionSlots chan struct{}
+	// eagerPatterns caches each repository's eager branch patterns
+	// (ADR-045 §4.1.1) so pushes do not read .hibou.yaml every time.
+	eagerPatterns sync.Map
+	// packagePolicy answers the policy endpoint, the MCP tool and the
+	// cooldown gate (ADR-048); nil without a database.
+	packagePolicy      *packagepolicy.Evaluator
 	secretCheckSlots   chan struct{}
 	retentionWorker    *retention.Worker
 	dispatcher         *notify.Dispatcher
@@ -156,6 +166,9 @@ type backgroundStarter interface {
 type advisoryScanner interface {
 	RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error)
 	TriggerRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error)
+	// MatchPurls is the stateless match behind the CLI's local scans
+	// (ADR-046 §2).
+	MatchPurls(ctx context.Context, purls []string) ([]scanner.PurlMatch, error)
 }
 
 type closeableListener interface {
@@ -354,6 +367,41 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	secretscan.SetHashKey(cfg.SecretHashKey)
 	// Forge tokens only go to http:// clone URLs in development.
 	secretscan.SetDevelopment(cfg.IsDevelopment())
+	if s.db != nil && cfg.DepInventory.Enabled {
+		s.depExtractionSlots = make(chan struct{}, cfg.DepInventory.MaxConcurrency)
+	}
+	if s.db != nil && s.queries != nil {
+		options := packagepolicy.Options{
+			FreshFor:           cfg.DepsDev.Interval,
+			InstanceNamespaces: cfg.DepsDev.PrivateNamespaces,
+		}
+		if cfg.DepsDev.Enabled {
+			// On-demand lookups for versions the daily pass has not seen;
+			// nil when the provider is off, so decisions say "not evaluated".
+			options.Lookup = depsdev.New(cfg.DepsDev.URL, nil)
+		}
+		s.packagePolicy = packagepolicy.New(s.queries, options)
+		if s.deltaSvc != nil {
+			s.deltaSvc.SetPackagePolicy(s.packagePolicy.Evaluate, s.packagePolicy.DefaultPolicy())
+		}
+	}
+	if s.deltaSvc != nil && s.queries != nil {
+		// The shipped attribute (ADR-045 §6) for the gate: findings on
+		// not-shipped components stay informational unless the not-shipped
+		// gate says otherwise.
+		s.deltaSvc.SetShippingLookup(func(ctx context.Context, orgID, repoID, snapshotID uuid.UUID) (map[uuid.UUID]shipped.Decision, error) {
+			org, err := s.queries.GetOrganizationByID(ctx, orgID)
+			if err != nil {
+				return nil, err
+			}
+			repo, err := s.queries.GetRepositoryByID(ctx, repoID)
+			if err != nil {
+				return nil, err
+			}
+			decisions, _, err := s.shippedDecisions(ctx, org, repo, snapshotID)
+			return decisions, err
+		})
+	}
 	s.dispatcher = notify.NewDispatcher(s.queries, s.bus, cfg.BaseURL, log,
 		&notify.SlackSender{},
 		&notify.TeamsSender{},
@@ -655,6 +703,19 @@ func (s *Server) routes(siteFS fs.FS) {
 					r.Get("/vulnerabilities", s.handleListOrgVulnerabilities)
 					r.Get("/cwes", s.handleListOrgCWEs)
 					r.Get("/components", s.handleListOrgComponents)
+					// Package policy (ADR-048): registry proxies, CI steps and agents
+					// ask before a version is used; admins record acceptances.
+					r.Get("/policy/packages", s.handlePackagePolicy)
+					r.Post("/policy/packages", s.handlePackagePolicy)
+					r.Get("/policy/packages/acceptances", s.handleListPackagePolicyAcceptances)
+					r.Post("/policy/packages/acceptances", s.handleAcceptPackagePolicy)
+					r.Delete("/policy/packages/acceptances", s.handleRevokePackagePolicyAcceptance)
+					// Organization not-shipped list (ADR-045 §6).
+					// Stateless matching for the CLI's local scans (ADR-046 §2).
+					r.Post("/advisories/match", s.handleMatchAdvisories)
+					r.Get("/dependencies/not-shipped", s.handleListOrgNotShipped)
+					r.Post("/dependencies/not-shipped", s.handleAddOrgNotShipped)
+					r.Delete("/dependencies/not-shipped/{entryID}", s.handleDeleteOrgNotShipped)
 					r.With(limitScans).Post("/components/scan", s.handleTriggerOrgComponentScan)
 					r.Get("/licenses", s.handleGetOrgLicenses)
 					r.Get("/licenses/components", s.handleListOrgLicenseComponents)
@@ -820,6 +881,19 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.With(limitScans).Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
 						r.With(limitScans).Post("/{repoSlug}/secrets/scan", s.handleTriggerSecretScan)
+						r.With(limitScans).Post("/{repoSlug}/dependencies/extract", s.handleTriggerDepExtraction)
+						r.Get("/{repoSlug}/dependencies/extraction", s.handleGetDepExtractionStatus)
+						// Shipped attribute and the repository not-shipped list (ADR-045 §6).
+						r.Get("/{repoSlug}/dependencies/shipping", s.handleGetDependencyShipping)
+						r.Post("/{repoSlug}/dependencies/not-shipped", s.handleAddRepoNotShipped)
+						r.Delete("/{repoSlug}/dependencies/not-shipped/{entryID}", s.handleDeleteRepoNotShipped)
+						r.With(limitScans).Post("/{repoSlug}/releases/extract-all", s.handleExtractAllReleases)
+						r.With(limitScans).Post("/{repoSlug}/releases/{releaseID}/extract", s.handleExtractReleaseDependencies)
+						// Release inventory sources (ADR-046 §4): deliverables analysed by the CLI, revocation by admins.
+						r.Get("/{repoSlug}/releases/{releaseID}/sources", s.handleListReleaseSources)
+						r.Post("/{repoSlug}/releases/{releaseID}/sources", s.handleRecordReleaseSource)
+						r.Post("/{repoSlug}/releases/{releaseID}/sources/{sourceID}/revoke", s.handleRevokeReleaseSource)
+						r.Post("/{repoSlug}/releases/{releaseID}/sources/{sourceID}/restore", s.handleRestoreReleaseSource)
 						r.Get("/{repoSlug}/secrets/jobs", s.handleListSecretScanJobs)
 						r.Get("/{repoSlug}/components/graph", s.handleGetRefComponentGraph)
 						r.Get("/{repoSlug}/summary", s.handleGetRefSummary)
@@ -963,6 +1037,14 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 			loops = append(loops, "epss_sync")
 			go s.runEPSSSyncLoop(runtimeCtx, s.cfg.EPSS.URL, s.cfg.EPSS.Interval)
 		}
+		// Package signals from deps.dev (ADR-048): a live API, so the same
+		// switch-and-purge stance as the KEV catalogs.
+		if s.cfg.DepsDev.Enabled {
+			loops = append(loops, "package_signals")
+			go s.runPackageSignalsLoop(runtimeCtx)
+		} else {
+			go s.purgePackageSignalsWhenDisabled(runtimeCtx)
+		}
 		if len(sources) > 0 {
 			loops = append(loops, "kev_sync")
 			go s.runKEVSyncLoop(runtimeCtx, sources, s.cfg.KEV.Interval)
@@ -987,6 +1069,14 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	if s.secretScanner != nil && s.cfg.Background.SecretScanEnabled {
 		loops = append(loops, "secret_scan")
 		go s.runSecretScanLoop(runtimeCtx)
+	}
+	// Built-in dependency inventory (ADR-045 §4.1): a sparse checkout of a
+	// few files per job, so it runs wherever the queue is, unlike secret
+	// scanning's full clones.
+	if s.depExtractionSlots != nil && s.objStore != nil {
+		loops = append(loops, "dep_extraction")
+		go s.runDepExtractionLoop(runtimeCtx)
+		go s.runDepExtractionUpgradeLoop(runtimeCtx)
 	}
 	if s.gatePublisher != nil {
 		loops = append(loops, "gate_reconcile")
@@ -1068,7 +1158,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), s.claimReleaseTimeout())
 	defer releaseCancel()
-	releaseErr := errors.Join(s.releaseArtifactClaims(releaseCtx), s.releaseSecretScanClaims(releaseCtx))
+	releaseErr := errors.Join(s.releaseArtifactClaims(releaseCtx), s.releaseSecretScanClaims(releaseCtx), s.releaseDepExtractionClaims(releaseCtx))
 	if s.queries != nil {
 		if err := s.queries.MarkWorkerStopped(releaseCtx, s.artifactWorkerID); err != nil {
 			s.log.Warn().Err(err).Msg("marking worker stopped failed")
@@ -1431,4 +1521,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	api.JSON(w, http.StatusOK, response)
+}
+
+// PackagePolicy exposes the evaluator so the MCP server shares it.
+func (s *Server) PackagePolicy() *packagepolicy.Evaluator {
+	return s.packagePolicy
 }

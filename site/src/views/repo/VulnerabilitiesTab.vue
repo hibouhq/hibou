@@ -311,7 +311,50 @@
                     v-if="formatLocation(vulnerability) !== 'n/a'"
                     class="mt-0.5 font-mono text-xs text-gray-500"
                   >
-                    {{ formatLocation(vulnerability) }}
+                    <!-- A package is a subject of its own: link it to the
+                         dependencies view, where the same version shows every
+                         advisory and where it is used. -->
+                    <RouterLink
+                      v-if="componentLocation(vulnerability)"
+                      :to="componentLocation(vulnerability)!"
+                      class="underline decoration-gray-700 underline-offset-2 transition hover:text-gray-300 hover:decoration-gray-400"
+                      title="Open in Dependencies"
+                      @click.stop
+                    >
+                      {{ formatLocation(vulnerability) }}
+                    </RouterLink>
+                    <template v-else>
+                      {{ formatLocation(vulnerability) }}
+                    </template>
+                    <!-- Registry signals of the version (ADR-048 §8), the
+                         same icons as the dependencies table. -->
+                    <Clock
+                      v-if="vulnerability.signals?.in_cooldown"
+                      class="signal-icon signal-cooldown ml-1 inline-block align-text-bottom"
+                      :title="`In cooldown until ${signalDate(vulnerability.signals.cooldown_until)}: the gate holds a bump to this version`"
+                    />
+                    <EyeOff
+                      v-if="vulnerability.signals?.unpublished"
+                      class="signal-icon signal-unpublished ml-1 inline-block align-text-bottom"
+                      title="Unpublished: this version is no longer on the public registry"
+                    />
+                    <Archive
+                      v-if="vulnerability.signals?.deprecated"
+                      class="signal-icon signal-deprecated ml-1 inline-block align-text-bottom"
+                      :title="`Deprecated: ${vulnerability.signals.deprecated_reason || 'deprecated on the registry'}`"
+                    />
+                    <TriangleAlert
+                      v-if="vulnerability.signals?.low_usage"
+                      class="signal-icon signal-low-usage ml-1 inline-block align-text-bottom"
+                      :title="vulnerability.signals.alternatives?.length ? `Low usage: did you mean ${vulnerability.signals.alternatives.join(', ')}?` : 'Low usage: verify this is the package you meant'"
+                    />
+                    <!-- Not shipped (ADR-045 §6): listed, informational for the
+                         gate unless gate_not_shipped says otherwise. -->
+                    <span
+                      v-if="vulnerability.shipped === false"
+                      class="ml-1.5 rounded border border-surface-border px-1 py-px font-sans text-[10px] uppercase tracking-wide text-gray-500"
+                      :title="`Not shipped: ${vulnerability.shipped_reason || 'does not reach clients'}. Listed, not counted by the gate unless dependencies.gate_not_shipped says so.`"
+                    >not shipped</span>
                   </div>
                   <CweChips
                     v-if="vulnerability.cwes?.length"
@@ -441,9 +484,9 @@
 <script setup lang="ts">
 import { createExploitedPreset } from '@/lib/exploitedPreset'
 import { computed, reactive, ref, watch } from 'vue'
-import { type LocationQueryRaw, useRoute, useRouter } from 'vue-router'
+import { type LocationQueryRaw, type RouteLocationRaw, RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { KeyRound, Flame } from 'lucide-vue-next'
+import { Archive, Clock, EyeOff, Flame, KeyRound, TriangleAlert } from 'lucide-vue-next'
 
 import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
@@ -593,6 +636,8 @@ const filterDefs = computed(() => [
   { key: 'acceptance', label: 'Triage', options: acceptanceOptions },
   // ADR-034: carried findings — open, but not re-checked on this snapshot.
   { key: 'presence', label: 'Presence', options: presenceOptions, multi: true },
+  // ADR-045 §6: the component's shipped attribute, resolved server-side.
+  { key: 'shipped', label: 'Shipped', options: ['yes', 'no'] },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
   // hidden: no dropdown pill (the red toggle is the UI) — the def exists so a
@@ -1345,6 +1390,25 @@ function rowClass(type: string) {
   }
 
   return ''
+}
+
+function signalDate(value?: string): string {
+  if (!value) return ''
+  return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+/** The dependencies view opened on this finding's package, for component-backed findings. */
+function componentLocation(vulnerability: Vulnerability): RouteLocationRaw | null {
+  if (!['dependency', 'malware'].includes(vulnerability.type) || !vulnerability.component_purl) return null
+  return {
+    name: 'repo-dependencies',
+    params: { provider: provider.value, slug: slug.value, repoSlug: repoSlug.value },
+    query: {
+      component: vulnerability.component_purl,
+      ...(typeof route.query.ref === 'string' ? { ref: route.query.ref } : {}),
+      ...(typeof route.query.snapshot === 'string' ? { snapshot: route.query.snapshot } : {}),
+    },
+  }
 }
 
 function formatLocation(vulnerability: Vulnerability) {

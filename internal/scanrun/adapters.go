@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/hibouhq/hibou/internal/depinventory"
 	"github.com/hibouhq/hibou/internal/scancatalog"
 	"github.com/hibouhq/hibou/internal/scanplan"
 )
@@ -46,11 +48,21 @@ type Environment struct {
 	MavenRepository string
 	// Command runs a program; tests replace it. Never a shell.
 	Command func(ctx context.Context, dir, name string, args ...string) ([]byte, int, error)
+	// DepsResolve enables the built-in inventory's resolve mode (ADR-045
+	// §4.2): "maven" or "gradle" runs the repository's own build tool to
+	// record what a manifest-only ecosystem resolves to. DepsGraphFile
+	// reads a graph export instead (Maven dependency:list or
+	// dependency:tree output, Gradle dependencies output, pip freeze).
+	DepsResolve   string
+	DepsGraphFile string
 }
 
 // Result is one job's output.
 type Result struct {
 	SARIFPaths []string
+	// SBOMPaths are inventory documents (CycloneDX) a built-in producer
+	// wrote; they upload like a CI SBOM, with the producer's tool name.
+	SBOMPaths []string
 	// ConfigDigest identifies the rules actually run, when they did not come
 	// from the plan.
 	ConfigDigest string
@@ -79,8 +91,71 @@ func Run(ctx context.Context, job scanplan.Job, entry CatalogEntry, env Environm
 		return runOpenGrep(ctx, job, entry, env)
 	case "spotbugs":
 		return runSpotBugsMaven(ctx, job, entry, env)
+	case "hibou-deps":
+		return runHibouDeps(ctx, job, env)
 	}
 	return Result{}, fmt.Errorf("no adapter for engine %q", entry.Engine)
+}
+
+// runHibouDeps runs the built-in dependency extractor in-process (ADR-045
+// §4.2): the same library and rules as the server, no download. With
+// resolve mode, the repository's own build tool fills in what a manifest
+// alone cannot say; that is the repository's trust domain, acceptable in
+// its CI, never on the server.
+func runHibouDeps(ctx context.Context, job scanplan.Job, env Environment) (Result, error) {
+	result := Result{}
+	inv, err := depinventory.Extract(ctx, env.SourceRoot, depinventory.Options{Exclude: job.Exclusions})
+	if err != nil {
+		return result, err
+	}
+	if len(job.Targets) > 0 && !contains(job.Targets, ".") {
+		inv.Components = depinventory.FilterModules(inv.Components, job.Targets)
+	}
+	switch strings.ToLower(strings.TrimSpace(env.DepsResolve)) {
+	case "":
+	case "maven", "gradle":
+		resolved, err := depinventory.Resolve(ctx, env.SourceRoot, env.DepsResolve, env.Command)
+		if err != nil {
+			return result, fmt.Errorf("resolve mode %s: %w", env.DepsResolve, err)
+		}
+		inv.Components = depinventory.MergeResolved(inv.Components, resolved)
+		result.Notes = append(result.Notes, fmt.Sprintf("resolve mode %s: %d resolved components merged", env.DepsResolve, len(resolved)))
+	default:
+		return result, fmt.Errorf("resolve mode %q: want maven or gradle", env.DepsResolve)
+	}
+	if env.DepsGraphFile != "" {
+		resolved, err := depinventory.ReadGraphExport(env.DepsGraphFile)
+		if err != nil {
+			return result, fmt.Errorf("graph export %s: %w", env.DepsGraphFile, err)
+		}
+		inv.Components = depinventory.MergeResolved(inv.Components, resolved)
+		result.Notes = append(result.Notes, fmt.Sprintf("graph export %s: %d resolved components merged", filepath.Base(env.DepsGraphFile), len(resolved)))
+	}
+	inv.Modules = depinventory.RebuildModules(inv.Components)
+	document, err := depinventory.ToCycloneDX(inv, filepath.Base(env.SourceRoot), depinventory.Version, time.Now())
+	if err != nil {
+		return result, err
+	}
+	path := filepath.Join(env.OutDir, safeName(job.ID)+".cdx.json")
+	if err := os.WriteFile(path, document, 0o600); err != nil {
+		return result, err
+	}
+	for _, module := range inv.Modules {
+		if !module.Complete {
+			result.Notes = append(result.Notes, fmt.Sprintf("%s: %s", module.Path, module.Reason))
+		}
+	}
+	result.SBOMPaths = []string{path}
+	return result, nil
+}
+
+func contains(values []string, value string) bool {
+	for _, v := range values {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 func runOpenGrep(ctx context.Context, job scanplan.Job, entry CatalogEntry, env Environment) (Result, error) {

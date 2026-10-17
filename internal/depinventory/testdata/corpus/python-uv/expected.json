@@ -1,0 +1,29 @@
+{
+  "modules": [
+    {
+      "path": ".",
+      "complete": true
+    }
+  ],
+  "components": [
+    {
+      "purl": "pkg:pypi/pluggy@1.5.0",
+      "relationship": "indirect"
+    },
+    {
+      "purl": "pkg:pypi/pytest@8.3.3",
+      "relationship": "direct",
+      "scopes": [
+        "dev"
+      ]
+    },
+    {
+      "purl": "pkg:pypi/requests@2.32.3",
+      "relationship": "direct"
+    },
+    {
+      "purl": "pkg:pypi/urllib3@2.2.2",
+      "relationship": "indirect"
+    }
+  ]
+}

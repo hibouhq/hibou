@@ -86,6 +86,9 @@ type service struct {
 	store MCPStore
 	delta *delta.Service
 	log   zerolog.Logger
+	// policy is nil when package signals are not available; the
+	// check_packages tool is then not registered.
+	policy PackagePolicy
 }
 
 type vulnerabilitySummary struct {

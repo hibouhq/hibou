@@ -1369,6 +1369,41 @@ type CveTriageItem struct {
 	CreatedAt              time.Time     `json:"created_at"`
 }
 
+type DepExtractionJob struct {
+	ID             uuid.UUID      `json:"id"`
+	RepoID         uuid.UUID      `json:"repo_id"`
+	RefName        string         `json:"ref_name"`
+	CommitSha      string         `json:"commit_sha"`
+	Reason         string         `json:"reason"`
+	SnapshotID     uuid.NullUUID  `json:"snapshot_id"`
+	Status         string         `json:"status"`
+	ClaimedBy      sql.NullString `json:"claimed_by"`
+	ClaimExpiresAt sql.NullTime   `json:"claim_expires_at"`
+	Attempts       int32          `json:"attempts"`
+	LastError      string         `json:"last_error"`
+	CreatedAt      time.Time      `json:"created_at"`
+	StartedAt      sql.NullTime   `json:"started_at"`
+	FinishedAt     sql.NullTime   `json:"finished_at"`
+}
+
+type DepExtractionRun struct {
+	ID               uuid.UUID       `json:"id"`
+	RepoID           uuid.UUID       `json:"repo_id"`
+	SnapshotID       uuid.UUID       `json:"snapshot_id"`
+	CommitSha        string          `json:"commit_sha"`
+	InputDigest      string          `json:"input_digest"`
+	ExtractorVersion string          `json:"extractor_version"`
+	ArtifactID       uuid.NullUUID   `json:"artifact_id"`
+	ObjectKey        string          `json:"object_key"`
+	Sha256           string          `json:"sha256"`
+	SizeBytes        int64           `json:"size_bytes"`
+	ComponentCount   int32           `json:"component_count"`
+	Modules          json.RawMessage `json:"modules"`
+	ReusedFrom       uuid.NullUUID   `json:"reused_from"`
+	CreatedAt        time.Time       `json:"created_at"`
+	Updaters         json.RawMessage `json:"updaters"`
+}
+
 type Deployment struct {
 	ID               uuid.UUID        `json:"id"`
 	ClientID         uuid.UUID        `json:"client_id"`
@@ -1584,6 +1619,16 @@ type LocalRoleGrant struct {
 	SuspendedReason string        `json:"suspended_reason"`
 }
 
+type NotShippedEntry struct {
+	ID        uuid.UUID     `json:"id"`
+	OrgID     uuid.UUID     `json:"org_id"`
+	RepoID    uuid.NullUUID `json:"repo_id"`
+	Pattern   string        `json:"pattern"`
+	Reason    string        `json:"reason"`
+	CreatedBy uuid.NullUUID `json:"created_by"`
+	CreatedAt time.Time     `json:"created_at"`
+}
+
 type Notification struct {
 	ID        uuid.UUID         `json:"id"`
 	UserID    uuid.UUID         `json:"user_id"`
@@ -1640,6 +1685,37 @@ type Organization struct {
 	UpdatedAt         time.Time       `json:"updated_at"`
 	ForgeAccountID    sql.NullString  `json:"forge_account_id"`
 	ForgeAccountLogin sql.NullString  `json:"forge_account_login"`
+}
+
+type PackagePolicyAcceptance struct {
+	ID         uuid.UUID     `json:"id"`
+	OrgID      uuid.UUID     `json:"org_id"`
+	RepoID     uuid.NullUUID `json:"repo_id"`
+	Purl       string        `json:"purl"`
+	Reason     string        `json:"reason"`
+	AcceptedBy uuid.NullUUID `json:"accepted_by"`
+	ExpiresAt  sql.NullTime  `json:"expires_at"`
+	CreatedAt  time.Time     `json:"created_at"`
+}
+
+type PackageSignal struct {
+	Purl               string          `json:"purl"`
+	System             string          `json:"system"`
+	Name               string          `json:"name"`
+	Version            string          `json:"version"`
+	PublishedAt        sql.NullTime    `json:"published_at"`
+	CooldownEnd        sql.NullTime    `json:"cooldown_end"`
+	Deprecated         bool            `json:"deprecated"`
+	DeprecatedReason   string          `json:"deprecated_reason"`
+	LowUsage           bool            `json:"low_usage"`
+	Alternatives       json.RawMessage `json:"alternatives"`
+	NotFound           bool            `json:"not_found"`
+	Malicious          bool            `json:"malicious"`
+	VulnerableCritical bool            `json:"vulnerable_critical"`
+	RecommendedVersion string          `json:"recommended_version"`
+	Raw                json.RawMessage `json:"raw"`
+	Source             string          `json:"source"`
+	FetchedAt          time.Time       `json:"fetched_at"`
 }
 
 type PrCheck struct {
@@ -1960,23 +2036,29 @@ type Snapshot struct {
 }
 
 type SnapshotArtifact struct {
-	ID           uuid.UUID      `json:"id"`
-	SnapshotID   uuid.UUID      `json:"snapshot_id"`
-	Kind         string         `json:"kind"`
-	Format       sql.NullString `json:"format"`
-	ToolName     sql.NullString `json:"tool_name"`
-	ObjectKey    string         `json:"object_key"`
-	Sha256       sql.NullString `json:"sha256"`
-	SizeBytes    int64          `json:"size_bytes"`
-	ContentType  sql.NullString `json:"content_type"`
-	CreatedAt    time.Time      `json:"created_at"`
-	Filename     string         `json:"filename"`
-	Scope        sql.NullString `json:"scope"`
-	ScopePaths   []string       `json:"scope_paths"`
-	ToolVersion  sql.NullString `json:"tool_version"`
-	ConfigDigest sql.NullString `json:"config_digest"`
-	PlanID       uuid.NullUUID  `json:"plan_id"`
-	PlanJobID    sql.NullString `json:"plan_job_id"`
+	ID           uuid.UUID       `json:"id"`
+	SnapshotID   uuid.UUID       `json:"snapshot_id"`
+	Kind         string          `json:"kind"`
+	Format       sql.NullString  `json:"format"`
+	ToolName     sql.NullString  `json:"tool_name"`
+	ObjectKey    string          `json:"object_key"`
+	Sha256       sql.NullString  `json:"sha256"`
+	SizeBytes    int64           `json:"size_bytes"`
+	ContentType  sql.NullString  `json:"content_type"`
+	CreatedAt    time.Time       `json:"created_at"`
+	Filename     string          `json:"filename"`
+	Scope        sql.NullString  `json:"scope"`
+	ScopePaths   []string        `json:"scope_paths"`
+	ToolVersion  sql.NullString  `json:"tool_version"`
+	ConfigDigest sql.NullString  `json:"config_digest"`
+	PlanID       uuid.NullUUID   `json:"plan_id"`
+	PlanJobID    sql.NullString  `json:"plan_job_id"`
+	Origin       string          `json:"origin"`
+	Metadata     json.RawMessage `json:"metadata"`
+	RevokedAt    sql.NullTime    `json:"revoked_at"`
+	RevokedBy    uuid.NullUUID   `json:"revoked_by"`
+	RevokeReason sql.NullString  `json:"revoke_reason"`
+	CreatedBy    uuid.NullUUID   `json:"created_by"`
 }
 
 type SnapshotCodeRef struct {

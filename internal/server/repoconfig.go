@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/hibouhq/hibou/internal/cooldown"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
@@ -216,11 +218,30 @@ func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.G
 	if cfg == nil {
 		return nil
 	}
+	out := &delta.GateConfig{}
+	// The dependencies section applies whatever gate matches (ADR-048 §3):
+	// the cooldown window and private namespaces are repository facts, not
+	// per-branch thresholds.
+	if cfg.Dependencies != nil {
+		out.PrivateNamespaces = append(out.PrivateNamespaces, cfg.Dependencies.PrivateNamespaces...)
+		if cfg.Dependencies.Cooldown != nil {
+			gate := &delta.CooldownGate{Enforcement: cfg.Dependencies.Cooldown.Enforcement, InstallConfig: cfg.Dependencies.Cooldown.InstallConfig}
+			if mode, duration, ok, err := cooldown.ParseWindow(cfg.Dependencies.Cooldown.Window); err == nil && ok {
+				gate.WindowMode, gate.WindowDuration = mode, duration
+			}
+			out.Cooldown = gate
+		}
+		if g := cfg.Dependencies.GateNotShipped; g != nil {
+			out.NotShipped = &delta.NotShippedGate{KEV: g.KEVValue(), EPSSMin: g.EPSSMin, MinSeverity: strings.ToLower(strings.TrimSpace(g.MinSeverity)), FixableOnly: g.FixableOnly}
+		}
+	}
 	gate := cfg.MatchGate(targetBranch)
 	if gate == nil {
+		if out.Configured() || len(out.PrivateNamespaces) > 0 {
+			return out
+		}
 		return nil
 	}
-	out := &delta.GateConfig{}
 	if gate.Code != nil {
 		out.Code = &delta.CodeGate{
 			Enabled:     gate.Code.Enabled,
@@ -264,7 +285,7 @@ func matchedGateConfig(cfg *repoconfig.RepoConfig, targetBranch string) *delta.G
 			MaxNew: gate.Secrets.MaxNew,
 		}
 	}
-	if !out.Configured() {
+	if !out.Configured() && len(out.PrivateNamespaces) == 0 {
 		return nil
 	}
 	return out

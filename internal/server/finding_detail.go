@@ -6,12 +6,16 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/cwe"
+	"github.com/hibouhq/hibou/internal/packagepolicy"
+	"github.com/hibouhq/hibou/internal/provider/depsdev"
+	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -35,6 +39,31 @@ type findingDetailResponse struct {
 	// Assertion is the lifecycle of a manual or agent finding (ADR-034 §4):
 	// last confirmed, and the decision that closed it if any.
 	Assertion *store.FindingAssertion `json:"assertion,omitempty"`
+	// Signals are the deps.dev package signals of the affected version
+	// (ADR-048): cooldown, deprecation, low usage, unpublished, and a
+	// suggested version when the advisory names no fix. Absent when not
+	// evaluated.
+	Signals *componentSignalsResponse `json:"signals,omitempty"`
+	// Remediation is the package policy's verdict on each version the
+	// advisory (or deps.dev) proposes: a fix still in cooldown is shown as
+	// such before anyone bumps to it (ADR-048 §8).
+	Remediation []remediationVersionResponse `json:"remediation,omitempty"`
+}
+
+// remediationVersionResponse is one candidate upgrade target evaluated
+// against the repository's package policy.
+type remediationVersionResponse struct {
+	Version string `json:"version"`
+	Purl    string `json:"purl"`
+	// Source: advisory (fixed_versions) or deps.dev (recommended version).
+	Source string `json:"source"`
+	// Decision: allow, hold, deny; empty when not evaluated.
+	Decision      string     `json:"decision,omitempty"`
+	InCooldown    bool       `json:"in_cooldown"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
+	Reason        string     `json:"reason,omitempty"`
+	Warnings      []string   `json:"warnings,omitempty"`
+	Evaluated     bool       `json:"evaluated"`
 }
 
 type findingAdvisoryResponse struct {
@@ -147,6 +176,11 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 		response.Occurrences = occurrences
 	}
 
+	if finding.ComponentPurl != nil && *finding.ComponentPurl != "" {
+		if row, ok := s.packageSignalsFor(r.Context(), []string{*finding.ComponentPurl})[*finding.ComponentPurl]; ok {
+			response.Signals = componentSignalsFromRow(row, time.Now())
+		}
+	}
 	if finding.AdvisoryID != nil {
 		if advisory, err := s.queries.GetAdvisoryByID(r.Context(), *finding.AdvisoryID); err == nil && advisory.ID == *finding.AdvisoryID {
 			response.Advisory = s.advisoryDetail(r.Context(), advisory)
@@ -174,6 +208,7 @@ func (s *Server) handleGetFindingDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response.KEV = s.findingKEV(r.Context(), finding, response.Advisory)
+	response.Remediation = s.remediationVersions(r.Context(), org, repo, finding, response.Advisory, response.Signals)
 
 	// CWEs live on the finding, whatever their source, so SAST, dependency
 	// and manual details render them alike (ADR-037 §6).
@@ -320,4 +355,74 @@ func isAdvisoryBackedFindingType(findingType string) bool {
 	return strings.EqualFold(trimmed, "dependency") ||
 		strings.EqualFold(trimmed, "malware") ||
 		strings.EqualFold(trimmed, "container")
+}
+
+// remediationVersions asks the package policy about every version the
+// advisory names as a fix and about deps.dev's suggestion, so the drawer can
+// say "fixed in 4.19.2, in cooldown until Friday" rather than send someone
+// to a version the gate will hold. Lookups go through the evaluator's
+// single-flight cache; nothing is asked twice.
+func (s *Server) remediationVersions(ctx context.Context, org *store.Organization, repo *store.Repository, finding *store.Vulnerability, advisory *findingAdvisoryResponse, signals *componentSignalsResponse) []remediationVersionResponse {
+	if s.packagePolicy == nil || finding == nil || finding.ComponentPurl == nil || *finding.ComponentPurl == "" {
+		return nil
+	}
+	if _, _, ok := depsdev.ParsePurl(*finding.ComponentPurl); !ok {
+		return nil
+	}
+	var out []remediationVersionResponse
+	seen := make(map[string]struct{})
+	add := func(version, source string) {
+		version = strings.TrimSpace(version)
+		if version == "" {
+			return
+		}
+		if _, dup := seen[version]; dup {
+			return
+		}
+		seen[version] = struct{}{}
+		out = append(out, remediationVersionResponse{Version: version, Purl: depsdev.WithVersion(*finding.ComponentPurl, version), Source: source})
+	}
+	if advisory != nil {
+		for _, version := range advisory.FixedVersions {
+			add(version, "advisory")
+		}
+	}
+	if signals != nil && signals.RecommendedVersion != "" {
+		add(signals.RecommendedVersion, "deps.dev")
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	var cfg *repoconfig.RepoConfig
+	if loaded, _, err := s.loadBoundRepoConfig(ctx, repo); err == nil {
+		cfg = loaded
+	}
+	purls := make([]string, 0, len(out))
+	for _, entry := range out {
+		purls = append(purls, entry.Purl)
+	}
+	decisions, err := s.packagePolicy.Evaluate(ctx, packagepolicy.Request{OrgID: org.ID, RepoID: &repo.ID, Purls: purls, Policy: s.policyFor(org, cfg)})
+	if err != nil {
+		s.log.Warn().Err(err).Str("purl", *finding.ComponentPurl).Msg("package policy for remediation versions")
+		return out
+	}
+	byPurl := make(map[string]packagepolicy.Decision, len(decisions))
+	for _, decision := range decisions {
+		byPurl[decision.Purl] = decision
+	}
+	for i := range out {
+		decision, ok := byPurl[out[i].Purl]
+		if !ok {
+			continue
+		}
+		out[i].Decision = decision.Decision
+		out[i].Evaluated = decision.Evaluated
+		out[i].Reason = decision.Reason
+		out[i].Warnings = decision.Warnings
+		if decision.Decision == packagepolicy.DecisionHold {
+			out[i].InCooldown = true
+			out[i].CooldownUntil = decision.Until
+		}
+	}
+	return out
 }

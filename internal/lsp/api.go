@@ -228,6 +228,17 @@ type apiCWE struct {
 	Name string `json:"name"`
 }
 
+// apiSignals is the deps.dev view of a package version (ADR-048).
+type apiSignals struct {
+	InCooldown       bool       `json:"in_cooldown"`
+	CooldownUntil    *time.Time `json:"cooldown_until"`
+	Deprecated       bool       `json:"deprecated"`
+	DeprecatedReason string     `json:"deprecated_reason"`
+	LowUsage         bool       `json:"low_usage"`
+	Alternatives     []string   `json:"alternatives"`
+	Unpublished      bool       `json:"unpublished"`
+}
+
 type apiFinding struct {
 	ID                     string `json:"id"`
 	Type                   string `json:"type"`
@@ -273,6 +284,9 @@ type apiFinding struct {
 		Reason     string     `json:"reason"`
 		ExpiresAt  *time.Time `json:"expires_at"`
 	} `json:"acceptance"`
+	// Signals are the registry's attributes of the affected version
+	// (ADR-048 §8): shown as tags on the manifest line.
+	Signals *apiSignals `json:"signals"`
 	Dispute *struct {
 		Reason string `json:"reason"`
 	} `json:"dispute"`

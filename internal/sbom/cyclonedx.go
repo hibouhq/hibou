@@ -14,6 +14,11 @@ type ParsedComponent struct {
 	Ecosystem string
 	Licenses  []string
 	BomRefs   []string
+	// Properties are the CycloneDX component properties, by name; a name
+	// may repeat (one "hibou:scope" per scope). The built-in extractor
+	// carries relationship, scope, module and registry this way
+	// (ADR-045 §5).
+	Properties map[string][]string
 }
 
 type ParsedDependency struct {
@@ -41,6 +46,31 @@ type cycloneDXComponent struct {
 	BomRef     string               `json:"bom-ref"`
 	Licenses   []cycloneDXLicense   `json:"licenses"`
 	Components []cycloneDXComponent `json:"components"`
+	Properties []cycloneDXProperty  `json:"properties"`
+}
+
+type cycloneDXProperty struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func componentProperties(entries []cycloneDXProperty) map[string][]string {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(entries))
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name)
+		value := strings.TrimSpace(entry.Value)
+		if name == "" || value == "" {
+			continue
+		}
+		out[name] = append(out[name], value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type cycloneDXLicense struct {
@@ -162,12 +192,13 @@ func collectCycloneDXComponent(component cycloneDXComponent, seen map[string]int
 			} else {
 				seen[key] = len(parsed.Components)
 				parsed.Components = append(parsed.Components, ParsedComponent{
-					PURL:      purl,
-					Name:      name,
-					Version:   version,
-					Ecosystem: ecosystem,
-					Licenses:  componentLicenses(component.Licenses),
-					BomRefs:   nil,
+					PURL:       purl,
+					Name:       name,
+					Version:    version,
+					Ecosystem:  ecosystem,
+					Licenses:   componentLicenses(component.Licenses),
+					BomRefs:    nil,
+					Properties: componentProperties(component.Properties),
 				})
 				appendComponentBomRef(parsed, len(parsed.Components)-1, bomRef)
 			}

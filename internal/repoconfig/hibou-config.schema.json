@@ -39,9 +39,80 @@
       "additionalProperties": {
         "$ref": "#/$defs/scannerRun"
       }
+    },
+    "dependencies": {
+      "$ref": "#/$defs/dependenciesConfig",
+      "description": "Built-in dependency inventory (ADR-045) and package signals policy (ADR-048)."
     }
   },
   "$defs": {
+    "dependenciesConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "type": "array",
+          "description": "Branches extracted on every push besides the default branch; glob patterns such as release/*.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "private_namespaces": {
+          "type": "array",
+          "description": "Package URL patterns never sent to third-party APIs, e.g. pkg:npm/@acme/* or pkg:maven/com.acme.*.",
+          "items": { "type": "string", "pattern": "^pkg:" }
+        },
+        "not_shipped": {
+          "type": "array",
+          "description": "Components that never reach clients (ADR-045 §6): purl globs such as pkg:npm/@types/*, regular expressions prefixed re:, ecosystems such as ecosystem:terraform, or repository paths such as tools/**. They stay listed with shipped: no.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "shipped": {
+          "type": "array",
+          "description": "Patterns that cancel an organization or default not-shipped entry, same syntax as not_shipped: a published Terraform module lists ecosystem:terraform.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Repository path globs never inventoried at all, e.g. examples/** or testdata/**.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "sbom_covers": {
+          "type": "array",
+          "description": "Paths an uploaded SBOM describes when it covers part of the repository, e.g. backend/**; the other modules follow the not-shipped lists. Omitted means the whole product.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "gate_not_shipped": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Findings on not-shipped components that still block a PR or release. Malicious packages always block.",
+          "properties": {
+            "kev": { "type": "boolean", "description": "Known-exploited findings block (default true)." },
+            "epss_min": { "type": "number", "minimum": 0, "maximum": 1, "description": "Block at or above this exploitation probability." },
+            "min_severity": { "type": "string", "enum": ["off", "low", "medium", "high", "critical"], "description": "Block at or above this severity (default off)." },
+            "fixable_only": { "type": "boolean", "description": "Limit the severity rule to findings with a fix." }
+          }
+        },
+        "cooldown": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "window": {
+              "type": "string",
+              "description": "auto (deps.dev's own cooldown end), off, or a duration such as 7d or 72h counted from the publish date."
+            },
+            "enforcement": {
+              "type": "string",
+              "enum": ["inherit", "advisory", "blocking"],
+              "description": "Whether a cooldown hold blocks the PR; inherit follows the matched quality gate."
+            },
+            "install_config": {
+              "type": "string",
+              "enum": ["require", "warn", "off"],
+              "description": "Whether a missing install-time cooldown setting (npm min-release-age, pnpm minimumReleaseAge, uv exclude-newer…) is a coverage gap, a warning, or ignored."
+            }
+          }
+        }
+      }
+    },
     "qualityGate": {
       "type": "object",
       "additionalProperties": false,

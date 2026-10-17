@@ -179,6 +179,7 @@
                 :repo-slug="repoSlug"
                 :repo-html-url="repoHtmlUrl"
                 :forge-provider="forgeProvider"
+                @navigate="emit('close')"
               />
 
               <div class="mt-5 space-y-5">
@@ -325,6 +326,7 @@
                 :repo-slug="repoSlug"
                 :repo-html-url="repoHtmlUrl"
                 :forge-provider="forgeProvider"
+                @navigate="emit('close')"
               />
 
               <FindingSection

@@ -183,6 +183,10 @@ func resolveArtifact(scanner *scancatalog.Scanner, runner Runner, distribution s
 	var chosen *scancatalog.Distribution
 	for i := range scanner.Distributions {
 		d := &scanner.Distributions[i]
+		if d.Kind == scancatalog.KindBuiltin {
+			// The adapter lives in the hibou binary: nothing to fetch.
+			return JobReady, "", nil
+		}
 		if d.Kind == scancatalog.KindMaven {
 			// A Maven adapter runs in the build's own JDK: the plugin is
 			// the artifact, whatever the runner's platform.

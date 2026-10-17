@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
@@ -19,6 +21,8 @@ import (
 	"github.com/hibouhq/hibou/internal/cwe"
 	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/license"
+	"github.com/hibouhq/hibou/internal/repoconfig"
+	"github.com/hibouhq/hibou/internal/shipped"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/versioncmp"
@@ -52,7 +56,11 @@ type advisoryResponse struct {
 	FixedVersions []string  `json:"fixed_versions,omitempty"`
 	References    []string  `json:"references,omitempty"`
 	Aliases       []string  `json:"aliases,omitempty"`
-	Source        *string   `json:"source,omitempty"`
+	// Fingerprint is the finding this advisory raised on the component in
+	// this snapshot, so the components view can open it in the findings
+	// view (?finding=<fingerprint>).
+	Fingerprint string  `json:"fingerprint,omitempty"`
+	Source      *string `json:"source,omitempty"`
 }
 
 type componentWithVulnsResponse struct {
@@ -68,6 +76,59 @@ type componentWithVulnsResponse struct {
 	FixedVersions   []string           `json:"fixed_versions,omitempty"`
 	UsagePaths      [][]string         `json:"usage_paths,omitempty"`
 	Licenses        []string           `json:"licenses,omitempty"`
+	// Signals are the deps.dev package signals for this version (ADR-048):
+	// absent when the provider is off or the version was not looked up,
+	// which the UI shows as "not evaluated", never as clean.
+	Signals *componentSignalsResponse `json:"signals,omitempty"`
+	// Provenance from the inventory sources (ADR-045 §5): relationship,
+	// scopes, modules, resolution, registry, and which artifacts reported
+	// the component. Empty fields mean no source said.
+	componentProvenance
+}
+
+// componentSignalsResponse is one package version's signals. Booleans are
+// computed at read time from stored timestamps, so a cooldown ends on its
+// own without a refresh.
+type componentSignalsResponse struct {
+	PublishedAt        *string  `json:"published_at,omitempty"`
+	CooldownUntil      *string  `json:"cooldown_until,omitempty"`
+	InCooldown         bool     `json:"in_cooldown"`
+	Deprecated         bool     `json:"deprecated"`
+	DeprecatedReason   string   `json:"deprecated_reason,omitempty"`
+	LowUsage           bool     `json:"low_usage"`
+	Alternatives       []string `json:"alternatives,omitempty"`
+	Unpublished        bool     `json:"unpublished"`
+	RecommendedVersion string   `json:"recommended_version,omitempty"`
+	Source             string   `json:"source"`
+	FetchedAt          string   `json:"fetched_at"`
+}
+
+func componentSignalsFromRow(row store.PackageSignal, now time.Time) *componentSignalsResponse {
+	out := &componentSignalsResponse{
+		Deprecated:         row.Deprecated,
+		DeprecatedReason:   row.DeprecatedReason,
+		LowUsage:           row.LowUsage,
+		Unpublished:        row.NotFound,
+		RecommendedVersion: row.RecommendedVersion,
+		Source:             row.Source,
+		FetchedAt:          row.FetchedAt.UTC().Format(time.RFC3339),
+	}
+	if row.PublishedAt.Valid {
+		published := row.PublishedAt.Time.UTC().Format(time.RFC3339)
+		out.PublishedAt = &published
+	}
+	if row.CooldownEnd.Valid && row.CooldownEnd.Time.After(now) {
+		until := row.CooldownEnd.Time.UTC().Format(time.RFC3339)
+		out.CooldownUntil = &until
+		out.InCooldown = true
+	}
+	if len(row.Alternatives) > 0 {
+		var alternatives []string
+		if json.Unmarshal(row.Alternatives, &alternatives) == nil && len(alternatives) > 0 {
+			out.Alternatives = alternatives
+		}
+	}
+	return out
 }
 
 type componentGraphNodeResponse struct {
@@ -278,7 +339,7 @@ func (s *Server) attachFixingPullRequests(ctx context.Context, repoID uuid.UUID,
 }
 
 func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
-	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
 		return
 	}
@@ -294,7 +355,21 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pagination := api.ParsePagination(r)
-	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+	// The shipped attribute is a policy over labels, not a column (ADR-045
+	// §6): the not-shipped set is computed once and passed as a parameter.
+	shippedFilter, q := shippedFilterFromQuery(r)
+	var notShippedIDs []uuid.UUID
+	if shippedFilter == "yes" || shippedFilter == "no" {
+		ids, err := s.notShippedComponentIDs(r.Context(), org, repo, snapshot.ID)
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to resolve shipped components")
+			return
+		}
+		notShippedIDs = ids
+	} else {
+		shippedFilter = ""
+	}
+	if q != "" {
 		node, err := filterquery.Parse(q)
 		if err != nil {
 			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
@@ -306,6 +381,7 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 			api.JSONError(w, http.StatusBadRequest, "invalid filter query")
 			return
 		}
+		sqlResult.Where, sqlResult.Params = withShippedCondition(sqlResult.Where, sqlResult.Params, 2, shippedFilter, notShippedIDs)
 
 		vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshotDynamicWithFilters(
 			r.Context(),
@@ -327,11 +403,15 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 		s.attachKEV(r.Context(), vulnerabilities)
 		s.attachCWEs(r.Context(), vulnerabilities)
 		s.attachRiskMetrics(r.Context(), vulnerabilities, false)
+		s.attachPackageSignals(r.Context(), vulnerabilities)
+		s.attachShipped(r.Context(), org, repo, snapshot.ID, vulnerabilities)
 		api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
 		return
 	}
 
-	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, vulnerabilityListOptionsFromRequest(r, pagination.PerPage, pagination.Offset))
+	options := vulnerabilityListOptionsFromRequest(r, pagination.PerPage, pagination.Offset)
+	options.Shipped, options.NotShippedComponentIDs = shippedFilter, notShippedIDs
+	vulnerabilities, total, err := s.queries.ListVulnerabilitiesBySnapshot(r.Context(), snapshot.ID, options)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to list vulnerabilities")
 		return
@@ -343,7 +423,27 @@ func (s *Server) handleGetRefFindings(w http.ResponseWriter, r *http.Request) {
 	s.attachKEV(r.Context(), vulnerabilities)
 	s.attachCWEs(r.Context(), vulnerabilities)
 	s.attachRiskMetrics(r.Context(), vulnerabilities, false)
+	s.attachPackageSignals(r.Context(), vulnerabilities)
+	s.attachShipped(r.Context(), org, repo, snapshot.ID, vulnerabilities)
 	api.JSONList(w, vulnerabilities, pagination.Page, pagination.PerPage, total)
+}
+
+// withShippedCondition appends the shipped filter to a filterquery WHERE
+// clause; startParam is the first index the clause's parameters use.
+func withShippedCondition(where string, params []interface{}, startParam int, shippedFilter string, notShippedIDs []uuid.UUID) (string, []interface{}) {
+	if shippedFilter != "yes" && shippedFilter != "no" {
+		return where, params
+	}
+	index := startParam + len(params)
+	params = append(params, pq.Array(notShippedIDs))
+	condition := fmt.Sprintf("COALESCE(v.component_id = ANY($%d::uuid[]), false)", index)
+	if shippedFilter == "yes" {
+		condition = "NOT " + condition
+	}
+	if strings.TrimSpace(where) == "" {
+		return condition, params
+	}
+	return "(" + where + ") AND " + condition, params
 }
 
 type scanRuleResponse struct {
@@ -535,7 +635,7 @@ func mergeCSVFilters(filters ...[]string) []string {
 }
 
 func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) {
-	_, repo, ok := s.loadAuthorizedRepo(r, w)
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
 		return
 	}
@@ -545,6 +645,10 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if snapshot == nil {
+		// A lazy ref (ADR-045 §4.1.1): the first read asks for its inventory.
+		if strings.TrimSpace(r.URL.Query().Get("snapshot")) == "" {
+			s.enqueueLazyDepExtraction(r.Context(), repo, resolveRequestedRefName(r, repo))
+		}
 		api.JSON(w, http.StatusOK, []componentWithVulnsResponse{})
 		return
 	}
@@ -569,8 +673,18 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		api.JSONError(w, http.StatusInternalServerError, "failed to load component dependency root")
 		return
 	}
+	labels, err := s.queries.ListSnapshotComponentLabels(r.Context(), snapshot.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load component provenance")
+		return
+	}
+	var repoCfg *repoconfig.RepoConfig
+	if loaded, _, err := s.loadBoundRepoConfig(r.Context(), repo); err == nil {
+		repoCfg = loaded
+	}
+	shipping := s.buildShippingPolicy(r.Context(), org, repo, repoCfg, labels)
 
-	responses, err := s.buildComponentResponses(r, components, vulnerabilities, edges, declaredRootRef)
+	responses, err := s.buildComponentResponses(r, components, vulnerabilities, edges, declaredRootRef, labels, shipping.policy)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load advisories")
 		return
@@ -1063,7 +1177,7 @@ func (s *Server) resolveRefForRepo(r *http.Request, repo *store.Repository, refN
 	}
 }
 
-func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Component, vulnerabilities []store.Vulnerability, dependencyEdges []store.ListComponentDependencyEdgesBySnapshotRow, declaredRootRef *string) ([]componentWithVulnsResponse, error) {
+func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Component, vulnerabilities []store.Vulnerability, dependencyEdges []store.ListComponentDependencyEdgesBySnapshotRow, declaredRootRef *string, labels map[uuid.UUID]json.RawMessage, shipping *shipped.Policy) ([]componentWithVulnsResponse, error) {
 	countedVulns, err := s.loadCountedVulns(r, vulnerabilities)
 	if err != nil {
 		return nil, err
@@ -1075,6 +1189,13 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 	for _, item := range countedVulns {
 		vulnsByComponent[item.ComponentID] = append(vulnsByComponent[item.ComponentID], item)
 	}
+
+	purls := make([]string, 0, len(components))
+	for _, component := range components {
+		purls = append(purls, component.Purl)
+	}
+	signals := s.packageSignalsFor(r.Context(), purls)
+	now := time.Now()
 
 	responses := make([]componentWithVulnsResponse, 0, len(components))
 	for _, component := range components {
@@ -1089,6 +1210,14 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 		}
 		populateComponentVulnerabilityDetails(&response, component, countedAdvisories)
 		response.UsagePaths = computeComponentUsagePaths(rootRef, adjacency, nodeLabels, component.Purl)
+		if row, ok := signals[component.Purl]; ok {
+			response.Signals = componentSignalsFromRow(row, now)
+		}
+		if raw, ok := labels[component.ID]; ok {
+			response.componentProvenance = provenanceFromLabels(raw)
+		}
+		decision := shipping.Decide(shippedCandidate(component.Purl, component.Ecosystem, response.componentProvenance))
+		response.Shipped, response.ShippedReason, response.ShippedIgnored = decision.Shipped, decision.Reason, decision.Ignored
 		responses = append(responses, response)
 	}
 
@@ -1158,7 +1287,9 @@ func populateComponentVulnerabilityDetails(response *componentWithVulnsResponse,
 	componentFixedVersionSets := make([][]string, 0, len(countedAdvisories))
 	for _, countedAdvisory := range countedAdvisories {
 		advisories = append(advisories, countedAdvisory.Advisory)
-		response.Advisories = append(response.Advisories, advisoryToResponse(countedAdvisory.Advisory, countedAdvisory.Enrichment))
+		advisoryResp := advisoryToResponse(countedAdvisory.Advisory, countedAdvisory.Enrichment)
+		advisoryResp.Fingerprint = countedAdvisory.Fingerprint
+		response.Advisories = append(response.Advisories, advisoryResp)
 		componentSources = append(componentSources, countedAdvisory.Enrichment.Sources...)
 		componentFixedVersionSets = append(componentFixedVersionSets, countedAdvisory.Enrichment.FixedVersions)
 	}
@@ -1478,11 +1609,13 @@ type countedVuln struct {
 	ComponentID uuid.UUID
 	Advisory    dbgen.Advisory
 	Enrichment  advisoryEnrichment
+	Fingerprint string
 }
 
 type countedVulnerabilityPair struct {
 	ComponentID uuid.UUID
 	AdvisoryID  uuid.UUID
+	Fingerprint string
 }
 
 type advisoryEnrichment struct {
@@ -1520,6 +1653,7 @@ func (s *Server) loadCountedVulns(r *http.Request, vulnerabilities []store.Vulne
 			ComponentID: pair.ComponentID,
 			Advisory:    advisory,
 			Enrichment:  enrichmentByID[pair.AdvisoryID],
+			Fingerprint: pair.Fingerprint,
 		})
 	}
 
@@ -1536,6 +1670,7 @@ func collectCountedVulnerabilityPairs(vulnerabilities []store.Vulnerability) []c
 		pair := countedVulnerabilityPair{
 			ComponentID: *vulnerability.ComponentID,
 			AdvisoryID:  *vulnerability.AdvisoryID,
+			Fingerprint: vulnerability.Fingerprint,
 		}
 		key := countedVulnPairKey(pair.ComponentID, pair.AdvisoryID)
 		if _, ok := seenPairs[key]; ok {

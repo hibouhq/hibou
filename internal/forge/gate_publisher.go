@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,8 @@ type GatePublisher struct {
 	// (ADR-035 §5); nil on installations without scanner policy.
 	coverageCheck CoverageCheck
 	log           zerolog.Logger
+	// cooldownTimers holds one self-expiry timer per PR ref (ADR-048 §3).
+	cooldownTimers sync.Map
 }
 
 // CoverageCheck returns, for a PR head snapshot, the required-coverage gaps
@@ -578,12 +581,60 @@ func (a *GatePublisher) evaluateAndPublish(ctx context.Context, annotation *gate
 	if !ok {
 		return
 	}
+	a.scheduleCooldownRecompute(annotation, gateResult)
 	enforcement := a.loadEnforcementMode(ctx, annotation)
 	status := gateForgeStatus(gateResult, deltaResult, enforcement)
 	a.publishGate(ctx, annotation, gateResult, deltaResult, status)
 	a.upsertGateComment(ctx, annotation, gateResult, deltaResult, status)
 	a.publishGateEvent(ctx, status.eventType, annotation.repo, annotation.snapshot, gateResult)
 	a.broadcastGateUpdate(ctx, annotation, gateResult, status)
+}
+
+// maxCooldownTimer bounds how far ahead a self-expiring recompute is armed;
+// beyond it the periodic reconcile covers it.
+const maxCooldownTimer = 14 * 24 * time.Hour
+
+// scheduleCooldownRecompute arms one timer per PR ref for the earliest
+// cooldown end in the verdict, so a hold turns green on its own without a
+// push (ADR-048 §3). Timers live in this process only; a restart loses
+// them and the reconcile loop catches up.
+func (a *GatePublisher) scheduleCooldownRecompute(annotation *gateContext, gateResult *delta.GateResult) {
+	if gateResult == nil || gateResult.Dependencies == nil || a.bus == nil {
+		return
+	}
+	var earliest *time.Time
+	for _, change := range gateResult.Dependencies.Changes {
+		if change.Decision != "hold" || change.Until == nil {
+			continue
+		}
+		if earliest == nil || change.Until.Before(*earliest) {
+			until := *change.Until
+			earliest = &until
+		}
+	}
+	if earliest == nil {
+		return
+	}
+	wait := time.Until(*earliest) + time.Minute
+	if wait <= 0 {
+		wait = time.Minute
+	}
+	if wait > maxCooldownTimer {
+		return
+	}
+	refID := annotation.prRef.ID
+	if existing, ok := a.cooldownTimers.Load(refID); ok {
+		if timer, ok := existing.(*time.Timer); ok {
+			timer.Stop()
+		}
+	}
+	a.cooldownTimers.Store(refID, time.AfterFunc(wait, func() {
+		a.cooldownTimers.Delete(refID)
+		a.bus.Publish(context.Background(), events.Event{
+			Type:    events.GateRecomputeRequested,
+			Payload: map[string]any{"ref_id": refID.String()},
+		})
+	}))
 }
 
 // gateCommentMarker identifies Hibou's sticky PR comment so re-runs edit the
@@ -738,6 +789,11 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 		b.WriteString("\n")
 	}
 
+	if section := dependenciesMarkdown(gateResult); section != "" {
+		b.WriteString(section)
+		b.WriteString("\n")
+	}
+
 	if deltaResult != nil {
 		fixed, noLongerReported := splitFixes(deltaResult.Resolved)
 		fmt.Fprintf(&b, "| 🆕 New | ✅ Fixed | ⏸️ Not re-checked | ♻️ Unchanged |\n| :---: | :---: | :---: | :---: |\n| %d | %d | %d | %d |\n\n",
@@ -772,6 +828,72 @@ func (a *GatePublisher) buildGateCommentBody(annotation *gateContext, gateResult
 	// No timestamp: the forge already shows "edited X ago", and a
 	// deterministic body is what lets UpsertPRComment skip no-op edits.
 	fmt.Fprintf(&b, "\n<sub>%s</sub>\n", provenanceLine(annotation))
+	return b.String()
+}
+
+// dependenciesMarkdown renders what the PR changes in the inventory and
+// what the package policy said (ADR-045 §4.1.2, ADR-048 §8): every
+// introduced version with its hold, deny or warnings, and the exemption
+// when one applied. Removed components are counted, not listed.
+func dependenciesMarkdown(gateResult *delta.GateResult) string {
+	if gateResult == nil || gateResult.Dependencies == nil {
+		return ""
+	}
+	deps := gateResult.Dependencies
+	var b strings.Builder
+	if !deps.Evaluated {
+		if deps.Note != "" {
+			fmt.Fprintf(&b, "**Dependencies:** %s\n", deps.Note)
+		}
+		b.WriteString(installGapsMarkdown(deps))
+		return b.String()
+	}
+	fmt.Fprintf(&b, "**Dependencies:** %d added, %d updated, %d removed", deps.Added, deps.Updated, deps.Removed)
+	if deps.Holds > 0 || deps.Denies > 0 {
+		fmt.Fprintf(&b, " · %d in cooldown, %d refused", deps.Holds, deps.Denies)
+	}
+	b.WriteString("\n\n")
+	listed := 0
+	for _, change := range deps.Changes {
+		if change.Change == delta.DependencyRemoved {
+			continue
+		}
+		if listed == 25 {
+			fmt.Fprintf(&b, "- … and %d more\n", deps.Added+deps.Updated-listed)
+			break
+		}
+		listed++
+		icon := "✓"
+		detail := ""
+		switch change.Decision {
+		case "hold":
+			icon = "⏳"
+			detail = change.Reason
+		case "deny":
+			icon = "🚫"
+			detail = change.Reason
+		}
+		if change.Exempt != "" {
+			icon = "✓"
+			detail = change.Exempt
+		}
+		version := change.Version
+		if change.Change == delta.DependencyUpdated && change.PreviousVersion != "" {
+			version = change.PreviousVersion + " → " + change.Version
+		}
+		fmt.Fprintf(&b, "- %s `%s` %s (%s)", icon, change.Name, version, change.Change)
+		if detail != "" {
+			fmt.Fprintf(&b, " — %s", detail)
+		}
+		for _, warning := range change.Warnings {
+			fmt.Fprintf(&b, " · ⚠ %s", warning)
+		}
+		b.WriteString("\n")
+	}
+	if deps.Holds > 0 {
+		b.WriteString("\nA cooldown ends on its own; the check is re-evaluated then. Needed now: an organization admin can record an acceptance for the exact version.\n")
+	}
+	b.WriteString(installGapsMarkdown(deps))
 	return b.String()
 }
 
@@ -1701,4 +1823,19 @@ func stringToNull(value *string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *value, Valid: true}
+}
+
+// installGapsMarkdown lists the install-time cooldown gaps (ADR-048 §3.1):
+// modules whose package manager would install a fresh version the gate
+// holds, and updaters out of step with the install.
+func installGapsMarkdown(deps *delta.DependencyDelta) string {
+	if deps == nil || len(deps.InstallGaps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n**Install-time cooldown:**\n")
+	for _, gap := range deps.InstallGaps {
+		fmt.Fprintf(&b, "- ⚠ %s\n", gap)
+	}
+	return b.String()
 }

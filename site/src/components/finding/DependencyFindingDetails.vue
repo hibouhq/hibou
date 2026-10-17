@@ -23,13 +23,14 @@
       <FindingFacts
         class="mt-2"
         :facts="packageFacts"
+        @navigate="emit('navigate')"
       />
     </FindingSection>
 
     <!-- Remediation before the advisory prose: the upgrade target is the
          decision, everything else is evidence for it. -->
     <FindingSection
-      v-if="fixedVersions.length > 0 || finding.solution || finding.remediation_link"
+      v-if="fixedVersions.length > 0 || suggestedVersion || finding.solution || finding.remediation_link"
       title="Remediation"
       boxed
       class="!border-ok/30 !bg-ok/5"
@@ -39,11 +40,46 @@
         class="flex flex-wrap items-center gap-1.5"
       >
         <span class="text-xs text-gray-400">Fixed in</span>
+        <!-- A fix still in cooldown is marked before anyone bumps to it: the
+             gate would hold that PR (ADR-048 §8). -->
         <span
           v-for="version in fixedVersions"
           :key="version"
-          class="rounded-md border border-ok/30 bg-ok/10 px-2 py-0.5 font-mono text-xs text-ok"
-        >{{ version }}</span>
+          class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs"
+          :class="versionChipClass(version, 'ok')"
+          :title="versionTitle(version)"
+        >
+          {{ version }}
+          <Clock
+            v-if="remediationFor(version)?.in_cooldown"
+            class="signal-icon signal-cooldown"
+          />
+          <ShieldAlert
+            v-else-if="remediationFor(version)?.decision === 'deny'"
+            class="signal-icon signal-unpublished"
+          />
+        </span>
+      </div>
+      <!-- deps.dev's "low risk" pick (ADR-048 §8): shown when the advisory names
+           no fix, or names one still in cooldown. Labelled with its source; it
+           is a suggestion, not the advisory's fix. -->
+      <div
+        v-if="suggestedVersion"
+        class="flex flex-wrap items-center gap-1.5"
+        :class="fixedVersions.length > 0 ? 'mt-2' : ''"
+      >
+        <span class="text-xs text-gray-400">Suggested by deps.dev</span>
+        <span
+          class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs"
+          :class="versionChipClass(suggestedVersion, 'accent')"
+          :title="versionTitle(suggestedVersion)"
+        >
+          {{ suggestedVersion }}
+          <Clock
+            v-if="remediationFor(suggestedVersion)?.in_cooldown"
+            class="signal-icon signal-cooldown"
+          />
+        </span>
       </div>
       <p
         v-if="finding.solution"
@@ -200,7 +236,8 @@
 import { safeHref } from '@/lib/safeUrl'
 import { computed, ref, watch } from 'vue'
 
-import { api, type AdvisoryActivityEvent, type FindingDetail } from '@/api/client'
+import { api, type AdvisoryActivityEvent, type FindingDetail, type RemediationVersion } from '@/api/client'
+import { Clock, ShieldAlert } from 'lucide-vue-next'
 import MarkdownText from '@/components/MarkdownText.vue'
 import { isLocallyCurated } from '@/lib/purl'
 import type { Fact } from '@/components/finding/facts'
@@ -223,6 +260,8 @@ const props = defineProps<{
   forgeProvider?: string
 }>()
 
+const emit = defineEmits<{ (event: 'navigate'): void }>()
+
 const REFERENCE_PREVIEW = 5
 const allReferences = ref(false)
 
@@ -235,6 +274,69 @@ const aliases = computed(() => advisory.value?.aliases ?? [])
 // adds anything.
 const advisoryTitle = computed(() => (advisory.value?.title !== finding.value.title ? advisory.value?.title ?? '' : ''))
 const fixedVersions = computed(() => advisory.value?.fixed_versions ?? [])
+const signals = computed(() => props.detail.signals)
+/** deps.dev's pick, only when it adds to what the advisory says. */
+const suggestedVersion = computed(() => {
+  const version = signals.value?.recommended_version
+  if (!version || fixedVersions.value.includes(version)) return ''
+  return version
+})
+
+const remediation = computed(() => props.detail.remediation ?? [])
+function remediationFor(version: string): RemediationVersion | undefined {
+  return remediation.value.find((entry) => entry.version === version)
+}
+/** Chip colour follows the policy verdict: amber while held, red when denied. */
+function versionChipClass(version: string, base: 'ok' | 'accent'): string {
+  const entry = remediationFor(version)
+  if (entry?.in_cooldown) return 'border-[#d29922]/40 bg-[#d29922]/10 text-[#d29922]'
+  if (entry?.decision === 'deny') return 'border-danger/40 bg-danger/10 text-danger'
+  return base === 'ok' ? 'border-ok/30 bg-ok/10 text-ok' : 'border-accent/30 bg-accent/10 text-accent'
+}
+function versionTitle(version: string): string {
+  const entry = remediationFor(version)
+  if (!entry) return ''
+  if (entry.in_cooldown) return `In cooldown until ${shortDate(entry.cooldown_until)}: the gate holds a bump to this version until then`
+  if (entry.decision === 'deny') return entry.reason || 'Denied by the package policy'
+  if (entry.warnings?.length) return entry.warnings.join('; ')
+  return entry.evaluated ? 'Clear: no cooldown or policy hold on this version' : entry.reason || ''
+}
+
+function shortDate(value?: string): string {
+  if (!value) return ''
+  return new Date(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+/** Package signals as facts (ADR-048): the registry's view of this version. */
+const signalFacts = computed<Fact[]>(() => {
+  const state = signals.value
+  if (!state) return []
+  const facts: Fact[] = []
+  if (state.published_at) {
+    facts.push({
+      label: 'Published',
+      value: shortDate(state.published_at),
+      hint: state.in_cooldown ? `In cooldown: deps.dev recommends waiting until ${shortDate(state.cooldown_until)} before adopting this version` : undefined,
+    })
+  }
+  if (state.in_cooldown) {
+    facts.push({ label: 'Cooldown', value: `until ${shortDate(state.cooldown_until)}`, hint: 'A fresh release: give scanners and reviewers time before it reaches a build' })
+  }
+  if (state.unpublished) {
+    facts.push({ label: 'Registry', value: 'unpublished', hint: 'This version is no longer on the public registry; often a takedown' })
+  }
+  if (state.deprecated) {
+    facts.push({ label: 'Registry', value: 'deprecated', hint: state.deprecated_reason || undefined, wide: Boolean(state.deprecated_reason) })
+  }
+  if (state.low_usage) {
+    facts.push({
+      label: 'Usage',
+      value: 'low',
+      hint: state.alternatives?.length ? `Did you mean ${state.alternatives.join(', ')}?` : 'Verify this is the package you meant',
+    })
+  }
+  return facts
+})
 const references = computed(() => advisory.value?.references ?? [])
 const visibleReferences = computed(() => (allReferences.value ? references.value : references.value.slice(0, REFERENCE_PREVIEW)))
 // The scanner's own text is usually the shorter one; the advisory's is the
@@ -295,8 +397,20 @@ const packageFacts = computed<Fact[]>(() => [
     label: locallyCurated.value ? 'Source' : 'Scanner',
     value: locallyCurated.value ? 'Curated here' : finding.value.scanner_name,
   },
-  { label: 'Package URL', value: finding.value.component_purl, mono: true, wide: true },
+  // The package is the subject: link it to the dependencies view, where the
+  // same version shows its other advisories and where it is used.
+  {
+    label: 'Package URL',
+    value: finding.value.component_purl,
+    mono: true,
+    wide: true,
+    to: finding.value.component_purl && props.provider && props.slug && props.repoSlug
+      ? { name: 'repo-dependencies', params: { provider: props.provider, slug: props.slug, repoSlug: props.repoSlug }, query: { component: finding.value.component_purl } }
+      : undefined,
+    hint: 'Open in Dependencies',
+  },
   { label: 'Manifest', value: finding.value.file_path, mono: true, wide: true, hint: 'The file the dependency was declared in' },
+  ...signalFacts.value,
 ])
 
 const advisoryFacts = computed<Fact[]>(() => [

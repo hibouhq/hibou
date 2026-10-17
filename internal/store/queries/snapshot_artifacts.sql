@@ -46,3 +46,38 @@ JOIN snapshots s ON s.id = sa.snapshot_id
 JOIN refs rf ON rf.id = s.ref_id
 JOIN repositories r ON r.id = rf.repo_id
 WHERE r.org_id = $1 AND sa.object_key <> '';
+
+-- name: SetSnapshotArtifactSource :exec
+-- Origin, who recorded it and the deliverable metadata (ADR-046 §4).
+UPDATE snapshot_artifacts
+SET origin = sqlc.arg(origin), created_by = sqlc.narg(created_by), metadata = COALESCE(sqlc.arg(metadata)::jsonb, '{}'::jsonb)
+WHERE id = sqlc.arg(id);
+
+-- name: RevokeSnapshotArtifact :execrows
+UPDATE snapshot_artifacts
+SET revoked_at = now(), revoked_by = sqlc.narg(revoked_by), revoke_reason = sqlc.arg(reason)
+WHERE id = sqlc.arg(id) AND revoked_at IS NULL;
+
+-- name: RestoreSnapshotArtifact :execrows
+UPDATE snapshot_artifacts
+SET revoked_at = NULL, revoked_by = NULL, revoke_reason = NULL
+WHERE id = sqlc.arg(id) AND revoked_at IS NOT NULL;
+
+-- name: CountSnapshotComponentsBySourceLabel :one
+SELECT COUNT(*)::bigint FROM snapshot_components
+WHERE snapshot_id = sqlc.arg(snapshot_id) AND labels ? sqlc.arg(label)::text;
+
+-- name: RemoveSnapshotComponentSourceLabel :exec
+-- Drops one artifact's provenance label from every component of the
+-- snapshot (revocation, ADR-045 §5.3).
+UPDATE snapshot_components
+SET labels = labels - sqlc.arg(label)::text
+WHERE snapshot_id = sqlc.arg(snapshot_id) AND labels ? sqlc.arg(label)::text;
+
+-- name: DeleteSnapshotComponentsWithoutSource :execrows
+-- Components no remaining artifact reports leave the effective inventory.
+DELETE FROM snapshot_components
+WHERE snapshot_id = sqlc.arg(snapshot_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM jsonb_object_keys(labels) AS k WHERE k LIKE 'sbom:%'
+  );

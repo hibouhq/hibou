@@ -119,6 +119,65 @@
       </div>
     </div>
 
+    <!-- Package signals from deps.dev (ADR-048 §6): a live provider has no
+         catalog date, but it has a last pass and what it looked up, which is
+         what tells "no signals" from "never synced". Absent when switched off. -->
+    <div
+      v-if="depsdev"
+      class="rounded-md border bg-surface-raised px-4 py-3"
+      :class="depsdevTone === 'failing' ? 'border-danger/40' : 'border-surface-border'"
+    >
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-medium text-gray-200">deps.dev package signals</span>
+        <span
+          class="flex items-center gap-1.5 text-xs"
+          :class="depsdevTone === 'failing' ? 'text-danger' : depsdevTone === 'stale' ? 'text-warn' : 'text-ok'"
+        >
+          <span
+            class="h-1.5 w-1.5 rounded-full"
+            :class="depsdevTone === 'failing' ? 'bg-danger' : depsdevTone === 'stale' ? 'bg-warn' : 'bg-ok'"
+          />
+          {{ depsdevTone === 'failing' ? 'Failing' : depsdevTone === 'stale' ? 'Stale' : 'Up to date' }}
+        </span>
+      </div>
+      <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
+        <span v-if="depsdev.succeeded_at">
+          Last pass <span class="text-gray-200">{{ relative(depsdev.succeeded_at) }}</span>
+        </span>
+        <span v-if="depsdev.stored">
+          <span class="font-mono text-gray-200">{{ depsdev.stored.toLocaleString() }}</span> versions known
+        </span>
+        <span v-if="depsdev.looked_up">
+          <span class="font-mono text-gray-200">{{ depsdev.looked_up.toLocaleString() }}</span> looked up
+        </span>
+        <span v-if="depsdev.private">
+          <span class="font-mono text-gray-200">{{ depsdev.private.toLocaleString() }}</span> private, never sent
+        </span>
+        <span v-if="depsdev.unsupported">
+          <span class="font-mono text-gray-200">{{ depsdev.unsupported.toLocaleString() }}</span> outside its ecosystems
+        </span>
+        <span
+          v-if="depsdev.url"
+          class="font-mono"
+        >{{ depsdev.url }}</span>
+      </div>
+      <div
+        v-if="depsdev.error"
+        class="mt-2 border-t border-danger/20 pt-2"
+      >
+        <p class="text-xs text-red-200">
+          Failing
+          <template v-if="depsdev.failing_since">
+            since {{ relative(depsdev.failing_since) }}
+          </template>
+          — stored signals stay as they were; cooldowns still expire on their own.
+        </p>
+        <p class="mt-1 break-all font-mono text-[11px] text-red-300/80">
+          {{ depsdev.error }}
+        </p>
+      </div>
+    </div>
+
     <!-- Why it is failing. A status colour tells someone to look; only the
          reason tells them where. -->
     <div
@@ -220,13 +279,28 @@
 import { Check, Flame, Plus, RefreshCw, TriangleAlert, X } from 'lucide-vue-next'
 import { computed, onMounted, ref } from 'vue'
 
-import { api, type AdvisoryActivityEvent, type CorpusState, type FeedHealth, type KEVHealth, type KEVSourceHealth } from '@/api/client'
+import { api, type AdvisoryActivityEvent, type CorpusState, type DepsDevHealth, type FeedHealth, type KEVHealth, type KEVSourceHealth } from '@/api/client'
 import { kevSourceLabel, kevSyncTone } from '@/lib/kev'
 
 const events = ref<AdvisoryActivityEvent[]>([])
 const health = ref<FeedHealth | null>(null)
 const corpus = ref<CorpusState | null>(null)
 const kev = ref<KEVHealth | null>(null)
+const depsdev = ref<DepsDevHealth | null>(null)
+
+/**
+ * Same verdict rule as the catalog cards: an error is actionable now, a
+ * missed schedule is a question. Stale after four missed passes at the
+ * configured interval (a day by default).
+ */
+const depsdevTone = computed<'ok' | 'stale' | 'failing'>(() => {
+  const state = depsdev.value
+  if (!state) return 'ok'
+  if (state.error) return 'failing'
+  if (!state.succeeded_at) return 'stale'
+  const interval = (state.interval_seconds ?? 86_400) * 1000
+  return Date.now() - new Date(state.succeeded_at).getTime() > 4 * interval ? 'stale' : 'ok'
+})
 
 function kevToneDot(source: KEVSourceHealth): string {
   const tone = kevSyncTone(source, kev.value?.interval_seconds)
@@ -343,6 +417,7 @@ onMounted(async () => {
     health.value = response.data.health
     corpus.value = response.data.corpus
     kev.value = response.data.kev ?? null
+    depsdev.value = response.data.depsdev ?? null
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to load advisory activity'
   } finally {

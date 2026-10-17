@@ -13,12 +13,15 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hibouhq/hibou/internal/cliclient"
+	"github.com/hibouhq/hibou/internal/depinventory"
 	"github.com/hibouhq/hibou/internal/scancatalog"
 	"github.com/hibouhq/hibou/internal/scanplan"
 	"github.com/hibouhq/hibou/internal/scanrun"
 )
 
 var (
+	scanDepsResolve   string
+	scanDepsGraph     string
 	scanMode          string
 	scanScanners      []string
 	scanJobs          int
@@ -170,6 +173,8 @@ func runScan(ctx context.Context) error {
 		OpenGrepRules:   scanOpenGrepRules,
 		MavenRepository: mavenRepo,
 		Command:         scanCommandOverride,
+		DepsResolve:     scanDepsResolve,
+		DepsGraphFile:   scanDepsGraph,
 	}
 
 	type outcome struct {
@@ -236,6 +241,12 @@ func runScan(ctx context.Context) error {
 				fmt.Fprintf(os.Stderr, "FAILED upload %s: %v\n", sarifPath, err)
 			}
 		}
+		for _, sbomPath := range o.result.SBOMPaths {
+			if err := uploadScanInventory(client, base, ci, o.job, sbomPath); err != nil {
+				failed++
+				fmt.Fprintf(os.Stderr, "FAILED upload %s: %v\n", sbomPath, err)
+			}
+		}
 	}
 	if uploadComplete {
 		if err := runUploadComplete(); err != nil {
@@ -249,6 +260,36 @@ func runScan(ctx context.Context) error {
 		return fmt.Errorf("%d scan job(s) blocked", blocked)
 	}
 	return nil
+}
+
+// uploadScanInventory uploads a built-in producer's inventory (ADR-045
+// §4.2) as an SBOM under the extractor's tool name, so the server treats
+// it as the CI run of its own extractor and skips its own.
+func uploadScanInventory(client *cliclient.Client, base uploadBase, ci uploadCIContext, job scanplan.Job, sbomPath string) error {
+	data, err := os.ReadFile(sbomPath) // #nosec G304 -- the producer's document in the scan output directory
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"provider":     base.provider,
+		"org":          base.org,
+		"repo":         base.repo,
+		"ref":          ci.ref,
+		"commit_sha":   ci.commitSHA,
+		"complete":     false,
+		"tool":         depinventory.ToolName,
+		"tool_version": depinventory.Version,
+		"scope":        job.Scope,
+		"artifact": map[string]string{
+			"filename":       filepath.Base(sbomPath),
+			"content_base64": base64.StdEncoding.EncodeToString(data),
+		},
+	}
+	if job.Scope == "partial" {
+		payload["paths"] = job.Targets
+	}
+	setOptionalUploadContextFields(payload, ci)
+	return submitUpload(client, "/upload", payload)
 }
 
 // uploadScanReport uploads one report. A plan-bound job declares its scope
@@ -336,4 +377,6 @@ func init() {
 	scanCmd.Flags().StringVar(&scanOpenGrepRules, "opengrep-rules", "", "Local OpenGrep rules while no catalog ruleset is approved; such reports are uploaded unbound")
 	scanCmd.Flags().StringVar(&scanBundleDir, "bundle-dir", "", "Imported offline scanner bundle on this runner (default $HIBOU_SCANNER_BUNDLE_DIR); required when the server distributes offline")
 	scanCmd.Flags().StringVar(&scanMavenRepo, "maven-repo", "", "Local Maven repository to verify resolved plugin jars in (default ~/.m2/repository)")
+	scanCmd.Flags().StringVar(&scanDepsResolve, "deps-resolve", "", "Dependency inventory resolve mode: run the repository's own build tool (maven|gradle) to record the resolved set for ecosystems without a lockfile")
+	scanCmd.Flags().StringVar(&scanDepsGraph, "deps-graph", "", "Dependency inventory graph export to merge (Maven dependency:list or dependency:tree output, Gradle dependencies output, pip freeze)")
 }

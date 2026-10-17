@@ -1,0 +1,174 @@
+---
+title: Dependency Inventory
+description: How Hibou builds its own dependency inventory, what "shipped" means, release cooldown, and the CLI for local scans, deliverables and SBOM verification
+---
+
+Hibou reads the lockfiles and manifests of every enrolled repository itself,
+without an uploaded SBOM (ADR-045). The inventory feeds the Dependencies and
+Vulnerabilities tabs, releases, the pull request gate and the compliance
+exports. A CI-uploaded SBOM and the deliverables you record on a release add
+to it; nothing replaces it.
+
+## What the server extracts
+
+Lockfiles give exact versions, indirect dependencies included: `go.mod`,
+`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `uv.lock`,
+`poetry.lock`, `pdm.lock`, `Pipfile.lock`, `pylock.toml`, pinned
+`requirements.txt`, `Cargo.lock`, `gradle.lockfile`,
+`verification-metadata.xml`. Manifests give direct dependencies only:
+`pom.xml` with its literal versions. A range in a manifest (`requests>=2.0`,
+`[30.0,32.0)`) is listed as **unresolved** with its constraint and is never
+matched against advisories: guessing a version would be wrong either way.
+
+Infrastructure and CI references are inventoried too, each as its own
+ecosystem: Terraform providers (`.terraform.lock.hcl`), Helm charts
+(`Chart.lock`, `Chart.yaml`), GitHub Actions and reusable workflows, GitLab
+CI includes and components, Ansible collections and roles, and the images
+`Dockerfile` and Compose files referrecordedence. A tag reference is *declared*; a
+commit SHA or a digest is **. These ecosystems are not shipped by
+default (see below).
+
+Extraction runs on every push to the default branch and to the branches
+listed in `dependencies.branches`, on release tags, and on the first read of
+any other branch. A pull request that touches a manifest is extracted and
+compared with its target branch.
+
+### Running the extractor in CI
+
+`hibou scan` plans the `hibou-deps` catalog entry when it recognises a
+lockfile. It runs the same extractor in-process and uploads the inventory;
+the server-side extraction of that commit is then skipped. Two options
+record what a manifest alone cannot say, inside the repository's own trust
+domain:
+
+```sh
+hibou scan --deps-resolve maven          # runs mvn dependency:list, records the resolved set
+hibou scan --deps-graph deps.txt         # merges a Maven, Gradle or pip freeze export
+```
+
+## Shipped or not shipped
+
+Every component stays listed. **Shipped** says whether it reaches clients:
+it drives client impact, release gates and the exported SBOM. Everything is
+shipped unless:
+
+- an SBOM uploaded from your build leaves it out (the SBOM is your own
+  statement of what ships; `dependencies.sbom_covers` says which paths it
+  describes when it covers part of a monorepo);
+- a not-shipped list matches it. Lists come from the built-in defaults
+  (Terraform, Helm, CI workflows, images, Ansible), the organization's
+  settings, the repository entries recorded in the Dependencies tab, and
+  `.hibou.yaml`:
+
+```yaml
+dependencies:
+  not_shipped:
+    - "pkg:npm/@types/*"
+    - "re:^pkg:npm/eslint(-.*)?@"
+    - "ecosystem:terraform"
+    - "tools/**"
+  shipped: ["ecosystem:terraform"]   # this repository publishes a Terraform module
+  exclude: ["examples/**"]           # not inventoried at all
+  gate_not_shipped:
+    kev: true            # exploited findings on dev dependencies still block
+    epss_min: 0.5
+    min_severity: off
+```
+
+Declared dev and test scopes are suggestions, not rules: the Dependencies
+tab offers to mark them, and an organization can trust them per ecosystem
+in its dependency policy settings. Findings on not-shipped components are
+listed with a badge and left out of the pull request gate, except malicious
+packages (always) and what `gate_not_shipped` names.
+
+## Release cooldown
+
+A freshly published version is the one most likely to be malicious or
+broken. Hibou reads the registry's publish date and holds a pull request
+that adopts a version younger than the window (`dependencies.cooldown`, or
+the organization's dependency policy). A fix for a finding the pull request
+resolves is never held. The finding drawer marks a fix version that is still
+in cooldown before anyone bumps to it.
+
+The gate holds a merge; it does not stop a download. The setting that does
+is the package manager's own, committed in the repository. Hibou checks it
+and reports it per module in the Dependencies tab; `install_config: require`
+turns a missing one into a gate failure. The CLI writes them:
+
+```sh
+hibou deps cooldown init --window 7d --updater renovate
+```
+
+For CI runners, the pre-install step asks the policy about every version
+the lockfile declares before anything is installed:
+
+```sh
+hibou deps check --fail-on hold,deny
+```
+
+A composite action, `hibou-deps-check`, wraps it for GitHub and Forgejo
+Actions. The Artifactory user plugin, `hibou-artifactory-plugin` in its own
+repository, enforces the same policy at the registry proxy.
+
+## The CLI
+
+`hibou deps` never writes to Hibou; `hibou release scan` records.
+
+```sh
+hibou deps scan                                  # this working tree, matched against your org's advisories
+hibou deps scan --git-ref v1.2.3                 # an old tag from the local clone
+hibou deps scan dist/app.war --repo api --release v1.2.3
+hibou deps scan --image registry.example/app:1.2.3 --format cyclonedx > app.cdx.json
+hibou deps scan delivery.zip --offline           # inventory only, no server
+hibou deps scan --fail-on 'severity:critical shipped:yes'
+hibou deps list --repo api --release v1.2.3 --filter 'relationship:direct'
+hibou vulns list --repo api --pr 42
+hibou deps diff --repo api v1.2.3 v1.3.0
+hibou deps verify dist/app.war --sbom vendor-app.cdx.json --fail-on undeclared
+```
+
+Only purls and versions reach the server; file contents never do. Exit codes:
+`0` whatever is found, `1` when `--fail-on` matches, `2` on errors.
+
+### Deliverables
+
+`hibou deps scan` and `hibou release scan` read what a build produced:
+
+| Deliverable | What it yields |
+|---|---|
+| JAR, WAR, EAR, Spring Boot fat JAR | Nested jars identified by their Maven metadata: the full shipped set |
+| Go binary | Build info: every module and version, the toolchain, the VCS revision |
+| Rust binary | The full set when built with `cargo auditable` |
+| Wheel, virtualenv, `site-packages` archive | Every installed package's metadata |
+| `node_modules` archive, npm tarball | Installed packages with exact versions |
+| Container image (reference or `docker save` tarball) | OS packages (dpkg, apk, rpm) and language packages of the squashed filesystem |
+| Any zip or tar of everything | All of the above, wherever it sits; nested archives included |
+
+Nothing is silently ignored: files no extractor recognises (a `.dll`, a
+`.so`, a jar without Maven metadata, a minified bundle) are listed as **not
+identified**, so the coverage of the analysis is visible.
+
+Packaging for the best result: the built JAR or WAR rather than classes,
+Go binaries built in module mode, `cargo auditable` builds, the lockfile
+next to a JavaScript bundle, `docker save` output for images you cannot
+pull from the machine running the CLI.
+
+### Recording deliverables on a release
+
+```sh
+hibou release scan v1.2.3                  # no files: the server extracts the tag
+hibou release scan v1.2.3 dist/app.war --image registry.example/app:1.2.3
+hibou release scan --all                   # every release without an inventory
+hibou release sources v1.2.3
+hibou release sources revoke v1.2.3 <source-id> --reason "wrong file"
+```
+
+With files, the CLI checks the deliverable's own metadata against the
+release (Go build info revision, JAR `Implementation-Version`, image labels,
+package versions), shows what the release already has and what recording
+changes, and asks for confirmation. Recording is additive and idempotent:
+sources are never replaced, a file already recorded is a no-op, and a source
+recorded after the release date is labelled as such. An organization admin
+in a user session can revoke a recorded deliverable, with a reason; the
+artifact stays, its components leave the release unless another source
+reports them, and the release is rescanned.

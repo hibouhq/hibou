@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/cooldown"
 	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -22,6 +24,15 @@ type OrgSettings struct {
 	// LoginTokens governs membership-wide device-login tokens in this org
 	// (ADR-043 §4): allow, read_only (role capped at viewer) or deny.
 	LoginTokens string `json:"login_tokens"`
+	// Dependency policy (ADR-048 §3, ADR-045 §6): the organization's
+	// defaults, which a repository's .hibou.yaml can tighten, never loosen.
+	DependencyCooldownWindow      string   `json:"dependency_cooldown_window"`
+	DependencyCooldownEnforcement string   `json:"dependency_cooldown_enforcement"`
+	DependencyInstallConfig       string   `json:"dependency_install_config"`
+	DependencyPrivateNamespaces   []string `json:"dependency_private_namespaces"`
+	// TrustedDeclaredScopes lists ecosystems whose declared dev and test
+	// scopes count as not shipped (default: none).
+	TrustedDeclaredScopes []string `json:"trusted_declared_scopes"`
 }
 
 func (s *Server) handleGetOrgSettings(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +113,10 @@ func (s *Server) handleUpdateOrgSettings(w http.ResponseWriter, r *http.Request)
 			api.JSONError(w, http.StatusBadRequest, "default_tlp_label must be empty or one of TLP:CLEAR, TLP:GREEN, TLP:AMBER, TLP:AMBER+STRICT, TLP:RED")
 			return
 		}
+		if errors.Is(err, errInvalidDependencyPolicy) {
+			api.JSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		api.JSONError(w, http.StatusInternalServerError, "failed to decode organization settings")
 		return
 	}
@@ -125,10 +140,41 @@ var (
 )
 
 var orgSettingsPatchKeys = map[string]struct{}{
-	"vex_auto_propagate":        {},
-	"vex_reachability_analysis": {},
-	"default_tlp_label":         {},
-	"login_tokens":              {},
+	"vex_auto_propagate":              {},
+	"vex_reachability_analysis":       {},
+	"default_tlp_label":               {},
+	"login_tokens":                    {},
+	"dependency_cooldown_window":      {},
+	"dependency_cooldown_enforcement": {},
+	"dependency_install_config":       {},
+	"dependency_private_namespaces":   {},
+	"trusted_declared_scopes":         {},
+}
+
+var errInvalidDependencyPolicy = errors.New("invalid dependency policy")
+
+// validateDependencySettings checks the dependency policy keys (ADR-048
+// §3): the same vocabulary as .hibou.yaml.
+func validateDependencySettings(settings OrgSettings) error {
+	if _, _, _, err := cooldown.ParseWindow(settings.DependencyCooldownWindow); err != nil {
+		return fmt.Errorf("%w: dependency_cooldown_window: %w", errInvalidDependencyPolicy, err)
+	}
+	switch strings.ToLower(strings.TrimSpace(settings.DependencyCooldownEnforcement)) {
+	case "", "inherit", "advisory", "blocking":
+	default:
+		return fmt.Errorf("%w: dependency_cooldown_enforcement must be inherit, advisory or blocking", errInvalidDependencyPolicy)
+	}
+	switch strings.ToLower(strings.TrimSpace(settings.DependencyInstallConfig)) {
+	case "", "require", "warn", "off":
+	default:
+		return fmt.Errorf("%w: dependency_install_config must be require, warn or off", errInvalidDependencyPolicy)
+	}
+	for _, pattern := range settings.DependencyPrivateNamespaces {
+		if !strings.HasPrefix(strings.TrimSpace(pattern), "pkg:") {
+			return fmt.Errorf("%w: dependency_private_namespaces: %q must be a purl pattern", errInvalidDependencyPolicy, pattern)
+		}
+	}
+	return nil
 }
 
 func mergeOrgSettingsPatch(existingRaw json.RawMessage, patch map[string]json.RawMessage) (OrgSettings, json.RawMessage, error) {
@@ -156,6 +202,9 @@ func mergeOrgSettingsPatch(existingRaw json.RawMessage, patch map[string]json.Ra
 	}
 	if !isValidLoginTokens(merged.LoginTokens) {
 		return OrgSettings{}, nil, errInvalidLoginTokens
+	}
+	if err := validateDependencySettings(merged); err != nil {
+		return OrgSettings{}, nil, err
 	}
 	if _, ok := patch["login_tokens"]; ok {
 		normalized, err := json.Marshal(merged.LoginTokens)

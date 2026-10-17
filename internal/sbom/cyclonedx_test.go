@@ -133,3 +133,24 @@ func TestCanonicalComponentNameFallsBackToGroupAndName(t *testing.T) {
 		t.Fatalf("golang purl = %q, want full module path", got)
 	}
 }
+
+func TestParseCycloneDXJSONGraphKeepsProperties(t *testing.T) {
+	doc := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","bom-ref":"pkg:npm/express@4.18.2","name":"express","version":"4.18.2","purl":"pkg:npm/express@4.18.2","properties":[{"name":"hibou:relationship","value":"direct"},{"name":"hibou:scope","value":"dev"},{"name":"hibou:scope","value":"optional"},{"name":"","value":"ignored"}]}]}`)
+	components, _, _, _, err := ParseCycloneDXJSONGraph(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 {
+		t.Fatalf("got %d components", len(components))
+	}
+	props := components[0].Properties
+	if got := props["hibou:relationship"]; len(got) != 1 || got[0] != "direct" {
+		t.Errorf("relationship property %v", got)
+	}
+	if got := props["hibou:scope"]; len(got) != 2 || got[0] != "dev" || got[1] != "optional" {
+		t.Errorf("scope properties %v, want dev and optional in order", got)
+	}
+	if _, ok := props[""]; ok {
+		t.Error("an unnamed property must be dropped")
+	}
+}

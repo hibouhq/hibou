@@ -31,6 +31,29 @@
             >
               {{ component.purl }}
             </div>
+            <!-- Shipped attribute (ADR-045 §6): a fact with its reason, and the
+                 "mark as not shipped" action for admins and release managers. -->
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span
+                v-if="component.shipped === false"
+                class="rounded-md border border-surface-border px-2 py-0.5 text-gray-400"
+                :title="component.shipped_reason || 'Does not reach clients'"
+              >not shipped · {{ component.shipped_reason || 'does not reach clients' }}</span>
+              <span
+                v-else-if="component.shipped_ignored"
+                class="rounded-md border border-warn/40 px-2 py-0.5 text-warn"
+                :title="`${component.shipped_ignored} matches, but an uploaded SBOM reports this component: the evidence says it ships`"
+              >shipped · list entry ignored</span>
+              <button
+                v-if="canMarkNotShipped && component.shipped !== false"
+                type="button"
+                class="rounded-md border border-surface-border px-2 py-0.5 text-gray-300 transition hover:border-accent/50 hover:text-white"
+                title="Record that this package never reaches clients; it stays listed with shipped: no"
+                @click="emit('mark-not-shipped', component)"
+              >
+                Mark as not shipped
+              </button>
+            </div>
           </div>
           <button
             type="button"
@@ -93,6 +116,9 @@
                 <tr
                   v-for="advisory in advisories"
                   :key="advisory.id"
+                  class="cursor-pointer transition hover:bg-white/5"
+                  title="Open this finding in Vulnerabilities"
+                  @click="emit('open-finding', { fingerprint: advisory.fingerprint, advisoryId: advisory.canonical_id })"
                 >
                   <td class="px-3 py-2">
                     <span class="inline-flex items-center gap-1.5">
@@ -110,17 +136,31 @@
                     {{ advisory.cvss_score ?? '—' }}
                   </td>
                   <td class="px-3 py-2 text-xs">
-                    <a
-                      v-if="advisoryUrl(advisory.canonical_id)"
-                      :href="advisoryUrl(advisory.canonical_id)"
-                      class="font-mono text-accent hover:underline"
-                      target="_blank"
-                      rel="noopener"
-                    >{{ advisory.canonical_id }}</a>
-                    <span
-                      v-else
-                      class="font-mono text-gray-300"
-                    >{{ advisory.canonical_id }}</span>
+                    <!-- The id opens the finding here; the upstream record is
+                         one icon further, so a click never leaves the app by
+                         accident. -->
+                    <span class="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        class="font-mono text-accent hover:underline"
+                        title="Open this finding in Vulnerabilities"
+                        @click.stop="emit('open-finding', { fingerprint: advisory.fingerprint, advisoryId: advisory.canonical_id })"
+                      >
+                        {{ advisory.canonical_id }}
+                      </button>
+                      <a
+                        v-if="advisoryUrl(advisory.canonical_id)"
+                        :href="advisoryUrl(advisory.canonical_id)"
+                        class="text-gray-500 transition hover:text-accent"
+                        target="_blank"
+                        rel="noopener"
+                        :title="`Open ${advisory.canonical_id} upstream`"
+                        :aria-label="`Open ${advisory.canonical_id} upstream`"
+                        @click.stop
+                      >
+                        <ExternalLink class="h-3 w-3" />
+                      </a>
+                    </span>
                     <div
                       v-if="advisory.aliases?.length"
                       class="mt-1 flex flex-wrap gap-1"
@@ -135,6 +175,7 @@
                           target="_blank"
                           rel="noopener noreferrer"
                           class="rounded bg-surface-overlay px-1.5 py-0.5 font-mono text-[11px] text-accent hover:underline"
+                          @click.stop
                         >{{ alias }}</a>
                         <span
                           v-else
@@ -229,6 +270,7 @@
 </template>
 
 <script setup lang="ts">
+import { ExternalLink } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted } from 'vue'
 
 import type { ComponentWithVulns } from '@/api/client'
@@ -239,10 +281,17 @@ import { ecosystemKey, sourceKey } from '@/lib/purl'
 
 const props = defineProps<{
   component: ComponentWithVulns
+  /** Admins and release managers can record not-shipped entries (ADR-045 §6). */
+  canMarkNotShipped?: boolean
 }>()
 
 const emit = defineEmits<{
   (event: 'close'): void
+  (event: 'mark-not-shipped', component: ComponentWithVulns): void
+  /** A row was clicked: open that finding in the findings view. The
+   * fingerprint lands on the exact finding; without one (older server) the
+   * advisory id becomes the search. */
+  (event: 'open-finding', target: { fingerprint?: string; advisoryId: string }): void
 }>()
 
 const ecoKey = computed(() => ecosystemKey(props.component.ecosystem))

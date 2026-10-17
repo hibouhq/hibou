@@ -786,7 +786,9 @@ func (s *Server) ingestCycloneDXSBOMArtifact(ctx context.Context, queries *store
 		if err != nil {
 			return fmt.Errorf("upsert component %s: %w", component.PURL, err)
 		}
-		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID, provenance); err != nil {
+		// The built-in extractor's properties (relationship, scope, module,
+		// registry) become labels next to the artifact's own (ADR-045 §5).
+		if err := queries.AttachComponentToSnapshot(ctx, snapshot.ID, storedComponent.ID, componentLabelsWithProperties(provenance, component)); err != nil {
 			return fmt.Errorf("attach component %s to snapshot: %w", component.PURL, err)
 		}
 		for _, bomRef := range component.BomRefs {

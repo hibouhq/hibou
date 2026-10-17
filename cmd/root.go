@@ -37,7 +37,7 @@ func init() {
 	case "hibou":
 		rootCmd.Use = "hibou"
 		rootCmd.Short = "Unified DevSecOps security platform"
-		rootCmd.AddCommand(loginCmd, logoutCmd, statusCmd, uploadCmd, scanCmd, scannersCmd, gateCmd, reposCmd, releaseCmd, configCmd, secretScanCmd)
+		rootCmd.AddCommand(loginCmd, logoutCmd, statusCmd, uploadCmd, scanCmd, scannersCmd, gateCmd, reposCmd, releaseCmd, configCmd, secretScanCmd, depsCmd, vulnsCmd)
 	case "hibou-server":
 		rootCmd.Use = "hibou-server"
 		rootCmd.Short = "Hibou server - API, workers, and MCP endpoint"
@@ -45,12 +45,18 @@ func init() {
 	default:
 		rootCmd.Use = "hibou"
 		rootCmd.Short = "Unified DevSecOps security platform"
-		rootCmd.AddCommand(serveCmd, seedCmd, loginCmd, logoutCmd, statusCmd, uploadCmd, scanCmd, scannersCmd, gateCmd, reposCmd, releaseCmd, configCmd, secretScanCmd)
+		rootCmd.AddCommand(serveCmd, seedCmd, loginCmd, logoutCmd, statusCmd, uploadCmd, scanCmd, scannersCmd, gateCmd, reposCmd, releaseCmd, configCmd, secretScanCmd, depsCmd, vulnsCmd)
 	}
 }
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// ADR-046 §2: 1 when --fail-on matched, 2 on errors, for the deps
+		// and release commands; other commands keep exit 1.
+		if code := ExitCode(err); code != 1 {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

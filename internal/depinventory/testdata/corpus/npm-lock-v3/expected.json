@@ -1,0 +1,25 @@
+{
+  "modules": [
+    {
+      "path": ".",
+      "complete": true
+    }
+  ],
+  "components": [
+    {
+      "purl": "pkg:npm/accepts@1.3.8",
+      "relationship": "indirect"
+    },
+    {
+      "purl": "pkg:npm/express@4.18.2",
+      "relationship": "direct"
+    },
+    {
+      "purl": "pkg:npm/jest@29.7.0",
+      "relationship": "direct",
+      "scopes": [
+        "dev"
+      ]
+    }
+  ]
+}

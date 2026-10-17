@@ -1,0 +1,25 @@
+{
+  "modules": [
+    {
+      "path": ".",
+      "complete": true
+    }
+  ],
+  "components": [
+    {
+      "purl": "pkg:pypi/flask@3.0.0",
+      "relationship": "direct"
+    },
+    {
+      "purl": "pkg:pypi/pytest@8.0.2",
+      "relationship": "direct",
+      "scopes": [
+        "dev"
+      ]
+    },
+    {
+      "purl": "pkg:pypi/werkzeug@3.0.1",
+      "relationship": "indirect"
+    }
+  ]
+}

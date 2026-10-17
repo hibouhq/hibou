@@ -1,0 +1,55 @@
+name: hibou-deps-check
+description: "Pre-install cooldown check (ADR-048 §3.1): ask the organization's package policy about every version the lockfiles declare before anything is installed, so a fresh or malicious version never reaches the runner. Works with GitHub Actions and Forgejo Actions."
+
+inputs:
+  server:
+    description: "Hibou server URL."
+    required: true
+  token:
+    description: "Hibou API token with vulnerabilities:read on the organization."
+    required: true
+  org:
+    description: "Organization in provider/slug form. Auto-detected from the CI environment when omitted."
+    required: false
+  repo:
+    description: "Repository slug. Auto-detected when omitted."
+    required: false
+  path:
+    description: "Directory whose lockfiles and manifests are checked."
+    required: false
+    default: "."
+  fail-on:
+    description: "What fails the step: deny (malicious packages, default), hold,deny (cooldown holds too)."
+    required: false
+    default: "deny"
+  cli-path:
+    description: "Absolute path to a hibou CLI binary you built or verified yourself. When set, nothing is downloaded."
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the hibou CLI
+      id: cli
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -n "${{ inputs.cli-path }}" ]; then
+          echo "bin=${{ inputs.cli-path }}" >> "$GITHUB_OUTPUT"
+        elif command -v hibou >/dev/null 2>&1; then
+          echo "bin=$(command -v hibou)" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::no hibou CLI: set cli-path or put hibou on PATH (the hibou-upload action documents the verified download)"
+          exit 2
+        fi
+    - name: Check the package policy before installing
+      shell: bash
+      env:
+        HIBOU_SERVER: ${{ inputs.server }}
+        HIBOU_TOKEN: ${{ inputs.token }}
+        HIBOU_ORG: ${{ inputs.org }}
+      run: |
+        set -euo pipefail
+        args=(deps check "${{ inputs.path }}" --fail-on "${{ inputs.fail-on }}")
+        if [ -n "${{ inputs.repo }}" ]; then args+=(--repo "${{ inputs.repo }}"); fi
+        "${{ steps.cli.outputs.bin }}" "${args[@]}"

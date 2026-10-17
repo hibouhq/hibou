@@ -425,6 +425,7 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 	}
 
 	s.maybeEnqueueSecretScan(r.Context(), repo, refType, refName, event)
+	s.maybeEnqueueDepExtraction(r.Context(), repo, refType, refName, event)
 	if refType == store.RefTypeBranch {
 		s.refreshApplicabilityAsync(repo, refName)
 	}
@@ -606,6 +607,7 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 			if _, err := s.queries.CreatePlaceholderSnapshot(r.Context(), ref.ID, headSHA); err != nil {
 				s.log.Warn().Err(err).Str("ref_id", ref.ID.String()).Str("commit_sha", headSHA).Msg("create placeholder snapshot for PR head")
 			}
+			s.maybeEnqueuePRDepExtraction(r.Context(), repo, ref, headSHA)
 		}
 		s.bus.Publish(r.Context(), events.Event{
 			Type:    events.GateRecomputeRequested,

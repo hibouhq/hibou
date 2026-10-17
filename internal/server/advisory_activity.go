@@ -10,6 +10,7 @@ import (
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/cvefeed"
 	"github.com/hibouhq/hibou/internal/cvetriage"
+	"github.com/hibouhq/hibou/internal/provider/depsdev"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -43,6 +44,11 @@ type activityResponse struct {
 	// been failing since when. Same reason health is here at all — "no
 	// exploited findings" and "catalogs never synced" must not look alike.
 	KEV *KEVHealth `json:"kev,omitempty"`
+	// DepsDev is the package-signals sync state (ADR-048 §6): a live
+	// provider has no catalog date, but it has a last pass, what it looked
+	// up and what failed, and that is what tells "no signals" from "never
+	// synced". Absent when the provider is switched off.
+	DepsDev *depsdev.Health `json:"depsdev,omitempty"`
 }
 
 type corpusState struct {
@@ -96,6 +102,14 @@ func (s *Server) handleAdvisoryEvents(w http.ResponseWriter, r *http.Request) {
 			var kevHealth KEVHealth
 			if json.Unmarshal(raw, &kevHealth) == nil {
 				response.KEV = &kevHealth
+			}
+		}
+	}
+	if s.cfg.DepsDev.Enabled {
+		if raw, depsErr := s.queries.GetInstanceSettingValue(r.Context(), depsdev.HealthSettingKey); depsErr == nil && len(raw) > 0 {
+			var health depsdev.Health
+			if json.Unmarshal(raw, &health) == nil {
+				response.DepsDev = &health
 			}
 		}
 	}

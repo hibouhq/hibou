@@ -38,6 +38,9 @@ const (
 	KindBinary = "binary"
 	KindMaven  = "maven"
 	KindOCI    = "oci"
+	// KindBuiltin runs inside the hibou binary itself (ADR-045 §4.2): no
+	// download, no checksum, the version is the CLI's.
+	KindBuiltin = "builtin"
 )
 
 // Catalog is the whole catalog document.
@@ -247,6 +250,8 @@ func (c *Catalog) Validate() error {
 
 func (d Distribution) validate() error {
 	switch d.Kind {
+	case KindBuiltin:
+		return nil
 	case KindBinary:
 		if d.OS == "" || d.Arch == "" || d.Asset == "" {
 			return errors.New("binary distribution needs os, arch and asset")

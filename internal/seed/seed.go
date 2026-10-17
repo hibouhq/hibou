@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/provider/depsdev"
 	"github.com/hibouhq/hibou/internal/provider/rawratings"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -550,7 +551,10 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 		return fmt.Errorf("checking existing seed data: %w", err)
 	}
 	if existingOrg != nil {
-		log.Info().Str("org_slug", "acme").Msg("seed data already present, skipping; refreshing seeded advisory ratings")
+		log.Info().Str("org_slug", "acme").Msg("seed data already present, skipping; refreshing seeded advisory ratings and package signals")
+		if err := seedPackageSignals(ctx, queries); err != nil {
+			return fmt.Errorf("refreshing seeded package signals: %w", err)
+		}
 		return refreshSeedRatings(ctx, db, queries)
 	}
 
@@ -659,6 +663,10 @@ func Run(ctx context.Context, db *sql.DB, log zerolog.Logger) error {
 
 	if err := seedAdvisoryData(ctx, queries, tx, seededSnapshots); err != nil {
 		return fmt.Errorf("seeding advisories: %w", err)
+	}
+
+	if err := seedPackageSignals(ctx, queries); err != nil {
+		return fmt.Errorf("seeding package signals: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1703,4 +1711,133 @@ func seedReleases(ctx context.Context, queries *store.Queries, p historyParams, 
 		}
 	}
 	return nil
+}
+
+// seedPackageSignals writes deps.dev package signals (ADR-048) for the
+// seeded components, one of each kind the UI can show, and the health
+// record the Advisory activity card reads. Versions deps.dev does not cover
+// (the rpm package, the Go standard library) get no row on purpose: that is
+// the "not evaluated" state. Idempotent, so it also runs against an existing
+// dev database.
+func seedPackageSignals(ctx context.Context, queries *store.Queries) error {
+	now := time.Now().UTC()
+	daysAgo := func(days int) *time.Time {
+		t := now.AddDate(0, 0, -days)
+		return &t
+	}
+	inDays := func(days int) *time.Time {
+		t := now.AddDate(0, 0, days)
+		return &t
+	}
+	forever := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	signal := func(purl string, mutate func(*depsdev.Signals)) depsdev.Signals {
+		key, _, ok := depsdev.ParsePurl(purl)
+		if !ok {
+			panic("seed: unsupported purl " + purl)
+		}
+		out := depsdev.Signals{Key: key, Purl: purl, Raw: json.RawMessage(`{"seed":true}`)}
+		mutate(&out)
+		return out
+	}
+	matured := func(publishedDaysAgo int, recommended string) func(*depsdev.Signals) {
+		return func(s *depsdev.Signals) {
+			s.PublishedAt = daysAgo(publishedDaysAgo)
+			s.CooldownEnd = daysAgo(publishedDaysAgo - 15)
+			s.RecommendedVersion = recommended
+		}
+	}
+
+	signals := []depsdev.Signals{
+		// In cooldown: fresh releases, the window still running.
+		signal("pkg:golang/golang.org/x/crypto@0.17.0", func(s *depsdev.Signals) {
+			s.PublishedAt = daysAgo(3)
+			s.CooldownEnd = inDays(7)
+		}),
+		signal("pkg:npm/next@14.1.0", func(s *depsdev.Signals) {
+			s.PublishedAt = daysAgo(2)
+			s.CooldownEnd = inDays(13)
+		}),
+		// Unpublished and malicious: the npm takedowns, cooldown never ends.
+		signal("pkg:npm/event-stream@3.3.6", func(s *depsdev.Signals) {
+			s.NotFound = true
+			s.Malicious = true
+			s.CooldownEnd = &forever
+			s.RecommendedVersion = "4.0.1"
+		}),
+		signal("pkg:npm/flatmap-stream@0.1.1", func(s *depsdev.Signals) {
+			s.NotFound = true
+			s.Malicious = true
+			s.CooldownEnd = &forever
+		}),
+		signal("pkg:npm/getcookies@1.0.0", func(s *depsdev.Signals) {
+			s.Malicious = true
+			s.CooldownEnd = &forever
+		}),
+		// Deprecated on the registry, with the maintainer's reason.
+		signal("pkg:npm/ua-parser-js@0.7.29", func(s *depsdev.Signals) {
+			s.PublishedAt = daysAgo(400)
+			s.CooldownEnd = daysAgo(385)
+			s.Deprecated = true
+			s.DeprecatedReason = "The 0.7.x line is no longer maintained; upgrade to 1.x"
+			s.RecommendedVersion = "1.0.37"
+		}),
+		// Low usage with a look-alike name: the typosquat.
+		signal("pkg:pypi/colourama@0.4.6", func(s *depsdev.Signals) {
+			s.PublishedAt = daysAgo(200)
+			s.CooldownEnd = daysAgo(195)
+			s.LowUsage = true
+			s.Alternatives = []string{"colorama"}
+		}),
+		// Mature, clean versions: evaluated and carrying nothing, which the
+		// Signals filter lists as "none"; some with a suggested upgrade.
+		signal("pkg:golang/golang.org/x/net@0.16.0", matured(730, "0.33.0")),
+		signal("pkg:golang/golang.org/x/crypto@0.14.0", matured(740, "0.31.0")),
+		signal("pkg:golang/github.com/opencontainers/runc@1.1.11", matured(25, "1.1.14")),
+		signal("pkg:npm/lodash@4.17.21", matured(1000, "")),
+		signal("pkg:npm/react@18.2.0", matured(900, "")),
+		signal("pkg:npm/axios@1.6.0", matured(400, "1.7.9")),
+		signal("pkg:npm/express@4.18.2", matured(800, "4.21.2")),
+		// Remediation targets (ADR-048 §8): the advisory's fix is four days
+		// old and still in cooldown, deps.dev's suggestion has matured.
+		signal("pkg:npm/express@4.19.2", func(s *depsdev.Signals) {
+			s.PublishedAt = daysAgo(4)
+			s.CooldownEnd = inDays(11)
+		}),
+		signal("pkg:npm/express@4.21.2", matured(300, "")),
+		signal("pkg:golang/golang.org/x/crypto@0.31.0", matured(60, "")),
+		signal("pkg:npm/jsonwebtoken@9.0.2", matured(700, "")),
+		signal("pkg:pypi/requests@2.31.0", matured(600, "2.32.3")),
+		signal("pkg:pypi/cryptography@41.0.4", matured(500, "43.0.1")),
+		signal("pkg:pypi/django@4.2.7", matured(500, "4.2.17")),
+		signal("pkg:pypi/flask@3.0.0", matured(450, "3.1.0")),
+		signal("pkg:pypi/PyJWT@2.8.0", matured(600, "")),
+		signal("pkg:maven/org.apache.logging.log4j/log4j-core@2.22.1", matured(400, "2.24.3")),
+		signal("pkg:maven/org.yaml/snakeyaml@2.2", matured(450, "")),
+		signal("pkg:maven/com.squareup.okhttp3/okhttp@4.12.0", matured(400, "")),
+		signal("pkg:maven/io.fabric8/kubernetes-client@6.10.0", matured(380, "6.13.4")),
+		signal("pkg:golang/github.com/gin-gonic/gin@1.9.1", matured(500, "1.10.0")),
+		signal("pkg:golang/github.com/jackc/pgx/v5@5.5.4", matured(300, "5.7.2")),
+		signal("pkg:golang/github.com/spf13/cobra@1.8.0", matured(400, "1.8.1")),
+	}
+	if err := queries.UpsertPackageSignals(ctx, signals); err != nil {
+		return fmt.Errorf("upserting seeded package signals: %w", err)
+	}
+
+	at := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	health := depsdev.Health{
+		At:              at,
+		SucceededAt:     at,
+		DurationMillis:  1840,
+		Candidates:      len(signals) + 2,
+		Unsupported:     2, // the rpm package and the Go standard library
+		LookedUp:        len(signals),
+		Stored:          int64(len(signals)),
+		IntervalSeconds: int((24 * time.Hour).Seconds()),
+		URL:             depsdev.DefaultURL,
+	}
+	encoded, err := json.Marshal(health)
+	if err != nil {
+		return fmt.Errorf("encoding seeded package signals health: %w", err)
+	}
+	return queries.SetInstanceSettingValue(ctx, depsdev.HealthSettingKey, encoded)
 }

@@ -35,6 +35,12 @@ type VulnerabilityListOptions struct {
 	// RiskOnly keeps findings which count as actual risk: active or
 	// disputed-suppressed, and not accepted as false positive.
 	RiskOnly bool
+	// Shipped selects findings by their component's shipped attribute
+	// (ADR-045 §6): "yes", "no", or empty. The caller computes
+	// NotShippedComponentIDs for the snapshot; the attribute is a policy
+	// over labels, not a column.
+	Shipped                string
+	NotShippedComponentIDs []uuid.UUID
 	// Filter is a parsed filterquery expression (the bar's `q`). Where a path
 	// honors it, it is exclusive: the discrete fields above are ignored, the
 	// same contract the list endpoints have.
@@ -42,6 +48,17 @@ type VulnerabilityListOptions struct {
 	Sort   string
 	Limit  int
 	Offset int
+}
+
+// normalizeShippedFilter keeps yes or no; anything else means unfiltered.
+func normalizeShippedFilter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "yes", "true":
+		return "yes"
+	case "no", "false":
+		return "no"
+	}
+	return ""
 }
 
 // normalizeAcceptanceFilter whitelists the acceptance filter value; anything
@@ -128,6 +145,15 @@ type Vulnerability struct {
 	// (PLAN §3). Enriched per page after the query, like FixedInPRs — never a
 	// column.
 	KEV bool `json:"kev,omitempty"`
+	// Signals are the deps.dev package signals of the affected version
+	// (ADR-048 §8), in the shape the components view uses; attached per page
+	// by the server for component-backed findings, never a column.
+	Signals any `json:"signals,omitempty"`
+	// Shipped says whether the affected component reaches clients (ADR-045
+	// §6); nil when the finding has no component or the attribute was not
+	// computed. Attached per page, never a column.
+	Shipped       *bool  `json:"shipped,omitempty"`
+	ShippedReason string `json:"shipped_reason,omitempty"`
 	// CWEs every source attributes to the finding (ADR-037): rule, advisory,
 	// SARIF result taxa, a manual declaration, or the finding type. Attached
 	// per page through the finding_cwes view — never a column.
@@ -309,6 +335,13 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 		Exploited: normalizeExploitedFilter(opts.Exploited),
 		RiskOnly:  opts.RiskOnly,
 		Sort:      normalizeVulnerabilitySort(opts.Sort),
+		Shipped:   normalizeShippedFilter(opts.Shipped),
+		NotShippedComponentIds: func() []uuid.UUID {
+			if opts.NotShippedComponentIDs == nil {
+				return []uuid.UUID{}
+			}
+			return opts.NotShippedComponentIDs
+		}(),
 	}
 
 	rows, err := q.db.ListVulnerabilitiesBySnapshot(ctx, params)
@@ -325,17 +358,19 @@ func (q *Queries) ListVulnerabilitiesBySnapshot(ctx context.Context, snapshotID 
 	}
 
 	total, err := q.db.CountVulnerabilitiesBySnapshot(ctx, dbgen.CountVulnerabilitiesBySnapshotParams{
-		SnapshotID: params.SnapshotID,
-		Statuses:   params.Statuses,
-		Types:      params.Types,
-		Severities: params.Severities,
-		Scanners:   params.Scanners,
-		Languages:  params.Languages,
-		FileQuery:  params.FileQuery,
-		Search:     params.Search,
-		Acceptance: params.Acceptance,
-		Exploited:  params.Exploited,
-		RiskOnly:   params.RiskOnly,
+		SnapshotID:             params.SnapshotID,
+		Statuses:               params.Statuses,
+		Types:                  params.Types,
+		Severities:             params.Severities,
+		Scanners:               params.Scanners,
+		Languages:              params.Languages,
+		FileQuery:              params.FileQuery,
+		Search:                 params.Search,
+		Acceptance:             params.Acceptance,
+		Exploited:              params.Exploited,
+		Shipped:                params.Shipped,
+		NotShippedComponentIds: params.NotShippedComponentIds,
+		RiskOnly:               params.RiskOnly,
 	})
 	if err != nil {
 		return nil, 0, err

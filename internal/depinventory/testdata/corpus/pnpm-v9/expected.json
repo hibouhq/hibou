@@ -1,0 +1,29 @@
+{
+  "modules": [
+    {
+      "path": ".",
+      "complete": true
+    }
+  ],
+  "components": [
+    {
+      "purl": "pkg:npm/debug@4.3.4",
+      "relationship": "direct"
+    },
+    {
+      "purl": "pkg:npm/lodash@4.17.21",
+      "relationship": "direct"
+    },
+    {
+      "purl": "pkg:npm/ms@2.1.2",
+      "relationship": "indirect"
+    },
+    {
+      "purl": "pkg:npm/typescript@5.4.5",
+      "relationship": "direct",
+      "scopes": [
+        "dev"
+      ]
+    }
+  ]
+}

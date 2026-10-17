@@ -538,6 +538,11 @@ func (s *Service) loadAffectedRangesForComponent(ctx context.Context, component 
 }
 
 func (s *Service) componentMatchesAffectedRange(component dbgen.Component, affectedRange dbgen.AffectedRange) bool {
+	// An unresolved range (ADR-045 §2.2) has no version to compare: it is
+	// listed, never matched.
+	if strings.TrimSpace(component.Version) == "" {
+		return false
+	}
 	if !distroRangeApplies(component, affectedRange) {
 		return false
 	}

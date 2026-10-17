@@ -23,6 +23,7 @@ import (
 	"github.com/hibouhq/hibou/internal/audit"
 	internalauth "github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/config"
+	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/ws"
@@ -50,6 +51,14 @@ func (s *advisoryScannerStub) RunScan(_ context.Context, snapshotID uuid.UUID, p
 		}
 	}
 	return uuid.New(), s.err
+}
+
+func (s *advisoryScannerStub) MatchPurls(_ context.Context, purls []string) ([]scanner.PurlMatch, error) {
+	out := make([]scanner.PurlMatch, 0, len(purls))
+	for _, purl := range purls {
+		out = append(out, scanner.PurlMatch{Purl: purl})
+	}
+	return out, nil
 }
 
 func (s *advisoryScannerStub) TriggerRescan(_ context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error) {

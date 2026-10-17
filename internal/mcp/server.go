@@ -13,6 +13,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/delta"
+	"github.com/hibouhq/hibou/internal/packagepolicy"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -34,6 +35,20 @@ type MCPStore interface {
 	UpdateAPIKeyLastUsed(ctx context.Context, id uuid.UUID) error
 	IsRepoScopedOrgMember(ctx context.Context, orgID, userID uuid.UUID) (bool, error)
 	ListUserRepoAccessInOrg(ctx context.Context, orgID, userID uuid.UUID) (map[uuid.UUID]string, error)
+}
+
+// Option configures the MCP service.
+type Option func(*service)
+
+// PackagePolicy answers check_packages (ADR-048 §7).
+type PackagePolicy interface {
+	DefaultPolicy() packagepolicy.Policy
+	Evaluate(ctx context.Context, req packagepolicy.Request) ([]packagepolicy.Decision, error)
+}
+
+// WithPackagePolicy registers the check_packages tool over the evaluator.
+func WithPackagePolicy(policy PackagePolicy) Option {
+	return func(s *service) { s.policy = policy }
 }
 
 // HTTPOption configures the MCP HTTP transport.
@@ -67,17 +82,24 @@ func withUser(ctx context.Context, user *store.User) context.Context {
 	return context.WithValue(ctx, userContextKey, user)
 }
 
-func New(st MCPStore, deltaSvc *delta.Service, log zerolog.Logger, serverVersion string) *server.MCPServer {
+func New(st MCPStore, deltaSvc *delta.Service, log zerolog.Logger, serverVersion string, opts ...Option) *server.MCPServer {
 	mcpSrv := server.NewMCPServer("hibou", serverVersion)
 
 	s := &service{store: st, delta: deltaSvc, log: log.With().Str("component", "mcp").Logger()}
-	registerScopedTools(mcpSrv, []scopedTool{
+	for _, opt := range opts {
+		opt(s)
+	}
+	tools := []scopedTool{
 		{listVulnerabilitiesTool, apitoken.CapVulnerabilities, apitoken.AccessRead, s.handleListVulnerabilities},
 		{getDependencyTreeTool, apitoken.CapComponents, apitoken.AccessRead, s.handleGetDependencyTree},
 		{impactAnalysisTool, apitoken.CapVulnerabilities, apitoken.AccessRead, s.handleImpactAnalysis},
 		{compareRefsTool, apitoken.CapVulnerabilities, apitoken.AccessRead, s.handleCompareRefs},
 		{searchComponentsTool, apitoken.CapComponents, apitoken.AccessRead, s.handleSearchComponents},
-	})
+	}
+	if s.policy != nil {
+		tools = append(tools, scopedTool{checkPackagesTool, apitoken.CapComponents, apitoken.AccessRead, s.handleCheckPackages})
+	}
+	registerScopedTools(mcpSrv, tools)
 
 	return mcpSrv
 }

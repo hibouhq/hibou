@@ -23,6 +23,23 @@ SELECT 'secret_scan'::text AS kind,
 	COALESCE((SELECT MIN(x.created_at) FROM secret_scan_jobs x WHERE x.status = 'pending'), 'epoch'::timestamptz)::timestamptz AS oldest_queued_at
 FROM secret_scan_jobs j
 UNION ALL
+SELECT 'dep_extraction'::text AS kind,
+	COUNT(*) FILTER (
+		WHERE j.status = 'pending'
+			OR (j.status = 'processing' AND (j.claim_expires_at IS NULL OR j.claim_expires_at < NOW()))
+	)::bigint AS queued,
+	COUNT(*) FILTER (
+		WHERE j.status = 'processing' AND j.claim_expires_at >= NOW()
+	)::bigint AS running,
+	COUNT(*) FILTER (
+		WHERE j.status = 'complete' AND j.finished_at >= NOW() - INTERVAL '24 hours'
+	)::bigint AS completed_24h,
+	COUNT(*) FILTER (
+		WHERE j.status = 'failed' AND j.finished_at >= NOW() - INTERVAL '24 hours'
+	)::bigint AS failed_24h,
+	COALESCE((SELECT MIN(x.created_at) FROM dep_extraction_jobs x WHERE x.status = 'pending'), 'epoch'::timestamptz)::timestamptz AS oldest_queued_at
+FROM dep_extraction_jobs j
+UNION ALL
 SELECT 'artifact_processing'::text,
 	COUNT(*) FILTER (
 		WHERE s.artifact_processing_finished_at IS NULL
@@ -92,6 +109,29 @@ SELECT * FROM (
 		j.attempts AS attempts,
 		j.last_error::text AS error
 	FROM secret_scan_jobs j
+	JOIN repositories r ON r.id = j.repo_id
+	JOIN organizations o ON o.id = r.org_id
+	WHERE j.finished_at IS NULL OR j.finished_at >= sqlc.arg(since)::timestamptz
+
+	UNION ALL
+	SELECT 'dep_extraction'::text AS kind,
+		j.id AS id,
+		(o.slug || '/' || r.slug)::text AS label,
+		(j.reason || ' · ' || j.ref_name)::text AS detail,
+		CASE
+			WHEN j.status = 'pending' THEN 'queued'
+			WHEN j.status = 'processing' AND (j.claim_expires_at IS NULL OR j.claim_expires_at < NOW()) THEN 'queued'
+			WHEN j.status = 'processing' THEN 'running'
+			WHEN j.status = 'complete' THEN 'complete'
+			ELSE 'failed'
+		END::text AS status,
+		j.created_at AS queued_at,
+		j.started_at AS started_at,
+		j.finished_at AS finished_at,
+		COALESCE(j.claimed_by, '')::text AS worker_id,
+		j.attempts AS attempts,
+		j.last_error::text AS error
+	FROM dep_extraction_jobs j
 	JOIN repositories r ON r.id = j.repo_id
 	JOIN organizations o ON o.id = r.org_id
 	WHERE j.finished_at IS NULL OR j.finished_at >= sqlc.arg(since)::timestamptz
@@ -178,6 +218,14 @@ WITH runs AS (
 	FROM secret_scan_jobs j
 	WHERE j.finished_at >= sqlc.arg(since)::timestamptz
 	UNION ALL
+	SELECT 'dep_extraction'::text AS kind,
+		j.status AS status,
+		j.created_at AS queued_at,
+		j.started_at AS started_at,
+		j.finished_at AS finished_at
+	FROM dep_extraction_jobs j
+	WHERE j.finished_at >= sqlc.arg(since)::timestamptz
+	UNION ALL
 	SELECT 'artifact_processing'::text,
 		CASE WHEN s.status = 'failed' THEN 'failed' ELSE 'complete' END,
 		s.created_at,
@@ -221,6 +269,15 @@ WITH runs AS (
 		j.started_at AS started_at,
 		j.finished_at AS finished_at
 	FROM secret_scan_jobs j
+	WHERE j.finished_at >= sqlc.arg(since)::timestamptz - INTERVAL '7 days'
+		AND j.finished_at < sqlc.arg(since)::timestamptz
+		AND j.started_at IS NOT NULL
+	UNION ALL
+	SELECT 'dep_extraction'::text AS kind,
+		j.created_at AS queued_at,
+		j.started_at AS started_at,
+		j.finished_at AS finished_at
+	FROM dep_extraction_jobs j
 	WHERE j.finished_at >= sqlc.arg(since)::timestamptz - INTERVAL '7 days'
 		AND j.finished_at < sqlc.arg(since)::timestamptz
 		AND j.started_at IS NOT NULL

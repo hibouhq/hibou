@@ -8,10 +8,28 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
+
+const countSnapshotComponentsBySourceLabel = `-- name: CountSnapshotComponentsBySourceLabel :one
+SELECT COUNT(*)::bigint FROM snapshot_components
+WHERE snapshot_id = $1 AND labels ? $2::text
+`
+
+type CountSnapshotComponentsBySourceLabelParams struct {
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	Label      string    `json:"label"`
+}
+
+func (q *Queries) CountSnapshotComponentsBySourceLabel(ctx context.Context, arg CountSnapshotComponentsBySourceLabelParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSnapshotComponentsBySourceLabel, arg.SnapshotID, arg.Label)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
 
 const createSnapshotArtifact = `-- name: CreateSnapshotArtifact :one
 INSERT INTO snapshot_artifacts (
@@ -31,7 +49,7 @@ WHERE NOT EXISTS (
 	FROM snapshot_artifacts
 	WHERE snapshot_id = $1 AND object_key = $5
 )
-RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id
+RETURNING id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id, origin, metadata, revoked_at, revoked_by, revoke_reason, created_by
 `
 
 type CreateSnapshotArtifactParams struct {
@@ -77,12 +95,35 @@ func (q *Queries) CreateSnapshotArtifact(ctx context.Context, arg CreateSnapshot
 		&i.ConfigDigest,
 		&i.PlanID,
 		&i.PlanJobID,
+		&i.Origin,
+		&i.Metadata,
+		&i.RevokedAt,
+		&i.RevokedBy,
+		&i.RevokeReason,
+		&i.CreatedBy,
 	)
 	return i, err
 }
 
+const deleteSnapshotComponentsWithoutSource = `-- name: DeleteSnapshotComponentsWithoutSource :execrows
+DELETE FROM snapshot_components
+WHERE snapshot_id = $1
+  AND NOT EXISTS (
+    SELECT 1 FROM jsonb_object_keys(labels) AS k WHERE k LIKE 'sbom:%'
+  )
+`
+
+// Components no remaining artifact reports leave the effective inventory.
+func (q *Queries) DeleteSnapshotComponentsWithoutSource(ctx context.Context, snapshotID uuid.UUID) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSnapshotComponentsWithoutSource, snapshotID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getSnapshotArtifactByID = `-- name: GetSnapshotArtifactByID :one
-SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id FROM snapshot_artifacts
+SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id, origin, metadata, revoked_at, revoked_by, revoke_reason, created_by FROM snapshot_artifacts
 WHERE id = $1
 `
 
@@ -107,6 +148,12 @@ func (q *Queries) GetSnapshotArtifactByID(ctx context.Context, id uuid.UUID) (Sn
 		&i.ConfigDigest,
 		&i.PlanID,
 		&i.PlanJobID,
+		&i.Origin,
+		&i.Metadata,
+		&i.RevokedAt,
+		&i.RevokedBy,
+		&i.RevokeReason,
+		&i.CreatedBy,
 	)
 	return i, err
 }
@@ -204,7 +251,7 @@ func (q *Queries) ListSnapshotArtifactObjectKeysByRepo(ctx context.Context, repo
 }
 
 const listSnapshotArtifactsBySnapshot = `-- name: ListSnapshotArtifactsBySnapshot :many
-SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id FROM snapshot_artifacts
+SELECT id, snapshot_id, kind, format, tool_name, object_key, sha256, size_bytes, content_type, created_at, filename, scope, scope_paths, tool_version, config_digest, plan_id, plan_job_id, origin, metadata, revoked_at, revoked_by, revoke_reason, created_by FROM snapshot_artifacts
 WHERE snapshot_id = $1
 ORDER BY created_at
 `
@@ -236,6 +283,12 @@ func (q *Queries) ListSnapshotArtifactsBySnapshot(ctx context.Context, snapshotI
 			&i.ConfigDigest,
 			&i.PlanID,
 			&i.PlanJobID,
+			&i.Origin,
+			&i.Metadata,
+			&i.RevokedAt,
+			&i.RevokedBy,
+			&i.RevokeReason,
+			&i.CreatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -248,4 +301,80 @@ func (q *Queries) ListSnapshotArtifactsBySnapshot(ctx context.Context, snapshotI
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeSnapshotComponentSourceLabel = `-- name: RemoveSnapshotComponentSourceLabel :exec
+UPDATE snapshot_components
+SET labels = labels - $1::text
+WHERE snapshot_id = $2 AND labels ? $1::text
+`
+
+type RemoveSnapshotComponentSourceLabelParams struct {
+	Label      string    `json:"label"`
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+}
+
+// Drops one artifact's provenance label from every component of the
+// snapshot (revocation, ADR-045 §5.3).
+func (q *Queries) RemoveSnapshotComponentSourceLabel(ctx context.Context, arg RemoveSnapshotComponentSourceLabelParams) error {
+	_, err := q.db.ExecContext(ctx, removeSnapshotComponentSourceLabel, arg.Label, arg.SnapshotID)
+	return err
+}
+
+const restoreSnapshotArtifact = `-- name: RestoreSnapshotArtifact :execrows
+UPDATE snapshot_artifacts
+SET revoked_at = NULL, revoked_by = NULL, revoke_reason = NULL
+WHERE id = $1 AND revoked_at IS NOT NULL
+`
+
+func (q *Queries) RestoreSnapshotArtifact(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreSnapshotArtifact, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokeSnapshotArtifact = `-- name: RevokeSnapshotArtifact :execrows
+UPDATE snapshot_artifacts
+SET revoked_at = now(), revoked_by = $1, revoke_reason = $2
+WHERE id = $3 AND revoked_at IS NULL
+`
+
+type RevokeSnapshotArtifactParams struct {
+	RevokedBy uuid.NullUUID  `json:"revoked_by"`
+	Reason    sql.NullString `json:"reason"`
+	ID        uuid.UUID      `json:"id"`
+}
+
+func (q *Queries) RevokeSnapshotArtifact(ctx context.Context, arg RevokeSnapshotArtifactParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeSnapshotArtifact, arg.RevokedBy, arg.Reason, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotArtifactSource = `-- name: SetSnapshotArtifactSource :exec
+UPDATE snapshot_artifacts
+SET origin = $1, created_by = $2, metadata = COALESCE($3::jsonb, '{}'::jsonb)
+WHERE id = $4
+`
+
+type SetSnapshotArtifactSourceParams struct {
+	Origin    string          `json:"origin"`
+	CreatedBy uuid.NullUUID   `json:"created_by"`
+	Metadata  json.RawMessage `json:"metadata"`
+	ID        uuid.UUID       `json:"id"`
+}
+
+// Origin, who recorded it and the deliverable metadata (ADR-046 §4).
+func (q *Queries) SetSnapshotArtifactSource(ctx context.Context, arg SetSnapshotArtifactSourceParams) error {
+	_, err := q.db.ExecContext(ctx, setSnapshotArtifactSource,
+		arg.Origin,
+		arg.CreatedBy,
+		arg.Metadata,
+		arg.ID,
+	)
+	return err
 }
