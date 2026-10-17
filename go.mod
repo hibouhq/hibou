@@ -43,6 +43,7 @@ require (
 	deps.dev/util/semver v0.0.0-20260529052642-cf1e78d92744 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/anchore/go-lzo v0.1.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
@@ -111,8 +112,8 @@ require (
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/moby/api v1.55.0 // indirect
 	github.com/moby/moby/client v0.5.0 // indirect
-	github.com/moby/term v0.5.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/ossf/osv-schema/bindings/go v0.0.0-20260424063704-83285ce2a866 // indirect
