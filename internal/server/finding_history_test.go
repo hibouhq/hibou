@@ -392,7 +392,7 @@ func TestFindingHistoryKEVBareIdentifierOnlyForComponentFindings(t *testing.T) {
 func seedHistoryKEVFinding(t *testing.T, srv *Server, repo *store.Repository, fingerprint string, advisoryID uuid.UUID, identifier string) {
 	t.Helper()
 	seedHistoryBareKEVFinding(t, srv, repo, fingerprint, "dependency", identifier)
-	if _, err := srv.db.ExecContext(t.Context(), `UPDATE vulnerabilities SET advisory_id = $1 WHERE repo_id = $2 AND fingerprint = $3`, advisoryID, repo.ID, fingerprint); err != nil {
+	if _, err := srv.db.ExecContext(t.Context(), `UPDATE findings SET advisory_id = $1 WHERE repo_id = $2 AND fingerprint = $3`, advisoryID, repo.ID, fingerprint); err != nil {
 		t.Fatalf("attach advisory: %v", err)
 	}
 }

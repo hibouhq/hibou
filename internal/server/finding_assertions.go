@@ -260,7 +260,7 @@ func (s *Server) reopenAssertion(r *http.Request, finding *store.Vulnerability) 
 	}
 	if latest != nil && latest.ID != snapshot.ID {
 		lastSeen := snapshot.ID
-		if _, err := s.queries.CarryVulnerabilitiesForward(ctx, latest.ID, []store.CarryInput{{
+		if _, err := s.queries.CarryVulnerabilitiesForward(ctx, latest.ID, snapshot.ID, []store.CarryInput{{
 			SourceID:           finding.ID,
 			Presence:           store.PresenceNotRechecked,
 			Reason:             presence.ReasonAssertion,

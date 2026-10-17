@@ -218,10 +218,11 @@ func (q *Queries) LockRefForPresence(ctx context.Context, refID uuid.UUID) error
 	return q.db.LockRefForPresence(ctx, refID.String())
 }
 
-// CarryVulnerabilitiesForward copies the source rows into the snapshot and
-// returns how many were inserted (a row the producer reported meanwhile is
-// skipped).
-func (q *Queries) CarryVulnerabilitiesForward(ctx context.Context, snapshotID uuid.UUID, carries []CarryInput) (int64, error) {
+// CarryVulnerabilitiesForward copies the previous snapshot's rows for the
+// given findings into the snapshot (ADR-049: pointer rows, not findings)
+// and returns how many were inserted (a row the producer reported
+// meanwhile is skipped).
+func (q *Queries) CarryVulnerabilitiesForward(ctx context.Context, snapshotID, fromSnapshotID uuid.UUID, carries []CarryInput) (int64, error) {
 	if len(carries) == 0 {
 		return 0, nil
 	}
@@ -230,30 +231,31 @@ func (q *Queries) CarryVulnerabilitiesForward(ctx context.Context, snapshotID uu
 		return 0, err
 	}
 	return q.db.CarryVulnerabilitiesForward(ctx, dbgen.CarryVulnerabilitiesForwardParams{
-		SnapshotID: snapshotID,
-		Carries:    encoded,
+		SnapshotID:     snapshotID,
+		Carries:        encoded,
+		FromSnapshotID: fromSnapshotID,
 	})
 }
 
 // UpdateCarriedPresence refreshes a carried row's presence fields; reported
 // rows are never touched.
-func (q *Queries) UpdateCarriedPresence(ctx context.Context, id uuid.UUID, carry CarryInput) error {
+func (q *Queries) UpdateCarriedPresence(ctx context.Context, snapshotID, id uuid.UUID, carry CarryInput) error {
 	return q.db.UpdateCarriedPresence(ctx, dbgen.UpdateCarriedPresenceParams{
+		SnapshotID:          snapshotID,
 		ID:                  id,
 		Presence:            dbgen.FindingPresence(carry.Presence),
 		Reason:              nullStringFromPtr(nonEmptyPtr(carry.Reason)),
 		LastSeenSnapshotID:  nullUUIDFromPtr(carry.LastSeenSnapshotID),
-		LastSeenCommit:      nullStringFromPtr(nonEmptyPtr(carry.LastSeenCommit)),
 		ConsecutiveAbsences: int32(carry.ConsecutiveAbsences), // #nosec G115 -- scan count
 	})
 }
 
 // DeleteCarriedVulnerabilities removes carried rows that no longer apply.
-func (q *Queries) DeleteCarriedVulnerabilities(ctx context.Context, ids []uuid.UUID) (int64, error) {
+func (q *Queries) DeleteCarriedVulnerabilities(ctx context.Context, snapshotID uuid.UUID, ids []uuid.UUID) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return q.db.DeleteCarriedVulnerabilities(ctx, ids)
+	return q.db.DeleteCarriedVulnerabilities(ctx, dbgen.DeleteCarriedVulnerabilitiesParams{SnapshotID: snapshotID, Ids: ids})
 }
 
 func nonEmptyPtr(value string) *string {
@@ -335,7 +337,7 @@ func (q *Queries) ListPresenceRowsBySnapshot(ctx context.Context, snapshotID uui
 			ID: row.ID, Type: row.Type, SnapshotID: snapshotID, Fingerprint: row.Fingerprint,
 			ScannerName: row.ScannerName, FilePath: stringPtrFromNull(row.FilePath), Status: row.Status,
 			Origin: row.Origin, Presence: row.Presence, PresenceReason: stringPtrFromNull(row.PresenceReason),
-			LastSeenSnapshotID: uuidPtrFromNull(row.LastSeenSnapshotID), LastSeenCommit: stringPtrFromNull(row.LastSeenCommit),
+			LastSeenSnapshotID: uuidPtrFromNull(row.LastSeenSnapshotID), LastSeenCommit: nonEmptyPtr(row.LastSeenCommit),
 			ConsecutiveAbsences: int(row.ConsecutiveAbsences),
 		}
 		if raw, ok := row.TraceFiles.([]byte); ok && len(raw) > 0 && string(raw) != "null" {

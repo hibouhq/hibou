@@ -165,21 +165,14 @@ func (q *Queries) ListClosedAssertionFingerprints(ctx context.Context, repoID uu
 }
 
 const setAssertionRowsStatus = `-- name: SetAssertionRowsStatus :execrows
-UPDATE vulnerabilities v
+UPDATE findings f
 SET status = $1::vulnerability_status,
     resolved_at = CASE WHEN $1::text = 'resolved' THEN now() ELSE NULL END,
     resolved_by = CASE WHEN $1::text = 'resolved' THEN $2::uuid ELSE NULL END,
     updated_at = now()
-WHERE v.repo_id = $3
-  AND v.fingerprint = $4
-  AND v.origin IN ('human', 'agent')
-  AND v.snapshot_id IN (
-      SELECT DISTINCT ON (s.ref_id) s.id
-      FROM snapshots s
-      JOIN refs r ON r.id = s.ref_id
-      WHERE r.repo_id = $3
-      ORDER BY s.ref_id, s.created_at DESC
-  )
+WHERE f.repo_id = $3
+  AND f.fingerprint = $4
+  AND f.origin IN ('human', 'agent')
 `
 
 type SetAssertionRowsStatusParams struct {
@@ -189,9 +182,8 @@ type SetAssertionRowsStatusParams struct {
 	Fingerprint string        `json:"fingerprint"`
 }
 
-// Applies a decision to the assertion's rows in the latest snapshot of each
-// ref (where it is currently open), so it stops counting now rather than at
-// the next commit. Older snapshots keep their history.
+// Applies a decision to the assertion's finding, which every snapshot
+// that carries it shows at once (ADR-049).
 func (q *Queries) SetAssertionRowsStatus(ctx context.Context, arg SetAssertionRowsStatusParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setAssertionRowsStatus,
 		arg.Status,

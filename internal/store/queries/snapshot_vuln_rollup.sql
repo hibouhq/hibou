@@ -14,6 +14,3 @@ ON CONFLICT (snapshot_id) DO UPDATE SET
 
 -- name: GetSnapshotVulnRollup :one
 SELECT * FROM snapshot_vuln_rollup WHERE snapshot_id = $1;
-
--- name: DeleteVulnerabilitiesBySnapshot :exec
-DELETE FROM vulnerabilities WHERE snapshot_id = $1;

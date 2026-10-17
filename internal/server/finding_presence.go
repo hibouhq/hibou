@@ -126,7 +126,7 @@ func (s *Server) reconcileFindingPresenceTx(ctx context.Context, snapshotID uuid
 			if carriedRowMatches(row, input) {
 				continue
 			}
-			if err := queries.UpdateCarriedPresence(ctx, row.ID, input); err != nil {
+			if err := queries.UpdateCarriedPresence(ctx, snapshot.ID, row.ID, input); err != nil {
 				return false, fmt.Errorf("update carried finding: %w", err)
 			}
 			changed = true
@@ -134,7 +134,13 @@ func (s *Server) reconcileFindingPresenceTx(ctx context.Context, snapshotID uuid
 		}
 		inserts = append(inserts, input)
 	}
-	inserted, err := queries.CarryVulnerabilitiesForward(ctx, snapshot.ID, inserts)
+	// The carried rows are copies of the previous snapshot's rows for the
+	// same findings (ADR-049): the source snapshot is where they come from.
+	fromSnapshotID := uuid.Nil
+	if inputs.previous != nil {
+		fromSnapshotID = inputs.previous.ID
+	}
+	inserted, err := queries.CarryVulnerabilitiesForward(ctx, snapshot.ID, fromSnapshotID, inserts)
 	if err != nil {
 		return false, fmt.Errorf("carry findings forward: %w", err)
 	}
@@ -142,7 +148,7 @@ func (s *Server) reconcileFindingPresenceTx(ctx context.Context, snapshotID uuid
 	for _, row := range existing {
 		stale = append(stale, row.ID)
 	}
-	deleted, err := queries.DeleteCarriedVulnerabilities(ctx, stale)
+	deleted, err := queries.DeleteCarriedVulnerabilities(ctx, snapshot.ID, stale)
 	if err != nil {
 		return false, fmt.Errorf("delete stale carried findings: %w", err)
 	}

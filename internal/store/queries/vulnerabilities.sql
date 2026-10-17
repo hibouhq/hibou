@@ -1,84 +1,3 @@
--- name: CreateVulnerability :one
-INSERT INTO vulnerabilities (
-    type,
-    snapshot_id,
-    title,
-    description,
-    primary_identifier_kind,
-    primary_identifier_value,
-    original_severity,
-    severity,
-    status,
-    scanner_name,
-    scanner_vendor,
-    scanner_version,
-    scanner_external_id,
-    file_path,
-    start_line,
-    end_line,
-    location_hash,
-    fingerprint,
-    component_id,
-    component_name,
-    component_version,
-    component_purl,
-    ecosystem,
-    advisory_id,
-    affected_range_id,
-    language,
-    confidence,
-    solution,
-    has_remediation,
-    remediation_link,
-    reachability,
-    secret_type,
-    secret_hash,
-    commit_sha,
-    author_email,
-    verified,
-    created_by,
-    metadata,
-    rule_ref_id,
-    origin,
-    origin_api_key_id,
-    origin_token_name,
-    origin_owner_type,
-    origin_owner_id,
-    cvss_score,
-    cvss_version,
-    cvss_vector,
-    rated_by
-)
-VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-    $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-    $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-    $41, $42, $43, $44, $45, $46, $47, $48
-)
-ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET
-    last_seen_at = NOW(),
-    severity = CASE WHEN vulnerabilities.severity_override_by IS NULL THEN EXCLUDED.severity ELSE vulnerabilities.severity END,
-    original_severity = EXCLUDED.original_severity,
-    cvss_score = EXCLUDED.cvss_score,
-    cvss_version = EXCLUDED.cvss_version,
-    cvss_vector = EXCLUDED.cvss_vector,
-    rated_by = EXCLUDED.rated_by,
-    status = CASE WHEN vulnerabilities.status = 'resolved' THEN vulnerabilities.status ELSE EXCLUDED.status END,
-    metadata = EXCLUDED.metadata,
-    rule_ref_id = EXCLUDED.rule_ref_id,
-    -- Its producer reported it again: a row carried forward earlier in this
-    -- snapshot (ADR-034) is now a real observation.
-    presence = 'reported',
-    presence_reason = NULL,
-    last_seen_snapshot_id = NULL,
-    last_seen_commit = NULL,
-    consecutive_absences = 0
-RETURNING *;
-
--- name: GetVulnerabilityByID :one
-SELECT * FROM vulnerabilities WHERE id = $1;
-
 -- name: ListVulnerabilitiesBySnapshot :many
 -- The acceptance LEFT JOIN is the ADR-023 hot read: decision status is
 -- computed server-side off the (repo_id, fingerprint) unique index,
@@ -243,26 +162,6 @@ FROM vulnerabilities
 WHERE snapshot_id = $1 AND status != 'resolved'
 GROUP BY type;
 
--- name: UpdateVulnerabilityStatus :one
-UPDATE vulnerabilities
-SET status = $2,
-    state_comment = $3,
-    resolved_at = CASE WHEN $2 = 'resolved' THEN NOW() ELSE resolved_at END,
-    resolved_by = CASE WHEN $2 = 'resolved' THEN $4 ELSE resolved_by END,
-    updated_at = NOW()
-WHERE id = $1
-RETURNING *;
-
--- name: MarkStaleVulnerabilities :many
--- Returns the resolved identifiers so the notification dedup ledger can
--- forget them — a regression then re-notifies.
-UPDATE vulnerabilities SET status = 'resolved', resolved_at = NOW(), updated_at = NOW(), last_seen_at = NOW()
-WHERE snapshot_id = sqlc.arg(snapshot_id)
-  AND type = sqlc.arg(vuln_type)
-  AND status != 'resolved'
-  AND id NOT IN (SELECT unnest(sqlc.arg(fresh_ids)::uuid[]))
-RETURNING primary_identifier_value;
-
 -- name: CreateStateTransition :one
 INSERT INTO vulnerability_state_transitions (vulnerability_id, state, changed_by, comment)
 VALUES ($1, $2, $3, $4)
@@ -365,7 +264,7 @@ WHERE fa.repo_id = $1 AND (fa.expires_at IS NULL OR fa.expires_at > now())
 -- drawer's anchor row.
 SELECT * FROM vulnerabilities
 WHERE repo_id = $1 AND fingerprint = $2
-ORDER BY created_at DESC
+ORDER BY detected_at DESC
 LIMIT 1;
 
 -- name: ListFindingOccurrences :many
@@ -389,30 +288,6 @@ ORDER BY s.created_at DESC;
 SELECT * FROM finding_acceptances
 WHERE repo_id = $1 AND fingerprint = $2
   AND (expires_at IS NULL OR expires_at > now());
-
--- name: SetVulnerabilityReachability :execrows
--- CI-side reachability analysis (govulncheck): match on the human identifier
--- or any advisory alias — analyzers speak GO-/CVE-/GHSA- interchangeably.
-UPDATE vulnerabilities v
-SET reachability = sqlc.arg(reachability), updated_at = NOW()
-WHERE v.snapshot_id = $1
-  AND v.type IN ('dependency', 'malware')
-  AND (
-    v.primary_identifier_value = ANY(sqlc.arg(identifiers)::text[])
-    OR EXISTS (
-      SELECT 1 FROM advisories a
-      WHERE a.id = v.advisory_id AND a.canonical_id = ANY(sqlc.arg(identifiers)::text[])
-    )
-    OR EXISTS (
-      SELECT 1 FROM advisory_aliases aa
-      WHERE aa.advisory_id = v.advisory_id AND aa.alias = ANY(sqlc.arg(identifiers)::text[])
-    )
-  );
-
--- name: SetVulnerabilityReachabilityByIDs :execrows
-UPDATE vulnerabilities
-SET reachability = sqlc.arg(reachability), updated_at = NOW()
-WHERE id = ANY(sqlc.arg(ids)::uuid[]);
 
 -- name: ListDependencyFindingHeadsBySnapshot :many
 -- The reachability classification's working set: dependency/container rows
@@ -507,27 +382,3 @@ WHERE v.repo_id = $1
 ORDER BY LEAST(v.first_seen_at, s.created_at) ASC, s.created_at ASC
 LIMIT 1;
 
--- name: CopyMatchedVulnerabilities :many
--- The dependency and malware matches of one snapshot, written for another
--- with the same inventory (scan reuse). Rows the prior scan resolved or
--- only carried forward are not matches and stay behind; status restarts
--- at detected, as a fresh match would, and triage applies by fingerprint.
-INSERT INTO vulnerabilities (
-    type, snapshot_id, title, description, primary_identifier_kind, primary_identifier_value,
-    original_severity, severity, status, scanner_name, scanner_vendor, scanner_version, scanner_external_id,
-    fingerprint, component_id, component_name, component_version, component_purl, ecosystem,
-    advisory_id, affected_range_id, has_remediation, metadata, origin,
-    cvss_score, cvss_version, cvss_vector, rated_by
-)
-SELECT v.type, sqlc.arg(to_snapshot_id), v.title, v.description, v.primary_identifier_kind, v.primary_identifier_value,
-       v.original_severity, v.original_severity, 'detected', v.scanner_name, v.scanner_vendor, v.scanner_version, v.scanner_external_id,
-       v.fingerprint, v.component_id, v.component_name, v.component_version, v.component_purl, v.ecosystem,
-       v.advisory_id, v.affected_range_id, v.has_remediation, '{}'::jsonb, v.origin,
-       v.cvss_score, v.cvss_version, v.cvss_vector, v.rated_by
-FROM vulnerabilities v
-WHERE v.snapshot_id = sqlc.arg(from_snapshot_id)
-  AND v.type IN ('dependency', 'malware')
-  AND v.status <> 'resolved'
-  AND v.presence = 'reported'
-ON CONFLICT (snapshot_id, type, fingerprint) DO UPDATE SET last_seen_at = NOW()
-RETURNING id, type, primary_identifier_value, severity, component_name, component_version;

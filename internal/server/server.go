@@ -89,10 +89,13 @@ type Server struct {
 	scanCatalog       *scancatalog.Catalog
 	bundleManifest    bundleManifestCache
 	// compareGate bounds forge compare traffic for finding presence.
-	compareGate        compareGate
-	advisoryScanner    advisoryScanner
-	advisoryIngester   *advisory.Ingester
-	advisoryProviders  []string
+	compareGate       compareGate
+	advisoryScanner   advisoryScanner
+	advisoryIngester  *advisory.Ingester
+	advisoryProviders []string
+	// advisoryScanSlots bounds the automatic scans running at once on this
+	// replica (ADR-049 §4); nil means unbounded, as in tests.
+	advisoryScanSlots  chan struct{}
 	secretScanner      *secretscan.Scanner
 	secretScanSlots    chan struct{}
 	depExtractionSlots chan struct{}
@@ -327,6 +330,7 @@ func initializeServerServices(s *Server, cfg config.Config, log zerolog.Logger, 
 	s.advisoryIngester = advisoryIngester
 	s.advisoryScanner = scanner.New(s.queries, advisoryCache, advisoryIngester, s.bus, providers, log)
 	s.advisoryProviders = configuredAdvisoryProviderNames(cfg.AdvisoryScan.Providers, providers)
+	s.advisoryScanSlots = make(chan struct{}, max(1, cfg.AdvisoryScan.MaxConcurrency))
 	if len(s.advisoryProviders) == 0 {
 		log.Info().Strs("configured_providers", append([]string(nil), cfg.AdvisoryScan.Providers...)).Msg("advisory scanning disabled: no supported providers are configured")
 	}
@@ -1407,6 +1411,7 @@ func (s *Server) runRetentionPass(ctx context.Context) {
 			return err
 		}
 		s.collectInventorySets(runCtx)
+		s.collectOrphanFindings(runCtx)
 		return nil
 	})
 	// Shutdown cancellation is not a failure; keep the original filtering.
@@ -1442,6 +1447,32 @@ func (s *Server) collectInventorySets(ctx context.Context) {
 	}
 	if total > 0 {
 		s.log.Info().Int64("sets", total).Msg("inventory sets collected")
+	}
+}
+
+// collectOrphanFindings frees the findings no snapshot carries any more
+// (ADR-049): retention rolled their snapshots up, or their producers
+// stopped reporting them everywhere a month ago. Acceptances key on the
+// fingerprint and survive.
+func (s *Server) collectOrphanFindings(ctx context.Context) {
+	if s.queries == nil {
+		return
+	}
+	const page, maxPages = 500, 20
+	var total int64
+	for range maxPages {
+		deleted, err := s.queries.CollectOrphanFindings(ctx, page)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("orphan finding collection")
+			return
+		}
+		total += deleted
+		if deleted < page {
+			break
+		}
+	}
+	if total > 0 {
+		s.log.Info().Int64("findings", total).Msg("orphan findings collected")
 	}
 }
 

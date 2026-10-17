@@ -707,6 +707,13 @@ export interface InstanceStorage {
   metrics_exposure: MetricsExposure
   /** Shared inventory sets (ADR-045): how many, their rows, and the snapshots pointing at them. */
   inventory_sets?: InventorySetStats
+  /** Findings stored once per repository and the snapshot rows pointing at them (ADR-049). */
+  findings?: FindingStats
+}
+
+export interface FindingStats {
+  findings: number
+  snapshot_rows: number
 }
 
 export interface InventorySetStats {

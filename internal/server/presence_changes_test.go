@@ -107,12 +107,18 @@ func TestReconcileForgeBudget(t *testing.T) {
 	}
 
 	// Five carried findings last seen at five different commits, all gone now.
+	// A carried finding's last-seen commit is a snapshot's (ADR-049), so the
+	// five commits get snapshots on a scratch ref.
 	third, _ := srv.queries.CreateSnapshot(ctx, ref.ID, "c3", store.SnapshotStatusComplete)
 	recordRun(t, srv, third.ID, gosec)
+	scratch, _ := srv.queries.CreateRef(ctx, repo.ID, "scratch", store.RefTypeBranch, nil, nil, nil)
 	for i, base := range []string{"x1", "x2", "x3", "x4", "x5"} {
 		fp := "gone-" + base
+		if _, err := srv.queries.CreateSnapshot(ctx, scratch.ID, base, store.SnapshotStatusComplete); err != nil {
+			t.Fatal(err)
+		}
 		seedPresenceFinding(t, srv, second.ID, "sast", "gosec", fp, "f"+string(rune('a'+i))+".go")
-		if _, err := srv.db.ExecContext(ctx, `UPDATE vulnerabilities SET presence = 'unconfirmed', last_seen_commit = $1 WHERE snapshot_id = $2 AND fingerprint = $3`, base, second.ID, fp); err != nil {
+		if _, err := srv.db.ExecContext(ctx, `UPDATE snapshot_findings sf SET presence = 'unconfirmed', last_seen_snapshot_id = (SELECT s.id FROM snapshots s WHERE s.commit_sha = $1 ORDER BY s.created_at DESC LIMIT 1) FROM findings f WHERE f.id = sf.finding_id AND sf.snapshot_id = $2 AND f.fingerprint = $3`, base, second.ID, fp); err != nil {
 			t.Fatal(err)
 		}
 	}

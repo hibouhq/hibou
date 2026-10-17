@@ -99,6 +99,21 @@
               {{ formatCount(storage.inventory_sets.component_rows) }} rows · shared by {{ formatCount(storage.inventory_sets.snapshots_with_inventory) }} snapshots
             </div>
           </div>
+          <div
+            v-if="storage.findings"
+            class="rounded-xl border border-surface-border bg-surface-raised/40 p-4"
+            title="Findings are stored once per repository; each snapshot that carries one points at it (ADR-049). The snapshot rows are what builds add."
+          >
+            <div class="text-[11px] uppercase tracking-[0.16em] text-gray-500">
+              Findings
+            </div>
+            <div class="mt-2 text-2xl font-semibold text-white">
+              {{ formatCount(storage.findings.findings) }}
+            </div>
+            <div class="mt-0.5 text-xs text-gray-500">
+              {{ formatCount(storage.findings.snapshot_rows) }} snapshot rows
+            </div>
+          </div>
           <div class="rounded-xl border border-surface-border bg-surface-raised/40 p-4">
             <div class="text-[11px] uppercase tracking-[0.16em] text-gray-500">
               Connections

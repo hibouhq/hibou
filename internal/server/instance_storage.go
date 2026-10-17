@@ -25,6 +25,9 @@ type instanceStorageResponse struct {
 	// pointing at them (ADR-045, Database section): a ratio near one
 	// means something writes non-canonical rows.
 	InventorySets *store.InventorySetStats `json:"inventory_sets,omitempty"`
+	// Findings counts the findings stored once per repository and the
+	// snapshot rows pointing at them (ADR-049).
+	Findings *store.FindingStats `json:"findings,omitempty"`
 }
 
 // @Summary      Instance storage usage
@@ -49,11 +52,17 @@ func (s *Server) handleInstanceStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.StorageUsage
 	var sets *store.InventorySetStats
+	var findings *store.FindingStats
 	if s.queries != nil {
 		if stats, err := s.queries.InventorySetStats(r.Context()); err == nil {
 			sets = &stats
 		} else {
 			s.log.Warn().Err(err).Msg("inventory set statistics")
+		}
+		if stats, err := s.queries.FindingStats(r.Context()); err == nil {
+			findings = &stats
+		} else {
+			s.log.Warn().Err(err).Msg("finding statistics")
 		}
 	}
 	api.JSON(w, http.StatusOK, instanceStorageResponse{
@@ -65,6 +74,7 @@ func (s *Server) handleInstanceStorage(w http.ResponseWriter, r *http.Request) {
 		ArtifactBackend:          s.cfg.ArtifactBackend,
 		MetricsExposure:          s.metricsExposure(),
 		InventorySets:            sets,
+		Findings:                 findings,
 	})
 }
 

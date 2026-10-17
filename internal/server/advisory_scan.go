@@ -160,6 +160,16 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 				s.log.Error().Any("panic", recovered).Str("snapshot_id", snapshotID.String()).Msg("advisory scan goroutine panicked")
 			}
 		}()
+		// A burst of builds waits its turn: the first scan of an inventory
+		// set matches, the later ones copy it (ADR-049 §4).
+		if s.advisoryScanSlots != nil {
+			select {
+			case s.advisoryScanSlots <- struct{}{}:
+				defer func() { <-s.advisoryScanSlots }()
+			case <-baseCtx.Done():
+				return
+			}
+		}
 		scanCtx, cancel := context.WithTimeout(baseCtx, advisoryScanTimeout)
 		defer cancel()
 		if _, err := s.advisoryScanner.RunScan(scanCtx, snapshotID, providers, triggeredBy); err != nil && !errors.Is(err, context.Canceled) {

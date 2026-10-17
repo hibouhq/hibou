@@ -59,7 +59,7 @@ func (q *Queries) CopyMatchedVulnerabilities(ctx context.Context, fromSnapshotID
 	out := make([]CopiedVulnerability, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, CopiedVulnerability{
-			ID: row.ID, Type: row.Type, Identifier: strings.TrimSpace(row.PrimaryIdentifierValue), Severity: strings.ToLower(string(row.Severity)),
+			ID: row.FindingID, Type: row.Type, Identifier: strings.TrimSpace(row.PrimaryIdentifierValue), Severity: strings.ToLower(string(row.Severity)),
 			ComponentName: strings.TrimSpace(row.ComponentName.String), ComponentVersion: strings.TrimSpace(row.ComponentVersion.String),
 		})
 	}

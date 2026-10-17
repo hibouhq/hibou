@@ -293,11 +293,16 @@ func (q *Queries) CreateVulnerability(ctx context.Context, params dbgen.CreateVu
 		params.Origin = dbgen.FindingOriginScanner
 	}
 
-	row, err := q.db.CreateVulnerability(ctx, params)
+	// One statement upserts the finding and its row for the snapshot
+	// (ADR-049); the row the readers see is the view's.
+	findingID, err := q.db.CreateVulnerability(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-
+	row, err := q.db.GetVulnerabilityBySnapshotAndID(ctx, dbgen.GetVulnerabilityBySnapshotAndIDParams{SnapshotID: params.SnapshotID, ID: findingID})
+	if err != nil {
+		return nil, err
+	}
 	return vulnerabilityFromRow(row), nil
 }
 
@@ -870,14 +875,21 @@ func (q *Queries) UpdateVulnerabilityStatus(ctx context.Context, id uuid.UUID, s
 		ResolvedBy:   nullUUIDFromPtr(userID),
 	}
 
-	row, err := q.db.UpdateVulnerabilityStatus(ctx, params)
+	// The state is the finding's (ADR-049); the caller gets the finding's
+	// newest occurrence back.
+	if _, err := q.db.UpdateVulnerabilityStatus(ctx, params); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	row, err := q.db.GetVulnerabilityByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-
 	return vulnerabilityFromRow(row), nil
 }
 
@@ -976,7 +988,7 @@ func vulnerabilityFromRow(row dbgen.Vulnerability) *Vulnerability {
 		Presence:                string(row.Presence),
 		PresenceReason:          stringPtrFromNull(row.PresenceReason),
 		LastSeenSnapshotID:      uuidPtrFromNull(row.LastSeenSnapshotID),
-		LastSeenCommit:          stringPtrFromNull(row.LastSeenCommit),
+		LastSeenCommit:          nonEmptyPtr(row.LastSeenCommit),
 		ConsecutiveAbsences:     int(row.ConsecutiveAbsences),
 	}
 }
@@ -1630,6 +1642,7 @@ func (q *Queries) ApplyReachabilityFromCodeRefs(ctx context.Context, snapshotID 
 	if len(reachableIDs) > 0 {
 		if reachableCount, err = q.db.SetVulnerabilityReachabilityByIDs(ctx, dbgen.SetVulnerabilityReachabilityByIDsParams{
 			Reachability: dbgen.NullReachability{Reachability: dbgen.ReachabilityReachable, Valid: true},
+			SnapshotID:   snapshotID,
 			Ids:          reachableIDs,
 		}); err != nil {
 			return reachableCount, 0, err
@@ -1638,6 +1651,7 @@ func (q *Queries) ApplyReachabilityFromCodeRefs(ctx context.Context, snapshotID 
 	if len(unreachableIDs) > 0 {
 		if unreachableCount, err = q.db.SetVulnerabilityReachabilityByIDs(ctx, dbgen.SetVulnerabilityReachabilityByIDsParams{
 			Reachability: dbgen.NullReachability{Reachability: dbgen.ReachabilityNotReachable, Valid: true},
+			SnapshotID:   snapshotID,
 			Ids:          unreachableIDs,
 		}); err != nil {
 			return reachableCount, unreachableCount, err

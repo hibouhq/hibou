@@ -1450,6 +1450,67 @@ type EpssScore struct {
 	Percentile string `json:"percentile"`
 }
 
+type Finding struct {
+	ID                      uuid.UUID       `json:"id"`
+	OrgID                   uuid.UUID       `json:"org_id"`
+	RepoID                  uuid.UUID       `json:"repo_id"`
+	Type                    string          `json:"type"`
+	Fingerprint             string          `json:"fingerprint"`
+	Title                   string          `json:"title"`
+	Description             string          `json:"description"`
+	PrimaryIdentifierKind   string          `json:"primary_identifier_kind"`
+	PrimaryIdentifierValue  string          `json:"primary_identifier_value"`
+	Severity                SeverityLevel   `json:"severity"`
+	SeverityOverrideReason  sql.NullString  `json:"severity_override_reason"`
+	SeverityOverrideBy      uuid.NullUUID   `json:"severity_override_by"`
+	CvssVersion             NullCvssVersion `json:"cvss_version"`
+	CvssVector              string          `json:"cvss_vector"`
+	RatedBy                 string          `json:"rated_by"`
+	Status                  string          `json:"status"`
+	StateComment            sql.NullString  `json:"state_comment"`
+	ResolvedAt              sql.NullTime    `json:"resolved_at"`
+	ResolvedBy              uuid.NullUUID   `json:"resolved_by"`
+	DueDate                 sql.NullTime    `json:"due_date"`
+	PresentOnDefaultBranch  bool            `json:"present_on_default_branch"`
+	ResolvedOnDefaultBranch bool            `json:"resolved_on_default_branch"`
+	ScannerName             string          `json:"scanner_name"`
+	ScannerVendor           string          `json:"scanner_vendor"`
+	ScannerVersion          string          `json:"scanner_version"`
+	ScannerExternalID       string          `json:"scanner_external_id"`
+	FilePath                sql.NullString  `json:"file_path"`
+	StartLine               sql.NullInt32   `json:"start_line"`
+	EndLine                 sql.NullInt32   `json:"end_line"`
+	LocationHash            sql.NullString  `json:"location_hash"`
+	ComponentID             uuid.NullUUID   `json:"component_id"`
+	ComponentName           sql.NullString  `json:"component_name"`
+	ComponentVersion        sql.NullString  `json:"component_version"`
+	ComponentPurl           sql.NullString  `json:"component_purl"`
+	Ecosystem               sql.NullString  `json:"ecosystem"`
+	AdvisoryID              uuid.NullUUID   `json:"advisory_id"`
+	AffectedRangeID         uuid.NullUUID   `json:"affected_range_id"`
+	Language                sql.NullString  `json:"language"`
+	Solution                sql.NullString  `json:"solution"`
+	HasRemediation          bool            `json:"has_remediation"`
+	RemediationLink         sql.NullString  `json:"remediation_link"`
+	SecretType              sql.NullString  `json:"secret_type"`
+	SecretHash              sql.NullString  `json:"secret_hash"`
+	CommitSha               sql.NullString  `json:"commit_sha"`
+	AuthorEmail             sql.NullString  `json:"author_email"`
+	Verified                sql.NullBool    `json:"verified"`
+	CreatedBy               uuid.NullUUID   `json:"created_by"`
+	Metadata                json.RawMessage `json:"metadata"`
+	RuleRefID               uuid.NullUUID   `json:"rule_ref_id"`
+	Origin                  FindingOrigin   `json:"origin"`
+	OriginApiKeyID          uuid.NullUUID   `json:"origin_api_key_id"`
+	OriginTokenName         string          `json:"origin_token_name"`
+	OriginOwnerType         string          `json:"origin_owner_type"`
+	OriginOwnerID           uuid.NullUUID   `json:"origin_owner_id"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
+	FirstSeenAt             time.Time       `json:"first_seen_at"`
+	LastSeenAt              time.Time       `json:"last_seen_at"`
+}
+
 type FindingAcceptance struct {
 	ID               uuid.UUID            `json:"id"`
 	RepoID           uuid.UUID            `json:"repo_id"`
@@ -2127,6 +2188,27 @@ type SnapshotDependencyRoot struct {
 	ComponentID uuid.NullUUID `json:"component_id"`
 }
 
+type SnapshotFinding struct {
+	SnapshotID          uuid.UUID        `json:"snapshot_id"`
+	FindingID           uuid.UUID        `json:"finding_id"`
+	DetectedAt          time.Time        `json:"detected_at"`
+	Severity            SeverityLevel    `json:"severity"`
+	CvssScore           sql.NullString   `json:"cvss_score"`
+	Confidence          sql.NullString   `json:"confidence"`
+	Reachability        NullReachability `json:"reachability"`
+	ScanStatus          string           `json:"scan_status"`
+	ResolvedAt          sql.NullTime     `json:"resolved_at"`
+	Presence            FindingPresence  `json:"presence"`
+	PresenceReason      sql.NullString   `json:"presence_reason"`
+	LastSeenSnapshotID  uuid.NullUUID    `json:"last_seen_snapshot_id"`
+	ConsecutiveAbsences int32            `json:"consecutive_absences"`
+	FilePath            sql.NullString   `json:"file_path"`
+	StartLine           sql.NullInt32    `json:"start_line"`
+	EndLine             sql.NullInt32    `json:"end_line"`
+	LocationHash        sql.NullString   `json:"location_hash"`
+	Metadata            json.RawMessage  `json:"metadata"`
+}
+
 type SnapshotVulnRollup struct {
 	SnapshotID uuid.UUID       `json:"snapshot_id"`
 	Counts     json.RawMessage `json:"counts"`
@@ -2270,7 +2352,7 @@ type Vulnerability struct {
 	UpdatedAt               time.Time        `json:"updated_at"`
 	FirstSeenAt             time.Time        `json:"first_seen_at"`
 	LastSeenAt              time.Time        `json:"last_seen_at"`
-	SeverityRank            sql.NullInt16    `json:"severity_rank"`
+	SeverityRank            int16            `json:"severity_rank"`
 	RuleRefID               uuid.NullUUID    `json:"rule_ref_id"`
 	PrimaryIdentifierKind   string           `json:"primary_identifier_kind"`
 	PrimaryIdentifierValue  string           `json:"primary_identifier_value"`
@@ -2288,7 +2370,7 @@ type Vulnerability struct {
 	Presence                FindingPresence  `json:"presence"`
 	PresenceReason          sql.NullString   `json:"presence_reason"`
 	LastSeenSnapshotID      uuid.NullUUID    `json:"last_seen_snapshot_id"`
-	LastSeenCommit          sql.NullString   `json:"last_seen_commit"`
+	LastSeenCommit          string           `json:"last_seen_commit"`
 	ConsecutiveAbsences     int32            `json:"consecutive_absences"`
 }
 

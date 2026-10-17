@@ -48,15 +48,6 @@ func (q *Queries) AggregateSnapshotVulnRollup(ctx context.Context, snapshotID uu
 	return items, nil
 }
 
-const deleteVulnerabilitiesBySnapshot = `-- name: DeleteVulnerabilitiesBySnapshot :exec
-DELETE FROM vulnerabilities WHERE snapshot_id = $1
-`
-
-func (q *Queries) DeleteVulnerabilitiesBySnapshot(ctx context.Context, snapshotID uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, deleteVulnerabilitiesBySnapshot, snapshotID)
-	return err
-}
-
 const getSnapshotVulnRollup = `-- name: GetSnapshotVulnRollup :one
 SELECT snapshot_id, counts, total, rolled_up_at FROM snapshot_vuln_rollup WHERE snapshot_id = $1
 `

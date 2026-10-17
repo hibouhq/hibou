@@ -16,56 +16,32 @@ import (
 )
 
 const carryVulnerabilitiesForward = `-- name: CarryVulnerabilitiesForward :execrows
-INSERT INTO vulnerabilities (
-    type, snapshot_id, title, description, original_severity, severity,
-    severity_override_reason, severity_override_by, status, state_comment,
-    detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor,
-    scanner_version, scanner_external_id, file_path, start_line, end_line,
-    location_hash, fingerprint, component_id, component_name, component_version,
-    component_purl, ecosystem, advisory_id, affected_range_id, language,
-    confidence, solution, has_remediation, remediation_link, reachability,
-    due_date, present_on_default_branch, resolved_on_default_branch, secret_type,
-    secret_hash, commit_sha, author_email, verified, created_by, metadata,
-    first_seen_at, last_seen_at, rule_ref_id, primary_identifier_kind,
-    primary_identifier_value, origin, origin_api_key_id, origin_token_name,
-    origin_owner_type, origin_owner_id, cvss_score, cvss_version, cvss_vector,
-    rated_by, presence, presence_reason, last_seen_snapshot_id, last_seen_commit,
-    consecutive_absences
+INSERT INTO snapshot_findings (
+    snapshot_id, finding_id, detected_at, severity, cvss_score, confidence, reachability, scan_status, resolved_at,
+    presence, presence_reason, last_seen_snapshot_id, consecutive_absences,
+    file_path, start_line, end_line, location_hash, metadata
 )
-SELECT
-    v.type, $1::uuid, v.title, v.description, v.original_severity, v.severity,
-    v.severity_override_reason, v.severity_override_by, v.status, v.state_comment,
-    v.detected_at, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor,
-    v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line,
-    v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version,
-    v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language,
-    v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability,
-    v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type,
-    v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata,
-    v.first_seen_at, v.last_seen_at, v.rule_ref_id, v.primary_identifier_kind,
-    v.primary_identifier_value, v.origin, v.origin_api_key_id, v.origin_token_name,
-    v.origin_owner_type, v.origin_owner_id, v.cvss_score, v.cvss_version, v.cvss_vector,
-    v.rated_by, c.presence::finding_presence, c.reason, c.last_seen_snapshot_id, c.last_seen_commit,
-    c.consecutive_absences
+SELECT $1::uuid, src.finding_id, src.detected_at, src.severity, src.cvss_score, src.confidence, src.reachability, src.scan_status, src.resolved_at,
+       c.presence::finding_presence, c.reason, c.last_seen_snapshot_id, c.consecutive_absences,
+       src.file_path, src.start_line, src.end_line, src.location_hash, src.metadata
 FROM jsonb_to_recordset($2::jsonb) AS c(
-    id uuid, presence text, reason text, last_seen_snapshot_id uuid,
-    last_seen_commit text, consecutive_absences int
+    id uuid, presence text, reason text, last_seen_snapshot_id uuid, consecutive_absences int
 )
-JOIN vulnerabilities v ON v.id = c.id
-ON CONFLICT (snapshot_id, type, fingerprint) DO NOTHING
+JOIN snapshot_findings src ON src.finding_id = c.id AND src.snapshot_id = $3::uuid
+ON CONFLICT (snapshot_id, finding_id) DO NOTHING
 `
 
 type CarryVulnerabilitiesForwardParams struct {
-	SnapshotID uuid.UUID       `json:"snapshot_id"`
-	Carries    json.RawMessage `json:"carries"`
+	SnapshotID     uuid.UUID       `json:"snapshot_id"`
+	Carries        json.RawMessage `json:"carries"`
+	FromSnapshotID uuid.UUID       `json:"from_snapshot_id"`
 }
 
-// Copies previous findings into a snapshot as carried rows. Every column of
-// the source row is kept except identity, tenancy (set by trigger) and the
-// presence fields given here. A row the producer reported meanwhile wins
-// (DO NOTHING on the snapshot's identity key).
+// Copies the previous snapshot's rows into the snapshot as carried rows
+// (ADR-034): the pointer rows with their as-scanned values, the presence
+// fields given here. A row the producer reported meanwhile wins.
 func (q *Queries) CarryVulnerabilitiesForward(ctx context.Context, arg CarryVulnerabilitiesForwardParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, carryVulnerabilitiesForward, arg.SnapshotID, arg.Carries)
+	result, err := q.db.ExecContext(ctx, carryVulnerabilitiesForward, arg.SnapshotID, arg.Carries, arg.FromSnapshotID)
 	if err != nil {
 		return 0, err
 	}
@@ -73,13 +49,18 @@ func (q *Queries) CarryVulnerabilitiesForward(ctx context.Context, arg CarryVuln
 }
 
 const deleteCarriedVulnerabilities = `-- name: DeleteCarriedVulnerabilities :execrows
-DELETE FROM vulnerabilities
-WHERE id = ANY($1::uuid[]) AND presence <> 'reported'
+DELETE FROM snapshot_findings
+WHERE snapshot_id = $1 AND finding_id = ANY($2::uuid[]) AND presence <> 'reported'
 `
 
+type DeleteCarriedVulnerabilitiesParams struct {
+	SnapshotID uuid.UUID   `json:"snapshot_id"`
+	Ids        []uuid.UUID `json:"ids"`
+}
+
 // Only carried rows: a producer's own observation is never deleted here.
-func (q *Queries) DeleteCarriedVulnerabilities(ctx context.Context, ids []uuid.UUID) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteCarriedVulnerabilities, pq.Array(ids))
+func (q *Queries) DeleteCarriedVulnerabilities(ctx context.Context, arg DeleteCarriedVulnerabilitiesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteCarriedVulnerabilities, arg.SnapshotID, pq.Array(arg.Ids))
 	if err != nil {
 		return 0, err
 	}
@@ -219,7 +200,7 @@ type ListPresenceRowsBySnapshotRow struct {
 	Presence            string         `json:"presence"`
 	PresenceReason      sql.NullString `json:"presence_reason"`
 	LastSeenSnapshotID  uuid.NullUUID  `json:"last_seen_snapshot_id"`
-	LastSeenCommit      sql.NullString `json:"last_seen_commit"`
+	LastSeenCommit      string         `json:"last_seen_commit"`
 	ConsecutiveAbsences int32          `json:"consecutive_absences"`
 	TraceFiles          interface{}    `json:"trace_files"`
 }
@@ -309,22 +290,20 @@ func (q *Queries) LockRefForPresence(ctx context.Context, refID string) error {
 }
 
 const updateCarriedPresence = `-- name: UpdateCarriedPresence :exec
-UPDATE vulnerabilities
+UPDATE snapshot_findings
 SET presence = $1::finding_presence,
     presence_reason = $2,
     last_seen_snapshot_id = $3,
-    last_seen_commit = $4,
-    consecutive_absences = $5,
-    updated_at = now()
-WHERE id = $6 AND presence <> 'reported'
+    consecutive_absences = $4
+WHERE snapshot_id = $5 AND finding_id = $6 AND presence <> 'reported'
 `
 
 type UpdateCarriedPresenceParams struct {
 	Presence            FindingPresence `json:"presence"`
 	Reason              sql.NullString  `json:"reason"`
 	LastSeenSnapshotID  uuid.NullUUID   `json:"last_seen_snapshot_id"`
-	LastSeenCommit      sql.NullString  `json:"last_seen_commit"`
 	ConsecutiveAbsences int32           `json:"consecutive_absences"`
+	SnapshotID          uuid.UUID       `json:"snapshot_id"`
 	ID                  uuid.UUID       `json:"id"`
 }
 
@@ -333,8 +312,8 @@ func (q *Queries) UpdateCarriedPresence(ctx context.Context, arg UpdateCarriedPr
 		arg.Presence,
 		arg.Reason,
 		arg.LastSeenSnapshotID,
-		arg.LastSeenCommit,
 		arg.ConsecutiveAbsences,
+		arg.SnapshotID,
 		arg.ID,
 	)
 	return err

@@ -104,7 +104,7 @@ func (q *Queries) DeleteProducerRunsByArtifact(ctx context.Context, artifactID u
 }
 
 const getPreviousCompleteSnapshotByRef = `-- name: GetPreviousCompleteSnapshotByRef :one
-SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha FROM snapshots
+SELECT id, ref_id, commit_sha, status, labels, image_digest, created_at, build_url, run_id, run_number, pr_number, pr_target_branch, tag, expected_uploads, received_uploads, run_attempt, pinned, retention_hold, artifact_bytes, artifact_processing_claimed_by, artifact_processing_claim_expires_at, artifact_processing_started_at, artifact_processing_finished_at, artifact_processing_attempts, artifact_processing_last_error, org_id, repo_id, merge_commit_sha, base_commit_sha, inventory_set_id FROM snapshots
 WHERE ref_id = $1
   AND id <> $2
   AND status IN ('complete', 'active')
@@ -154,6 +154,7 @@ func (q *Queries) GetPreviousCompleteSnapshotByRef(ctx context.Context, arg GetP
 		&i.RepoID,
 		&i.MergeCommitSha,
 		&i.BaseCommitSha,
+		&i.InventorySetID,
 	)
 	return i, err
 }

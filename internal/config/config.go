@@ -168,6 +168,10 @@ type BackgroundConfig struct {
 type AdvisoryScanConfig struct {
 	Providers []string
 	Interval  time.Duration
+	// MaxConcurrency bounds the automatic scans a replica runs at once
+	// after uploads (ADR-049 §4); a burst of builds waits its turn and the
+	// later ones reuse the first scan of the same inventory.
+	MaxConcurrency int
 }
 
 // CVEFeedConfig configures the CVE Program feed sweep (ADR-028).
@@ -413,6 +417,7 @@ func Load() (Config, error) {
 	v.SetDefault("background.stale_pending.enabled", true)
 	v.SetDefault("advisory_scan.providers", []string{"osv", "trivy"})
 	v.SetDefault("advisory_scan.interval", "6h")
+	v.SetDefault("advisory_scan.max_concurrency", 2)
 	v.SetDefault("cve_feed.remote", "")
 	v.SetDefault("cve_feed.interval", "15m")
 	v.SetDefault("kev.enabled", true)
@@ -539,6 +544,10 @@ func Load() (Config, error) {
 		return Config{}, errors.New("parsing kev.interval: duration must be greater than zero")
 	}
 
+	advisoryScanMaxConcurrency := v.GetInt("advisory_scan.max_concurrency")
+	if advisoryScanMaxConcurrency < 1 {
+		return Config{}, errors.New("parsing advisory_scan.max_concurrency: must be at least 1")
+	}
 	advisoryScanInterval, err := time.ParseDuration(v.GetString("advisory_scan.interval"))
 	if err != nil {
 		return Config{}, fmt.Errorf("parsing advisory_scan.interval: %w", err)
@@ -684,8 +693,9 @@ func Load() (Config, error) {
 			PrivateNamespaces: normalizeList(v.GetStringSlice("depsdev.private_namespaces")),
 		},
 		AdvisoryScan: AdvisoryScanConfig{
-			Providers: normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),
-			Interval:  advisoryScanInterval,
+			Providers:      normalizeProviderList(v.GetStringSlice("advisory_scan.providers")),
+			Interval:       advisoryScanInterval,
+			MaxConcurrency: advisoryScanMaxConcurrency,
 		},
 		Worker: WorkerConfig{
 			LeaseDuration:     workerLeaseDuration,

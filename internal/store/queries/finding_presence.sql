@@ -4,62 +4,35 @@
 SELECT pg_advisory_xact_lock(hashtextextended('finding_presence:' || sqlc.arg(ref_id)::text, 0));
 
 -- name: CarryVulnerabilitiesForward :execrows
--- Copies previous findings into a snapshot as carried rows. Every column of
--- the source row is kept except identity, tenancy (set by trigger) and the
--- presence fields given here. A row the producer reported meanwhile wins
--- (DO NOTHING on the snapshot's identity key).
-INSERT INTO vulnerabilities (
-    type, snapshot_id, title, description, original_severity, severity,
-    severity_override_reason, severity_override_by, status, state_comment,
-    detected_at, resolved_at, resolved_by, scanner_name, scanner_vendor,
-    scanner_version, scanner_external_id, file_path, start_line, end_line,
-    location_hash, fingerprint, component_id, component_name, component_version,
-    component_purl, ecosystem, advisory_id, affected_range_id, language,
-    confidence, solution, has_remediation, remediation_link, reachability,
-    due_date, present_on_default_branch, resolved_on_default_branch, secret_type,
-    secret_hash, commit_sha, author_email, verified, created_by, metadata,
-    first_seen_at, last_seen_at, rule_ref_id, primary_identifier_kind,
-    primary_identifier_value, origin, origin_api_key_id, origin_token_name,
-    origin_owner_type, origin_owner_id, cvss_score, cvss_version, cvss_vector,
-    rated_by, presence, presence_reason, last_seen_snapshot_id, last_seen_commit,
-    consecutive_absences
+-- Copies the previous snapshot's rows into the snapshot as carried rows
+-- (ADR-034): the pointer rows with their as-scanned values, the presence
+-- fields given here. A row the producer reported meanwhile wins.
+INSERT INTO snapshot_findings (
+    snapshot_id, finding_id, detected_at, severity, cvss_score, confidence, reachability, scan_status, resolved_at,
+    presence, presence_reason, last_seen_snapshot_id, consecutive_absences,
+    file_path, start_line, end_line, location_hash, metadata
 )
-SELECT
-    v.type, sqlc.arg(snapshot_id)::uuid, v.title, v.description, v.original_severity, v.severity,
-    v.severity_override_reason, v.severity_override_by, v.status, v.state_comment,
-    v.detected_at, v.resolved_at, v.resolved_by, v.scanner_name, v.scanner_vendor,
-    v.scanner_version, v.scanner_external_id, v.file_path, v.start_line, v.end_line,
-    v.location_hash, v.fingerprint, v.component_id, v.component_name, v.component_version,
-    v.component_purl, v.ecosystem, v.advisory_id, v.affected_range_id, v.language,
-    v.confidence, v.solution, v.has_remediation, v.remediation_link, v.reachability,
-    v.due_date, v.present_on_default_branch, v.resolved_on_default_branch, v.secret_type,
-    v.secret_hash, v.commit_sha, v.author_email, v.verified, v.created_by, v.metadata,
-    v.first_seen_at, v.last_seen_at, v.rule_ref_id, v.primary_identifier_kind,
-    v.primary_identifier_value, v.origin, v.origin_api_key_id, v.origin_token_name,
-    v.origin_owner_type, v.origin_owner_id, v.cvss_score, v.cvss_version, v.cvss_vector,
-    v.rated_by, c.presence::finding_presence, c.reason, c.last_seen_snapshot_id, c.last_seen_commit,
-    c.consecutive_absences
+SELECT sqlc.arg(snapshot_id)::uuid, src.finding_id, src.detected_at, src.severity, src.cvss_score, src.confidence, src.reachability, src.scan_status, src.resolved_at,
+       c.presence::finding_presence, c.reason, c.last_seen_snapshot_id, c.consecutive_absences,
+       src.file_path, src.start_line, src.end_line, src.location_hash, src.metadata
 FROM jsonb_to_recordset(sqlc.arg(carries)::jsonb) AS c(
-    id uuid, presence text, reason text, last_seen_snapshot_id uuid,
-    last_seen_commit text, consecutive_absences int
+    id uuid, presence text, reason text, last_seen_snapshot_id uuid, consecutive_absences int
 )
-JOIN vulnerabilities v ON v.id = c.id
-ON CONFLICT (snapshot_id, type, fingerprint) DO NOTHING;
+JOIN snapshot_findings src ON src.finding_id = c.id AND src.snapshot_id = sqlc.arg(from_snapshot_id)::uuid
+ON CONFLICT (snapshot_id, finding_id) DO NOTHING;
 
 -- name: UpdateCarriedPresence :exec
-UPDATE vulnerabilities
+UPDATE snapshot_findings
 SET presence = sqlc.arg(presence)::finding_presence,
     presence_reason = sqlc.narg(reason),
     last_seen_snapshot_id = sqlc.narg(last_seen_snapshot_id),
-    last_seen_commit = sqlc.narg(last_seen_commit),
-    consecutive_absences = sqlc.arg(consecutive_absences),
-    updated_at = now()
-WHERE id = sqlc.arg(id) AND presence <> 'reported';
+    consecutive_absences = sqlc.arg(consecutive_absences)
+WHERE snapshot_id = sqlc.arg(snapshot_id) AND finding_id = sqlc.arg(id) AND presence <> 'reported';
 
 -- name: DeleteCarriedVulnerabilities :execrows
 -- Only carried rows: a producer's own observation is never deleted here.
-DELETE FROM vulnerabilities
-WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND presence <> 'reported';
+DELETE FROM snapshot_findings
+WHERE snapshot_id = sqlc.arg(snapshot_id) AND finding_id = ANY(sqlc.arg(ids)::uuid[]) AND presence <> 'reported';
 
 -- name: DeleteFindingResolutionsBySnapshot :exec
 -- Reconcile rewrites a snapshot's resolutions whole: a late producer can turn

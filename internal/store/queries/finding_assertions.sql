@@ -34,21 +34,13 @@ SELECT * FROM finding_assertions WHERE repo_id = $1 AND fingerprint = $2;
 SELECT fingerprint FROM finding_assertions WHERE repo_id = $1 AND closed_kind IS NOT NULL;
 
 -- name: SetAssertionRowsStatus :execrows
--- Applies a decision to the assertion's rows in the latest snapshot of each
--- ref (where it is currently open), so it stops counting now rather than at
--- the next commit. Older snapshots keep their history.
-UPDATE vulnerabilities v
+-- Applies a decision to the assertion's finding, which every snapshot
+-- that carries it shows at once (ADR-049).
+UPDATE findings f
 SET status = sqlc.arg(status)::vulnerability_status,
     resolved_at = CASE WHEN sqlc.arg(status)::text = 'resolved' THEN now() ELSE NULL END,
     resolved_by = CASE WHEN sqlc.arg(status)::text = 'resolved' THEN sqlc.narg(resolved_by)::uuid ELSE NULL END,
     updated_at = now()
-WHERE v.repo_id = sqlc.arg(repo_id)
-  AND v.fingerprint = sqlc.arg(fingerprint)
-  AND v.origin IN ('human', 'agent')
-  AND v.snapshot_id IN (
-      SELECT DISTINCT ON (s.ref_id) s.id
-      FROM snapshots s
-      JOIN refs r ON r.id = s.ref_id
-      WHERE r.repo_id = sqlc.arg(repo_id)
-      ORDER BY s.ref_id, s.created_at DESC
-  );
+WHERE f.repo_id = sqlc.arg(repo_id)
+  AND f.fingerprint = sqlc.arg(fingerprint)
+  AND f.origin IN ('human', 'agent');
