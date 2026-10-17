@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -53,6 +54,14 @@ type RevalidationStore interface {
 	MarkForgeOrgMemberRevalidationAttempted(ctx context.Context, orgID, userID uuid.UUID) error
 	CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int, error)
 	RemoveForgeOrgAccess(ctx context.Context, orgID, userID uuid.UUID) error
+}
+
+// RepoGrantStore lets re-validation ask the forge about each repository a
+// repo-scoped member holds a grant on. StoreAdapter implements it; a store
+// without it keeps repo-scoped memberships unverified, as before.
+type RepoGrantStore interface {
+	ListForgeRepoGrantsInOrg(ctx context.Context, orgID, userID uuid.UUID) ([]store.ForgeRepoGrant, error)
+	DeleteForgeUserRepoAccess(ctx context.Context, userID, repoID uuid.UUID) error
 }
 
 // MembershipVerifierSource is implemented by forges that verify org
@@ -103,9 +112,7 @@ func (s *Service) RunRevalidation(ctx context.Context, interval time.Duration) {
 	defer lateRepos.Stop()
 	for {
 		s.runLateRepoGrants(ctx)
-		if err := s.RevalidateMemberships(ctx, time.Now()); err != nil && ctx.Err() == nil {
-			s.log.Warn().Err(err).Msg("forge membership re-validation failed")
-		}
+		s.runRevalidation(ctx)
 	wait:
 		for {
 			select {
@@ -120,8 +127,22 @@ func (s *Service) RunRevalidation(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// backgroundRunTimeout bounds one re-validation or late-repository pass: a
+// forge call that never returns must not stop the loop for good.
+const backgroundRunTimeout = 15 * time.Minute
+
+func (s *Service) runRevalidation(ctx context.Context) {
+	runCtx, cancel := context.WithTimeout(ctx, backgroundRunTimeout)
+	defer cancel()
+	if err := s.RevalidateMemberships(runCtx, time.Now()); err != nil && ctx.Err() == nil {
+		s.log.Warn().Err(err).Msg("forge membership re-validation failed")
+	}
+}
+
 func (s *Service) runLateRepoGrants(ctx context.Context) {
-	if err := s.GrantLateRepositories(ctx); err != nil && ctx.Err() == nil {
+	runCtx, cancel := context.WithTimeout(ctx, backgroundRunTimeout)
+	defer cancel()
+	if err := s.GrantLateRepositories(runCtx); err != nil && ctx.Err() == nil {
 		s.log.Warn().Err(err).Msg("settling repositories enrolled after the last sync failed")
 	}
 }
@@ -195,19 +216,22 @@ func (s *Service) revalidateOrg(ctx context.Context, rs RevalidationStore, membe
 	}
 
 	var gone []store.StaleForgeOrgMembership
+	var scoped []store.StaleForgeOrgMembership
 	confirmed := make([]string, 0, len(memberships))
 	for _, membership := range memberships {
 		forgeID := strings.TrimSpace(membership.UserForgeID)
+		// The forge is asked by immutable user id; the verifier resolves the
+		// current login itself. A membership recorded before logins were
+		// stored is therefore checked like any other.
 		switch {
-		case membership.RepoScoped:
-			s.unverifiable(ctx, rs, membership, "repo_scoped")
-			continue
-		case strings.TrimSpace(membership.ForgeLogin) == "":
-			// Signed in before logins were recorded: never acted on.
-			s.unverifiable(ctx, rs, membership, "no_forge_login")
-			continue
 		case forgeID == "" || !strings.EqualFold(membership.UserProvider, membership.OrgProvider):
 			s.unverifiable(ctx, rs, membership, "provider_mismatch")
+			continue
+		case membership.RepoScoped:
+			// An outside collaborator or a member the forge limits to some
+			// repositories: "is a member?" is the wrong question. Each
+			// granted repository is asked about after the positive control.
+			scoped = append(scoped, membership)
 			continue
 		}
 		member, err := verifier.IsMember(ctx, forgeID)
@@ -232,6 +256,9 @@ func (s *Service) revalidateOrg(ctx context.Context, rs RevalidationStore, membe
 			s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Msg("failed to record a forge membership confirmation")
 		}
 	}
+	if len(scoped) > 0 {
+		s.revalidateRepoScoped(ctx, rs, verifier, first.OrgID, scoped, confirmed)
+	}
 	if len(gone) == 0 {
 		return
 	}
@@ -246,6 +273,96 @@ func (s *Service) revalidateOrg(ctx context.Context, rs RevalidationStore, membe
 	}
 	for _, membership := range gone {
 		s.removeDeparted(ctx, rs, membership)
+	}
+}
+
+// revalidateRepoScoped asks the forge, per granted repository, what each
+// repo-scoped member may still do. A grant the forge now answers "none" for
+// is removed; a changed level updates the grant; a member left with no grant
+// loses the membership. Nothing is removed unless the positive control (an
+// org-wide member still reads as a member with the same token) passes, and an
+// error on a repository keeps that grant.
+func (s *Service) revalidateRepoScoped(ctx context.Context, rs RevalidationStore, verifier forge.OrgMembershipVerifier, orgID uuid.UUID, memberships []store.StaleForgeOrgMembership, confirmed []string) {
+	gs, ok := s.store.(RepoGrantStore)
+	if !ok {
+		for _, membership := range memberships {
+			s.unverifiable(ctx, rs, membership, "repo_scoped")
+		}
+		return
+	}
+	controlChecked, controlPassed := false, false
+	control := func() bool {
+		if !controlChecked {
+			controlChecked = true
+			controlPassed = s.forgeConfirmsAnyMember(ctx, rs, verifier, orgID, memberships, confirmed)
+		}
+		return controlPassed
+	}
+	for _, membership := range memberships {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		grants, err := gs.ListForgeRepoGrantsInOrg(ctx, membership.OrgID, membership.UserID)
+		if err != nil {
+			s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Str("user_id", membership.UserID.String()).
+				Msg("failed to list a repo-scoped member's grants; keeping them")
+			s.markAttempted(ctx, rs, membership)
+			continue
+		}
+		if len(grants) == 0 {
+			// Sees nothing in Hibou: nothing to re-check.
+			s.unverifiable(ctx, rs, membership, "repo_scoped_no_grants")
+			continue
+		}
+		forgeID := strings.TrimSpace(membership.UserForgeID)
+		var withdrawn []store.ForgeRepoGrant
+		kept, failed := 0, false
+		for _, grant := range grants {
+			level, err := verifier.RepoLevel(ctx, grant.Slug, forgeID)
+			if err != nil {
+				failed = true
+				kept++
+				continue
+			}
+			role := forge.RoleForTier(forge.MapForgeRole(membership.OrgProvider, level))
+			if role == "" {
+				withdrawn = append(withdrawn, grant)
+				continue
+			}
+			kept++
+			if role != grant.Role {
+				if err := s.store.UpsertForgeUserRepoAccess(ctx, membership.UserID, grant.RepoID, role); err != nil {
+					s.log.Warn().Err(err).Str("user_id", membership.UserID.String()).Str("repo_id", grant.RepoID.String()).
+						Msg("failed to update a repository grant the forge changed")
+				}
+			}
+		}
+		if len(withdrawn) > 0 && !control() {
+			revalidationOutcomes.WithLabelValues("control_failed").Inc()
+			s.markAttempted(ctx, rs, membership)
+			continue
+		}
+		for _, grant := range withdrawn {
+			if err := gs.DeleteForgeUserRepoAccess(ctx, membership.UserID, grant.RepoID); err != nil {
+				s.log.Warn().Err(err).Str("user_id", membership.UserID.String()).Str("repo_id", grant.RepoID.String()).
+					Msg("failed to remove a repository grant the forge withdrew")
+				kept++
+				continue
+			}
+			revalidationOutcomes.WithLabelValues("repo_grant_removed").Inc()
+		}
+		switch {
+		case kept == 0:
+			// The forge withdrew every repository: the membership ended.
+			s.removeDeparted(ctx, rs, membership)
+		case failed:
+			s.markAttempted(ctx, rs, membership)
+		default:
+			revalidationOutcomes.WithLabelValues("repo_scoped_confirmed").Inc()
+			if err := rs.TouchForgeOrgMember(ctx, membership.OrgID, membership.UserID); err != nil {
+				s.log.Warn().Err(err).Str("org_id", membership.OrgID.String()).Msg("failed to record a forge membership confirmation")
+			}
+		}
 	}
 }
 
@@ -305,6 +422,19 @@ func (s *Service) removeDeparted(ctx context.Context, rs RevalidationStore, memb
 				Msg("the forge says the org's last admin left; keeping the membership for an operator to resolve")
 			revalidationOutcomes.WithLabelValues("last_admin_kept").Inc()
 			s.markAttempted(ctx, rs, membership)
+			if err == nil && s.bus != nil {
+				// A log line nobody reads leaves the org administered by
+				// someone who left: tell an operator.
+				s.bus.Publish(ctx, events.Event{
+					Type: events.ForgeAdminDeparted,
+					Payload: map[string]any{
+						"org_id":   membership.OrgID.String(),
+						"user_id":  membership.UserID.String(),
+						"severity": "high",
+					},
+					Timestamp: time.Now().UTC(),
+				})
+			}
 			return
 		}
 	}

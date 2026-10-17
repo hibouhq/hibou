@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/hibouhq/hibou/internal/forge"
 )
 
 type GitHubProvider struct {
@@ -22,7 +24,7 @@ type GitHubProvider struct {
 
 func NewGitHubProvider(client *http.Client, apiURL string, log zerolog.Logger) *GitHubProvider {
 	if client == nil {
-		client = http.DefaultClient
+		client = forge.NewHTTPClient()
 	}
 	if apiURL == "" {
 		apiURL = "https://api.github.com"
@@ -145,7 +147,7 @@ func (p *GitHubProvider) listAlerts(ctx context.Context, owner, repo, token stri
 		}
 
 		var pageAlerts []gitHubSecretAlert
-		if err := json.NewDecoder(response.Body).Decode(&pageAlerts); err != nil {
+		if err := json.NewDecoder(forge.LimitResponse(response.Body)).Decode(&pageAlerts); err != nil {
 			return nil, fmt.Errorf("decode github alerts response: %w", err)
 		}
 		alerts = append(alerts, pageAlerts...)
@@ -185,7 +187,7 @@ func (p *GitHubProvider) loadFirstLocation(ctx context.Context, locationsURL, to
 	}
 
 	var locations []gitHubSecretLocation
-	if err := json.NewDecoder(response.Body).Decode(&locations); err != nil {
+	if err := json.NewDecoder(forge.LimitResponse(response.Body)).Decode(&locations); err != nil {
 		return "", 0, "", fmt.Errorf("decode github secret locations response: %w", err)
 	}
 	if len(locations) == 0 {

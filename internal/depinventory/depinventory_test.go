@@ -261,3 +261,59 @@ func TestReport(t *testing.T) {
 		root, len(inv.Components), len(inv.Modules), inv.Duration,
 		float64(after.TotalAlloc-before.TotalAlloc)/(1<<20), float64(after.HeapSys-before.HeapSys)/(1<<20), len(inv.FileErrors))
 }
+
+// TestExcludedManifestsAreReported: dependencies.exclude (ADR-045 §8) keeps
+// a test corpus out of the inventory, and the excluded files are listed so
+// the exclusion is visible (ADR-034). Nothing is excluded by default.
+func TestExcludedManifestsAreReported(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("requirements.txt", "requests==2.31.0\n")
+	write("internal/x/testdata/corpus/requirements.txt", "django==4.2.7\n")
+	write("internal/x/testdata/README.md", "not a manifest\n")
+	write("node_modules/pkg/testdata/requirements.txt", "jinja2==3.0.0\n")
+
+	inv, err := Extract(context.Background(), root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasComponent(inv, "django") {
+		t.Error("testdata is excluded without configuration")
+	}
+	if len(inv.Excluded) != 0 {
+		t.Errorf("Excluded without configuration = %v", inv.Excluded)
+	}
+
+	inv, err = Extract(context.Background(), root, Options{Exclude: []string{"**/testdata/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasComponent(inv, "django") {
+		t.Error("an excluded lockfile was inventoried")
+	}
+	if !hasComponent(inv, "requests") {
+		t.Error("the root manifest was lost")
+	}
+	want := []string{"internal/x/testdata/corpus/requirements.txt"}
+	if strings.Join(inv.Excluded, ",") != strings.Join(want, ",") {
+		t.Errorf("Excluded = %v, want %v", inv.Excluded, want)
+	}
+}
+
+func hasComponent(inv *Inventory, name string) bool {
+	for _, component := range inv.Components {
+		if component.Name == name {
+			return true
+		}
+	}
+	return false
+}

@@ -96,3 +96,83 @@ func TestRevalidateMembershipsAsksByForgeID(t *testing.T) {
 
 // The GitHub forge is what production re-validation runs against.
 var _ MembershipVerifierSource = (*forge.GitHub)(nil)
+
+// countingVerifier answers RepoLevel from a function and counts the calls.
+type countingVerifier struct {
+	scriptedVerifier
+	answer func(repo, forgeUserID string) (string, error)
+	calls  map[string]int
+}
+
+func (v *countingVerifier) RepoLevel(_ context.Context, repo, forgeUserID string) (string, error) {
+	if v.calls == nil {
+		v.calls = map[string]int{}
+	}
+	v.calls[repo]++
+	return v.answer(repo, forgeUserID)
+}
+
+// A repository the forge does not know (an upload can enrol any name) is
+// asked about once per backoff period, not once per member every run; a
+// failing pair backs off too; and one run never spends more than its budget
+// on an installation.
+func TestGrantLateRepositoriesBacksOffAndBudgets(t *testing.T) {
+	t.Parallel()
+
+	orgID := uuid.New()
+	var candidates []store.LateRepoGrantCandidate
+	ghostID := uuid.New()
+	for i := 0; i < 3; i++ {
+		c := lateCandidate(orgID, "g"+string(rune('a'+i)), "ghost")
+		c.RepoID = ghostID // one repository, three members
+		candidates = append(candidates, c)
+	}
+	for i := 0; i < 2*lateRepoCallsPerAccount; i++ {
+		candidates = append(candidates, lateCandidate(orgID, "u"+uuid.NewString(), "api"))
+	}
+	st := &lateRepoStore{candidates: candidates}
+	verifier := &countingVerifier{answer: func(repo, _ string) (string, error) {
+		if repo == "ghost" {
+			return "", forge.ErrRepositoryNotFound
+		}
+		return "", errors.New("502")
+	}}
+	svc := newRevalidationService(&st.revalidationStore, &fakeRBAC{}, verifyingForge{verifiers: map[string]forge.OrgMembershipVerifier{"42": verifier}})
+	svc.store = st
+	now := time.Now()
+	svc.clock = func() time.Time { return now }
+
+	if err := svc.GrantLateRepositories(context.Background()); err != nil {
+		t.Fatalf("GrantLateRepositories: %v", err)
+	}
+	if got := verifier.calls["ghost"]; got != 1 {
+		t.Errorf("unknown repository asked %d times in one run, want 1", got)
+	}
+	if total := verifier.calls["ghost"] + verifier.calls["api"]; total != lateRepoCallsPerAccount {
+		t.Errorf("one run asked %d questions of one installation, want the budget %d", total, lateRepoCallsPerAccount)
+	}
+
+	// Next run, five minutes later: everything that failed is backing off,
+	// so only the pairs the first run had no budget for are asked.
+	verifier.calls = nil
+	now = now.Add(5 * time.Minute)
+	if err := svc.GrantLateRepositories(context.Background()); err != nil {
+		t.Fatalf("GrantLateRepositories (second run): %v", err)
+	}
+	if got := verifier.calls["ghost"]; got != 0 {
+		t.Errorf("unknown repository asked again during its backoff (%d)", got)
+	}
+	if got := verifier.calls["api"]; got != lateRepoCallsPerAccount {
+		t.Errorf("second run asked %d of the remaining pairs, want %d", got, lateRepoCallsPerAccount)
+	}
+
+	// After the backoff, the unknown repository is asked once more.
+	verifier.calls = nil
+	now = now.Add(lateRepoBackoffMin)
+	if err := svc.GrantLateRepositories(context.Background()); err != nil {
+		t.Fatalf("GrantLateRepositories (after backoff): %v", err)
+	}
+	if got := verifier.calls["ghost"]; got != 1 {
+		t.Errorf("unknown repository asked %d times after its backoff, want 1", got)
+	}
+}

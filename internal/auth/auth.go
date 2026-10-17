@@ -280,6 +280,9 @@ func (m *Manager) recordSignIn(ctx context.Context, user *store.User, login stri
 	m.forgetAllowed(user.ID)
 }
 
+// loginHookTimeout bounds one post-sign-in hook (the forge permission sync).
+const loginHookTimeout = 5 * time.Minute
+
 func (m *Manager) invokeLoginHooks(ctx context.Context, user *store.User, providerID string, token *oauth2.Token) {
 	if len(m.loginHooks) == 0 || user == nil || token == nil {
 		return
@@ -296,7 +299,11 @@ func (m *Manager) invokeLoginHooks(ctx context.Context, user *store.User, provid
 			defer func() {
 				_ = recover()
 			}()
-			h(baseCtx, user, providerID, &tokenCopy)
+			// Detached from the request, but bounded: a hook waiting on a
+			// forge that never answers must not live forever.
+			hookCtx, cancel := context.WithTimeout(baseCtx, loginHookTimeout)
+			defer cancel()
+			h(hookCtx, user, providerID, &tokenCopy)
 		}()
 	}
 }

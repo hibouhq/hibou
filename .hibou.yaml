@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json
+# yaml-language-server: $schema=./internal/repoconfig/hibou-config.schema.json
 version: 1
 
 # Configure branch-aware quality gates. `code` caps new first-party code
@@ -47,3 +47,12 @@ quality_gates:
 # Default matches v-prefixed semver-ish tags (v1.2.3, 1.2, v2.0.0-rc.1):
 # releases:
 #   tag_pattern: "^payments-v\\d+\\.\\d+\\.\\d+$"
+
+# Built-in dependency inventory (ADR-045 §8). The extractor's test corpus
+# under testdata/ holds real lockfiles (django, express...) that are test
+# inputs, not dependencies of hibou. Excluded files are listed on the
+# extraction's producer run, not silently dropped.
+dependencies:
+  exclude:
+    - "**/testdata/**"
+    - "**/__fixtures__/**"

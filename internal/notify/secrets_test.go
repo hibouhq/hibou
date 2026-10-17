@@ -382,10 +382,17 @@ func TestRuleMatchingIsNotASecretOracle(t *testing.T) {
 		rule := dbgen.NotificationRule{DestinationType: "slack", DestinationConfig: mustJSON(t, config)}
 		return PreviewIntegrationsForRule(Payload{}, integrations, rule)
 	}
+	// A legacy rule that selects by a credential field matches nothing,
+	// whatever the guess: no oracle, and no fan-out to every integration of
+	// the type (which ignoring the field would cause).
 	right := preview(map[string]any{"webhook_url": hook, "smtp_password": "pw"})
 	wrong := preview(map[string]any{"webhook_url": "https://hooks.example/guess", "smtp_password": "nope"})
-	if len(right) != len(wrong) || len(right) != 2 {
-		t.Fatalf("secret guess changed the match: right=%d wrong=%d (want 2 and 2)", len(right), len(wrong))
+	if len(right) != 0 || len(wrong) != 0 {
+		t.Fatalf("legacy credential selector matched: right=%d wrong=%d (want 0 and 0)", len(right), len(wrong))
+	}
+	// The same legacy rule naming an integration_id still delivers there.
+	if got := preview(map[string]any{"webhook_url": "https://hooks.example/guess", RuleIntegrationIDKey: integration.ID.String()}); len(got) != 1 || got[0].ID != integration.ID {
+		t.Fatalf("legacy rule with integration_id matched %v", got)
 	}
 
 	// Non-secret fields and integration_id still select.

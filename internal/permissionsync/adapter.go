@@ -99,3 +99,11 @@ func (a *StoreAdapter) CountOrgAdmins(ctx context.Context, orgID uuid.UUID) (int
 func (a *StoreAdapter) RemoveForgeOrgAccess(ctx context.Context, orgID, userID uuid.UUID) error {
 	return a.queries.RemoveForgeOrgAccess(ctx, orgID, userID)
 }
+
+func (a *StoreAdapter) ListForgeRepoGrantsInOrg(ctx context.Context, orgID, userID uuid.UUID) ([]store.ForgeRepoGrant, error) {
+	return a.queries.ListForgeRepoGrantsInOrg(ctx, orgID, userID)
+}
+
+func (a *StoreAdapter) DeleteForgeUserRepoAccess(ctx context.Context, userID, repoID uuid.UUID) error {
+	return a.queries.DeleteForgeUserRepoAccess(ctx, userID, repoID)
+}

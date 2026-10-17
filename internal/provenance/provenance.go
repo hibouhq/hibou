@@ -66,9 +66,10 @@ type Provenance struct {
 	// application fix are distinguishable.
 	Layer     *int `json:"layer,omitempty"`
 	BaseImage bool `json:"base_image,omitempty"`
-	// Paths are the manifest paths that declare the component, for the
-	// not-shipped path patterns.
-	Paths []string `json:"-"`
+	// Paths are the repository files that declare the component (the
+	// lockfile or manifest the extractor read it from): where a dependency
+	// comes from. Also matched by the not-shipped path patterns.
+	Paths []string `json:"paths,omitempty"`
 }
 
 // FromLabels parses a snapshot component's label set.

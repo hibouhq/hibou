@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
 )
@@ -120,8 +121,9 @@ func ids(list []uuid.UUID) map[uuid.UUID]bool {
 
 // A member the forge definitively no longer lists loses the membership and
 // RBAC role, their local grants are suspended (not revoked); a confirmed
-// member is touched. Unverifiable memberships — collaborators, users with no
-// recorded login — are kept however old, and stamped so they leave the batch.
+// member is touched. A user with no recorded login is asked by forge id like
+// anyone else. A repo-scoped membership the store cannot re-check per
+// repository is kept however old, and stamped so it leaves the batch.
 func TestRevalidateMembershipsRemovesOnlyDefinitivelyDepartedMembers(t *testing.T) {
 	t.Parallel()
 
@@ -147,24 +149,32 @@ func TestRevalidateMembershipsRemovesOnlyDefinitivelyDepartedMembers(t *testing.
 	if len(st.touched) != 1 || st.touched[0] != stayed.UserID {
 		t.Errorf("touched = %v, want only the confirmed member", st.touched)
 	}
-	if len(st.removed) != 1 || st.removed[0] != left.UserID {
-		t.Errorf("removed = %v, want only the departed member", st.removed)
+	removed := ids(st.removed)
+	if len(st.removed) != 2 || !removed[left.UserID] || !removed[noLogin.UserID] {
+		t.Errorf("removed = %v, want the departed member and the departed user without a recorded login", st.removed)
 	}
-	if len(rbacFake.removed) != 1 {
-		t.Errorf("RBAC roles removed = %+v, want 1", rbacFake.removed)
+	if len(rbacFake.removed) != 2 {
+		t.Errorf("RBAC roles removed = %+v, want 2", rbacFake.removed)
 	}
-	if len(st.revokedForOrgs) != 0 || len(st.suspendedReasons) != 1 || len(rbacFake.removedLocal) != 1 {
+	if len(st.revokedForOrgs) != 0 || len(st.suspendedReasons) != 2 || len(rbacFake.removedLocal) != 2 {
 		t.Errorf("local grants: revoked=%v suspended=%v policies dropped=%v; want suspended only",
 			st.revokedForOrgs, st.suspendedReasons, rbacFake.removedLocal)
 	}
 	attempted := ids(st.attempted)
-	if !attempted[collaborator.UserID] || !attempted[noLogin.UserID] {
-		t.Errorf("attempted = %v, want the unverifiable rows stamped", st.attempted)
+	if !attempted[collaborator.UserID] {
+		t.Errorf("attempted = %v, want the unverifiable collaborator stamped", st.attempted)
 	}
+	askedNoLogin := false
 	for _, login := range verifier.asked {
-		if login == "collab" || login == "pre-00056" {
-			t.Errorf("asked the forge about unverifiable row %q", login)
+		if login == "collab" {
+			t.Errorf("asked org membership for a repo-scoped collaborator")
 		}
+		if login == "pre-00056" {
+			askedNoLogin = true
+		}
+	}
+	if !askedNoLogin {
+		t.Error("a user without a recorded login was not asked about by forge id")
 	}
 }
 
@@ -281,11 +291,16 @@ func TestRevalidateMembershipsKeepsTheLastAdmin(t *testing.T) {
 	st := &revalidationStore{stale: []store.StaleForgeOrgMembership{admin}, controls: map[uuid.UUID]string{uuid.New(): "c"}, admins: 1}
 	verifier := &scriptedVerifier{members: map[string]bool{"c": true}}
 	svc := newRevalidationService(st, &fakeRBAC{}, verifyingForge{verifiers: map[string]forge.OrgMembershipVerifier{"42": verifier}})
+	bus := &recordingBus{}
+	svc.WithPublisher(bus)
 	if err := svc.RevalidateMemberships(context.Background(), now); err != nil {
 		t.Fatalf("RevalidateMemberships() error = %v", err)
 	}
 	if len(st.removed) != 0 {
 		t.Fatalf("removed the last admin: %v", st.removed)
+	}
+	if len(bus.events) != 1 || bus.events[0].Type != events.ForgeAdminDeparted {
+		t.Fatalf("events = %+v, want one %s so an operator is told", bus.events, events.ForgeAdminDeparted)
 	}
 
 	st.admins = 2
@@ -313,4 +328,94 @@ func TestRevalidateMembershipsKeepsMembersOnForgeErrors(t *testing.T) {
 	if len(st.removed) != 0 || len(st.attempted) != 1 {
 		t.Fatalf("removed=%v attempted=%v, want kept and stamped", st.removed, st.attempted)
 	}
+}
+
+// grantStore adds per-repository grants to the revalidation fake.
+type grantStore struct {
+	*revalidationStore
+	grants  map[uuid.UUID][]store.ForgeRepoGrant
+	deleted []uuid.UUID
+}
+
+func (g *grantStore) ListForgeRepoGrantsInOrg(_ context.Context, _, userID uuid.UUID) ([]store.ForgeRepoGrant, error) {
+	return g.grants[userID], nil
+}
+
+func (g *grantStore) DeleteForgeUserRepoAccess(_ context.Context, _, repoID uuid.UUID) error {
+	g.deleted = append(g.deleted, repoID)
+	return nil
+}
+
+// Repo-scoped members (outside collaborators) are re-checked per granted
+// repository: a withdrawn repository loses its grant, a member with none
+// left loses the membership, an error keeps the grant, and nothing is
+// removed when the positive control fails.
+func TestRevalidateRepoScopedMembersPerRepository(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	orgID := uuid.New()
+	stayed := staleMembership(orgID, "stayed", false, now)
+	partial := staleMembership(orgID, "partial", true, now)
+	gone := staleMembership(orgID, "gone", true, now)
+	flaky := staleMembership(orgID, "flaky", true, now)
+	apiRepo, webRepo, oldRepo := uuid.New(), uuid.New(), uuid.New()
+	base := &revalidationStore{stale: []store.StaleForgeOrgMembership{stayed, partial, gone, flaky}}
+	st := &grantStore{revalidationStore: base, grants: map[uuid.UUID][]store.ForgeRepoGrant{
+		partial.UserID: {{RepoID: apiRepo, Slug: "api", Role: "viewer"}, {RepoID: webRepo, Slug: "web", Role: "viewer"}},
+		gone.UserID:    {{RepoID: oldRepo, Slug: "old", Role: "viewer"}},
+		flaky.UserID:   {{RepoID: apiRepo, Slug: "api", Role: "viewer"}},
+	}}
+	verifier := &scriptedVerifier{
+		members: map[string]bool{"stayed": true},
+		levels:  map[string]string{"api/partial": "push", "web/partial": "", "old/gone": ""},
+		errs:    map[string]error{"api/flaky": errors.New("502")},
+	}
+	svc := newRevalidationService(base, &fakeRBAC{}, verifyingForge{verifiers: map[string]forge.OrgMembershipVerifier{"42": verifier}})
+	svc.store = st
+
+	if err := svc.RevalidateMemberships(context.Background(), now); err != nil {
+		t.Fatalf("RevalidateMemberships() error = %v", err)
+	}
+	deleted := ids(st.deleted)
+	if len(st.deleted) != 2 || !deleted[webRepo] || !deleted[oldRepo] {
+		t.Errorf("deleted grants = %v, want web (partial) and old (gone)", st.deleted)
+	}
+	if len(base.removed) != 1 || base.removed[0] != gone.UserID {
+		t.Errorf("removed = %v, want only the collaborator with no repository left", base.removed)
+	}
+	upgraded := false
+	for _, grant := range base.upsertRepoAccess {
+		if grant.userID == partial.UserID && grant.role == "developer" {
+			upgraded = true
+		}
+	}
+	if !upgraded {
+		t.Errorf("the forge's new level was not recorded: %+v", base.upsertRepoAccess)
+	}
+	if !ids(base.attempted)[flaky.UserID] {
+		t.Error("a member whose repository check failed was not stamped as attempted")
+	}
+
+	// Positive control fails: the forge confirms nobody, so its "none"
+	// answers are not trusted.
+	base2 := &revalidationStore{stale: []store.StaleForgeOrgMembership{gone}}
+	st2 := &grantStore{revalidationStore: base2, grants: map[uuid.UUID][]store.ForgeRepoGrant{
+		gone.UserID: {{RepoID: oldRepo, Slug: "old", Role: "viewer"}},
+	}}
+	verifier2 := &scriptedVerifier{levels: map[string]string{"old/gone": ""}}
+	svc2 := newRevalidationService(base2, &fakeRBAC{}, verifyingForge{verifiers: map[string]forge.OrgMembershipVerifier{"42": verifier2}})
+	svc2.store = st2
+	if err := svc2.RevalidateMemberships(context.Background(), now); err != nil {
+		t.Fatalf("RevalidateMemberships() error = %v", err)
+	}
+	if len(st2.deleted)+len(base2.removed) != 0 {
+		t.Errorf("removed without a positive control: grants=%v memberships=%v", st2.deleted, base2.removed)
+	}
+}
+
+type recordingBus struct{ events []events.Event }
+
+func (b *recordingBus) Publish(_ context.Context, event events.Event) {
+	b.events = append(b.events, event)
 }

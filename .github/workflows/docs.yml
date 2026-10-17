@@ -8,6 +8,7 @@ on:
     paths:
       - "docs/**"
       - ".github/workflows/docs.yml"
+      - "internal/repoconfig/hibou-config.schema.json"
   workflow_dispatch:
     inputs:
       version:
@@ -126,6 +127,9 @@ jobs:
           # (upload-pages-artifact + deploy-pages) publish a fresh site each run
           # and drop the custom domain unless a CNAME file is present in the site
           # root. One site: the landing page at /, versioned docs below it.
+          # The apex serves the site (landing + docs); the Hibou instance
+          # lives on its own host (dogfood.hibouhq.com), so the static site
+          # never shares the app's origin.
           echo "hibouhq.com" > _site/CNAME
 
           # Copy built docs into version subdirectory
@@ -163,6 +167,13 @@ jobs:
           # under /stable, /latest, /vX.Y. The landing's "Docs" links point to
           # ./stable/. Self-contained (assets inlined), so nothing else to copy.
           cp docs/landing.html _site/index.html
+
+          # The .hibou.yaml schema, at the URL its $id and the generated
+          # config's yaml-language-server modeline name: editors complete
+          # and validate .hibou.yaml from it. Unversioned on purpose: the
+          # schema stays backward compatible within v1.
+          mkdir -p _site/schemas/v1
+          cp internal/repoconfig/hibou-config.schema.json _site/schemas/v1/hibou-config.schema.json
 
           echo "Site structure:"
           ls -la _site/

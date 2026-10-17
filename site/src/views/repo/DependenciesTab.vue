@@ -190,22 +190,24 @@
       </p>
 
       <!-- Declared-scope suggestions (ADR-045 §6): dev and test scopes are
-           suggestions, never automatic; accepting records explicit entries. -->
+           suggestions, never automatic. The entries belong in .hibou.yaml,
+           reviewed in a pull request, so the action copies them. -->
       <div
-        v-if="shipping?.can_edit && scopeSuggestions.length > 0"
+        v-if="shipping && scopeSuggestions.length > 0"
         class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-surface-border-subtle bg-surface-overlay/40 px-3 py-2 text-xs text-gray-400"
       >
         <span>
           <span class="text-gray-200">{{ scopeSuggestions.length }}</span> shipped components are declared dev or test
-          ({{ suggestionScopes.join(', ') }}): mark them as not shipped?
+          ({{ suggestionScopes.join(', ') }}): not shipped? Add them to
+          <span class="font-mono">dependencies.not_shipped</span> in <span class="font-mono">.hibou.yaml</span>.
         </span>
         <button
           type="button"
-          class="rounded-md border border-surface-border px-2 py-1 text-gray-300 transition hover:border-accent/50 hover:text-white disabled:opacity-50"
-          :disabled="markingSuggestions"
-          @click="acceptScopeSuggestions"
+          class="rounded-md border border-surface-border px-2 py-1 text-gray-300 transition hover:border-accent/50 hover:text-white"
+          title="Copy the .hibou.yaml entries for these packages"
+          @click="copyScopeSuggestions"
         >
-          {{ markingSuggestions ? 'Recording…' : `Mark ${scopeSuggestions.length} as not shipped` }}
+          Copy {{ scopeSuggestions.length }} {{ scopeSuggestions.length === 1 ? 'entry' : 'entries' }}
         </button>
       </div>
 
@@ -220,8 +222,9 @@
       </div>
 
       <!-- Not-shipped lists (ADR-045 §6): every entry with where it comes
-           from. Repository entries are managed here; organization entries in
-           the org settings; .hibou.yaml entries in the repository. -->
+           from, read-only. Repository entries are edited in .hibou.yaml,
+           organization entries in the org settings. Entries recorded here
+           before that can still be removed. -->
       <details
         v-if="shipping"
         class="mb-3 rounded-xl border border-surface-border-subtle bg-surface-overlay/40 px-3 py-2 text-xs text-gray-400"
@@ -254,42 +257,24 @@
               v-if="shipping.can_edit && entry.source === 'repository' && entry.id"
               type="button"
               class="text-gray-500 transition hover:text-danger"
-              title="Remove this repository entry"
+              title="Remove this entry, recorded from the UI: new entries go in .hibou.yaml"
               @click="removeNotShipped(entry.id)"
             >
               remove
             </button>
           </li>
         </ul>
-        <form
-          v-if="shipping.can_edit"
-          class="mt-2 flex flex-wrap items-center gap-2"
-          @submit.prevent="addNotShipped"
+        <p class="mt-2 text-gray-500">
+          Edit the repository list in <span class="font-mono text-gray-300">.hibou.yaml</span> under
+          <span class="font-mono text-gray-300">dependencies.not_shipped</span>, reviewed like any change;
+          organization entries are in the organization settings.
+        </p>
+        <p
+          v-if="shippingError"
+          class="mt-1 text-danger"
         >
-          <input
-            v-model="newPattern"
-            type="text"
-            placeholder="pkg:npm/@types/*, re:^pkg:npm/eslint, ecosystem:terraform, tools/**"
-            class="h-7 min-w-[18rem] flex-1 rounded-md border border-surface-border bg-surface-overlay px-2 font-mono text-xs text-gray-200 focus:border-accent/50 focus:outline-none"
-          >
-          <input
-            v-model="newReason"
-            type="text"
-            placeholder="reason"
-            class="h-7 min-w-[10rem] rounded-md border border-surface-border bg-surface-overlay px-2 text-xs text-gray-200 focus:border-accent/50 focus:outline-none"
-          >
-          <button
-            type="submit"
-            class="rounded-md border border-surface-border px-2 py-1 text-gray-300 transition hover:border-accent/50 hover:text-white disabled:opacity-50"
-            :disabled="!newPattern.trim() || !newReason.trim() || addingEntry"
-          >
-            Add
-          </button>
-          <span
-            v-if="shippingError"
-            class="text-danger"
-          >{{ shippingError }}</span>
-        </form>
+          {{ shippingError }}
+        </p>
       </details>
 
       <p
@@ -524,7 +509,7 @@
     <LibraryDetailModal
       v-if="activeComponent"
       :component="activeComponent"
-      :can-mark-not-shipped="shipping?.can_edit"
+      :can-mark-not-shipped="Boolean(shipping)"
       @close="closeComponent"
       @open-finding="openFinding"
       @mark-not-shipped="markNotShipped"
@@ -683,10 +668,6 @@ const shippedCount = computed(() => components.value.filter((component) => compo
 // The not-shipped lists and the SBOM facts behind the attribute.
 const shipping = ref<ShippingInfo | null>(null)
 const shippingError = ref('')
-const newPattern = ref('')
-const newReason = ref('')
-const addingEntry = ref(false)
-const markingSuggestions = ref(false)
 
 async function refreshShipping() {
   if (!provider.value || !slug.value || !repoSlug.value) return
@@ -713,54 +694,40 @@ function purlIdentity(purl: string): string {
   return at > base.indexOf('/') ? base.slice(0, at) : base
 }
 
-async function recordNotShipped(entries: Array<{ pattern: string; reason: string }>) {
-  shippingError.value = ''
-  await api.addNotShippedEntries(provider.value, slug.value, repoSlug.value, entries)
-  await Promise.all([refreshShipping(), loadComponents()])
+/** The .hibou.yaml lines that record entries in the repository's
+ * not-shipped list, ready to paste under `dependencies:`. */
+function notShippedSnippet(entries: Array<{ pattern: string; reason: string }>): string {
+  const lines = ['  not_shipped:']
+  for (const entry of entries) {
+    lines.push(`    - "${entry.pattern.replace(/"/g, '\\"')}"  # ${entry.reason}`)
+  }
+  return lines.join('\n')
 }
 
-async function markNotShipped(component: ComponentWithVulns) {
+async function copyNotShipped(entries: Array<{ pattern: string; reason: string }>, title: string) {
   try {
-    await recordNotShipped([{ pattern: purlIdentity(component.purl), reason: 'marked in the Dependencies tab' }])
-    pushToast({ title: 'Marked as not shipped', description: `${component.name} stays listed with shipped: no.`, tone: 'success' })
-    closeComponent()
+    await navigator.clipboard.writeText(notShippedSnippet(entries))
+    pushToast({ title, description: 'Paste under dependencies: in .hibou.yaml and open a pull request.', tone: 'success' })
   } catch (error) {
-    pushToast({ title: 'Could not record the entry', description: error instanceof Error ? error.message : undefined, tone: 'error' })
+    pushToast({ title: 'Could not copy', description: error instanceof Error ? error.message : undefined, tone: 'error' })
   }
 }
 
-async function acceptScopeSuggestions() {
-  markingSuggestions.value = true
-  try {
-    const seen = new Set<string>()
-    const entries: Array<{ pattern: string; reason: string }> = []
-    for (const component of scopeSuggestions.value) {
-      const pattern = purlIdentity(component.purl)
-      if (seen.has(pattern)) continue
-      seen.add(pattern)
-      const scope = (component.scopes ?? []).find((value) => DEV_SCOPES.has(value.toLowerCase())) ?? 'dev'
-      entries.push({ pattern, reason: `declared ${scope}` })
-    }
-    await recordNotShipped(entries)
-    pushToast({ title: `${entries.length} packages marked as not shipped`, tone: 'success' })
-  } catch (error) {
-    pushToast({ title: 'Could not record the entries', description: error instanceof Error ? error.message : undefined, tone: 'error' })
-  } finally {
-    markingSuggestions.value = false
-  }
+function markNotShipped(component: ComponentWithVulns) {
+  void copyNotShipped([{ pattern: purlIdentity(component.purl), reason: `${component.name}: not shipped` }], '.hibou.yaml entry copied')
 }
 
-async function addNotShipped() {
-  addingEntry.value = true
-  try {
-    await recordNotShipped([{ pattern: newPattern.value.trim(), reason: newReason.value.trim() }])
-    newPattern.value = ''
-    newReason.value = ''
-  } catch (error) {
-    shippingError.value = error instanceof Error ? error.message : 'Could not add the entry'
-  } finally {
-    addingEntry.value = false
+function copyScopeSuggestions() {
+  const seen = new Set<string>()
+  const entries: Array<{ pattern: string; reason: string }> = []
+  for (const component of scopeSuggestions.value) {
+    const pattern = purlIdentity(component.purl)
+    if (seen.has(pattern)) continue
+    seen.add(pattern)
+    const scope = (component.scopes ?? []).find((value) => DEV_SCOPES.has(value.toLowerCase())) ?? 'dev'
+    entries.push({ pattern, reason: `declared ${scope}` })
   }
+  void copyNotShipped(entries, `${entries.length} .hibou.yaml ${entries.length === 1 ? 'entry' : 'entries'} copied`)
 }
 
 async function removeNotShipped(entryID: string) {
@@ -1027,7 +994,9 @@ watch(
 function openComponent(component: ComponentWithVulns) {
   activeComponent.value = {
     ...component,
-    usage_paths: computeUsagePaths(component.purl),
+    // The server walks the full graph, including the modules of a built-in
+    // extraction; the client graph is the fallback for older servers.
+    usage_paths: component.usage_paths?.length ? component.usage_paths : computeUsagePaths(component.purl),
   }
   focusedNodeRef.value = component.purl
   if (route.query.component !== component.purl) {

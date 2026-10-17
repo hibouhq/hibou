@@ -36,7 +36,7 @@ func NewGitLab(apiURL, clientID, clientSecret, webhookSecret string) *GitLab {
 		clientID:      clientID,
 		clientSecret:  clientSecret,
 		webhookSecret: webhookSecret,
-		httpClient:    http.DefaultClient,
+		httpClient:    NewHTTPClient(),
 	}
 }
 
@@ -572,7 +572,7 @@ func (g *GitLab) doWithStatus(request *http.Request, out any) (int, error) {
 		return response.StatusCode, nil
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(LimitResponse(response.Body)).Decode(out); err != nil {
 		return response.StatusCode, fmt.Errorf("decode gitlab response: %w", err)
 	}
 

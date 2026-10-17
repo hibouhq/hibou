@@ -682,6 +682,43 @@ func TestComputeComponentUsagePaths(t *testing.T) {
 	}
 }
 
+// TestUsagePathsStartAtExtractedModules: the built-in extraction's module
+// nodes carry no purl, so their edges never reach the graph. Chains start
+// from the modules its provenance labels name, then follow the lockfile
+// edges; an SBOM root that reaches nothing adds no chain.
+func TestUsagePathsStartAtExtractedModules(t *testing.T) {
+	t.Parallel()
+
+	express := dbgen.Component{ID: uuid.New(), Name: "express", Purl: "pkg:npm/express@4.18.2"}
+	qs := dbgen.Component{ID: uuid.New(), Name: "qs", Purl: "pkg:npm/qs@6.11.0"}
+	requests := dbgen.Component{ID: uuid.New(), Name: "requests", Purl: "pkg:pypi/requests@2.31.0"}
+	components := []dbgen.Component{express, qs, requests}
+	labels := map[uuid.UUID]json.RawMessage{
+		express.ID:  json.RawMessage(`{"relationship:direct":true,"module:web":true}`),
+		qs.ID:       json.RawMessage(`{"relationship:indirect":true,"module:web":true}`),
+		requests.ID: json.RawMessage(`{"relationship:direct":true,"module:.":true}`),
+	}
+	edges := []store.ListComponentDependencyEdgesBySnapshotRow{
+		{Ref: express.Purl, DependsOn: qs.Purl},
+		{Ref: "module:web", DependsOn: express.Purl}, // dropped: not a component
+	}
+	root := "root"
+	nodeLabels, adjacency, rootRef := buildComponentUsageGraph(components, edges, &root)
+	roots := addInventoryModuleRoots(nodeLabels, adjacency, rootRef, components, labels)
+
+	if got := computeUsagePathsFromRoots(roots, adjacency, nodeLabels, qs.Purl); !reflect.DeepEqual(got, [][]string{{"web", "express", "qs"}}) {
+		t.Errorf("qs chains = %v", got)
+	}
+	if got := computeUsagePathsFromRoots(roots, adjacency, nodeLabels, requests.Purl); !reflect.DeepEqual(got, [][]string{{"(repository root)", "requests"}}) {
+		t.Errorf("requests chains = %v", got)
+	}
+	for _, ref := range roots {
+		if ref == root {
+			t.Errorf("an SBOM root with no edges is kept as a chain start")
+		}
+	}
+}
+
 func TestShortPurlLabel(t *testing.T) {
 	t.Parallel()
 

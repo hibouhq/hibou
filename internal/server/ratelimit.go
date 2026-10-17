@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,12 @@ const (
 	// rateLimitIdleTTL drops a bucket idle for that long; it would be full
 	// again by then for any sane rate.
 	rateLimitIdleTTL = 10 * time.Minute
+	// maxCoarseRateLimitKeys caps the second level: once the keyed buckets
+	// are full, an unseen client address shares the bucket of its IPv6 /48
+	// or IPv4 /24 before falling back to the single global one. A holder of
+	// a large IPv6 allocation then exhausts its own range's bucket, not the
+	// bucket every new client lands in.
+	maxCoarseRateLimitKeys = 10_000
 )
 
 type ipRateLimiter struct {
@@ -33,7 +40,9 @@ type ipRateLimiter struct {
 	seed        maphash.Seed
 	shards      [rateLimiterShards]limiterShard
 	maxPerShard int
-	// overflow is the bucket every key shares once a shard is full.
+	// coarse holds the /48 (IPv6) or /24 (IPv4) buckets used once a shard
+	// is full; overflow is the bucket every key shares once both are.
+	coarse   limiterShard
 	overflow *rate.Limiter
 	rate     rate.Limit
 	burst    int
@@ -80,6 +89,7 @@ func newIPRateLimiterWithCap(ctx context.Context, rps float64, burst, maxKeys in
 	for index := range l.shards {
 		l.shards[index].entries = make(map[string]*limiterEntry)
 	}
+	l.coarse.entries = make(map[string]*limiterEntry)
 	go l.cleanup()
 	return l
 }
@@ -89,21 +99,67 @@ func (l *ipRateLimiter) shard(key string) *limiterShard {
 }
 
 func (l *ipRateLimiter) getLimiter(key string) *rate.Limiter {
+	limiter, _ := l.limiterFor(key)
+	return limiter
+}
+
+// limiterFor returns the key's bucket, and whether it is the global overflow
+// bucket that unrelated clients share: a caller refusing a request must not
+// refuse on that one, or one flood locks out every new client.
+func (l *ipRateLimiter) limiterFor(key string) (*rate.Limiter, bool) {
 	shard := l.shard(key)
 	now := time.Now()
 	shard.mu.Lock()
-	defer shard.mu.Unlock()
-
 	if entry, exists := shard.entries[key]; exists {
 		entry.lastSeen = now
-		return entry.limiter
+		shard.mu.Unlock()
+		return entry.limiter, false
 	}
-	if len(shard.entries) >= l.maxPerShard {
-		return l.overflow
+	if len(shard.entries) < l.maxPerShard {
+		entry := &limiterEntry{limiter: rate.NewLimiter(l.rate, l.burst), lastSeen: now}
+		shard.entries[key] = entry
+		shard.mu.Unlock()
+		return entry.limiter, false
+	}
+	shard.mu.Unlock()
+
+	coarseKey := rateLimitCoarseKey(key)
+	if coarseKey == "" {
+		return l.overflow, true
+	}
+	l.coarse.mu.Lock()
+	defer l.coarse.mu.Unlock()
+	if entry, exists := l.coarse.entries[coarseKey]; exists {
+		entry.lastSeen = now
+		return entry.limiter, false
+	}
+	if len(l.coarse.entries) >= maxCoarseRateLimitKeys {
+		return l.overflow, true
 	}
 	entry := &limiterEntry{limiter: rate.NewLimiter(l.rate, l.burst), lastSeen: now}
-	shard.entries[key] = entry
-	return entry.limiter
+	l.coarse.entries[coarseKey] = entry
+	return entry.limiter, false
+}
+
+// rateLimitCoarseKey widens an address key ("ip:" + rateLimitIPKey) to its
+// IPv6 /48 or IPv4 /24; "" for keys that are not addresses (principals).
+func rateLimitCoarseKey(key string) string {
+	value := strings.TrimPrefix(key, "ip:")
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		if prefix.Addr().Is6() {
+			return "net:" + netip.PrefixFrom(prefix.Addr(), 48).Masked().String()
+		}
+		return ""
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return ""
+	}
+	addr = addr.Unmap().WithZone("")
+	if addr.Is4() {
+		return "net:" + netip.PrefixFrom(addr, 24).Masked().String()
+	}
+	return "net:" + netip.PrefixFrom(addr, 48).Masked().String()
 }
 
 // size is the number of keyed buckets held (tests).
@@ -133,8 +189,11 @@ func (l *ipRateLimiter) cleanup() {
 
 // sweep drops buckets idle for rateLimitIdleTTL, one shard lock at a time.
 func (l *ipRateLimiter) sweep(now time.Time) {
-	for index := range l.shards {
-		shard := &l.shards[index]
+	for index := -1; index < len(l.shards); index++ {
+		shard := &l.coarse
+		if index >= 0 {
+			shard = &l.shards[index]
+		}
 		shard.mu.Lock()
 		for key, entry := range shard.entries {
 			if now.Sub(entry.lastSeen) > rateLimitIdleTTL {

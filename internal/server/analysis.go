@@ -1184,6 +1184,7 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 	}
 
 	nodeLabels, adjacency, rootRef := buildComponentUsageGraph(components, dependencyEdges, declaredRootRef)
+	usageRoots := addInventoryModuleRoots(nodeLabels, adjacency, rootRef, components, labels)
 
 	vulnsByComponent := make(map[uuid.UUID][]countedVuln)
 	for _, item := range countedVulns {
@@ -1209,7 +1210,7 @@ func (s *Server) buildComponentResponses(r *http.Request, components []dbgen.Com
 			Licenses:  license.NormalizeIDs(component.Licenses),
 		}
 		populateComponentVulnerabilityDetails(&response, component, countedAdvisories)
-		response.UsagePaths = computeComponentUsagePaths(rootRef, adjacency, nodeLabels, component.Purl)
+		response.UsagePaths = computeUsagePathsFromRoots(usageRoots, adjacency, nodeLabels, component.Purl)
 		if row, ok := signals[component.Purl]; ok {
 			response.Signals = componentSignalsFromRow(row, now)
 		}
@@ -1256,6 +1257,73 @@ func buildComponentUsageGraph(components []dbgen.Component, dependencyEdges []st
 		return nodeLabels, adjacency, *declaredRootRef
 	}
 	return nodeLabels, adjacency, deriveComponentGraphRootRef(adjacency, inDegree)
+}
+
+// moduleUsageRefPrefix names the synthetic graph nodes standing for the
+// modules of a built-in extraction. The extractor's document roots its
+// graph at "module:<path>" entries without a purl; they are not
+// components, so ingestion drops their edges and no chain would start
+// anywhere. The modules come back from the provenance labels instead.
+const moduleUsageRefPrefix = "hibou-module:"
+
+// addInventoryModuleRoots returns the refs dependency chains start from:
+// the SBOM's declared root when its graph reaches anything, plus one node
+// per module of the built-in extraction, linked to the module's direct
+// dependencies (ADR-045 §5.1). The lockfile edges between packages do the
+// rest, so a chain reads module › direct › ... › target.
+func addInventoryModuleRoots(nodeLabels map[string]string, adjacency map[string][]string, rootRef string, components []dbgen.Component, labels map[uuid.UUID]json.RawMessage) []string {
+	var roots []string
+	if _, ok := nodeLabels[rootRef]; ok && len(adjacency[rootRef]) > 0 {
+		roots = append(roots, rootRef)
+	}
+	directByModule := map[string][]string{}
+	for _, component := range components {
+		raw, ok := labels[component.ID]
+		if !ok {
+			continue
+		}
+		prov := provenanceFromLabels(raw)
+		if prov.Relationship != "direct" {
+			continue
+		}
+		for _, module := range prov.Modules {
+			directByModule[module] = append(directByModule[module], component.Purl)
+		}
+	}
+	modules := make([]string, 0, len(directByModule))
+	for module := range directByModule {
+		modules = append(modules, module)
+	}
+	sort.Strings(modules)
+	for _, module := range modules {
+		ref := moduleUsageRefPrefix + module
+		label := module
+		if label == "" || label == "." {
+			label = "(repository root)"
+		}
+		nodeLabels[ref] = label
+		adjacency[ref] = directByModule[module]
+		roots = append(roots, ref)
+	}
+	return roots
+}
+
+// computeUsagePathsFromRoots walks every root in order, up to the overall
+// path limit.
+func computeUsagePathsFromRoots(roots []string, adjacency map[string][]string, nodeLabels map[string]string, targetRef string) [][]string {
+	var paths [][]string
+	for _, root := range roots {
+		if len(paths) >= componentUsageMaxPaths {
+			break
+		}
+		for _, path := range computeComponentUsagePaths(root, adjacency, nodeLabels, targetRef) {
+			if len(paths) >= componentUsageMaxPaths {
+				break
+			}
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 func componentUsageNodeLabel(component dbgen.Component) string {

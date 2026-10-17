@@ -128,7 +128,10 @@ func (v *githubOrgVerifier) RepoLevel(ctx context.Context, repo, forgeUserID str
 		return "", err
 	}
 	request.Header.Set("Authorization", githubBearerPrefix+token)
-	if _, err := v.g.doWithStatus(request, &payload); err != nil {
+	if status, err := v.g.doWithStatus(request, &payload); err != nil {
+		if status == http.StatusNotFound {
+			return "", fmt.Errorf("%w: %w", ErrRepositoryNotFound, err)
+		}
 		return "", err
 	}
 	if payload.User.ID > 0 && strconv.FormatInt(payload.User.ID, 10) != strings.TrimSpace(forgeUserID) {

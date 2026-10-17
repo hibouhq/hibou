@@ -160,6 +160,20 @@ func TestAnonymizeUserKeepsOrgKeysAndRefusesLastAdmin(t *testing.T) {
 	if err := srv.queries.AddOrgMember(ctx, solo.ID, admin.ID, "admin"); err != nil {
 		t.Fatalf("AddOrgMember(second admin): %v", err)
 	}
+	// A key the member created in an org they have since left is refused
+	// today (creator_membership_valid); anonymizing must not revive it by
+	// detaching its creator.
+	left, err := srv.queries.CreateOrganization(ctx, uniqueName(t, "left-org"), uniqueName(t, "left-org"), "Left", "github")
+	if err != nil {
+		t.Fatalf("CreateOrganization(left): %v", err)
+	}
+	leftKeyHash := uniqueName(t, "anon-left-org-key-hash")
+	if _, err := srv.queries.CreateAPIKey(ctx, member.ID, "ci", leftKeyHash, json.RawMessage(`{}`), nil, "org", &left.ID, ""); err != nil {
+		t.Fatalf("CreateAPIKey(left org): %v", err)
+	}
+	if key, err := srv.queries.GetAPIKeyByHash(ctx, leftKeyHash); err != nil || key == nil || !key.CreatorLeftOrg {
+		t.Fatalf("precondition: the departed creator's key must be refused (%v, %v)", key, err)
+	}
 	rec = callAnonymize(t, srv, admin, member.ID.String())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("anonymize status = %d (%s)", rec.Code, rec.Body.String())
@@ -178,6 +192,12 @@ func TestAnonymizeUserKeepsOrgKeysAndRefusesLastAdmin(t *testing.T) {
 	}
 	if err := internalauth.ValidateAPIKey(key, time.Now()); err != nil {
 		t.Fatalf("org-owned CI key stopped working: %v", err)
+	}
+	if revived, err := srv.queries.GetAPIKeyByHash(ctx, leftKeyHash); err != nil || revived != nil {
+		t.Fatalf("the key of an org the user had left survives anonymization: %+v, %v", revived, err)
+	}
+	if !strings.Contains(rec.Body.String(), `"org_api_keys_revoked":1`) {
+		t.Fatalf("response does not count the revoked key: %s", rec.Body.String())
 	}
 	if roles := enforcer.GetRolesForUserInOrg(member.ID, org.ID); len(roles) != 0 {
 		t.Fatalf("RBAC org roles survive anonymization: %v", roles)

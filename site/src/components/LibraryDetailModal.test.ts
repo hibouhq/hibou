@@ -26,4 +26,44 @@ describe('LibraryDetailModal', () => {
         expect(html).toContain('https://euvd.enisa.europa.eu/vulnerability/EUVD-2026-73069')
         expect(html).not.toContain('https://osv.dev/vulnerability/EUVD-')
     })
+
+    it('shows where the component comes from and its chains, without backend TODO notes', async () => {
+        const context: { teleports?: Record<string, string> } = {}
+        await renderToString(createSSRApp({
+            render: () => h(LibraryDetailModal, {
+                component: {
+                    id: 'qs', name: 'qs', version: '6.11.0', ecosystem: 'npm',
+                    purl: 'pkg:npm/qs@6.11.0', vuln_count: 0,
+                    relationship: 'indirect', resolution: 'recorded',
+                    paths: ['web/package-lock.json'], modules: ['web'],
+                    inventory_sources: ['hibou-dependencies.cdx.json'],
+                    usage_paths: [['web', 'express', 'qs']],
+                },
+            }),
+        }), context)
+
+        const html = context.teleports?.body ?? ''
+        expect(html).toContain('Where it comes from')
+        expect(html).toContain('web/package-lock.json')
+        expect(html).toContain('recorded in a lockfile')
+        expect(html).toContain('express')
+        expect(html).not.toContain('TODO-BACKEND')
+    })
+
+    it('lays the advisory table out without horizontal scrolling', async () => {
+        const context: { teleports?: Record<string, string> } = {}
+        await renderToString(createSSRApp({
+            render: () => h(LibraryDetailModal, {
+                component: {
+                    id: 'django', name: 'django', version: '4.2.7', ecosystem: 'pypi',
+                    purl: 'pkg:pypi/django@4.2.7', vuln_count: 1,
+                    advisories: [{ id: 'a', canonical_id: 'CVE-2026-4277', title: 't', severity: 'critical', is_malware: false }],
+                },
+            }),
+        }), context)
+
+        const html = context.teleports?.body ?? ''
+        expect(html).toContain('table-fixed')
+        expect(html).toContain('overflow-x-hidden')
+    })
 })

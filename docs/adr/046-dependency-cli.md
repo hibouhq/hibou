@@ -88,9 +88,9 @@ auto-detected from CI and `hibou config set-org`.
 | Scan release v1.2.3 and keep the result on it | `hibou release scan v1.2.3 [FILES...]` | Yes, additive, with confirmation |
 
 Both commands that scan are called `scan`; the noun in front tells whether the
-result is kept. The same split exists elsewhere: Snyk separates `test`
-(check) from `monitor` (record), `trivy` scans without a server, and
-`hibou secret-scan` checks without persisting. Writing is never a flag added
+result is kept. The same split exists elsewhere: commercial dependency
+scanners separate a check command from a record command, `trivy` scans
+without a server, and `hibou secret-scan` checks without persisting. Writing is never a flag added
 to a read-only command: forgetting or adding one flag must not change whether
 data is stored.
 
@@ -345,7 +345,7 @@ what the attestation claims, not who signed it.
 | Releases tab, "Extract dependencies" | `hibou release scan v1.2.3` (no files) |
 | "Backfill all releases" | `hibou release scan --all` |
 | "Add deliverables" | `hibou release scan v1.2.3 dist/app.war ...` |
-| "Mark as not shipped" | edit `.hibou.yaml`, or `hibou deps not-shipped add 'pkg:npm/@types/*' --repo api --reason ...` |
+| "Copy not-shipped entry" | edit `.hibou.yaml` (`dependencies.not_shipped`); `hibou deps not-shipped list\|add\|remove` for API entries (ADR-045 §6) |
 | Sources of a release, revoke, restore | `hibou release sources v1.2.3`, `hibou release sources revoke|restore v1.2.3 <source-id>` |
 
 Common flags are those of `upload` and `gate` (`--org`, `--repo`,

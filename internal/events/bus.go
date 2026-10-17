@@ -68,6 +68,11 @@ const (
 	// somebody who could triage yesterday cannot today, and if nobody is told,
 	// the first symptom is a queue quietly going unworked.
 	LocalGrantSuspended Type = "rbac.local_grant.suspended"
+	// ForgeAdminDeparted is the forge saying an org's only admin left. The
+	// membership is kept (an org nobody administers cannot be repaired from
+	// inside Hibou), so an operator must appoint another admin. Payload:
+	// org_id, user_id.
+	ForgeAdminDeparted Type = "rbac.forge_admin.departed"
 )
 
 type Event struct {

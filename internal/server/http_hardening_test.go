@@ -560,3 +560,52 @@ func TestUploadKeyLimitLeavesASlot(t *testing.T) {
 		}
 	}
 }
+
+// Once the keyed buckets are full, an unseen address shares its /48 (IPv6)
+// or /24 (IPv4) bucket, so a client rotating through a large IPv6 range
+// exhausts its own range, not every newcomer's. The failed-token gate never
+// refuses on the global overflow bucket, which unrelated clients share.
+func TestRateLimiterOverflowIsCoarseAndNeverLocksEveryoneOut(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	limiter := newIPRateLimiterWithCap(ctx, 0.001, 1, rateLimiterShards)
+	// Fill the keyed buckets with one attacker's /64s inside 2001:db8:1::/48.
+	for i := 0; i < 10*rateLimiterShards; i++ {
+		limiter.getLimiter("ip:" + rateLimitIPKey("2001:db8:1:"+strconv.FormatInt(int64(i), 16)+"::1"))
+	}
+	attacker, global := limiter.limiterFor("ip:" + rateLimitIPKey("2001:db8:1:ffff::1"))
+	if global {
+		t.Fatal("a full table sent an address to the global bucket before its /48")
+	}
+	attacker.Allow() // the attacker's range spends its token
+	if !authFailuresExhausted(limiter, "ip:"+rateLimitIPKey("2001:db8:1:fffe::1")) {
+		t.Error("the attacker's /48 is not throttled")
+	}
+	if authFailuresExhausted(limiter, "ip:"+rateLimitIPKey("2001:db8:2:1::1")) {
+		t.Error("another /48 is throttled by the attacker's failures")
+	}
+	if authFailuresExhausted(limiter, "ip:"+rateLimitIPKey("198.51.100.7")) {
+		t.Error("an IPv4 client is throttled by an IPv6 attacker")
+	}
+
+	// Even with the coarse table full, the shared global bucket never
+	// refuses a token on its own.
+	full := newIPRateLimiterWithCap(ctx, 0.001, 1, rateLimiterShards)
+	for i := 0; i < 10*rateLimiterShards; i++ {
+		full.getLimiter("ip:" + strconv.Itoa(i))
+	}
+	full.coarse.mu.Lock()
+	for i := len(full.coarse.entries); i < maxCoarseRateLimitKeys; i++ {
+		full.coarse.entries["net:filler-"+strconv.Itoa(i)] = &limiterEntry{limiter: full.overflow, lastSeen: time.Now()}
+	}
+	full.coarse.mu.Unlock()
+	full.overflow.Allow()
+	if bucket, global := full.limiterFor("ip:" + rateLimitIPKey("2001:db8:9::1")); !global || bucket != full.overflow {
+		t.Fatal("expected the global bucket once both tables are full")
+	}
+	if authFailuresExhausted(full, "ip:"+rateLimitIPKey("2001:db8:9::1")) {
+		t.Error("the failed-token gate refused on the shared global bucket")
+	}
+}

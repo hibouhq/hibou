@@ -91,3 +91,43 @@ func (q *Queries) ListUserRepoAccessInOrg(ctx context.Context, orgID, userID uui
 func (q *Queries) ListRepoAudienceUserIDs(ctx context.Context, repoID uuid.UUID) ([]uuid.UUID, error) {
 	return q.db.ListRepoAudienceUserIDs(ctx, repoID)
 }
+
+// ForgeRepoGrant is a forge-synced grant with the repository's slug, for
+// asking the forge again about it.
+type ForgeRepoGrant struct {
+	RepoID uuid.UUID
+	Slug   string
+	Role   string
+}
+
+// ListForgeRepoGrantsInOrg lists a user's forge-synced repository grants in
+// an org, with slugs. Operator grants (source local) are not listed: the
+// forge does not own them.
+func (q *Queries) ListForgeRepoGrantsInOrg(ctx context.Context, orgID, userID uuid.UUID) ([]ForgeRepoGrant, error) {
+	rows, err := q.sqlDB.QueryContext(ctx, `
+		SELECT ura.repo_id, r.slug, ura.role
+		FROM user_repo_access ura
+		JOIN repositories r ON r.id = ura.repo_id
+		WHERE ura.user_id = $1 AND r.org_id = $2 AND ura.source = 'forge'
+		ORDER BY r.slug`, userID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ForgeRepoGrant
+	for rows.Next() {
+		var grant ForgeRepoGrant
+		if err := rows.Scan(&grant.RepoID, &grant.Slug, &grant.Role); err != nil {
+			return nil, err
+		}
+		out = append(out, grant)
+	}
+	return out, rows.Err()
+}
+
+// DeleteForgeUserRepoAccess removes one forge-synced grant.
+func (q *Queries) DeleteForgeUserRepoAccess(ctx context.Context, userID, repoID uuid.UUID) error {
+	_, err := q.execer().ExecContext(ctx,
+		`DELETE FROM user_repo_access WHERE user_id = $1 AND repo_id = $2 AND source = 'forge'`, userID, repoID)
+	return err
+}

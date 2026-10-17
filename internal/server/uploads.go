@@ -1579,6 +1579,9 @@ func validateUploadRequest(input uploadRequest) error {
 	if input.Repo == "" {
 		return errors.New("repo is required")
 	}
+	if !validUploadRepoSlug(input.Repo) {
+		return errors.New(invalidUploadRepoMessage)
+	}
 	if input.Ref == "" {
 		return errors.New("ref is required")
 	}
@@ -1777,4 +1780,20 @@ func errorAsConflict(err error, target *conflictError) bool {
 
 func errorAsNotFound(err error, target *notFoundError) bool {
 	return errors.As(err, target)
+}
+
+const invalidUploadRepoMessage = "repo must be a repository name: up to 100 letters, digits, '.', '_' or '-', not '.' or '..'"
+
+// uploadRepoSlugPattern is the character set forges allow in a repository
+// path segment (GitHub, GitLab, Forgejo).
+var uploadRepoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+
+// validUploadRepoSlug accepts the repository names an upload may target or
+// auto-enrol. An upload enrols the repository it names, so a free-form value
+// ("../x", ".", a 300-character string) used to create unreachable rows.
+func validUploadRepoSlug(repo string) bool {
+	if repo == "." || repo == ".." || strings.HasPrefix(repo, "-") {
+		return false
+	}
+	return uploadRepoSlugPattern.MatchString(repo) && validRepoName(repo)
 }

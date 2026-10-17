@@ -696,15 +696,18 @@ mechanism for every ecosystem (Go included):
   `pkg:golang/github.com/stretchr/testify`), regular expressions
   (`re:^pkg:npm/eslint(-.*)?$`), or repository paths (`tools/**`, `e2e/**`:
   everything a manifest under that path declares).
-- **Org list** for common tooling, inherited by every repository; **repo
-  list** in `.hibou.yaml` (reviewed in a PR, versioned with the code) and in
-  the UI (admins and release managers, with a reason, audit-logged, in the
-  style of triage acceptance, ADR-023). The UI shows both lists and where
-  each entry comes from.
+- **Org list** for common tooling, inherited by every repository, edited in
+  the org settings; **repo list** in `.hibou.yaml` (reviewed in a PR,
+  versioned with the code). The web UI does not edit the repository list:
+  the repository page shows the effective list read-only, with where each
+  entry comes from, and offers the `.hibou.yaml` lines to copy. Entries
+  recorded through the API (`hibou deps not-shipped add`, or the UI before
+  this rule) stay effective, are shown with their source, and can be
+  removed.
 - Declared scopes (`devDependencies`, Maven `test`, `[dev-dependencies]`,
   Poetry/uv groups, Gradle test configurations) are **suggestions**: "37
-  components are declared dev/test: mark them as not shipped?". Accepting
-  creates explicit entries. An org can opt into trusting declared scopes for
+  components are declared dev/test: not shipped?". The action copies the
+  matching `.hibou.yaml` entries. An org can opt into trusting declared scopes for
   a given ecosystem (e.g. Maven `test`); the default is off.
 
 Safeguards:
@@ -794,7 +797,13 @@ dependencies:
     fixable_only: true
 ```
 
-`exclude` removes paths from the inventory (fixtures, examples).
+`exclude` removes paths from the inventory (fixtures, examples). Nothing
+is excluded by default beyond installed dependencies and build outputs
+(`node_modules`, `vendor`, `target`...): a test corpus is excluded by the
+repository's own configuration, e.g. `"**/testdata/**"`, reviewed like any
+change. Excluded manifests are listed on the extraction's producer run with
+the reason `excluded`, so findings they carried become "not re-checked",
+never resolved (ADR-034).
 `not_shipped` keeps components listed with `shipped: no`. As in ADR-035, org
 requirements override repository choices, and exclusions that remove
 required scope need an approved exception. Directory scoping mirrors
@@ -900,8 +909,8 @@ Neither tool is reused as an engine (§3, E7/E8).
     "unresolved" shows the declared range, "unknown license" says why (§2.3).
   - Per module, a completeness banner with the reason and the fix ("no
     lockfile: indirect dependencies unknown").
-  - "Mark as not shipped" per component or module; accepting declared-scope
-    suggestions (§6). The empty state of a repository without an SBOM offers
+  - "Copy not-shipped entry" per component, and the declared-scope
+    suggestions, both as `.hibou.yaml` lines to paste (§6). The empty state of a repository without an SBOM offers
     "Extract dependencies now".
 - **Vulnerabilities tab**: the same Shipped, Relationship and Origin filters;
   findings on not-shipped components carry a "not shipped" badge and stay

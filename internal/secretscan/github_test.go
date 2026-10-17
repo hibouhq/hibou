@@ -13,8 +13,8 @@ import (
 
 func TestNewGitHubProviderDefaults(t *testing.T) {
 	provider := NewGitHubProvider(nil, "", zerolog.Nop())
-	if provider.client != http.DefaultClient {
-		t.Fatal("client = nil, want http.DefaultClient")
+	if provider.client == nil || provider.client == http.DefaultClient || provider.client.Timeout <= 0 {
+		t.Fatal("default client must be the forge client with deadlines, not http.DefaultClient")
 	}
 	if provider.baseURL != "https://api.github.com" {
 		t.Fatalf("baseURL = %q, want %q", provider.baseURL, "https://api.github.com")

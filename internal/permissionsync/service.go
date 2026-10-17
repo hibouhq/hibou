@@ -52,6 +52,17 @@ type Service struct {
 	forges map[string]forge.Provider
 	bus    Publisher
 	log    zerolog.Logger
+	// lateRepos backs off forge questions that failed (late_repos.go).
+	lateRepos lateRepoBackoff
+	// clock is time.Now unless a test sets it.
+	clock func() time.Time
+}
+
+func (s *Service) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }
 
 // WithPublisher attaches an event bus for suspension notifications.

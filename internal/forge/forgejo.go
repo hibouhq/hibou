@@ -57,7 +57,7 @@ func NewForgejo(apiURL, clientID, clientSecret, webhookSecret, token string) *Fo
 		clientSecret:  clientSecret,
 		webhookSecret: webhookSecret,
 		token:         strings.TrimSpace(token),
-		httpClient:    http.DefaultClient,
+		httpClient:    NewHTTPClient(),
 	}
 }
 
@@ -586,7 +586,7 @@ func (f *Forgejo) doWithStatus(request *http.Request, out any) (int, error) {
 		return response.StatusCode, nil
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(LimitResponse(response.Body)).Decode(out); err != nil {
 		return response.StatusCode, fmt.Errorf("decode forgejo response: %w", err)
 	}
 

@@ -274,6 +274,10 @@ func (RepositoryEvent) EventType() string {
 
 var ErrNotImplemented = errors.New("forge: provider not implemented")
 var ErrFileNotFound = errors.New("forge: file not found")
+
+// ErrRepositoryNotFound is a repository permission check the forge answered
+// with 404: the repository (or the user) does not exist for the account.
+var ErrRepositoryNotFound = errors.New("forge: repository or user not found")
 var ErrUnsupportedWebhookEvent = errors.New("forge: unsupported webhook event")
 
 // TreeListing is a repository's blob paths at a ref, and whether the forge

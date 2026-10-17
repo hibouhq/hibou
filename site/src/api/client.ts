@@ -1346,8 +1346,6 @@ export interface Advisory {
   malware_type?: string
   // Every CWE the advisory maps to, with titles (ADR-037).
   cwes?: CWERef[]
-  // Optional enriched fields — populated once the backend exposes them
-  // (see TODO-BACKEND-deps-nodata.md). Rendered with graceful fallbacks.
   summary?: string
   /** The finding this advisory raised on the component in this snapshot; opens it in the findings view. */
   fingerprint?: string
@@ -1365,7 +1363,7 @@ export interface ComponentWithVulns {
   vuln_count: number
   highest_severity?: string
   advisories?: Advisory[]
-  // Optional enriched fields (backend TODO). Graceful when absent.
+  /** Advisory feeds that reported vulnerabilities on the component. */
   sources?: string[]
   fixed_versions?: string[]
   usage_paths?: string[][]
@@ -1376,10 +1374,12 @@ export interface ComponentWithVulns {
   relationship?: 'direct' | 'indirect' | 'unknown'
   scopes?: string[]
   modules?: string[]
-  resolution?: 'recorded' | 'declared'
+  resolution?: 'recorded' | 'declared' | 'unresolved'
   registry?: 'public' | 'private'
   /** Artifacts that reported the component: uploaded SBOM file names, or the extractor's document. */
   inventory_sources?: string[]
+  /** Repository files the component was read from: the lockfile or manifest that declares it. */
+  paths?: string[]
   /** Whether the component reaches clients (ADR-045 §6); false stays listed, never hidden. */
   shipped?: boolean
   shipped_reason?: string

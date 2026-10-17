@@ -198,8 +198,18 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	if loaded, _, err := s.loadBoundRepoConfig(ctx, repo); err == nil && loaded != nil && loaded.Dependencies != nil {
 		exclude = loaded.Dependencies.Exclude
 	}
+	// Excluded manifests are neither checked out nor inventoried, but they
+	// are listed on the producer run so the exclusion is visible (ADR-034).
+	var excluded []store.SkippedFile
 	selectPath := func(p string) bool {
-		return depinventory.IsExtractionPath(p) && !depinventory.IsExcludedPath(p, exclude)
+		if !depinventory.IsExtractionPath(p) {
+			return false
+		}
+		if depinventory.IsExcludedPath(p, exclude) {
+			excluded = append(excluded, store.SkippedFile{Path: p, Reason: depinventory.SkipReasonExcluded})
+			return false
+		}
+		return true
 	}
 	checkout, err := secretscan.CheckoutManifests(ctx, s.cfg.DepInventory.TempDir, target.cloneURL, cloneRef, commit, token, selectPath)
 	if err != nil {
@@ -233,7 +243,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 		return nil, err
 	} else if ciInventory {
 		detail := "skipped: the repository ran hibou-deps in CI for this commit"
-		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, nil, &detail)
+		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, nil, &detail, excluded)
 		if snapshot.Status == store.SnapshotStatusPending {
 			s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 		}
@@ -242,7 +252,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 
 	if len(checkout.Paths) == 0 {
 		detail := "no lockfile or manifest recognised at this commit"
-		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, nil, &detail)
+		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, nil, &detail, excluded)
 		s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 		return &snapshot.ID, nil
 	}
@@ -255,7 +265,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 			return nil, fmt.Errorf("look up extraction by digest: %w", err)
 		}
 		if prior != nil && prior.SnapshotID != snapshot.ID {
-			if err := s.reuseExtractedInventory(ctx, repo, snapshot, commit, checkout.Digest, prior); err == nil {
+			if err := s.reuseExtractedInventory(ctx, repo, snapshot, commit, checkout.Digest, prior, excluded); err == nil {
 				if snapshot.Status == store.SnapshotStatusPending {
 					s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 				}
@@ -274,7 +284,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	})
 	if err != nil {
 		detail := truncateSecretScanError(err)
-		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, err, &detail)
+		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, err, &detail, excluded)
 		return &snapshot.ID, err
 	}
 	document, err := depinventory.ToCycloneDX(inv, repo.Slug, version.Version, time.Now())
@@ -307,7 +317,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 			return &snapshot.ID, fmt.Errorf("link extraction run to its inventory source: %w", err)
 		}
 	}
-	s.recordDepExtractionProducerRun(ctx, snapshot.ID, inv, nil, nil)
+	s.recordDepExtractionProducerRun(ctx, snapshot.ID, inv, nil, nil, excluded)
 	if snapshot.Status == store.SnapshotStatusPending {
 		s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 	}
@@ -435,7 +445,7 @@ func (s *Server) resolveDepExtractionSnapshot(ctx context.Context, job *store.De
 
 // reuseExtractedInventory copies an earlier run's rows under this snapshot
 // and records a run that points back to it.
-func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Repository, snapshot *store.Snapshot, commit, digest string, prior *store.DepExtractionRun) error {
+func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Repository, snapshot *store.Snapshot, commit, digest string, prior *store.DepExtractionRun, skipped []store.SkippedFile) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -474,7 +484,7 @@ func (s *Server) reuseExtractedInventory(ctx context.Context, repo *store.Reposi
 		_ = tx.Rollback()
 		return err
 	}
-	s.recordDepExtractionProducerRunFromModules(ctx, snapshot.ID, prior.Modules, nil)
+	s.recordDepExtractionProducerRunFromModules(ctx, snapshot.ID, prior.Modules, nil, skipped)
 	s.afterArtifactIngest(ctx, snapshot)
 	if copied > 0 {
 		s.enqueueAdvisoryScan(snapshot.ID, "system")
@@ -528,7 +538,10 @@ func extractionUpdaters(inv *depinventory.Inventory) []store.DepUpdaterConfig {
 // recordDepExtractionProducerRun stores the run (ADR-034 §2): complete when
 // every module has a recorded source, partial when one is manifest-only or
 // a file could not be read, failed on error. Scope paths are the modules.
-func (s *Server) recordDepExtractionProducerRun(ctx context.Context, snapshotID uuid.UUID, inv *depinventory.Inventory, runErr error, detail *string) {
+//
+// skipped lists the files deliberately left out (dependencies.exclude):
+// they are recorded with their reason and do not make the run partial.
+func (s *Server) recordDepExtractionProducerRun(ctx context.Context, snapshotID uuid.UUID, inv *depinventory.Inventory, runErr error, detail *string, skipped []store.SkippedFile) {
 	var modules []store.DepExtractionModule
 	if inv != nil {
 		modules = extractionModules(inv)
@@ -539,7 +552,7 @@ func (s *Server) recordDepExtractionProducerRun(ctx context.Context, snapshotID 
 		}
 	}
 	if runErr != nil {
-		run := store.ProducerRunInput{Producer: depInventoryProducer, Scope: store.ProducerScopeFull, ScopeDeclared: true, Outcome: store.ProducerOutcomeFailed, Detail: detail}
+		run := store.ProducerRunInput{Producer: depInventoryProducer, Scope: store.ProducerScopeFull, ScopeDeclared: true, Outcome: store.ProducerOutcomeFailed, Detail: detail, SkippedFiles: skipped}
 		v := depinventory.Version
 		run.Version = &v
 		if _, err := s.queries.UpsertSnapshotProducerRun(ctx, snapshotID, run); err != nil {
@@ -547,10 +560,10 @@ func (s *Server) recordDepExtractionProducerRun(ctx context.Context, snapshotID 
 		}
 		return
 	}
-	s.recordDepExtractionProducerRunFromModules(ctx, snapshotID, modules, detail)
+	s.recordDepExtractionProducerRunFromModules(ctx, snapshotID, modules, detail, skipped)
 }
 
-func (s *Server) recordDepExtractionProducerRunFromModules(ctx context.Context, snapshotID uuid.UUID, modules []store.DepExtractionModule, detail *string) {
+func (s *Server) recordDepExtractionProducerRunFromModules(ctx context.Context, snapshotID uuid.UUID, modules []store.DepExtractionModule, detail *string, skipped []store.SkippedFile) {
 	v := depinventory.Version
 	run := store.ProducerRunInput{
 		Producer:      depInventoryProducer,
@@ -558,6 +571,7 @@ func (s *Server) recordDepExtractionProducerRunFromModules(ctx context.Context, 
 		Scope:         store.ProducerScopeFull,
 		ScopeDeclared: true,
 		Outcome:       store.ProducerOutcomeCompleted,
+		SkippedFiles:  skipped,
 		Detail:        detail,
 	}
 	var reasons []string

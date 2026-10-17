@@ -30,6 +30,9 @@ type anonymizeUserResult struct {
 	RepoGrantsRemoved      int64  `json:"repo_access_removed"`
 	LocalRolesRevoked      int64  `json:"local_roles_revoked"`
 	OrgAPIKeysDetached     int64  `json:"org_api_keys_detached"`
+	// OrgAPIKeysRevoked are org keys the user created in orgs they had
+	// already left: refused before, so revoked rather than revived.
+	OrgAPIKeysRevoked int64 `json:"org_api_keys_revoked"`
 
 	// orgRoles are the memberships removed, for dropping their RBAC roles
 	// once the transaction commits.
@@ -175,6 +178,7 @@ func (s *Server) handleAnonymizeUser(w http.ResponseWriter, r *http.Request) {
 			"repo_access_removed":      result.RepoGrantsRemoved,
 			"local_roles_revoked":      result.LocalRolesRevoked,
 			"org_api_keys_detached":    result.OrgAPIKeysDetached,
+			"org_api_keys_revoked":     result.OrgAPIKeysRevoked,
 			"sessions_revoked":         true,
 		},
 	})
@@ -259,6 +263,29 @@ func (s *Server) anonymizeUser(ctx context.Context, userID uuid.UUID) (anonymize
 		return result, &lastAdminError{orgs: orphaned}
 	}
 
+	// Org-owned keys first, while org_members still says where the user
+	// belongs. A key whose creator exists but left its org is refused
+	// (GetAPIKeyByHash, creator_membership_valid), and a key without a
+	// creator is accepted: detaching every key would revive those of orgs
+	// the user had left. Revoke them; detach only the keys of orgs the user
+	// still belonged to (ADR-022: an org's CI key outlives its creator).
+	orgKeySteps := []struct {
+		query string
+		count *int64
+	}{
+		{`DELETE FROM api_keys ak
+		   WHERE ak.user_id = $1 AND ak.owner_type = 'org'
+		     AND NOT EXISTS (SELECT 1 FROM org_members om WHERE om.org_id = ak.owner_id AND om.user_id = $1)`, &result.OrgAPIKeysRevoked},
+		{`UPDATE api_keys SET user_id = NULL WHERE user_id = $1 AND owner_type = 'org'`, &result.OrgAPIKeysDetached},
+	}
+	for _, step := range orgKeySteps {
+		res, err := tx.ExecContext(ctx, step.query, userID)
+		if err != nil {
+			return result, fmt.Errorf("anonymize user: %w", err)
+		}
+		*step.count, _ = res.RowsAffected()
+	}
+
 	rows, err := tx.QueryContext(ctx, `DELETE FROM org_members WHERE user_id = $1 RETURNING org_id, role`, userID)
 	if err != nil {
 		return result, err
@@ -284,9 +311,6 @@ func (s *Server) anonymizeUser(ctx context.Context, userID uuid.UUID) (anonymize
 		count *int64
 	}{
 		{`DELETE FROM api_keys WHERE user_id = $1 AND owner_type = 'user'`, &result.APIKeysRevoked},
-		// ADR-022: an org-owned key outlives its creator; detach it as a
-		// user deletion would (ON DELETE SET NULL).
-		{`UPDATE api_keys SET user_id = NULL WHERE user_id = $1 AND owner_type = 'org'`, &result.OrgAPIKeysDetached},
 		{`DELETE FROM team_members WHERE user_id = $1`, &result.TeamMembershipsRemoved},
 		{`DELETE FROM user_repo_access WHERE user_id = $1`, &result.RepoGrantsRemoved},
 		{`DELETE FROM local_role_grants WHERE user_id = $1`, &result.LocalRolesRevoked},

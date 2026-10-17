@@ -75,7 +75,7 @@ What this config does:
 
 You can adjust the thresholds in .hibou.yaml and merge this PR when ready.
 
-Docs: https://hibou.dev/docs/config-as-code`),
+Every key is described in the schema, which your editor uses for completion: https://hibouhq.com/schemas/v1/hibou-config.schema.json`),
 		Head: onboardingBranchName,
 		Base: defaultBranch,
 	})

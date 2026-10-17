@@ -141,6 +141,10 @@ type Inventory struct {
 	// Errors from files the extractors could not read; the inventory is
 	// still returned, marked partial where they apply.
 	FileErrors []string
+	// Excluded are the manifests and lockfiles Options.Exclude left out,
+	// relative to the root: reported, not inventoried, so the exclusion
+	// stays visible (ADR-034).
+	Excluded []string
 	// InstallConfig is each module's install-time cooldown settings, by
 	// module path (ADR-048 §3.1); Updaters the repository's updater
 	// cooldown, when a Renovate or Dependabot config exists.
@@ -277,6 +281,10 @@ var offlineCapabilities = &plugin.Capabilities{
 // would double every count), and build outputs.
 var skipDirPattern = regexp.MustCompile(`(^|[\\/])(\.git|\.hg|\.svn|node_modules|vendor|\.venv|venv|__pycache__|target|dist|build|\.gradle|\.idea|\.terraform)$`)
 
+// SkipReasonExcluded is the producer-run reason for a manifest left out by
+// the repository's dependencies.exclude (ADR-045 §8).
+const SkipReasonExcluded = "excluded"
+
 // Extract walks root and returns the inventory. It never follows symlinks
 // out of the root and never executes repository content.
 func Extract(ctx context.Context, root string, opts Options) (*Inventory, error) {
@@ -340,6 +348,7 @@ func Extract(ctx context.Context, root string, opts Options) (*Inventory, error)
 		}
 	}
 	inv.Components = excludeComponents(inv.Components, opts.Exclude)
+	inv.Excluded = findExcludedManifests(absRoot, opts.Exclude)
 	// IaC and CI references (ADR-045 §9) come from hibou's own parsers.
 	inv.Components = append(inv.Components, extractIaC(absRoot, opts.Exclude, func(message string) {
 		if opts.Warn != nil {
@@ -629,4 +638,38 @@ func sortComponents(components []Component) {
 		}
 		return components[i].Path < components[j].Path
 	})
+}
+
+// maxReportedExcluded bounds the list a run reports: an excluded corpus of
+// test lockfiles can be large, and the list is evidence, not an inventory.
+const maxReportedExcluded = 500
+
+// findExcludedManifests lists the files the extraction would have read but
+// the exclude globs left out.
+func findExcludedManifests(root string, exclude []string) []string {
+	if len(exclude) == 0 {
+		return nil
+	}
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || len(out) >= maxReportedExcluded {
+			return filepath.SkipDir
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if skipDirPattern.MatchString(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type().IsRegular() && IsExtractionPath(rel) && IsExcludedPath(rel, exclude) {
+			out = append(out, rel)
+		}
+		return nil
+	})
+	return out
 }

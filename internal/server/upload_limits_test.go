@@ -79,3 +79,25 @@ func TestCompareLocalSBOMsRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("status = %d, want 413", recorder.Code)
 	}
 }
+
+// TestValidateUploadRequestRejectsUnsafeRepo: an upload enrols the
+// repository it names, so the name must be one a forge could hold.
+func TestValidateUploadRequestRejectsUnsafeRepo(t *testing.T) {
+	t.Parallel()
+
+	base := uploadRequest{Provider: "github", Org: "acme", Ref: "refs/heads/main", CommitSHA: "0123456789abcdef0123456789abcdef01234567"}
+	for _, repo := range []string{"../x", ".", "..", "a/b", `a\b`, "x';drop table repositories;--", strings.Repeat("a", 101), "-rf", "a b", "café"} {
+		input := base
+		input.Repo = repo
+		if err := validateUploadRequest(input); err == nil {
+			t.Errorf("repo %q accepted", repo)
+		}
+	}
+	for _, repo := range []string{"app", "my_repo", "site.v2", "Hibou-Server", "a"} {
+		input := base
+		input.Repo = repo
+		if err := validateUploadRequest(input); err != nil {
+			t.Errorf("repo %q refused: %v", repo, err)
+		}
+	}
+}

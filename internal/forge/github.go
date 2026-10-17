@@ -87,7 +87,7 @@ func WithOrgMembershipScope() GitHubOption {
 
 func NewGitHub(clientID, clientSecret, webhookSecret string, opts ...GitHubOption) *GitHub {
 	github := &GitHub{
-		httpClient:    http.DefaultClient,
+		httpClient:    NewHTTPClient(),
 		apiURL:        defaultGitHubAPIURL,
 		clientID:      clientID,
 		clientSecret:  clientSecret,
@@ -1224,7 +1224,7 @@ func (g *GitHub) doWithResponse(request *http.Request, out any) (*http.Response,
 	}
 
 	if out != nil {
-		if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		if err := json.NewDecoder(LimitResponse(response.Body)).Decode(out); err != nil {
 			return nil, fmt.Errorf("decode github response: %w", err)
 		}
 	} else {
@@ -1290,7 +1290,7 @@ func (g *GitHub) doWithStatus(request *http.Request, out any) (int, error) {
 		return response.StatusCode, nil
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(LimitResponse(response.Body)).Decode(out); err != nil {
 		return response.StatusCode, fmt.Errorf("decode github response: %w", err)
 	}
 

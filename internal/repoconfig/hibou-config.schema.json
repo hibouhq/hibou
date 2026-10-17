@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hibou.dev/schemas/v1/hibou-config.schema.json",
+  "$id": "https://hibouhq.com/schemas/v1/hibou-config.schema.json",
   "title": "Hibou Repository Config",
   "description": "Repository-scoped Hibou configuration for branch-aware weakness quality gates.",
   "type": "object",

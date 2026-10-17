@@ -364,11 +364,12 @@ func (d *Dispatcher) selectIntegrationsForRules(payload Payload, integrations []
 	}
 
 	for _, rule := range rules {
-		if ruleHasSecretSelector(rule) {
+		if ruleNeedsIntegrationID(rule) {
 			d.log.Warn().
 				Str("org_id", payload.OrgID.String()).
 				Str("rule_id", rule.ID.String()).
-				Msg("notification rule selects integrations by a credential field; that field is ignored — edit the rule to use integration_id")
+				Str("rule", rule.Name).
+				Msg("notification rule selects its integration by a credential field and sends nothing until it is edited to name an integration_id")
 		}
 	}
 
@@ -415,13 +416,31 @@ const RuleIntegrationIDKey = "integration_id"
 // a rule that could match on an integration's webhook URL or password would
 // tell an admin (through dry-run or deliveries) whether a guess was right,
 // for a value the API keeps write-only. New rules cannot carry them
-// (ValidateRuleDestinationConfig); in rules stored before that, they are
-// ignored.
+// (ValidateRuleDestinationConfig).
+//
+// A rule stored before that, which selected its integration by a credential
+// field and names no integration_id, matches nothing: ignoring the field
+// would turn "this Slack webhook" into "every Slack integration" and send
+// one team's alerts to all of them. It stays silent, with a warning, until
+// it is edited to name an integration_id.
 func ruleMatchesIntegration(rule dbgen.NotificationRule, integration dbgen.Integration) bool {
 	if !strings.EqualFold(string(rule.DestinationType), integration.IntegrationType) {
 		return false
 	}
+	if ruleNeedsIntegrationID(rule) {
+		return false
+	}
 	return destinationConfigMatches(rule.DestinationConfig, integration)
+}
+
+// ruleNeedsIntegrationID reports a legacy rule that selects by a credential
+// field without an integration_id: it matches no integration.
+func ruleNeedsIntegrationID(rule dbgen.NotificationRule) bool {
+	if !ruleHasSecretSelector(rule) {
+		return false
+	}
+	_, named := decodeRuleMap(rule.DestinationConfig)[RuleIntegrationIDKey]
+	return !named
 }
 
 func destinationConfigMatches(ruleConfig json.RawMessage, integration dbgen.Integration) bool {
@@ -758,6 +777,10 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 		payload.Body = "The forge narrowed someone's standing, so " + role +
 			" was suspended for them: " + stringValue(data, "reason", "role changed") +
 			". It stays inert until an operator re-confirms it."
+	case events.ForgeAdminDeparted:
+		payload.Title = "An organization's only admin left the forge organization"
+		payload.Body = "The forge says the only admin of this organization is no longer a member. " +
+			"Hibou keeps their admin role so the organization can still be managed: appoint another admin, then remove them."
 	case events.AdvisoryDiverged:
 		cveID := stringValue(data, "cve_id", "an advisory")
 		payload.Title = "Upstream disagrees with a mapping made here"

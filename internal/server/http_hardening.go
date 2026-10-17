@@ -375,13 +375,23 @@ func rateLimitMiddleware(limiter *ipRateLimiter, key func(*http.Request) string)
 func (s *Server) authFailureGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		limiter := s.rateLimiters.authFailure
-		if limiter != nil && r.Header.Get("Authorization") != "" && limiter.getLimiter(ipRateKey(r)).Tokens() < 1 {
+		if limiter != nil && r.Header.Get("Authorization") != "" && authFailuresExhausted(limiter, ipRateKey(r)) {
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(limiter)))
 			api.JSONError(w, http.StatusTooManyRequests, "too many failed authentication attempts, retry later")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authFailuresExhausted reports an address whose own failed-token bucket is
+// empty. The global overflow bucket never refuses here: it is shared by
+// every client the limiter has no room for, so refusing on it would let one
+// flood lock valid tokens out from everywhere. Those requests still meet the
+// per-principal limits once their token resolves.
+func authFailuresExhausted(limiter *ipRateLimiter, key string) bool {
+	bucket, global := limiter.limiterFor(key)
+	return !global && bucket.Tokens() < 1
 }
 
 // authFailureCount runs right after SessionAuth and charges a bearer token

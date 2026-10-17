@@ -8,6 +8,7 @@
     "ms-ossdata.vscode-pgsql",
     "astro-build.astro-vscode",
     "editorconfig.editorconfig",
-    "github.vscode-github-actions"
+    "github.vscode-github-actions",
+    "redhat.vscode-yaml"
   ]
 }

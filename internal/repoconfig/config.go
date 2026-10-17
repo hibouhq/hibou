@@ -372,7 +372,7 @@ func Default() *RepoConfig {
 
 func DefaultYAML() []byte {
 	return []byte(strings.Join([]string{
-		"# yaml-language-server: $schema=https://hibou.dev/schemas/v1/hibou-config.schema.json",
+		"# yaml-language-server: $schema=https://hibouhq.com/schemas/v1/hibou-config.schema.json",
 		"version: 1",
 		"",
 		"# Configure branch-aware quality gates. `code` caps new first-party code",

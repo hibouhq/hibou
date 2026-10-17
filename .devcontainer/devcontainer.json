@@ -96,6 +96,7 @@
         "github.vscode-github-actions",
         "docker.docker",
         "HashiCorp.terraform",
+        "redhat.vscode-yaml",
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",
