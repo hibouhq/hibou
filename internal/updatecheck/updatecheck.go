@@ -1,9 +1,9 @@
 // Package updatecheck reports whether a newer Hibou release is available.
 //
-// It mirrors the approach used by coder/coder: a background goroutine polls
-// the GitHub "latest release" endpoint on an interval, caches the result, and
-// compares the running version against it with semantic versioning. The cached
-// comparison is served to the UI so no request ever blocks on GitHub.
+// A background goroutine polls the GitHub "latest release" endpoint on an
+// interval, caches the result, and compares the running version against it
+// with semantic versioning. The cached comparison is served to the UI so no
+// request ever blocks on GitHub.
 package updatecheck
 
 import (
