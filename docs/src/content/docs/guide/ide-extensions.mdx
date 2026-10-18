@@ -1,0 +1,76 @@
+---
+title: IDE Extensions
+description: Hibou findings in VS Code, its derivatives and JetBrains IDEs
+---
+
+The Hibou extensions show findings from your last scans in the files they were
+found in, mapped onto your working copy with git. No source code is sent to the
+Hibou server.
+
+## Install
+
+| Editor | Store |
+|--------|-------|
+| VS Code | [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=hibouhq.hibou), or `code --install-extension hibouhq.hibou` |
+| Cursor, Windsurf, VSCodium, code-server, Theia | [Open VSX](https://open-vsx.org/extension/hibouhq/hibou), or search **hibou** in the Extensions view |
+| IntelliJ IDEA, GoLand, PyCharm, WebStorm, Rider, CLion, PhpStorm, RubyMine, Android Studio (2025.1 or later) | [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/35258-hibou), or **Settings → Plugins → Marketplace**, search **hibou** |
+
+You don't need to install the CLI first: the extension downloads the `hibou`
+binary matching your server's version from the server itself and checks its
+sha256 before running it. The JetBrains plugin depends on
+[LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij); the IDE offers to
+install it.
+
+The **Install CLI** dialog in the Hibou web UI links to the three stores and
+shows your server's URL.
+
+## Sign in
+
+1. **Set the server URL**: the URL of your Hibou instance (VS Code: command
+   `hibou: Set Server URL`; JetBrains: **Settings → Tools → hibou**). If you
+   already ran `hibou login`, the extension reuses that server.
+2. **Sign in** (`hibou: Sign In`): your browser opens with a one-time code to
+   approve (device login). The token is stored in the editor's secret storage.
+
+The token is read-only unless you pick **Read-only + triage** on the approval
+page, which lets an org admin triage from the editor.
+
+## Features
+
+- **Diagnostics** on the lines each scanner reported. A finding whose code you
+  changed stays visible, marked "may already be fixed", until the next scan
+  confirms it.
+- **Hover** with rule, CWE, CVSS, EPSS, KEV, reachability and a link to the
+  finding in Hibou.
+- **Quick fixes**: suppress with the scanner's own directive and a
+  justification (`// #nosec G101 -- reason`, `nosemgrep`,
+  `eslint-disable-next-line`, `gitleaks:allow`); accept the risk; mark a false
+  positive; dispute a suppression. Triage needs the org admin role and a token
+  with `triage:write`.
+- **Findings view** per repository, **status bar** with open findings and the
+  pull request's gate verdict, and an optional **coverage gutter**.
+- **`.hibou.yaml` validation** against its schema (in VS Code, with the Red
+  Hat YAML extension).
+- **Check staged changes for secrets** (opt-in): sends `git diff --cached` to
+  the server, which scans it and stores nothing.
+
+## Settings
+
+VS Code settings (JetBrains: **Settings → Tools → hibou**):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `hibou.server` | | Hibou server URL |
+| `hibou.path` | | Use a local `hibou` binary instead of downloading it (user-level only) |
+| `hibou.pollSeconds` | `120` | How often to check for a newer scan and gate verdict |
+| `hibou.showSuppressed` | `false` | Also show suppressed and accepted findings, faded |
+| `hibou.coverage.enabled` | `false` | Show line coverage from the last scan in the gutter |
+| `hibou.secretCheck.enabled` | `false` | Enable the staged-changes secret check (user-level only) |
+
+The extensions don't run in untrusted workspaces, because they run git there.
+
+## Source
+
+The extensions are open source (AGPL-3.0) in
+[hibouhq/hibou-ide](https://github.com/hibouhq/hibou-ide). Report issues
+there.

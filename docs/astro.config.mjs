@@ -81,6 +81,7 @@ export default defineConfig({
                         { label: "Security Scans", slug: "guide/security-scans" },
                         { label: "License Gating", slug: "guide/license-gating" },
                         { label: "Dependency Inventory", slug: "guide/dependency-inventory" },
+                        { label: "IDE Extensions", slug: "guide/ide-extensions" },
                         { label: "Webhooks", slug: "guide/webhooks" },
                     ],
                 },

@@ -129,6 +129,36 @@
             </a>
           </div>
         </div>
+
+        <!-- Editor extensions -->
+        <div class="mt-5">
+          <h3 class="mb-2 text-sm font-semibold uppercase tracking-wide text-gray-300">
+            Editor extensions
+          </h3>
+          <div class="grid gap-2 sm:grid-cols-3">
+            <a
+              v-for="e in editorExtensions"
+              :key="e.name"
+              :href="e.href"
+              target="_blank"
+              rel="noopener"
+              class="rounded-xl border border-surface-border bg-surface-overlay px-3 py-2 text-xs text-gray-400 transition hover:border-accent/50 hover:text-white"
+            >
+              <span class="block font-medium text-gray-200">{{ e.name }}</span>
+              <span class="block text-gray-500">{{ e.store }}</span>
+            </a>
+          </div>
+          <p class="mt-2 text-xs text-gray-500">
+            The extension downloads the matching <code class="rounded bg-surface-overlay px-1 py-0.5 font-mono text-gray-300">hibou</code> binary itself. When it asks for the server, use
+            <code class="rounded bg-surface-overlay px-1 py-0.5 font-mono text-gray-300">{{ serverUrl }}</code>.
+            <a
+              href="https://hibouhq.com/latest/guide/ide-extensions/"
+              target="_blank"
+              rel="noopener"
+              class="text-accent hover:underline"
+            >Docs</a>
+          </p>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -211,6 +241,15 @@ const installSnippet = computed(() => {
     `sudo mv ~/Downloads/${binaryName.value} /usr/local/bin/hibou`,
   ].join('\n')
 })
+
+// Store pages; each has the store's own install button.
+const editorExtensions = [
+  { name: 'VS Code', store: 'Visual Studio Marketplace', href: 'https://marketplace.visualstudio.com/items?itemName=hibouhq.hibou' },
+  { name: 'Cursor, Windsurf, VSCodium', store: 'Open VSX', href: 'https://open-vsx.org/extension/hibouhq/hibou' },
+  { name: 'JetBrains IDEs', store: 'JetBrains Marketplace', href: 'https://plugins.jetbrains.com/plugin/35258-hibou' },
+]
+
+const serverUrl = typeof window !== 'undefined' ? window.location.origin : ''
 
 const copied = ref(false)
 async function copySnippet() {
