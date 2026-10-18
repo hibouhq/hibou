@@ -11,11 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/hibouhq/hibou/internal/devicelogin"
 )
 
 // testClient drives a Server over in-memory pipes.
@@ -407,10 +410,104 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("a 403 must point to the browser: %+v", tr)
 	}
 
+	// After the refusal, the editor stops offering changes that will fail.
+	// Drop the directive first, so the finding is triageable again.
+	c.notify("textDocument/didChange", map[string]any{
+		"textDocument":   map[string]any{"uri": uri, "version": 3},
+		"contentChanges": []map[string]any{{"text": edited}},
+	})
+	if diags := c.waitDiagnostics(uri); len(diags) != 1 || diags[0].Severity != severityError {
+		t.Fatalf("after removing the directive: %+v", diags)
+	}
+	actions = nil
+	if err := c.call("textDocument/codeAction", map[string]any{
+		"textDocument": map[string]string{"uri": uri}, "range": d.Range,
+		"context": map[string]any{"diagnostics": []diagnostic{d}},
+	}, &actions); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range actions {
+		if a.Command != nil && a.Command.Command == clientCmdTriage {
+			t.Fatalf("triage action %q still offered after a 403", a.Title)
+		}
+	}
+	if !slices.ContainsFunc(actions, func(a codeAction) bool { return strings.HasPrefix(a.Title, "hibou: triage in the browser") }) {
+		t.Fatalf("no browser triage action in %+v", actions)
+	}
+
 	if err := c.call("shutdown", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	c.notify("exit", nil)
+}
+
+func TestLoginAsksForTriageAndFallsBackOnOlderServers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HIBOU_SERVER", "")
+	t.Setenv("HIBOU_TOKEN", "")
+
+	var scopes []string
+	var mu sync.Mutex
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/auth/device/code", func(w http.ResponseWriter, r *http.Request) {
+		var body devicelogin.CodeRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		scopes = append(scopes, body.Scope)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if body.Scope != "read-only" { // a server older than the triage preset
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(devicelogin.ErrorResponse{Error: devicelogin.ErrCodeInvalidScope, ErrorDescription: "scope must be cli or read-only"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(devicelogin.Authorization{DeviceCode: "dc", UserCode: "BCDF-GHJK", VerificationURI: "http://x/device", ExpiresIn: 600, Interval: 5})
+	})
+	api := httptest.NewServer(mux)
+	t.Cleanup(api.Close)
+
+	c, stop := startServer(t)
+	defer stop()
+	if err := c.call("initialize", map[string]any{
+		"processId": nil, "capabilities": map[string]any{},
+		"initializationOptions": map[string]any{"server": api.URL, "clientId": "hibou-intellij"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.notify("initialized", map[string]any{})
+
+	var start loginStartResult
+	if err := c.call("hibou/login/start", nil, &start); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if start.UserCode != "BCDF-GHJK" || strings.Join(scopes, ",") != "triage,read-only" {
+		t.Fatalf("login start = %+v after scopes %v, want triage then read-only", start, scopes)
+	}
+}
+
+func TestTriageActionsFollowTheServerVerdict(t *testing.T) {
+	open := apiFinding{Fingerprint: "fp", Status: "detected"}
+	triage := func(actions []codeAction) (n int) {
+		for _, a := range actions {
+			if a.Command != nil && a.Command.Command == clientCmdTriage {
+				n++
+			}
+		}
+		return n
+	}
+	if got := triageActions(nil, "file:///x", open, false, true); triage(got) != 2 {
+		t.Fatalf("allowed: %+v, want accept and false positive", got)
+	}
+	got := triageActions(nil, "file:///x", open, false, false)
+	if len(got) != 1 || triage(got) != 0 || got[0].Command.Command != cmdOpenFinding {
+		t.Fatalf("refused: %+v, want one browser action", got)
+	}
+	// Nothing to triage: no browser action either.
+	if got := triageActions(nil, "file:///x", open, true, false); len(got) != 0 {
+		t.Fatalf("suppressed in source: %+v, want none", got)
+	}
 }
 
 func TestServerMarksEditedFindingLines(t *testing.T) {

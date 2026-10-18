@@ -254,6 +254,7 @@ import { defaultDevicePreset, normalizeUserCode, userCodesMatch } from '@/lib/de
 
 const PRESET_LABELS: Record<DeviceLoginPreset, { title: string; hint: string }> = {
   cli: { title: 'CLI', hint: 'Upload scans, check gates and secrets, read findings. Cannot triage or change settings.' },
+  triage: { title: 'Read-only + triage', hint: 'Read everything, and accept, dismiss or dispute findings from the editor. Triage also needs the org admin role.' },
   'read-only': { title: 'Read-only', hint: 'Read findings, coverage and gates. Changes nothing.' },
 }
 const EXPIRY_DAYS = [30, 90, 180, 365]

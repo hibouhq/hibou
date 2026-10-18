@@ -203,6 +203,9 @@ type apiRepo struct {
 	Name          string `json:"name"`
 	Provider      string `json:"provider"`
 	DefaultBranch string `json:"default_branch"`
+	// ViewerCanTriage is nil on servers that predate it: triage actions are
+	// then offered and a refusal points to the browser.
+	ViewerCanTriage *bool `json:"viewer_can_triage"`
 }
 
 type apiSnapshot struct {

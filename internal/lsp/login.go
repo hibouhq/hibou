@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/devicelogin"
 )
 
@@ -37,6 +38,8 @@ type loginResult struct {
 	TokenName string `json:"tokenName,omitempty"`
 	User      string `json:"user,omitempty"`
 	ExpiresAt string `json:"expiresAt,omitempty"`
+	// Preset is the access approved in the browser ("read-only", "triage").
+	Preset string `json:"preset,omitempty"`
 }
 
 // errorUnsupported tells the client to fall back to pasting a token.
@@ -61,7 +64,15 @@ func (s *Server) loginStart(ctx context.Context) (*loginStartResult, error) {
 	}
 
 	dc := &devicelogin.Client{Server: server, HTTPClient: &http.Client{Timeout: 15 * time.Second}}
-	auth, err := dc.RequestCode(ctx, devicelogin.Request{ClientID: clientID, ClientName: name, Preset: "read-only"})
+	// Ask for triage: the approval page preselects read-only for IDEs, so the
+	// user opts in to triage there. A server older than the triage preset
+	// answers invalid_scope; read-only is what those servers offer IDEs.
+	req := devicelogin.Request{ClientID: clientID, ClientName: name, Preset: string(apitoken.PresetTriage)}
+	auth, err := dc.RequestCode(ctx, req)
+	if errors.Is(err, devicelogin.ErrInvalidScope) {
+		req.Preset = string(apitoken.PresetReadOnly)
+		auth, err = dc.RequestCode(ctx, req)
+	}
 	if errors.Is(err, devicelogin.ErrUnsupported) {
 		return nil, &rpcError{Code: codeLoginUnsupported, Message: err.Error()}
 	}
@@ -119,7 +130,7 @@ func (s *Server) loginWait(reqCtx, sessionCtx context.Context) (*loginResult, er
 	s.resetWorkspaces()
 	go s.refreshAll(sessionCtx, true)
 
-	res := &loginResult{Token: tok.AccessToken, TokenName: tok.TokenName, User: tok.User}
+	res := &loginResult{Token: tok.AccessToken, TokenName: tok.TokenName, User: tok.User, Preset: tok.Preset}
 	if tok.ExpiresIn > 0 {
 		res.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).UTC().Format(time.RFC3339)
 	}

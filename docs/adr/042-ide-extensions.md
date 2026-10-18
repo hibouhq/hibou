@@ -33,10 +33,13 @@ Implementation notes (2026-10-13):
   - §5 "live refresh over `/ws`" is polling instead: `/ws` rejects API tokens
     by design. The server checks local `HEAD` every 5 s and hibou every
     `pollSeconds` (default 120 s, minimum 30 s).
-  - §5 phase-2 triage needs `triage:write` and the org admin role. The
-    `read-only` preset the IDE requests has neither, so the IDE falls back to
-    opening the finding in the browser on 403. An opt-in triage preset on the
-    device-approval page is an ADR-043 follow-up.
+  - §5 phase-2 triage needs `triage:write` and the org admin role. The IDEs
+    request the `triage` preset (read-only plus `triage:write`); the approval
+    page preselects `read-only`, so triage is an explicit opt-in (ADR-043).
+    The repository response carries `viewer_can_triage` (admin role after any
+    login-token cap, and `triage:write` for a token); when it is false the
+    triage quick fixes are replaced by "triage in the browser". A 403 still
+    points to the browser and hides the actions for the session.
   - The suppression quick fix inserts the directive as an LSP 3.18 snippet
     edit with the cursor on the justification when the client supports it;
     otherwise the client asks for the justification first (`hibou.suppress`).
@@ -330,8 +333,8 @@ queries MCP, under the same scopes.
 2. **Snapshot-by-ancestor endpoint.** The client searches the 300 most recent
    snapshots of the branch, then of the default branch. Revisit
    `?ancestor_of=<sha>` if long-lived branches outrun that window.
-3. **Device-flow approval scope UI.** Resolved by ADR-043 for phase 1
-   (`read-only` preset). Open for phase 2: an opt-in triage preset.
+3. **Device-flow approval scope UI.** Resolved by ADR-043: `read-only` for
+   phase 1, plus the opt-in `triage` preset for phase 2.
 4. ~~**Go LSP protocol types.**~~ Resolved: hand-written subset
    (`internal/lsp/protocol.go`, `jsonrpc.go`).
 5. ~~**Repository layout.**~~ Resolved: separate repository

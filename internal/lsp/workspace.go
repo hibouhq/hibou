@@ -625,6 +625,15 @@ func (w *workspace) fileFindings(rel string) (snap *pickedSnapshot, findings []a
 	return w.snapshot, findings
 }
 
+// canTriage reports whether the server said this sign-in may triage the
+// repository's findings. Unknown (older server, repo not loaded) counts as
+// yes, so the actions stay and a refusal points to the browser.
+func (w *workspace) canTriage() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.repoInfo.ViewerCanTriage == nil || *w.repoInfo.ViewerCanTriage
+}
+
 func (w *workspace) finding(fingerprint string) (apiFinding, *repoRef, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

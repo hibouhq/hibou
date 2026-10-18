@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,6 +97,19 @@ func TestRequestCodeOldServer(t *testing.T) {
 	c := &Client{Server: srv.URL}
 	if _, err := c.RequestCode(context.Background(), Request{ClientID: ClientCLI}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("err = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestRequestCodeUnknownScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_scope","error_description":"scope must be cli or read-only"}`))
+	}))
+	defer srv.Close()
+	c := &Client{Server: srv.URL}
+	_, err := c.RequestCode(context.Background(), Request{ClientID: ClientVSCode, Preset: "triage"})
+	if !errors.Is(err, ErrInvalidScope) || !strings.Contains(err.Error(), "cli or read-only") {
+		t.Fatalf("err = %v, want ErrInvalidScope with the server's description", err)
 	}
 }
 

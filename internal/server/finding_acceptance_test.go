@@ -537,3 +537,57 @@ func TestApplyReachabilityGoSafeMonotonic(t *testing.T) {
 		t.Fatalf("enrichment must promote not_reachable→reachable, got %q", got)
 	}
 }
+
+func TestRepoDetailViewerCanTriage(t *testing.T) {
+	t.Parallel()
+
+	srv, org, admin, viewer := newDiscoveryTestServer(t)
+	repo := createUploadTestRepository(t, srv, org)
+	scoped := func(level apitoken.AccessLevel) *internalauth.TokenAuth {
+		return &internalauth.TokenAuth{Scoped: true, Scope: apitoken.Scope{
+			Org:         org.Slug,
+			Repos:       apitoken.RepoSelector{Mode: apitoken.RepoAll},
+			Permissions: map[apitoken.Capability]apitoken.AccessLevel{apitoken.CapTriage: level, apitoken.CapVulnerabilities: apitoken.AccessRead},
+		}}
+	}
+	cases := []struct {
+		name  string
+		user  *store.User
+		token *internalauth.TokenAuth
+		want  bool
+	}{
+		{"admin session", admin, nil, true},
+		{"viewer session", viewer, nil, false},
+		{"admin, triage:read token", admin, scoped(apitoken.AccessRead), false},
+		{"admin, triage:write token", admin, scoped(apitoken.AccessWrite), true},
+		{"viewer, triage:write token", viewer, scoped(apitoken.AccessWrite), false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/repo", nil)
+		ctx := internalauth.WithUser(req.Context(), tc.user)
+		if tc.token != nil {
+			ctx = internalauth.WithTokenAuth(ctx, tc.token)
+		}
+		routeCtx := chi.NewRouteContext()
+		routeCtx.URLParams.Add("provider", "github")
+		routeCtx.URLParams.Add("slug", org.Slug)
+		routeCtx.URLParams.Add("repoSlug", repo.Slug)
+		req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, routeCtx))
+		rec := httptest.NewRecorder()
+		srv.handleGetRepo(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: GET repo = %d %s", tc.name, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data struct {
+				ViewerCanTriage bool `json:"viewer_can_triage"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Data.ViewerCanTriage != tc.want {
+			t.Errorf("%s: viewer_can_triage = %v, want %v", tc.name, body.Data.ViewerCanTriage, tc.want)
+		}
+	}
+}

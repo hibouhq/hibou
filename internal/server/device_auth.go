@@ -51,21 +51,30 @@ var deviceClients = map[string]struct {
 	devicelogin.ClientIntelliJ: {label: "IntelliJ plugin", preset: apitoken.PresetReadOnly},
 }
 
-// devicePresetRank orders the presets by how much they let a token change:
-// read-only writes nothing, cli uploads. Approval may keep or lower the
-// requested preset, never raise it (a phished user who clicks through should at
-// worst hand out what the device asked for, and IDEs ask for read-only).
-var devicePresetRank = map[apitoken.Preset]int{
-	apitoken.PresetReadOnly: 0,
-	apitoken.PresetCLI:      1,
+// deviceNarrowings lists, for each preset a device may request, the presets
+// approval may turn it into: the request itself or something that changes
+// less. Approval may keep or lower the requested preset, never raise it (a
+// phished user who clicks through should at worst hand out what the device
+// asked for). cli and triage are not comparable (one uploads, the other
+// changes finding state), so neither narrows to the other.
+var deviceNarrowings = map[apitoken.Preset][]apitoken.Preset{
+	apitoken.PresetCLI:      {apitoken.PresetCLI, apitoken.PresetReadOnly},
+	apitoken.PresetTriage:   {apitoken.PresetTriage, apitoken.PresetReadOnly},
+	apitoken.PresetReadOnly: {apitoken.PresetReadOnly},
 }
+
+// devicePresetOrder is the order the approval page lists presets in.
+var devicePresetOrder = []apitoken.Preset{apitoken.PresetCLI, apitoken.PresetTriage, apitoken.PresetReadOnly}
 
 // devicePresetWithin reports whether approving `approved` stays within what
 // the device requested. Unknown presets are never within.
 func devicePresetWithin(approved, requested apitoken.Preset) bool {
-	a, okA := devicePresetRank[approved]
-	r, okR := devicePresetRank[requested]
-	return okA && okR && a <= r
+	for _, allowed := range deviceNarrowings[requested] {
+		if allowed == approved {
+			return true
+		}
+	}
+	return false
 }
 
 // Failed user-code lookups are limited here, always on and independent of the
@@ -269,7 +278,7 @@ func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 	if requested := strings.TrimSpace(input.Scope); requested != "" {
 		preset = apitoken.Preset(requested)
 		if _, ok := preset.Permissions(); !ok {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_scope", "scope must be cli or read-only")
+			writeOAuthError(w, http.StatusBadRequest, devicelogin.ErrCodeInvalidScope, "scope must be cli, triage or read-only")
 			return
 		}
 	}
@@ -649,8 +658,8 @@ func (s *Server) handleDeviceLookup(w http.ResponseWriter, r *http.Request) {
 
 	// Only the requested preset and lower ones are offered (and accepted by
 	// approve): the page can narrow what a device asked for, never widen it.
-	presets := make([]devicePresetView, 0, 2)
-	for _, preset := range []apitoken.Preset{apitoken.PresetCLI, apitoken.PresetReadOnly} {
+	presets := make([]devicePresetView, 0, len(devicePresetOrder))
+	for _, preset := range devicePresetOrder {
 		if !devicePresetWithin(preset, apitoken.Preset(request.RequestedPreset)) {
 			continue
 		}
@@ -713,7 +722,7 @@ func (s *Server) handleDeviceApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	preset := apitoken.Preset(input.Preset)
 	if _, ok := preset.Permissions(); !ok {
-		api.JSONError(w, http.StatusBadRequest, "preset must be cli or read-only")
+		api.JSONError(w, http.StatusBadRequest, "preset must be cli, triage or read-only")
 		return
 	}
 	expiresAt := time.Now().Add(deviceDefaultTokenLifetime)

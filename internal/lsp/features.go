@@ -488,6 +488,7 @@ func (s *Server) codeActions(p codeActionParams) []codeAction {
 	snippets := s.caps.Workspace.WorkspaceEdit.SnippetEditSupport && s.caps.Workspace.WorkspaceEdit.DocumentChanges
 	s.mu.Unlock()
 
+	canTriage := d.ws.canTriage()
 	seen := map[string]bool{}
 	var actions []codeAction
 	for _, diag := range p.Context.Diagnostics {
@@ -521,25 +522,44 @@ func (s *Server) codeActions(p codeActionParams) []codeAction {
 					})
 				}
 			}
-			actions = append(actions,
-				triageAction(diags, d.uri, fp, "accept", "hibou: accept the risk…"),
-				triageAction(diags, d.uri, fp, "false_positive", "hibou: mark as false positive…"))
 		}
-		if f.Acceptance != nil {
-			actions = append(actions, triageAction(diags, d.uri, fp, "reopen", "hibou: reopen (remove the acceptance)"))
-		}
-		if f.Status == "suppressed" {
-			if f.Dispute == nil {
-				actions = append(actions, triageAction(diags, d.uri, fp, "dispute", "hibou: dispute this suppression…"))
-			} else {
-				actions = append(actions, triageAction(diags, d.uri, fp, "undispute", "hibou: withdraw the dispute"))
-			}
-		}
+		actions = append(actions, triageActions(diags, d.uri, f, inSource, canTriage)...)
 	}
 	if actions == nil {
 		return []codeAction{}
 	}
 	return actions
+}
+
+// triageActions lists the triage changes that apply to f. When the server said
+// this sign-in cannot triage here (not an org admin, or a token without
+// triage:write), they are replaced by one action that opens the finding in the
+// browser, rather than offering changes the server is certain to refuse.
+func triageActions(diags []diagnostic, uri string, f apiFinding, inSource, canTriage bool) []codeAction {
+	fp := f.Fingerprint
+	var actions []codeAction
+	if f.Status == "detected" && f.Acceptance == nil && !inSource {
+		actions = append(actions,
+			triageAction(diags, uri, fp, "accept", "hibou: accept the risk…"),
+			triageAction(diags, uri, fp, "false_positive", "hibou: mark as false positive…"))
+	}
+	if f.Acceptance != nil {
+		actions = append(actions, triageAction(diags, uri, fp, "reopen", "hibou: reopen (remove the acceptance)"))
+	}
+	if f.Status == "suppressed" {
+		if f.Dispute == nil {
+			actions = append(actions, triageAction(diags, uri, fp, "dispute", "hibou: dispute this suppression…"))
+		} else {
+			actions = append(actions, triageAction(diags, uri, fp, "undispute", "hibou: withdraw the dispute"))
+		}
+	}
+	if canTriage || len(actions) == 0 {
+		return actions
+	}
+	return []codeAction{{
+		Title: "hibou: triage in the browser (this IDE sign-in cannot triage here)", Kind: "quickfix", Diagnostics: diags,
+		Command: &command{Title: "Triage in hibou", Command: cmdOpenFinding, Arguments: []any{fp}},
+	}}
 }
 
 func triageAction(diags []diagnostic, uri, fp, action, title string) codeAction {
@@ -690,6 +710,11 @@ func (s *Server) triage(ctx, sessionCtx context.Context, p triageParams) (*triag
 		go s.refreshWorkspace(sessionCtx, ws, true)
 		return &triageResult{OK: true, Message: "Saved in hibou."}, nil
 	case isStatus(err, http.StatusForbidden):
+		// Hide the actions from now on, as if the server had said so.
+		cannot := false
+		ws.mu.Lock()
+		ws.repoInfo.ViewerCanTriage = &cannot
+		ws.mu.Unlock()
 		return &triageResult{Message: "Your IDE token cannot triage here: it needs the triage:write permission and the org admin role. Continue in the browser.", WebURL: link}, nil
 	case errors.As(err, &apiErr) && (apiErr.Status == http.StatusBadRequest || apiErr.Status == http.StatusUnprocessableEntity):
 		return &triageResult{Message: "hibou refused the change: " + apiErr.Message, WebURL: link}, nil

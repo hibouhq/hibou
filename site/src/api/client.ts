@@ -1043,7 +1043,7 @@ export interface TokenScope {
 export type ApiKeyApprovalStatus = 'pending' | 'approved' | 'rejected'
 
 // ADR-043 device login, as the /device approval page sees it.
-export type DeviceLoginPreset = 'cli' | 'read-only'
+export type DeviceLoginPreset = 'cli' | 'triage' | 'read-only'
 
 export interface DeviceLoginOrgReach {
   provider: string

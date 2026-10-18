@@ -176,7 +176,8 @@ codes so a standard OAuth client library can drive them:
    address, and how long ago it was started, with the warning *"Approve only
    if you started this login yourself in the last few minutes."*
 4. The user picks:
-   - **Preset**: `cli` or `read-only`, preselected from the request. There is
+   - **Preset**: `cli`, `triage` or `read-only`, among those the request
+     allows; preselected from the request for the CLI, `read-only` otherwise. There is
      no org picker: the token covers the user's memberships (§4). Anyone who
      wants a single-org or custom scope creates one under Settings › API Keys.
    - **Expiry**: 90 days by default, at most one year.
@@ -193,6 +194,7 @@ codes so a standard OAuth client library can drive them:
 | Preset | Permissions | Use |
 |---|---|---|
 | `cli` | `uploads:write`, `secrets:read`, `vulnerabilities:read`, `coverage:read`, `components:read`, `quality_gates:read`, everything else `none`; repos `all` | `hibou upload`, `scan`, `analyze`, `release`, `gate`, `secret-scan`, `repos`, `status` |
+| `triage` | `read-only` plus `triage:write` | IDE extensions (ADR-042 phase 2): accept, dismiss and dispute findings from the editor. The triage endpoints also require the org admin role. |
 | `read-only` | ADR-020 "read-only agent" preset | IDE extensions (ADR-042 phase 1), MCP, browsing |
 
 The minted token is **user-owned**, named `CLI — <device name>` (or
@@ -389,9 +391,12 @@ API of `/auth/device/code` and `/auth/device/token` is unchanged.
   device (unverified), and the requester IP as best effort. This supersedes §3
   item 2.
 - **Presets can only go down.** The page offers the requested preset and lower
-  ones (`read-only` < `cli`); approve refuses a higher preset with 400. The page
-  preselects `read-only` unless the request came from `hibou-cli`. IDE clients
-  still default to `read-only`.
+  ones (`cli` lowers to `read-only`, `triage` lowers to `read-only`; `cli` and
+  `triage` are not comparable); approve refuses anything else with 400. The
+  page preselects `read-only` unless the request came from `hibou-cli`. The
+  IDEs request `triage`, so triage is an explicit opt-in on the page; against
+  a server without the preset (`invalid_scope`) they retry with `read-only`.
+  A request without a scope still defaults to `read-only` for IDE clients.
 - **Key cap at mint time.** The per-user API key cap is re-checked inside the
   transaction that mints the key, under a per-user advisory lock. Over the cap,
   the request is spent and the poll gets `access_denied`.

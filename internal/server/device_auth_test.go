@@ -282,6 +282,12 @@ func TestDevicePresetWithin(t *testing.T) {
 		{apitoken.PresetReadOnly, apitoken.PresetCLI, true},
 		{apitoken.PresetCLI, apitoken.PresetCLI, true},
 		{apitoken.PresetCLI, apitoken.PresetReadOnly, false},
+		{apitoken.PresetTriage, apitoken.PresetTriage, true},
+		{apitoken.PresetReadOnly, apitoken.PresetTriage, true},
+		{apitoken.PresetTriage, apitoken.PresetReadOnly, false},
+		// cli uploads, triage changes finding state: neither narrows to the other.
+		{apitoken.PresetCLI, apitoken.PresetTriage, false},
+		{apitoken.PresetTriage, apitoken.PresetCLI, false},
 		{"admin", apitoken.PresetCLI, false},
 		{apitoken.PresetReadOnly, "", false},
 	}
@@ -329,6 +335,59 @@ func TestDeviceApproveCannotRaiseRequestedPreset(t *testing.T) {
 	}
 	if code, body := pollDevice(t, srv, cli.DeviceCode, devicelogin.ClientCLI); code != http.StatusOK || body["preset"] != "read-only" {
 		t.Fatalf("poll after lowered approval = %d %v", code, body)
+	}
+}
+
+func TestDeviceIDETriagePresetIsOptIn(t *testing.T) {
+	t.Parallel()
+	srv, _, admin, _ := newDeviceTestServer(t)
+
+	// The IDEs ask for triage; the page offers it next to read-only.
+	auth := startDeviceLogin(t, srv, devicelogin.ClientVSCode, "triage")
+	lookup := httptest.NewRecorder()
+	srv.handleDeviceLookup(lookup, asUser(deviceJSON(t, http.MethodGet, "/api/v1/auth/device?user_code="+url.QueryEscape(auth.UserCode), nil), admin))
+	if lookup.Code != http.StatusOK {
+		t.Fatalf("lookup: %d %s", lookup.Code, lookup.Body.String())
+	}
+	var view struct {
+		Data deviceRequestView `json:"data"`
+	}
+	if err := json.Unmarshal(lookup.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	var offered []string
+	for _, p := range view.Data.Presets {
+		offered = append(offered, p.Key)
+	}
+	if strings.Join(offered, ",") != "triage,read-only" {
+		t.Fatalf("triage request offers %v, want [triage read-only]", offered)
+	}
+
+	raise := httptest.NewRecorder()
+	srv.handleDeviceApprove(raise, asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{UserCode: auth.UserCode, Preset: "cli"}), admin))
+	if raise.Code != http.StatusBadRequest {
+		t.Fatalf("approving cli for a triage request = %d, want 400", raise.Code)
+	}
+
+	approve := httptest.NewRecorder()
+	srv.handleDeviceApprove(approve, asUser(deviceJSON(t, http.MethodPost, "/api/v1/auth/device/approve", deviceDecisionRequest{UserCode: auth.UserCode, Preset: "triage"}), admin))
+	if approve.Code != http.StatusOK {
+		t.Fatalf("approve triage: %d %s", approve.Code, approve.Body.String())
+	}
+	code, body := pollDevice(t, srv, auth.DeviceCode, devicelogin.ClientVSCode)
+	if code != http.StatusOK || body["preset"] != "triage" {
+		t.Fatalf("poll = %d %v, want a triage token", code, body)
+	}
+	key, err := srv.queries.GetAPIKeyByHash(context.Background(), store.HashAPIKey(body["access_token"].(string)))
+	if err != nil || key == nil {
+		t.Fatalf("minted key not found: %v", err)
+	}
+	var scope apitoken.Scope
+	if err := json.Unmarshal(key.Scopes, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if scope.Permissions[apitoken.CapTriage] != apitoken.AccessWrite || scope.Permissions[apitoken.CapUploads] != apitoken.AccessRead {
+		t.Fatalf("triage token permissions = %v, want triage:write and nothing else above read", scope.Permissions)
 	}
 }
 

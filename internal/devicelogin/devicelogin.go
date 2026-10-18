@@ -48,14 +48,20 @@ var (
 	ErrDenied = errors.New("login request was denied in the browser")
 	// ErrExpired means the code expired, or was already used, before approval.
 	ErrExpired = errors.New("login code expired before it was approved")
+	// ErrInvalidScope means the server does not know the requested preset
+	// (a server older than the preset). Callers may retry with an older one.
+	ErrInvalidScope = errors.New("this hibou server does not offer the requested access")
 )
+
+// ErrCodeInvalidScope is RFC 6749's invalid_scope error code.
+const ErrCodeInvalidScope = "invalid_scope"
 
 // CodeRequest is the body of POST /api/v1/auth/device/code.
 type CodeRequest struct {
 	ClientID   string `json:"client_id"`
 	ClientName string `json:"client_name,omitempty"`
-	// Scope is the requested preset ("cli" or "read-only"). The user can
-	// change it on the approval page.
+	// Scope is the requested preset ("cli", "triage" or "read-only"). The
+	// user can lower it on the approval page.
 	Scope string `json:"scope,omitempty"`
 }
 
@@ -126,7 +132,8 @@ func (c *Client) endpoint(path string) string {
 }
 
 // RequestCode starts a device login. It returns ErrUnsupported when the
-// server predates ADR-043.
+// server predates ADR-043, and an error wrapping ErrInvalidScope when the
+// server does not know the requested preset.
 func (c *Client) RequestCode(ctx context.Context, req Request) (*Authorization, error) {
 	status, body, err := c.post(ctx, c.endpoint("code"), CodeRequest{
 		ClientID:   req.ClientID,
@@ -139,6 +146,8 @@ func (c *Client) RequestCode(ctx context.Context, req Request) (*Authorization, 
 	switch {
 	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
 		return nil, ErrUnsupported
+	case status == http.StatusBadRequest && oauthErrorCode(body) == ErrCodeInvalidScope:
+		return nil, fmt.Errorf("%w: %w", ErrInvalidScope, serverError(status, body))
 	case status != http.StatusOK:
 		return nil, serverError(status, body)
 	}
@@ -238,6 +247,14 @@ func (c *Client) post(ctx context.Context, url string, payload any) (int, []byte
 		return 0, nil, err
 	}
 	return resp.StatusCode, body, nil
+}
+
+func oauthErrorCode(body []byte) string {
+	var oauthErr ErrorResponse
+	if json.Unmarshal(body, &oauthErr) != nil {
+		return ""
+	}
+	return oauthErr.Error
 }
 
 // serverError turns an error body (OAuth or hibou's {"error":{"message"}}

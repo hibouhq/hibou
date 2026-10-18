@@ -12,6 +12,11 @@ const (
 	// PresetReadOnly matches the web UI's "Read-only agent" preset
 	// (site/src/lib/tokenPresets.ts): observe everything, change nothing.
 	PresetReadOnly Preset = "read-only"
+	// PresetTriage is read-only plus triage:write: what the IDEs ask for, so
+	// a user who opts in on the approval page can accept, dismiss and dispute
+	// findings from the editor (ADR-042 §5). The server still requires the org
+	// admin role for those changes.
+	PresetTriage Preset = "triage"
 )
 
 // Permissions returns the preset's grants and whether the preset is known.
@@ -28,17 +33,25 @@ func (p Preset) Permissions() (map[Capability]AccessLevel, bool) {
 			CapQualityGates:    AccessRead,
 		}, true
 	case PresetReadOnly:
-		return map[Capability]AccessLevel{
-			CapCoverage:        AccessRead,
-			CapVulnerabilities: AccessRead,
-			CapComponents:      AccessRead,
-			CapTriage:          AccessRead,
-			CapQualityGates:    AccessRead,
-			CapSecrets:         AccessRead,
-			CapUploads:         AccessRead,
-		}, true
+		return readOnlyPermissions(), true
+	case PresetTriage:
+		permissions := readOnlyPermissions()
+		permissions[CapTriage] = AccessWrite
+		return permissions, true
 	default:
 		return nil, false
+	}
+}
+
+func readOnlyPermissions() map[Capability]AccessLevel {
+	return map[Capability]AccessLevel{
+		CapCoverage:        AccessRead,
+		CapVulnerabilities: AccessRead,
+		CapComponents:      AccessRead,
+		CapTriage:          AccessRead,
+		CapQualityGates:    AccessRead,
+		CapSecrets:         AccessRead,
+		CapUploads:         AccessRead,
 	}
 }
 

@@ -91,8 +91,8 @@ definitions:
         type: string
       scope:
         description: |-
-          Scope is the requested preset ("cli" or "read-only"). The user can
-          change it on the approval page.
+          Scope is the requested preset ("cli", "triage" or "read-only"). The
+          user can lower it on the approval page.
         type: string
     type: object
   devicelogin.ErrorResponse:

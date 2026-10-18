@@ -10538,7 +10538,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "scope": {
-                    "description": "Scope is the requested preset (\"cli\" or \"read-only\"). The user can\nchange it on the approval page.",
+                    "description": "Scope is the requested preset (\"cli\", \"triage\" or \"read-only\"). The\nuser can lower it on the approval page.",
                     "type": "string"
                 }
             }

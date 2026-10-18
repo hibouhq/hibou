@@ -20,6 +20,8 @@ describe('device login helpers', () => {
     expect(defaultDevicePreset('hibou-cli', 'cli', ['cli', 'read-only'])).toBe('cli')
     expect(defaultDevicePreset('hibou-vscode', 'cli', ['cli', 'read-only'])).toBe('read-only')
     expect(defaultDevicePreset('hibou-intellij', 'read-only', ['read-only'])).toBe('read-only')
+    expect(defaultDevicePreset('hibou-vscode', 'triage', ['triage', 'read-only'])).toBe('read-only')
+    expect(defaultDevicePreset('hibou-intellij', 'triage', ['triage', 'read-only'])).toBe('read-only')
     expect(defaultDevicePreset('someone-else', 'cli', ['cli', 'read-only'])).toBe('read-only')
   })
 })

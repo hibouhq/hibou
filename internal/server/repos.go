@@ -16,7 +16,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/comparison"
 	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/license"
@@ -509,6 +511,8 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	if canAudit, auditErr := s.canViewRepoAudit(r, role, repo); auditErr == nil {
 		resp.ViewerCanAudit = canAudit
 	}
+	resp.ViewerCanTriage = role == "admin" &&
+		auth.RequireCapability(r.Context(), apitoken.CapTriage, apitoken.AccessWrite, org.Slug, repo.Slug) == nil
 	api.JSON(w, http.StatusOK, resp)
 }
 
@@ -525,6 +529,11 @@ type repoVisibilityResponse struct {
 	// text.
 	HTMLURL        string `json:"html_url,omitempty"`
 	ViewerCanAudit bool   `json:"viewer_can_audit"`
+	// ViewerCanTriage tells clients whether the caller may accept, reopen
+	// or dispute this repo's findings, with the checks those endpoints run:
+	// org admin role (after any login-token cap) and, for a token,
+	// triage:write. The IDEs hide triage actions that would be refused.
+	ViewerCanTriage bool `json:"viewer_can_triage"`
 }
 
 func (s *Server) repoDetailResponse(ctx context.Context, repo *store.Repository) repoVisibilityResponse {
