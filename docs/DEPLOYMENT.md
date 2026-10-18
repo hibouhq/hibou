@@ -58,20 +58,32 @@ Use a GitHub App for org-wide repo access, webhook delivery, and commit status u
 6. Webhook secret: generate one with `openssl rand -hex 32`
 7. Click **Create GitHub App**
 
-### Set permissions
+### Choose a tier and set permissions
 
-| Permission | Access | Why |
-|-----------|--------|-----|
-| Repository → Contents | Read-only | Read files, branches |
-| Repository → Metadata | Read-only | Discover repos |
-| Repository → Pull requests | Read & write | Post PR check results |
-| Repository → Commit statuses | Read & write | Set CI status |
-| Organization → Members | Read-only | Org membership info; also answers the `auth.allowed_orgs` sign-in allowlist |
+Pick the least Hibou needs (ADR-052). The tier decides the App's
+permissions, and Hibou never asks a token for more than the tier allows,
+even if the App was granted more.
+
+| Tier | What Hibou does on GitHub | App permissions |
+|---|---|---|
+| `read` | Nothing visible: scans and inventory; results stay in Hibou | Contents: Read · Metadata: Read · Members (org): Read |
+| `report` (recommended) | Quality-gate checks and statuses, one comment per pull request | `read`, plus Checks: Read and write · Commit statuses: Read and write · Pull requests: Read and write |
+| `propose` | Opens pull requests on `hibou/*` branches (onboarding, fixes) | `report`, plus Contents: Read and write |
+
+Set the same tier in Hibou: `HIBOU_FORGE_N_TIER=report` (or `tier: report`
+under the forge in the Helm values). Without it Hibou starts, warns, and caps
+tokens only by the App's own permissions.
+
+Members: Read also answers the `auth.allowed_orgs` sign-in allowlist.
 
 Login asks the user only for `read:user user:email`. Hibou never requests the
 `repo` scope: repositories are read with the App installation token, and when
 the Client ID is the GitHub App's own (recommended), GitHub ignores OAuth scopes
 and applies the App permissions above.
+
+Every installation token Hibou mints is limited to the one repository and the
+permissions of the operation that needs it, and Hibou refuses to write to any
+branch outside `hibou/`.
 
 ### Generate a private key
 
@@ -91,8 +103,133 @@ Collect these values from the App settings page:
 
 1. App settings page → **Install App**
 2. Select your organization
-3. Choose **All repositories** or the subset you want
+3. Choose **Only select repositories** and pick the repositories Hibou should
+   analyse. An App installed on all repositories also reaches every
+   repository created later.
 4. Click **Install**
+
+Add repositories later from the same page (**Configure**).
+
+### With the `propose` tier: confine the App to `hibou/*` branches
+
+Hibou only writes to `hibou/*` branches, but that is Hibou's code. A forge rule
+makes it hold even if the App's private key is stolen: the App can then only
+open pull requests on `hibou/*` branches, which a person approves. Do this once,
+as a GitHub admin; Hibou does not do it itself, because the permission it would
+need (Administration) could also remove the rule.
+
+| Your GitHub plan | Where | Covers new repositories |
+|---|---|---|
+| Team or Enterprise | One organization ruleset (Organization settings → Repository → Rulesets) | Yes |
+| Free | One ruleset per repository, public repositories only | No: repeat for each new public repository |
+| Free, private repositories | Not available | Use the `report` tier for those |
+
+Create two branch rulesets (Settings → Rules → Rulesets → New branch ruleset):
+
+1. **hibou-confine**
+   - Enforcement: Active
+   - Bypass list: the Write, Maintain and Admin repository roles. People with
+     write access keep pushing their branches as usual; an App holds no
+     repository role, so the rule binds Hibou's App (and any other App or
+     deploy key not listed)
+   - Target branches: Include all branches; Exclude by pattern `hibou/**`
+   - Rules: Restrict creations, Restrict updates, Restrict deletions, Block
+     force pushes
+2. **default-branch**
+   - Enforcement: Active
+   - Bypass list: Repository admin (if you push to the default branch yourself)
+   - Target branches: Include default branch
+   - Rules: Restrict deletions, Block force pushes, Require a pull request
+     before merging (1 approval)
+
+The same rulesets as JSON, for `gh api -X POST repos/OWNER/REPO/rulesets --input file.json`:
+
+```json
+{
+  "name": "hibou-confine",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    { "actor_id": 4, "actor_type": "RepositoryRole", "bypass_mode": "always" },
+    { "actor_id": 2, "actor_type": "RepositoryRole", "bypass_mode": "always" },
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+  ],
+  "conditions": { "ref_name": { "include": ["~ALL"], "exclude": ["refs/heads/hibou/**"] } },
+  "rules": [
+    { "type": "creation" }, { "type": "update" }, { "type": "deletion" }, { "type": "non_fast_forward" }
+  ]
+}
+```
+
+Role ids: 4 is Write, 2 Maintain, 5 Admin; check them in the ruleset page's
+bypass list, which shows the names.
+
+### Check the confinement
+
+Hibou checks this itself, with Metadata: Read only. One minute after startup,
+then every 6 hours, it asks the forge, for each repository its identity can
+write to, which rules apply to a branch outside `hibou/*`, to the default
+branch and to a `hibou/*` branch, and whether its identity may bypass them.
+It reports:
+
+| Code | Severity | Meaning, and the fix |
+|---|---|---|
+| `other_branches_unrestricted` | error | Hibou could create or push branches other than `hibou/*`. Add **hibou-confine** |
+| `identity_can_bypass` | error | The App is on a ruleset's bypass list. Remove it |
+| `identity_is_admin` | error | The App holds Administration: write, or the Forgejo token's user is an admin: it can delete the rules. Remove the permission, or use a user with Write access only |
+| `default_branch_unprotected` | error | Hibou could push to the default branch. Add **default-branch** |
+| `identity_can_bypass_via_pull_requests` | warning | The App may bypass a ruleset through pull requests. Remove it from the bypass list |
+| `hibou_branches_blocked` | warning | A rule also covers `hibou/*`: onboarding and fix pull requests will fail. Exclude `hibou/**` from it |
+| `classic_protection_unverifiable` | info | The default branch uses classic branch protection, whose push list Hibou cannot read. Prefer the ruleset |
+| `unverifiable` | info | Hibou could not read the rules |
+| `no_write_permission` | ok | Confined, or nothing to confine (no Contents: write) |
+
+The results go to:
+
+- the server log, one line per repository to fix;
+- the metric `hibou_forge_unconfined_repositories{forge="…"}`: alert on any
+  value above zero;
+- `GET /api/v1/instance/forges/confinement` for instance admins, with
+  `?refresh=true` to check again after a fix.
+
+### Forgejo
+
+Hibou supports the latest Forgejo release only (17 at the time of writing).
+Forgejo has no installable App: Hibou writes with a user token
+(`HIBOU_FORGE_N_TOKEN`).
+
+1. Create a dedicated user, for example `hibou-bot`, and give it Write
+   access only to the repositories Hibou should reach. Never make it an
+   admin of a repository, an organization or the site: an admin can delete
+   the protection rules below.
+2. Create its token with the scopes of the tier (`read:repository` and
+   `read:organization`, plus `write:repository` and `write:issue` for
+   `report` and `propose`). Choose **Specific repositories** to bind the
+   token to them as well.
+3. In each repository, Settings → Branches, add two protection rules, in
+   this order:
+   - `hibou/**`: Enable push, push allowlist `hibou-bot`;
+   - `**`: Enable push, push allowlist the maintainers (not `hibou-bot`).
+     It covers every other branch, the default branch included.
+
+   Forgejo applies the first rule that matches a branch, in the order the
+   Branches page lists them, so `hibou/**` must come first. Use `**`, not
+   `*`: in Forgejo patterns `*` stops at `/`, so `*` leaves `feature/x` open.
+
+Forgejo has no scope that posts statuses without allowing pushes, so these
+rules confine the token from `report` upwards.
+
+The check above works on Forgejo too. It reads, for each existing branch,
+whether the token can push. Branches that do not exist yet are covered only
+by the protection rules, which only an admin can read. With this setup the
+check therefore reports `unverifiable` for them. That is expected: do not
+grant admin to make it go away.
+
+### GitLab
+
+Hibou supports the latest GitLab release only. Its GitLab provider uses OAuth
+for sign-in and holds no server token, so it writes nothing to GitLab and has
+nothing to confine.
 
 ## Step 2: GitHub Connectivity
 
@@ -186,6 +323,7 @@ https://hibou.example.com/api/v1/webhooks/github
 |--------|---------------|
 | Session | `HIBOU_SESSION_SECRET` |
 | Forge (index N) | `HIBOU_FORGE_N_CLIENT_ID`, `HIBOU_FORGE_N_CLIENT_SECRET`, `HIBOU_FORGE_N_WEBHOOK_SECRET`, `HIBOU_FORGE_N_APP_ID`, `HIBOU_FORGE_N_PRIVATE_KEY` |
+| Forge (index N), not secret | `HIBOU_FORGE_N_TIER`: `read`, `report` or `propose` |
 | Database (external) | `url` (full `postgres://` connection string) |
 
 The forge key index (0, 1, ...) must match the forge's position in the `forges[]` array.

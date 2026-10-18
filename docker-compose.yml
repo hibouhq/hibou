@@ -22,7 +22,7 @@ services:
       retries: 5
 
   forgejo:
-    image: codeberg.org/forgejo/forgejo:9
+    image: codeberg.org/forgejo/forgejo:17
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     ports:
@@ -35,7 +35,7 @@ services:
       FORGEJO__server__HTTP_PORT: '3000'
       FORGEJO__service__DISABLE_REGISTRATION: 'false'
       FORGEJO__service__REQUIRE_SIGNIN_VIEW: 'false'
-      FORGEJO__oauth2__ENABLE: 'true'
+      FORGEJO__oauth2__ENABLED: 'true'
     volumes:
       - forgejo-data:/data
     healthcheck:

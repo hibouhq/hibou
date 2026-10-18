@@ -46,6 +46,11 @@ type GitHub struct {
 	// intermittently returned rate-limit errors.
 	tokenMu     sync.Mutex
 	ownerTokens map[string]ownerToken
+	// ownerInstallations caches each account's installation and its
+	// permissions (github_tokens.go).
+	ownerInstallations map[string]cachedInstallation
+	// tier caps what any token may ask for (ADR-052 §2).
+	tier Tier
 }
 
 type ownerToken struct {
@@ -79,6 +84,18 @@ func WithAppCredentials(appID int64, privateKey []byte) GitHubOption {
 // WithOrgMembershipScope requests read:org at login. Only needed when a
 // sign-in org allowlist is configured without App credentials: in App mode
 // membership is checked with the installation token instead.
+// WithTier caps the permissions of every installation token (ADR-052 §2).
+func WithTier(tier Tier) GitHubOption {
+	return func(g *GitHub) {
+		g.tier = tier
+	}
+}
+
+// Tier is the configured tier (TierUnset when none was chosen).
+func (g *GitHub) Tier() Tier {
+	return g.tier
+}
+
 func WithOrgMembershipScope() GitHubOption {
 	return func(g *GitHub) {
 		g.orgMembershipScope = true
@@ -260,6 +277,9 @@ func (g *GitHub) GetFileContent(ctx context.Context, owner, repo, filePath, ref 
 		return nil, err
 	}
 	if err := g.authorizeForOwner(ctx, request, owner); err != nil {
+		if errors.Is(err, ErrRepositoryNotFound) {
+			return nil, ErrFileNotFound
+		}
 		return nil, err
 	}
 
@@ -329,6 +349,9 @@ func (g *GitHub) ListTree(ctx context.Context, owner, repo, ref string) (*TreeLi
 }
 
 func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {
+	if err := CheckWriteBranch(branch); err != nil {
+		return err
+	}
 	sha, err := g.lookupContentSHA(ctx, owner, repo, filePath, branch)
 	if err != nil {
 		return err
@@ -352,6 +375,9 @@ func (g *GitHub) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, 
 }
 
 func (g *GitHub) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error {
+	if err := CheckWriteBranch(branch); err != nil {
+		return err
+	}
 	requestPath := fmt.Sprintf("/repos/%s/%s/git/refs", url.PathEscape(owner), url.PathEscape(repo))
 	return g.doJSONOwner(ctx, owner, http.MethodPost, requestPath, map[string]string{
 		"ref": "refs/heads/" + branch,
@@ -360,6 +386,9 @@ func (g *GitHub) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA 
 }
 
 func (g *GitHub) CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error) {
+	if err := CheckWriteBranch(opts.Head); err != nil {
+		return nil, err
+	}
 	requestPath := fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
 	var payload githubPullRequestResource
 	if err := g.doJSONOwner(ctx, owner, http.MethodPost, requestPath, map[string]string{
@@ -689,7 +718,7 @@ func (g *GitHub) IsOrgMember(ctx context.Context, token *oauth2.Token, login, or
 	}
 	hasUserToken := token != nil && token.AccessToken != ""
 	if g.isAppMode() {
-		installationToken, err := g.cachedInstallationToken(ctx, org)
+		installationToken, err := g.scopedInstallationToken(ctx, org, TokenScope{Permissions: map[string]string{"members": "read"}})
 		if err == nil && installationToken != "" {
 			return g.orgMemberStatus(ctx, installationToken, org, login)
 		}
@@ -1096,22 +1125,40 @@ func (g *GitHub) InstallationAccountIDs(ctx context.Context) (map[string]string,
 	return ids, nil
 }
 
-// createInstallationToken creates an access token for an installation.
+// createInstallationToken creates an access token with the installation's
+// full permissions, for account-level work (listing repositories, membership
+// verification). Repository work uses scopedInstallationToken.
 func (g *GitHub) createInstallationToken(ctx context.Context, installationID int64) (*githubInstallationToken, error) {
+	return g.createInstallationTokenWith(ctx, installationID, nil)
+}
+
+// createInstallationTokenWith creates an access token narrowed by request
+// (repositories and permissions); nil asks for the installation's full
+// permissions.
+func (g *GitHub) createInstallationTokenWith(ctx context.Context, installationID int64, request *installationTokenRequest) (*githubInstallationToken, error) {
 	jwt, err := g.generateAppJWT()
 	if err != nil {
 		return nil, err
 	}
 
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
-	req, err := g.newRequest(ctx, http.MethodPost, path, nil)
+	var body any
+	if request != nil && (len(request.Repositories) > 0 || len(request.Permissions) > 0) {
+		body = request
+	}
+	req, err := g.newRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", githubBearerPrefix+jwt)
 
 	var token githubInstallationToken
-	if err := g.do(req, &token); err != nil {
+	if status, err := g.doWithStatus(req, &token); err != nil {
+		if status == http.StatusUnprocessableEntity && request != nil && len(request.Repositories) > 0 {
+			// The repository is not part of the installation (or does not
+			// exist): the same answer a broad token would have got as 404.
+			return nil, fmt.Errorf("%w: %s not accessible to installation %d", ErrRepositoryNotFound, strings.Join(request.Repositories, ","), installationID)
+		}
 		return nil, fmt.Errorf("create installation token for %d: %w", installationID, err)
 	}
 
@@ -1308,6 +1355,9 @@ func (g *GitHub) lookupContentSHA(ctx context.Context, owner, repo, filePath, re
 		return "", err
 	}
 	if err := g.authorizeForOwner(ctx, request, owner); err != nil {
+		if errors.Is(err, ErrRepositoryNotFound) {
+			return "", nil
+		}
 		return "", err
 	}
 
@@ -1413,6 +1463,8 @@ type githubInstallation struct {
 		Type  string `json:"type"`
 	} `json:"account"`
 	SuspendedAt *time.Time `json:"suspended_at"`
+	// Permissions the installation was granted, e.g. "contents": "read".
+	Permissions map[string]string `json:"permissions"`
 }
 
 func (i githubInstallation) toInstallation() Installation {

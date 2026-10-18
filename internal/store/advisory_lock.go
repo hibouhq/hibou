@@ -24,6 +24,9 @@ const (
 	LockDepExtractionUpgrade = "hibou:dep-extraction-upgrade"
 	LockStorageUsage         = "hibou:storage-usage"
 	LockDeviceAuthCleanup    = "hibou:device-auth-cleanup"
+	// LockForgeConfinement runs the forge confinement check (ADR-052) on one
+	// replica: it reads several rules per repository from the forge API.
+	LockForgeConfinement = "hibou:forge-confinement"
 )
 
 // WithLeaderLock runs fn only if this connection wins a Postgres session-level

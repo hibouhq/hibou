@@ -41,7 +41,7 @@ func (g *GitHub) UpsertPRComment(ctx context.Context, owner, repo string, prNumb
 }
 
 func (g *GitHub) findMarkedComment(ctx context.Context, owner, repo string, prNumber int, marker string) (*markedComment, error) {
-	token, err := g.cachedInstallationToken(ctx, owner)
+	token, err := g.scopedInstallationToken(ctx, owner, TokenScope{Repo: repo, Permissions: map[string]string{"pull_requests": "read"}})
 	if err != nil {
 		return nil, err
 	}

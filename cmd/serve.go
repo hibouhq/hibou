@@ -86,6 +86,11 @@ var serveCmd = &cobra.Command{
 				if fc.AppID > 0 && fc.PrivateKey != "" {
 					opts = append(opts, forge.WithAppCredentials(fc.AppID, []byte(fc.PrivateKey)))
 				}
+				tier, err := forge.ParseTier(fc.Tier)
+				if err != nil {
+					return fmt.Errorf("forge %q: %w", fc.ID, err)
+				}
+				opts = append(opts, forge.WithTier(tier))
 				if len(cfg.Auth.AllowedOrgs) > 0 {
 					// Only takes effect without App credentials (OAuth App
 					// login): App mode checks membership with the

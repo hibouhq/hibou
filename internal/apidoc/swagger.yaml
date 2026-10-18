@@ -132,6 +132,32 @@ definitions:
       grant_type:
         type: string
     type: object
+  forge.ConfinementFinding:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+      repository:
+        type: string
+      ruleset:
+        description: Ruleset names the forge rule involved, when there is one.
+        type: string
+      severity:
+        $ref: '#/definitions/forge.ConfinementSeverity'
+    type: object
+  forge.ConfinementSeverity:
+    enum:
+    - ok
+    - info
+    - warning
+    - error
+    type: string
+    x-enum-varnames:
+    - ConfinementOK
+    - ConfinementInfo
+    - ConfinementWarning
+    - ConfinementError
   orgprovision.OnboardableAccount:
     properties:
       account:
@@ -1485,6 +1511,37 @@ definitions:
         type: string
       status:
         type: string
+    type: object
+  server.forgeConfinementReport:
+    properties:
+      checked_at:
+        type: string
+      forges:
+        items:
+          $ref: '#/definitions/server.forgeConfinementResult'
+        type: array
+    type: object
+  server.forgeConfinementResult:
+    properties:
+      error:
+        description: |-
+          Error is set when the check could not finish; Findings then holds what
+          it found before.
+        type: string
+      findings:
+        items:
+          $ref: '#/definitions/forge.ConfinementFinding'
+        type: array
+      forge:
+        description: Forge is the configured forge id (HIBOU_FORGE_N_ID).
+        type: string
+      provider:
+        description: Provider is github, gitlab or forgejo.
+        type: string
+      unconfined_repositories:
+        description: UnconfinedRepositories counts the repositories with an error
+          finding.
+        type: integer
     type: object
   server.healthResponse:
     properties:
@@ -4444,6 +4501,42 @@ paths:
                   type: array
               type: object
       summary: Active announcement banners
+      tags:
+      - instance
+  /instance/forges/confinement:
+    get:
+      description: For each forge, whether Hibou's identity (GitHub App, Forgejo token)
+        could write outside hibou/* branches, per repository (ADR-052). Returns this
+        replica's latest check, running one when there is none or when refresh=true.
+        Instance admins only.
+      parameters:
+      - description: Run a new check first
+        in: query
+        name: refresh
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.forgeConfinementReport'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Forge confinement
       tags:
       - instance
   /instance/jobs/overview:

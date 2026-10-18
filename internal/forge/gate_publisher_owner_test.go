@@ -55,7 +55,7 @@ func TestCachedInstallationTokenHonoursBoundOwner(t *testing.T) {
 	g.ownerTokens["hibouhq"] = ownerToken{value: "cached-victim-token"}
 	ctx := WithInstallationOwner(context.Background(), "acme")
 
-	if _, err := g.cachedInstallationToken(ctx, "hibouhq"); err == nil {
+	if _, err := g.scopedInstallationToken(ctx, "hibouhq", TokenScope{}); err == nil {
 		t.Fatal("expected owner mismatch error")
 	}
 	if err := checkInstallationOwner(ctx, "ACME"); err != nil {

@@ -63,6 +63,15 @@ var (
 		// Clone-dominated work: seconds to minutes, so the buckets span that.
 		Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600},
 	}, []string{"mode"})
+
+	// ForgeUnconfinedRepositories counts, per forge, the repositories where
+	// Hibou's forge identity could write outside hibou/* branches (ADR-052).
+	// Alert on any value above zero.
+	ForgeUnconfinedRepositories = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "hibou",
+		Name:      "forge_unconfined_repositories",
+		Help:      "Repositories where Hibou's forge identity could write outside hibou/* branches, by forge.",
+	}, []string{"forge"})
 )
 
 func init() {
@@ -76,5 +85,6 @@ func init() {
 		UploadsTotal,
 		SecretScansTotal,
 		SecretScanDuration,
+		ForgeUnconfinedRepositories,
 	)
 }

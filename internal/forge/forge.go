@@ -93,7 +93,7 @@ type Repository struct {
 // no credential is available (e.g. not running in App mode) — public
 // repositories still clone without one.
 type CloneAuthProvider interface {
-	CloneToken(ctx context.Context, owner string) (string, error)
+	CloneToken(ctx context.Context, owner, repo string) (string, error)
 }
 
 // CloneURLProvider is implemented by forges whose HTTPS clone URL is derivable

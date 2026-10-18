@@ -112,6 +112,9 @@ data:
   {{- if $forge.allowedCIDRs }}
   {{ printf "HIBOU_FORGE_%d_ALLOWED_CIDRS" $i }}: {{ $forge.allowedCIDRs | quote }}
   {{- end }}
+  {{- if $forge.tier }}
+  {{ printf "HIBOU_FORGE_%d_TIER" $i }}: {{ $forge.tier | quote }}
+  {{- end }}
   {{- if $forge.rateLimitRPS }}
   {{ printf "HIBOU_FORGE_%d_RATE_LIMIT_RPS" $i }}: {{ $forge.rateLimitRPS | quote }}
   {{- end }}

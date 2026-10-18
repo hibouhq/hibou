@@ -225,6 +225,9 @@ func (f *Forgejo) GetFileContent(ctx context.Context, owner, repo, filePath, ref
 }
 
 func (f *Forgejo) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {
+	if err := CheckWriteBranch(branch); err != nil {
+		return err
+	}
 	sha, err := f.lookupContentSHA(ctx, owner, repo, filePath, branch)
 	if err != nil {
 		return err
@@ -250,6 +253,9 @@ func (f *Forgejo) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath,
 }
 
 func (f *Forgejo) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error {
+	if err := CheckWriteBranch(branch); err != nil {
+		return err
+	}
 	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/branches", url.PathEscape(owner), url.PathEscape(repo))
 	return f.doJSON(ctx, http.MethodPost, requestPath, map[string]string{
 		"new_branch_name": branch,
@@ -258,6 +264,9 @@ func (f *Forgejo) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA
 }
 
 func (f *Forgejo) CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error) {
+	if err := CheckWriteBranch(opts.Head); err != nil {
+		return nil, err
+	}
 	requestPath := fmt.Sprintf("/api/v1/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
 	var payload forgejoPullRequestResource
 	if err := f.doJSON(ctx, http.MethodPost, requestPath, map[string]string{

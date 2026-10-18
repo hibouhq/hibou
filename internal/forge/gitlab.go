@@ -197,6 +197,9 @@ func (g *GitLab) GetFileContent(ctx context.Context, owner, repo, filePath, ref 
 }
 
 func (g *GitLab) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, branch, message string, content []byte) error {
+	if err := CheckWriteBranch(branch); err != nil {
+		return err
+	}
 	payload := map[string]string{
 		"branch":         branch,
 		"content":        base64.StdEncoding.EncodeToString(content),
@@ -223,6 +226,9 @@ func (g *GitLab) CreateOrUpdateFile(ctx context.Context, owner, repo, filePath, 
 }
 
 func (g *GitLab) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA string) error {
+	if err := CheckWriteBranch(branch); err != nil {
+		return err
+	}
 	values := url.Values{}
 	values.Set("branch", branch)
 	values.Set("ref", fromSHA)
@@ -232,6 +238,9 @@ func (g *GitLab) CreateBranch(ctx context.Context, owner, repo, branch, fromSHA 
 }
 
 func (g *GitLab) CreatePullRequest(ctx context.Context, owner, repo string, opts CreatePROptions) (*PullRequest, error) {
+	if err := CheckWriteBranch(opts.Head); err != nil {
+		return nil, err
+	}
 	requestPath := fmt.Sprintf("/api/v4/projects/%s/merge_requests", gitlabProjectID(owner, repo))
 	var payload gitlabMergeRequest
 	if err := g.doJSON(ctx, http.MethodPost, requestPath, map[string]string{

@@ -813,3 +813,32 @@ func TestLoadAuthAllowlists(t *testing.T) {
 		t.Fatalf("AllowedUsers = %q", got)
 	}
 }
+
+// HIBOU_FORGE_N_TIER (ADR-052): a typo fails startup instead of falling back
+// to the App's broadest permissions; an App forge without a tier warns.
+func TestValidateForgeTier(t *testing.T) {
+	forge := ForgeConfig{ID: "github", Type: "github", ClientID: "id", WebhookSecret: "s", AppID: 1}
+	secret := strings.Repeat("x", 48)
+
+	bad := Config{SessionSecret: secret, Forges: []ForgeConfig{forge}}
+	bad.Forges[0].Tier = "admin"
+	if err := bad.ValidateStartup(zerolog.Nop()); err == nil || !strings.Contains(err.Error(), "HIBOU_FORGE_0_TIER") {
+		t.Fatalf("tier admin = %v, want a startup error naming the variable", err)
+	}
+
+	var logBuffer bytes.Buffer
+	unset := Config{SessionSecret: secret, Forges: []ForgeConfig{forge}}
+	if err := unset.ValidateStartup(zerolog.New(&logBuffer)); err != nil {
+		t.Fatalf("unset tier refused: %v", err)
+	}
+	if !strings.Contains(logBuffer.String(), "HIBOU_FORGE_0_TIER is not set") {
+		t.Fatalf("no warning for an App forge without a tier: %q", logBuffer.String())
+	}
+
+	logBuffer.Reset()
+	set := Config{SessionSecret: secret, Forges: []ForgeConfig{forge}}
+	set.Forges[0].Tier = "report"
+	if err := set.ValidateStartup(zerolog.New(&logBuffer)); err != nil || strings.Contains(logBuffer.String(), "TIER") {
+		t.Fatalf("tier report: err %v, log %q", err, logBuffer.String())
+	}
+}

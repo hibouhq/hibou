@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // SupportsCheckRuns reports whether this provider can publish a native GitHub
@@ -31,7 +30,7 @@ func (g *GitHub) CreateOrUpdateCheckRun(ctx context.Context, owner, repo string,
 	if !g.isAppMode() {
 		return "", errors.New("check runs require GitHub App credentials (HIBOU_FORGE_N_APP_ID / HIBOU_FORGE_N_PRIVATE_KEY)")
 	}
-	token, err := g.cachedInstallationToken(ctx, owner)
+	token, err := g.scopedInstallationToken(ctx, owner, TokenScope{Repo: repo, Permissions: map[string]string{"checks": "write"}})
 	if err != nil {
 		return "", err
 	}
@@ -158,43 +157,14 @@ func (g *GitHub) findCheckRunID(ctx context.Context, token, owner, repo, sha, na
 }
 
 // CloneToken implements CloneAuthProvider: a short-lived installation token
-// usable as the password in an HTTPS clone URL. Empty outside App mode, so
-// public repositories still clone unauthenticated.
-func (g *GitHub) CloneToken(ctx context.Context, owner string) (string, error) {
+// usable as the password in an HTTPS clone URL, for that one repository and
+// read-only. Empty outside App mode, so public repositories still clone
+// unauthenticated.
+func (g *GitHub) CloneToken(ctx context.Context, owner, repo string) (string, error) {
 	if !g.isAppMode() {
 		return "", nil
 	}
-	return g.cachedInstallationToken(ctx, owner)
-}
-
-// cachedInstallationToken returns the owner's installation token, minting one
-// only when the cached token is absent or near expiry (they live one hour).
-// installationTokenForOwner lists every installation per call, so caching is
-// what keeps repo-level REST traffic from hammering the App API.
-func (g *GitHub) cachedInstallationToken(ctx context.Context, owner string) (string, error) {
-	key := strings.ToLower(strings.TrimSpace(owner))
-	if key == "" {
-		return "", errors.New("owner is required for an installation token")
-	}
-	if err := checkInstallationOwner(ctx, key); err != nil {
-		return "", err
-	}
-
-	g.tokenMu.Lock()
-	cached, ok := g.ownerTokens[key]
-	g.tokenMu.Unlock()
-	if ok && time.Until(cached.expiresAt) > 2*time.Minute {
-		return cached.value, nil
-	}
-
-	value, err := g.installationTokenForOwner(ctx, owner)
-	if err != nil {
-		return "", err
-	}
-	g.tokenMu.Lock()
-	g.ownerTokens[key] = ownerToken{value: value, expiresAt: time.Now().Add(55 * time.Minute)}
-	g.tokenMu.Unlock()
-	return value, nil
+	return g.scopedInstallationToken(ctx, owner, TokenScope{Repo: repo, Permissions: map[string]string{"contents": "read"}})
 }
 
 // authorizeForOwner attaches the owner's installation token when running in
@@ -206,7 +176,7 @@ func (g *GitHub) authorizeForOwner(ctx context.Context, request *http.Request, o
 	if !g.isAppMode() || request == nil {
 		return nil
 	}
-	token, err := g.cachedInstallationToken(ctx, owner)
+	token, err := g.scopedInstallationToken(ctx, owner, scopeForRequest(request))
 	if err != nil {
 		return fmt.Errorf("installation token for %q: %w", owner, err)
 	}
@@ -215,25 +185,6 @@ func (g *GitHub) authorizeForOwner(ctx context.Context, request *http.Request, o
 	}
 	request.Header.Set("Authorization", githubBearerPrefix+token)
 	return nil
-}
-
-// installationTokenForOwner mints an installation access token for the App
-// installation on the given account (owner).
-func (g *GitHub) installationTokenForOwner(ctx context.Context, owner string) (string, error) {
-	installations, err := g.listInstallations(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, installation := range installations {
-		if strings.EqualFold(strings.TrimSpace(installation.Account.Login), strings.TrimSpace(owner)) {
-			token, err := g.createInstallationToken(ctx, installation.ID)
-			if err != nil {
-				return "", err
-			}
-			return token.Token, nil
-		}
-	}
-	return "", fmt.Errorf("no GitHub App installation found for owner %q", owner)
 }
 
 // ErrInstallationOwnerMismatch is returned when a caller bound its context to

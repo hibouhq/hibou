@@ -37,7 +37,7 @@ func TestGitHubContentCallsRejectTraversal(t *testing.T) {
 	if _, err := g.GetFileContent(context.Background(), "o", "r", "../../orgs/x", "main"); !errors.Is(err, errUnsafeContentPath) {
 		t.Fatalf("GetFileContent: expected errUnsafeContentPath, got %v", err)
 	}
-	if err := g.CreateOrUpdateFile(context.Background(), "o", "r", "a/../../b", "main", "msg", nil); !errors.Is(err, errUnsafeContentPath) {
+	if err := g.CreateOrUpdateFile(context.Background(), "o", "r", "a/../../b", "hibou/configure", "msg", nil); !errors.Is(err, errUnsafeContentPath) {
 		t.Fatalf("CreateOrUpdateFile: expected errUnsafeContentPath, got %v", err)
 	}
 }

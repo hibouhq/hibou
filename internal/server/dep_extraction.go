@@ -162,7 +162,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	}
 	var token string
 	if auth, ok := provider.(forge.CloneAuthProvider); ok {
-		token, err = auth.CloneToken(ctx, target.owner)
+		token, err = auth.CloneToken(ctx, target.owner, target.name)
 		if err != nil {
 			s.log.Warn().Err(err).Str("repo", repo.Slug).Msg("clone token minting failed, attempting tokenless checkout")
 			token = ""

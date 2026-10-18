@@ -99,6 +99,9 @@ type Server struct {
 	secretScanner      *secretscan.Scanner
 	secretScanSlots    chan struct{}
 	depExtractionSlots chan struct{}
+	// confinement holds this replica's latest forge confinement check
+	// (ADR-052).
+	confinement confinementState
 	// eagerPatterns caches each repository's eager branch patterns
 	// (ADR-045 §4.1.1) so pushes do not read .hibou.yaml every time.
 	eagerPatterns sync.Map
@@ -653,6 +656,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/instance/jobs/timeline", s.handleInstanceJobsTimeline)
 			r.Get("/instance/jobs/stats", s.handleInstanceJobsStats)
 			r.Get("/instance/storage", s.handleInstanceStorage)
+			r.Get("/instance/forges/confinement", s.handleInstanceForgeConfinement)
 			r.Get("/instance/audit-logs", s.handleListInstanceAuditLogs)
 			// ADR-028. `advisories` not `cves`: the namespace has to hold
 			// `HSA-*` once an advisory exists that no CVE covers (§10).
@@ -1000,6 +1004,11 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 	if s.advisoryScanner != nil && len(s.advisoryProviders) > 0 && s.cfg.AdvisoryScan.Interval > 0 {
 		loops = append(loops, "advisory_scan")
 		go s.runAdvisoryScanLoop(runtimeCtx)
+	}
+	if s.db != nil && len(s.forges) > 0 {
+		// ADR-052: warn when a forge identity could write outside hibou/*.
+		loops = append(loops, "forge_confinement")
+		go s.runForgeConfinementLoop(runtimeCtx)
 	}
 	if s.staleScanChecker != nil && s.cfg.Background.StaleScanEnabled {
 		loops = append(loops, "stale_scan")

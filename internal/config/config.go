@@ -329,6 +329,10 @@ type ForgeConfig struct {
 	// For static IP allowlisting (GitLab SaaS, self-hosted forges).
 	// For GitHub forges, IPs are auto-fetched; this field provides additional static ranges.
 	AllowedCIDRs string
+	// Tier caps what the forge's installation tokens may ask for (ADR-052
+	// §2): read, report or propose. Empty keeps the App installation's own
+	// permissions as the cap, with a startup warning.
+	Tier string
 }
 
 func (c Config) ListenAddr() string {
@@ -877,6 +881,15 @@ func (c Config) validateSessionSecret(log zerolog.Logger) error {
 func (c Config) validateForges(log zerolog.Logger) error {
 	var problems []string
 	for i, fc := range c.Forges {
+		switch fc.Tier {
+		case "", "read", "report", "propose":
+		default:
+			// A typo must not silently fall back to the broadest permissions.
+			return fmt.Errorf("invalid forge configuration: forge %q (HIBOU_FORGE_%d_TIER) is %q; want read, report or propose", fc.ID, i, fc.Tier)
+		}
+		if fc.Type == "github" && fc.AppID > 0 && fc.Tier == "" {
+			log.Warn().Str("forge", fc.ID).Msgf("HIBOU_FORGE_%d_TIER is not set: installation tokens are capped only by the App's own permissions; set it to report (checks and comments) or propose (pull requests), see ADR-052", i)
+		}
 		if strings.TrimSpace(fc.ClientID) == "" {
 			problems = append(problems, fmt.Sprintf("forge %q (HIBOU_FORGE_%d_CLIENT_ID) has no OAuth client id", fc.ID, i))
 		}
@@ -1270,6 +1283,7 @@ func loadForgeConfigs() []ForgeConfig {
 			IPAllowlist:   strings.EqualFold(strings.TrimSpace(os.Getenv(prefix+"IP_ALLOWLIST")), "true"),
 			RateLimitRPS:  parseForgeFloat64(prefix + "RATE_LIMIT_RPS"),
 			AllowedCIDRs:  strings.TrimSpace(os.Getenv(prefix + "ALLOWED_CIDRS")),
+			Tier:          strings.ToLower(strings.TrimSpace(os.Getenv(prefix + "TIER"))),
 		})
 	}
 

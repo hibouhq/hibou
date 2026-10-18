@@ -217,6 +217,7 @@ hibou:
   #   ipAllowlist: false  # enable source IP allowlisting (GitHub: auto /meta, GitLab SaaS: built-in defaults)
   #   rateLimitRPS: 0     # per-IP rate limit (req/s) on webhooks. 0 = disabled
   #   allowedCIDRs: ""    # override default CIDRs (e.g., for self-hosted forges)
+  #   tier: report        # read | report | propose: the most the forge's tokens may do (ADR-052)
   # -- Optional dedicated worker deployment. Same binary, separate replica set.
   # Enable this and disable hibou.background.* on the primary deployment for an
   # API-only plus worker-only split.

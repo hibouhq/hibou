@@ -48,7 +48,8 @@ minutes. Local startup waits up to ten minutes before launching Hibou.
 
 ### Forgejo local instance
 
-The Docker Compose stack includes a Forgejo instance at http://localhost:3030.
+The Docker Compose stack includes a Forgejo instance at http://localhost:3030,
+on the latest Forgejo release (17), the only one Hibou supports.
 Admin credentials (created by `make start`):
 - Username: `hibou-admin`
 - Password: `hibou-admin`

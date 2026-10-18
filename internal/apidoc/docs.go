@@ -659,6 +659,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/instance/forges/confinement": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "For each forge, whether Hibou's identity (GitHub App, Forgejo token) could write outside hibou/* branches, per repository (ADR-052). Returns this replica's latest check, running one when there is none or when refresh=true. Instance admins only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "instance"
+                ],
+                "summary": "Forge confinement",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Run a new check first",
+                        "name": "refresh",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.forgeConfinementReport"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/instance/jobs/overview": {
             "get": {
                 "security": [
@@ -10541,6 +10598,42 @@ const docTemplate = `{
                 }
             }
         },
+        "forge.ConfinementFinding": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "repository": {
+                    "type": "string"
+                },
+                "ruleset": {
+                    "description": "Ruleset names the forge rule involved, when there is one.",
+                    "type": "string"
+                },
+                "severity": {
+                    "$ref": "#/definitions/forge.ConfinementSeverity"
+                }
+            }
+        },
+        "forge.ConfinementSeverity": {
+            "type": "string",
+            "enum": [
+                "ok",
+                "info",
+                "warning",
+                "error"
+            ],
+            "x-enum-varnames": [
+                "ConfinementOK",
+                "ConfinementInfo",
+                "ConfinementWarning",
+                "ConfinementError"
+            ]
+        },
         "orgprovision.OnboardableAccount": {
             "type": "object",
             "properties": {
@@ -12452,6 +12545,47 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "server.forgeConfinementReport": {
+            "type": "object",
+            "properties": {
+                "checked_at": {
+                    "type": "string"
+                },
+                "forges": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.forgeConfinementResult"
+                    }
+                }
+            }
+        },
+        "server.forgeConfinementResult": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "description": "Error is set when the check could not finish; Findings then holds what\nit found before.",
+                    "type": "string"
+                },
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/forge.ConfinementFinding"
+                    }
+                },
+                "forge": {
+                    "description": "Forge is the configured forge id (HIBOU_FORGE_N_ID).",
+                    "type": "string"
+                },
+                "provider": {
+                    "description": "Provider is github, gitlab or forgejo.",
+                    "type": "string"
+                },
+                "unconfined_repositories": {
+                    "description": "UnconfinedRepositories counts the repositories with an error finding.",
+                    "type": "integer"
                 }
             }
         },

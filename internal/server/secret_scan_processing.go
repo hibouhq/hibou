@@ -215,7 +215,7 @@ func (s *Server) executeSecretScanJob(ctx context.Context, job *store.SecretScan
 
 	var token string
 	if auth, ok := provider.(forge.CloneAuthProvider); ok {
-		token, err = auth.CloneToken(ctx, target.owner)
+		token, err = auth.CloneToken(ctx, target.owner, target.name)
 		if err != nil {
 			// Minting can fail while the clone still succeeds (public repo,
 			// installation missing or renamed). The clone is the authority:
