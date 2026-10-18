@@ -8,6 +8,7 @@ on:
     paths:
       - "docs/**"
       - ".github/workflows/docs.yml"
+      - "scripts/docs/**"
       - "internal/repoconfig/hibou-config.schema.json"
   workflow_dispatch:
     inputs:
@@ -23,22 +24,22 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-permissions:
-  actions: read
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 
 jobs:
-  build-and-deploy:
+  # Builds on the plain runner: the docs need only Node (and zip, which the
+  # runner has). No write permission here, so third-party npm install scripts
+  # never run next to a token that can publish the site or mint OIDC tokens.
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      actions: read # find and download the previous run's site
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Determine version
         id: version
@@ -46,64 +47,28 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
-        run: |
-          if [[ "${REF_TYPE}" == "tag" ]]; then
-            if [[ ! "${REF_NAME}" =~ ^v[0-9]+\.[0-9]+ ]]; then
-              echo "::error::Unexpected tag name: ${REF_NAME}"
-              exit 1
-            fi
-            VERSION=$(echo "${REF_NAME}" | sed -E 's/^(v[0-9]+\.[0-9]+).*/\1/')
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "is_latest=false" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${INPUT_VERSION}" && "${INPUT_VERSION}" != "latest" ]]; then
-              # Sanitize: only allow semver-like patterns (v1.0, v1.0.0, etc.)
-              if [[ ! "${INPUT_VERSION}" =~ ^v?[0-9]+(\.[0-9]+){0,2}$ ]]; then
-                echo "::error::Invalid version format: ${INPUT_VERSION}"
-                exit 1
-              fi
-              echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
-            echo "is_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=latest" >> "$GITHUB_OUTPUT"
-            echo "is_latest=true" >> "$GITHUB_OUTPUT"
-          fi
+        run: scripts/docs/version.sh
 
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Read Node version
+        id: node
+        run: scripts/docs/node-version.sh
 
-      - name: Build devcontainer
-        uses: ./.github/actions/devcontainer-ci
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          registry: ghcr.io
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
       - name: Build docs
-        uses: ./.github/actions/devcontainer-ci
-        # The version reaches the shell as data (env), never as interpolated
-        # script text.
         env:
           DOCS_VERSION: ${{ steps.version.outputs.version }}
-        with:
-          run-cmd: |
-            cd docs && npm ci
-            DOCS_BASE="/${DOCS_VERSION}" \
-            PUBLIC_DOCS_VERSION="${DOCS_VERSION}" \
-            npm run build
+        run: scripts/docs/build.sh
 
-      # download-artifact only sees the current run unless given a run-id, so
-      # without this every deploy started from an empty site and dropped all
-      # other versions. The saved site expires after its 90-day retention.
       - name: Find previous site
         id: previous
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          run_id="$(gh run list -R "$GITHUB_REPOSITORY" --workflow docs.yml \
-            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
-          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+        run: scripts/docs/previous-run.sh
 
       - name: Download existing site
         if: steps.previous.outputs.run_id != ''
@@ -119,64 +84,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           IS_LATEST: ${{ steps.version.outputs.is_latest }}
-        run: |
-          mkdir -p _site
-
-          # Custom domain for GitHub Pages. This MUST be re-written into the
-          # artifact on every deploy: Actions-based Pages deployments
-          # (upload-pages-artifact + deploy-pages) publish a fresh site each run
-          # and drop the custom domain unless a CNAME file is present in the site
-          # root. One site: the landing page at /, versioned docs below it.
-          # The apex serves the site (landing + docs); the Hibou instance
-          # lives on its own host (dogfood.hibouhq.com), so the static site
-          # never shares the app's origin.
-          echo "hibouhq.com" > _site/CNAME
-
-          # Copy built docs into version subdirectory
-          rm -rf "_site/$VERSION"
-          cp -r docs/dist "_site/$VERSION"
-
-          # If this is a tag release, also deploy as "stable"
-          if [[ "$IS_LATEST" == "false" ]]; then
-            rm -rf _site/stable
-            cp -r docs/dist _site/stable
-          fi
-
-          # Update versions.json
-          if [[ -f _site/versions.json ]]; then
-            # Add version if not present, ensure latest and stable are first
-            jq --arg v "$VERSION" \
-              'if (. | index($v)) then . else . + [$v] end' \
-              _site/versions.json > _site/versions.tmp
-            mv _site/versions.tmp _site/versions.json
-          else
-            echo '["stable", "latest"]' > _site/versions.json
-            if [[ "$VERSION" != "latest" && "$VERSION" != "stable" ]]; then
-              jq --arg v "$VERSION" '. + [$v]' _site/versions.json > _site/versions.tmp
-              mv _site/versions.tmp _site/versions.json
-            fi
-          fi
-
-          # Ensure "stable" is always in versions.json
-          if ! jq -e '. | index("stable")' _site/versions.json > /dev/null 2>&1; then
-            jq '. = ["stable"] + .' _site/versions.json > _site/versions.tmp
-            mv _site/versions.tmp _site/versions.json
-          fi
-
-          # Root index.html is the landing page; versioned docs live
-          # under /stable, /latest, /vX.Y. The landing's "Docs" links point to
-          # ./stable/. Self-contained (assets inlined), so nothing else to copy.
-          cp docs/landing.html _site/index.html
-
-          # The .hibou.yaml schema, at the URL its $id and the generated
-          # config's yaml-language-server modeline name: editors complete
-          # and validate .hibou.yaml from it. Unversioned on purpose: the
-          # schema stays backward compatible within v1.
-          mkdir -p _site/schemas/v1
-          cp internal/repoconfig/hibou-config.schema.json _site/schemas/v1/hibou-config.schema.json
-
-          echo "Site structure:"
-          ls -la _site/
+        run: scripts/docs/assemble-site.sh
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
@@ -191,6 +99,16 @@ jobs:
           retention-days: 90
           overwrite: true
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
