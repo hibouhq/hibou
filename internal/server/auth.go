@@ -19,7 +19,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.authMgr.HandleOAuthCallback(w, r)
+	user, returnPath, err := s.authMgr.HandleOAuthCallback(w, r)
 	if err != nil {
 		internalauth.WriteCallbackError(w, r, s.authMgr, err)
 		return
@@ -31,5 +31,6 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.authMgr.SetSessionCookie(w, user)
-	http.Redirect(w, r, "/", http.StatusFound)
+	// #nosec G710 -- returnPath comes from SafeReturnPath: only /device, rebuilt from parsed parts.
+	http.Redirect(w, r, returnPath, http.StatusFound)
 }

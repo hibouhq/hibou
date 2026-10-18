@@ -214,6 +214,13 @@
         >
           {{ error }}
         </p>
+        <a
+          v-if="reauthUrl"
+          :href="reauthUrl"
+          class="block rounded-md bg-accent px-3 py-2 text-center text-sm font-medium text-white transition hover:bg-accent/90"
+        >
+          Sign in again
+        </a>
 
         <div class="flex gap-3">
           <button
@@ -251,6 +258,7 @@ import {
   type TokenCapability,
 } from '@/api/client'
 import { defaultDevicePreset, normalizeUserCode, userCodesMatch } from '@/lib/deviceLogin'
+import { useAuthStore } from '@/stores/auth'
 
 const PRESET_LABELS: Record<DeviceLoginPreset, { title: string; hint: string }> = {
   cli: { title: 'CLI', hint: 'Upload scans, check gates and secrets, read findings. Cannot triage or change settings.' },
@@ -271,6 +279,9 @@ const selectedPreset = ref<DeviceLoginPreset>('read-only')
 const expiryDays = ref(90)
 const busy = ref(false)
 const error = ref('')
+// Set when approval needs a fresh sign-in: a fresh sign-in with the user's
+// forge that lands back on this page, where they approve again.
+const reauthUrl = ref('')
 const outcome = ref<'approved' | 'denied' | null>(null)
 const tokenName = ref('')
 
@@ -300,6 +311,7 @@ function describe(err: unknown): string {
   const message = err instanceof Error ? err.message : ''
   if (/invalid or has expired/i.test(message)) return 'This code is invalid or has expired. Start the sign-in again.'
   if (/HTTP 429/.test(message) || /rate|too many/i.test(message)) return 'Too many attempts. Wait a minute and try again.'
+  if (/sign in again to approve/i.test(message)) return 'Approving a device needs a sign-in from the last 12 hours. Sign in again, then approve.'
   return message || 'Something went wrong. Try again.'
 }
 
@@ -331,10 +343,23 @@ async function lookup() {
   }
 }
 
+async function offerReauth(userCode: string) {
+  const provider = useAuthStore().user?.provider ?? ''
+  try {
+    const providers = (await api.getProviders()).data ?? []
+    if (!providers.some((p) => p.id === provider)) return
+  } catch {
+    return
+  }
+  const back = `/device?${new URLSearchParams({ user_code: userCode })}`
+  reauthUrl.value = `/api/v1/auth/login?${new URLSearchParams({ provider, return: back })}`
+}
+
 async function approve() {
   if (!request.value) return
   busy.value = true
   error.value = ''
+  reauthUrl.value = ''
   try {
     const res = await api.approveDeviceLogin({
       user_code: request.value.user_code,
@@ -345,6 +370,9 @@ async function approve() {
     outcome.value = 'approved'
   } catch (err) {
     error.value = describe(err)
+    if (err instanceof Error && /sign in again to approve/i.test(err.message)) {
+      void offerReauth(request.value.user_code)
+    }
   } finally {
     busy.value = false
   }

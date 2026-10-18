@@ -111,12 +111,14 @@ func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, provide
 	verifier := oauth2.GenerateVerifier()
 
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	signature := m.sign(state, providerID, timestamp, verifier)
+	// Where the callback sends the browser back; empty means home.
+	returnPath := SafeReturnPath(r.URL.Query().Get("return"))
+	signature := m.sign(state, providerID, timestamp, verifier, returnPath)
 
 	// #nosec G124 -- cookie security attributes depend on deployment TLS config.
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cookieName(oauthStateCookieName),
-		Value:    strings.Join([]string{hex.EncodeToString([]byte(state)), hex.EncodeToString([]byte(providerID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString([]byte(verifier)), hex.EncodeToString(signature)}, "|"),
+		Value:    strings.Join([]string{hex.EncodeToString([]byte(state)), hex.EncodeToString([]byte(providerID)), hex.EncodeToString([]byte(timestamp)), hex.EncodeToString([]byte(verifier)), hex.EncodeToString([]byte(returnPath)), hex.EncodeToString(signature)}, "|"),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   m.cfg.CookieSecure,
@@ -131,7 +133,31 @@ func (m *Manager) BeginOAuthFlow(w http.ResponseWriter, r *http.Request, provide
 	return nil
 }
 
-func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*store.User, error) {
+// HandleOAuthCallback completes the flow BeginOAuthFlow started. It returns
+// the signed-in user and the path to send the browser to ("/" by default).
+func (m *Manager) HandleOAuthCallback(w http.ResponseWriter, r *http.Request) (*store.User, string, error) {
+	user, err := m.handleOAuthCallback(w, r)
+	if err != nil {
+		return nil, "", err
+	}
+	return user, m.oauthReturnPath(r), nil
+}
+
+// oauthReturnPath reads the return path from the request's state cookie,
+// already validated by handleOAuthCallback.
+func (m *Manager) oauthReturnPath(r *http.Request) string {
+	stateCookie, err := r.Cookie(m.cookieName(oauthStateCookieName))
+	if err != nil {
+		return "/"
+	}
+	state, err := m.parseOAuthState(stateCookie.Value)
+	if err != nil || state.returnPath == "" {
+		return "/"
+	}
+	return SafeReturnPath(state.returnPath)
+}
+
+func (m *Manager) handleOAuthCallback(w http.ResponseWriter, r *http.Request) (*store.User, error) {
 	providerID := strings.TrimSpace(r.URL.Query().Get("provider"))
 	provider, err := m.provider(providerID)
 	if err != nil {
@@ -520,31 +546,47 @@ func (m *Manager) callbackURL(r *http.Request, providerID string) string {
 
 // validateOAuthState checks the signed state cookie against the callback and
 // returns the PKCE verifier it carries.
-func (m *Manager) validateOAuthState(cookieValue, providerID, state string) (string, error) {
+type oauthStateCookie struct {
+	state, providerID, timestamp, verifier, returnPath string
+	signature                                          []byte
+}
+
+func (m *Manager) parseOAuthState(cookieValue string) (oauthStateCookie, error) {
 	parts := strings.Split(cookieValue, "|")
-	if len(parts) != 5 {
-		return "", errors.New("invalid oauth state cookie format")
+	if len(parts) != 6 {
+		return oauthStateCookie{}, errors.New("invalid oauth state cookie format")
 	}
 
 	decoded := make([]string, len(parts))
 	for i, part := range parts {
 		value, err := hex.DecodeString(part)
 		if err != nil {
-			return "", fmt.Errorf("decode oauth state cookie: %w", err)
+			return oauthStateCookie{}, fmt.Errorf("decode oauth state cookie: %w", err)
 		}
 		decoded[i] = string(value)
 	}
-	storedState, storedProviderID, timestamp, verifier := decoded[0], decoded[1], decoded[2], decoded[3]
-	providedSig := []byte(decoded[4])
+	c := oauthStateCookie{
+		state: decoded[0], providerID: decoded[1], timestamp: decoded[2],
+		verifier: decoded[3], returnPath: decoded[4], signature: []byte(decoded[5]),
+	}
+	if !hmac.Equal(c.signature, m.sign(c.state, c.providerID, c.timestamp, c.verifier, c.returnPath)) {
+		return oauthStateCookie{}, errors.New("oauth state signature mismatch")
+	}
+	return c, nil
+}
+
+func (m *Manager) validateOAuthState(cookieValue, providerID, state string) (string, error) {
+	c, err := m.parseOAuthState(cookieValue)
+	if err != nil {
+		return "", err
+	}
+	storedState, storedProviderID, timestamp, verifier := c.state, c.providerID, c.timestamp, c.verifier
 
 	if storedProviderID != providerID {
 		return "", errors.New("oauth provider mismatch")
 	}
 	if storedState != state {
 		return "", errors.New("oauth state mismatch")
-	}
-	if !hmac.Equal(providedSig, m.sign(storedState, storedProviderID, timestamp, verifier)) {
-		return "", errors.New("oauth state signature mismatch")
 	}
 
 	issuedAt, err := strconv.ParseInt(timestamp, 10, 64)

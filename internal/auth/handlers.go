@@ -52,14 +52,15 @@ func CallbackHandler(mgr *Manager) http.HandlerFunc {
 			return
 		}
 
-		user, err := mgr.HandleOAuthCallback(w, r)
+		user, returnPath, err := mgr.HandleOAuthCallback(w, r)
 		if err != nil {
 			WriteCallbackError(w, r, mgr, err)
 			return
 		}
 
 		mgr.SetSessionCookie(w, user)
-		http.Redirect(w, r, "/", http.StatusFound)
+		// #nosec G710 -- returnPath comes from SafeReturnPath: only /device, rebuilt from parsed parts.
+		http.Redirect(w, r, returnPath, http.StatusFound)
 	}
 }
 
