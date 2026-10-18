@@ -75,5 +75,5 @@ store, then worker/config wiring, then docs and full validation.
 ## Phase 8 — Docs & validation
 
 - [x] Update `hibou-server.example.yaml` with the `retention:` block
-- [x] Update `SPEC.md` retention section
+- [x] Update the product specification's retention section
 - [x] `rtk make generate && rtk go build ./... && rtk go vet ./... && rtk go test ./...`

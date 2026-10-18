@@ -35,7 +35,7 @@ Implementation notes:
 
 ## Context
 
-SPEC.md already promises release tracking as a first-class concern: `releases`
+The product specification already promises release tracking as a first-class concern: `releases`
 layer lifecycle metadata on top of tagged refs, `deployments` connect a client
 to a release, and impact analysis must answer "which releases are affected by
 CVE-X" and "which client environments are currently exposed".

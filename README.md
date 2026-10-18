@@ -15,7 +15,7 @@
 *A real walkthrough from a self-hosted dogfooding instance: start at the organization, filter findings with a grouped `OR` query, open Log4j detail, switch to Hibou's real SBOM inventory, inspect coverage, and browse releases. Vulnerability examples come from the intentionally vulnerable [sample project](https://github.com/hibouhq/hibou-sample-project); dependency, coverage, and release views come from Hibou itself.*
 
 > [!IMPORTANT]
-> **Hibou is in alpha.** This is a solo, spare-time experiment built with LLM assistance, not a production-readiness or support promise. Expect bugs, incomplete workflows, and documentation that can lag behind the code. Feedback and forks are welcome; see the [roadmap](TODO.md).
+> **Hibou is in alpha.** This is a solo, spare-time experiment built with LLM assistance, not a production-readiness or support promise. Expect bugs, incomplete work, and documentation that can lag behind the code. Feedback and forks are welcome.
 
 [Features](#features) · [Capabilities](#capabilities) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#contributing)
 
@@ -73,7 +73,7 @@ Review risk per release and see which clients are associated with each version. 
 
 ## Capabilities
 
-Availability and maturity vary by integration. The [documentation](docs/src/content/docs/getting-started/introduction.mdx) and [roadmap](TODO.md) describe the details and remaining work.
+Availability and maturity vary by integration. The [documentation](docs/src/content/docs/getting-started/introduction.mdx) describes the details.
 
 | Area | Included |
 | --- | --- |
