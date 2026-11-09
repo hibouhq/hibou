@@ -233,6 +233,123 @@ nothing to confine.
 
 ## Step 2: GitHub Connectivity
 
+### Private instances without inbound webhooks
+
+GitHub/GHES can reconcile through outbound API reads instead of delivering
+webhooks. No public ingress, relay, tunnel or development-mode exception is
+required. Browsers and CI runners still need a private route to Hibou, and
+Hibou needs outbound access to its configured GitHub API and Git endpoints.
+
+Choose the delivery mode explicitly:
+
+| Mode | Inputs | Webhook secret |
+|---|---|---|
+| `webhook` (default) | Existing webhook behavior | Required outside development |
+| `poll` | Outbound API reconciliation and ordinary CI uploads | Not required; receiver disabled even if configured |
+| `hybrid` | Webhooks plus periodic API recovery | Required outside development |
+
+```bash
+HIBOU_FORGE_0_TYPE=github
+HIBOU_FORGE_0_ID=github
+HIBOU_FORGE_0_EVENT_MODE=poll
+HIBOU_FORGE_0_POLL_INTERVAL=5m
+HIBOU_FORGE_0_INVENTORY_INTERVAL=30m
+HIBOU_FORGE_0_APP_ID=<app-id>
+HIBOU_FORGE_0_PRIVATE_KEY=<pem-key>
+HIBOU_FORGE_0_CLIENT_ID=<oauth-client-id>
+HIBOU_FORGE_0_CLIENT_SECRET=<oauth-client-secret>
+HIBOU_FORGE_0_TIER=report
+```
+
+In Helm use `hibou.forges[].eventMode`, `pollInterval` and
+`inventoryInterval`; existing secrets still supply App/OAuth credentials.
+Server YAML accepts `forges[].event_mode`, `poll_interval` and
+`inventory_interval`, with indexed environment variables taking precedence.
+For GHES, retain the configured API URL, including `/api/v3`.
+
+Install the App on selected repositories and grant Metadata/Contents read,
+Pull requests read and Organization Members read. Actions read enables
+terminal-build detection; without it that capability reports an error and
+pending snapshots rely on timeouts. Checks/Statuses write are optional
+reporting permissions, not necessary for metadata ingestion; choose the
+appropriate tier without automatically elevating a read-only installation.
+Polling does not require Contents write.
+
+Deactivate webhook delivery in the GitHub App settings when switching to
+`poll`. Restart Hibou with the new mode; the existing App is discovered
+without an installation event. Sign in with an account that currently
+administers the installed organization to import it. Installation presence
+alone never grants a user admin rights, and discovery never enrolls repos.
+Existing CLI/action uploads keep their current endpoint and token scopes.
+
+Check **Settings → Instance → Forge delivery** for per-scope freshness,
+errors, next retry and pending check publication. **Jobs & workers** shows
+the durable reconciliation runs. "Sync now" schedules the same work and
+preserves rate-limit backoff. The default cadences are targets, not latency
+guarantees: pagination, bounded workers and API outages can delay them.
+
+#### Hundreds of repositories: bandwidth, storage and freshness
+
+Defaults are **5 minutes for active PRs/identified pending builds** and
+**30 minutes for inventory, refs, releases and inactive discovery**. Explicit
+shorter values remain supported. An ordinary CI upload wakes the PR/build
+scopes for its own repository. An inactive repository without CI uploads may
+therefore take up to the slower discovery interval, plus backlog, to expose
+a newly opened PR. This is an intentional traffic/freshness tradeoff.
+
+Unchanged responses use **per-page ETags**, including App/installation
+inventory; a first-page 304 still checks every page. Conditional caches are
+isolated by installation and repository. Tokens are reused with bounded
+lifetimes, and unchanged inventory does not flush every repository's tokens.
+A shared PostgreSQL backoff prevents other replicas or "Sync now" from
+bypassing a GitHub rate-limit deferral.
+
+For single-page lists, an idle repository needs about **8 repository GETs
+per hour** (PR discovery, branches, tags and releases). An actively tracked
+PR repository needs about **18 per hour**, before extra PR/build pages,
+installation discovery, token minting and check publication. Thus 500 idle
+repositories target roughly 4,000 GETs/hour; 500 active ones roughly 9,000.
+These are request-count estimates, not performance or rate-limit guarantees.
+
+**A 304 does not mean zero bandwidth.** Headers, authentication, TLS and
+network round trips still exist. At an illustrative 1–3 KiB per conditional
+exchange, 4,000 requests/hour is about **94–281 MiB/day**, before changed
+JSON, pagination, token operations or actual scans. Measure your own API,
+proxy and TLS traffic; payload sizes and compression vary significantly.
+
+Controlled fixtures, not a customer deployment benchmark:
+
+| Test | Result |
+|---|---|
+| 1,000 repos across two installations, 500 per organization, synthetic uncompressed inventory | Cold: 13 requests, 2,455,612 response-body bytes; immediate unchanged warm: 11 requests, zero response-body bytes and zero token mints |
+| Same HTTP/1.1 fixture, actual socket bytes including headers but excluding TLS | Warm: 1,690 bytes received + 3,105 bytes sent; cold response traffic about 2.46 MB. Real GitHub headers/TLS will differ |
+| Projected conditional cache for that inventory fixture | 200,572 bytes retained instead of the 2,455,612-byte original bodies; only fields consumed by readers are stored |
+| 250 quiet enrolled repos, 1,000 scopes, controlled readers and local PostgreSQL | Roughly 8 seconds per cold/warm cycle in the development test; two quiet cycles retain 1,000 samples rather than 2,000, with no unchanged checkpoint rewrites |
+
+Successful unchanged cycles are **sampled hourly per scope**; material
+changes, reported failures and recovery runs are retained. Run history has
+a 14-day horizon, with bounded cleanup batches. Jobs-page reconciliation
+counts/latency charts describe those retained samples, not an exact count
+of all successful polls. Other job kinds remain unsampled.
+
+The worker drains available work without an artificial one-second pause
+after each scope. It remains bounded and provider-serialized for hybrid
+ordering, so high API latency or very large inventories can still increase
+lag. Polling itself does not repeatedly enqueue unchanged analysis; actual
+secret/dependency scans are a separate, potentially much heavier load.
+Polling rejects a decoded page above 16 MiB, a scope above 64 MiB of decoded
+response bodies, or retained conditional metadata above 16 MiB. Cache schema
+versions force a fresh fetch when reader fields change. Exceeding a limit
+does not apply removals or advance a checkpoint.
+
+Polling cannot recover commits pushed and removed between observations.
+Keep webhooks, CI or pre-receive scanning when every-push secret inspection
+is mandatory. A successful poll or workflow run is never proof of clean or
+complete analysis. Scope bounds and controlled-test coverage are recorded in
+[ADR-054](adr/054-github-without-webhooks.md).
+
+### Webhook and hybrid connectivity
+
 Hibou includes built-in security middleware for GitHub-facing traffic. No special
 ingress configuration needed: your existing ingress controller routes traffic to
 Hibou, and Hibou handles webhook protection itself.

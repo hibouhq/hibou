@@ -20,6 +20,7 @@ import (
 	"github.com/hibouhq/hibou/internal/metrics"
 	"github.com/hibouhq/hibou/internal/secretscan"
 	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/version"
 	"github.com/hibouhq/hibou/internal/worker"
 )
 
@@ -505,17 +506,17 @@ func (s *Server) completeScanOnlySnapshot(ctx context.Context, repoID uuid.UUID,
 // maybeEnqueueSecretScan records a job for a push; the clone happens on
 // whichever worker claims it, never on the webhook path. Enqueue is gated on
 // config alone — the API pod may lack the gitleaks binary, the worker has it.
-func (s *Server) maybeEnqueueSecretScan(ctx context.Context, repo *store.Repository, refType store.RefType, refName string, event forge.PushEvent) {
+func (s *Server) maybeEnqueueSecretScan(ctx context.Context, repo *store.Repository, refType store.RefType, refName string, event forge.PushEvent) error {
 	if !s.cfg.SecretScan.Enabled || !s.cfg.SecretScan.OnPush {
-		return
+		return nil
 	}
 	if refType != store.RefTypeBranch {
-		return
+		return nil
 	}
 	after := strings.TrimSpace(event.After)
 	if after == "" || after == gitZeroSHA {
 		// Branch deletion: nothing to scan.
-		return
+		return nil
 	}
 
 	mode := store.SecretScanModeIncremental
@@ -526,17 +527,17 @@ func (s *Server) maybeEnqueueSecretScan(ctx context.Context, repo *store.Reposit
 		from = ""
 	}
 
-	if _, err := s.queries.EnqueueSecretScanJob(ctx, store.EnqueueSecretScanJobParams{
+	if err := s.queries.EnqueueObservedSecretScan(ctx, store.EnqueueSecretScanJobParams{
 		RepoID:     repo.ID,
 		RefName:    refName,
 		Mode:       mode,
 		FromCommit: from,
 		ToCommit:   after,
-	}); err != nil {
-		// The push webhook must succeed regardless; the enrolment full scan or
-		// the next push covers the gap.
+	}, version.Version+":"+strings.Join(s.cfg.SecretScan.Providers, ",")); err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Str("ref", refName).Msg("enqueue secret scan job")
+		return err
 	}
+	return nil
 }
 
 func (s *Server) resolveSecretScanCommit(ctx context.Context, job *store.SecretScanJob, ref *store.Ref, provider forge.Provider, target secretScanTarget) (string, error) {

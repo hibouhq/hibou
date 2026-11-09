@@ -182,6 +182,7 @@ const router = createRouter({
             { path: 'admins', name: 'settings-instance-admins', component: () => import('@/views/settings/InstanceAdminsSettings.vue') },
             { path: 'audit', name: 'settings-instance-audit', component: () => import('@/views/settings/InstanceAuditSettings.vue') },
             { path: 'jobs', name: 'settings-instance-jobs', component: () => import('@/views/settings/InstanceJobsSettings.vue') },
+            { path: 'forges', name: 'settings-instance-forges', component: () => import('@/views/settings/ForgeDeliverySettings.vue') },
             { path: 'storage', name: 'settings-instance-storage', component: () => import('@/views/settings/InstanceStorageSettings.vue') },
             { path: 'people', name: 'settings-instance-people', component: () => import('@/views/settings/InstanceMembersSettings.vue') },
             // Mirrors the API: one subject, watches nested under it. See ADR-028.

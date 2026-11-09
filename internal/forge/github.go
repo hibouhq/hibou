@@ -50,7 +50,9 @@ type GitHub struct {
 	// permissions (github_tokens.go).
 	ownerInstallations map[string]cachedInstallation
 	// tier caps what any token may ask for (ADR-052 §2).
-	tier Tier
+	tier    Tier
+	retryMu sync.Mutex
+	retryAt time.Time
 }
 
 type ownerToken struct {
@@ -135,11 +137,7 @@ func (g *GitHub) Installations(ctx context.Context) ([]Installation, error) {
 
 	result := make([]Installation, 0, len(installations))
 	for _, installation := range installations {
-		result = append(result, Installation{
-			ID:          installation.ID,
-			AccountName: installation.Account.Login,
-			AccountType: installation.Account.Type,
-		})
+		result = append(result, installation.toInstallation())
 	}
 
 	return result, nil
@@ -829,7 +827,8 @@ func (g *GitHub) primaryEmail(ctx context.Context, accessToken string) (string, 
 
 	var payload []githubEmail
 	status, err := g.doWithStatus(request, &payload)
-	if err != nil && status == http.StatusForbidden && strings.Contains(err.Error(), "Resource not accessible by integration") {
+	var apiErr *APIError
+	if err != nil && status == http.StatusForbidden && errors.As(err, &apiErr) && apiErr.IntegrationDenied {
 		return "", errors.New("github login requires OAuth App credentials in HIBOU_FORGE_N_CLIENT_ID and HIBOU_FORGE_N_CLIENT_SECRET; keep GitHub App credentials in HIBOU_FORGE_N_APP_ID and HIBOU_FORGE_N_PRIVATE_KEY only")
 	}
 	if err != nil {
@@ -1026,7 +1025,10 @@ func (g *GitHub) listInstallations(ctx context.Context) ([]githubInstallation, e
 
 	var all []githubInstallation
 	path := "/app/installations?per_page=100"
-	for path != "" {
+	for page := 0; path != ""; page++ {
+		if page >= reconciliationPageLimit {
+			return nil, errors.New("installation listing exceeded pagination limit")
+		}
 		req, err := g.newRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
 			return nil, err
@@ -1034,15 +1036,12 @@ func (g *GitHub) listInstallations(ctx context.Context) ([]githubInstallation, e
 		req.Header.Set("Authorization", githubBearerPrefix+jwt)
 
 		var page []githubInstallation
-		resp, err := g.doWithResponse(req, &page)
+		next, err := g.readAuthorizedObservation(ctx, req, "app:"+path, &page)
 		if err != nil {
 			return nil, fmt.Errorf("list github app installations: %w", err)
 		}
 		all = append(all, page...)
-		path = nextPagePath(resp)
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
+		path = next
 	}
 
 	return all, nil
@@ -1154,7 +1153,7 @@ func (g *GitHub) createInstallationTokenWith(ctx context.Context, installationID
 
 	var token githubInstallationToken
 	if status, err := g.doWithStatus(req, &token); err != nil {
-		if status == http.StatusUnprocessableEntity && request != nil && len(request.Repositories) > 0 {
+		if status == http.StatusUnprocessableEntity && request != nil && (len(request.Repositories) > 0 || len(request.RepositoryIDs) > 0) {
 			// The repository is not part of the installation (or does not
 			// exist): the same answer a broad token would have got as 404.
 			return nil, fmt.Errorf("%w: %s not accessible to installation %d", ErrRepositoryNotFound, strings.Join(request.Repositories, ","), installationID)
@@ -1168,36 +1167,44 @@ func (g *GitHub) createInstallationTokenWith(ctx context.Context, installationID
 // ListInstallationRepositories lists all repos accessible to an App installation.
 // Paginates through all pages.
 func (g *GitHub) ListInstallationRepositories(ctx context.Context, installationID int64) ([]Repository, error) {
-	token, err := g.createInstallationToken(ctx, installationID)
+	token, err := g.installationInventoryToken(ctx, installationID)
 	if err != nil {
 		return nil, err
 	}
 
 	var repositories []Repository
+	var expectedTotal *int
 	path := "/installation/repositories?per_page=100"
-	for path != "" {
+	for page := 0; path != ""; page++ {
+		if page >= reconciliationPageLimit {
+			return nil, errors.New("installation repository listing exceeded pagination limit")
+		}
 		req, err := g.newRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", githubBearerPrefix+token.Token)
+		req.Header.Set("Authorization", githubBearerPrefix+token)
 
 		var payload struct {
 			Repositories []githubRepository `json:"repositories"`
+			TotalCount   *int               `json:"total_count"`
 		}
-		resp, err := g.doWithResponse(req, &payload)
+		next, err := g.readAuthorizedObservation(ctx, req, fmt.Sprintf("installation:%d:%s", installationID, path), &payload)
 		if err != nil {
 			return nil, fmt.Errorf("list installation repositories: %w", err)
 		}
 		for _, repo := range payload.Repositories {
 			repositories = append(repositories, repo.toRepository())
 		}
-		path = nextPagePath(resp)
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
+		if payload.TotalCount != nil {
+			expectedTotal = payload.TotalCount
 		}
+		path = next
 	}
 
+	if expectedTotal != nil && len(repositories) != *expectedTotal {
+		return nil, errors.New("installation repository listing incomplete: total_count does not match pages")
+	}
 	return repositories, nil
 }
 
@@ -1255,19 +1262,14 @@ func (g *GitHub) do(request *http.Request, out any) error {
 
 // doWithResponse performs a request and returns the raw HTTP response (for pagination headers).
 func (g *GitHub) doWithResponse(request *http.Request, out any) (*http.Response, error) {
-	response, err := g.httpClient.Do(request)
+	response, err := g.sendRequest(request)
 	if err != nil {
 		return nil, fmt.Errorf("perform github request: %w", err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = response.Status
-		}
-		return nil, fmt.Errorf("github api %s: %s", request.URL.Path, message)
+		return nil, g.responseError(request, response)
 	}
 
 	if out != nil {
@@ -1317,19 +1319,14 @@ func nextPagePath(resp *http.Response) string {
 }
 
 func (g *GitHub) doWithStatus(request *http.Request, out any) (int, error) {
-	response, err := g.httpClient.Do(request)
+	response, err := g.sendRequest(request)
 	if err != nil {
 		return 0, fmt.Errorf("perform github request: %w", err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = response.Status
-		}
-		return response.StatusCode, fmt.Errorf("github api %s: %s", request.URL.Path, message)
+		return response.StatusCode, g.responseError(request, response)
 	}
 
 	if out == nil {
@@ -1446,6 +1443,7 @@ type githubRepository struct {
 	Size          int64  `json:"size"`
 	Owner         struct {
 		Login string `json:"login"`
+		ID    int64  `json:"id"`
 	} `json:"owner"`
 }
 
@@ -1472,6 +1470,8 @@ func (i githubInstallation) toInstallation() Installation {
 		ID:          i.ID,
 		AccountName: i.Account.Login,
 		AccountType: i.Account.Type,
+		AccountID:   strconv.FormatInt(i.Account.ID, 10),
+		Suspended:   i.SuspendedAt != nil,
 	}
 }
 
@@ -1504,6 +1504,7 @@ func (r githubRepository) toRepository() Repository {
 		ProviderID:     r.FullName,
 		ProviderRepoID: providerRepoID,
 		Owner:          r.Owner.Login,
+		OwnerID:        strconv.FormatInt(r.Owner.ID, 10),
 		Name:           r.Name,
 		FullName:       r.FullName,
 		DefaultBranch:  r.DefaultBranch,

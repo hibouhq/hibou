@@ -8,6 +8,7 @@ const KIND_LABELS: Record<string, string> = {
   dep_extraction: 'Dependency extraction',
   artifact_processing: 'Artifact processing',
   advisory_scan: 'Advisory scans',
+  forge_reconciliation: 'Forge reconciliation (sampled)',
 }
 
 // New job kinds render with their raw name until given a label here.

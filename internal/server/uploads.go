@@ -1524,6 +1524,9 @@ func buildUploadRefOptions(input uploadRequest) store.UpsertRefOptions {
 // check is never published for that PR.
 func uploadRefOptions(ctx context.Context, queries *store.Queries, repoID uuid.UUID, input uploadRequest) (store.UpsertRefOptions, error) {
 	options := buildUploadRefOptions(input)
+	if err := queries.RequestRepositoryReconciliation(ctx, repoID); err != nil {
+		return options, err
+	}
 	if refTypeFromName(input.Ref) != store.RefTypePullRequest {
 		return options, nil
 	}

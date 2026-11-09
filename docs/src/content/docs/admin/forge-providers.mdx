@@ -27,6 +27,9 @@ HIBOU_FORGE_{N}_URL
 HIBOU_FORGE_{N}_CLIENT_ID
 HIBOU_FORGE_{N}_CLIENT_SECRET
 HIBOU_FORGE_{N}_WEBHOOK_SECRET
+HIBOU_FORGE_{N}_EVENT_MODE
+HIBOU_FORGE_{N}_POLL_INTERVAL
+HIBOU_FORGE_{N}_INVENTORY_INTERVAL
 ```
 
 Where `{N}` is `0`, `1`, `2`, etc. Hibou reads indexes sequentially and stops at the first gap.
@@ -126,6 +129,63 @@ HIBOU_FORGE_0_WEBHOOK_SECRET=<webhook-secret>
 
 :::note
 GitHub does not require a `URL` field — it defaults to `https://github.com` and `https://api.github.com`.
+:::
+
+### Private GitHub / GHES instances without webhook ingress
+
+Use a GitHub App for machine reads and keep the OAuth credentials above for
+interactive login. Choose `poll` explicitly; a missing webhook secret never
+automatically changes delivery mode.
+
+```bash
+HIBOU_FORGE_0_EVENT_MODE=poll
+HIBOU_FORGE_0_APP_ID=<app-id>
+HIBOU_FORGE_0_PRIVATE_KEY=<pem-key>
+HIBOU_FORGE_0_POLL_INTERVAL=5m
+HIBOU_FORGE_0_INVENTORY_INTERVAL=30m
+HIBOU_FORGE_0_TIER=report
+```
+
+`webhook` is the default. `hybrid` accepts verified webhooks and reconciles
+through the API; both need a webhook secret outside development. `poll`
+disables the receiver even if a secret remains configured, so deactivate
+delivery in the GitHub App settings. No public ingress or relay is required.
+Hibou needs outbound API/Git access, and browsers/runners need private
+connectivity to Hibou. Existing CI upload commands and token scopes do not
+change.
+
+Grant Metadata/Contents read, Pull requests read and Organization Members
+read. Actions read enables failed-build reconciliation; without it, pending
+builds retain the timeout policy and report the missing capability.
+Checks/Statuses write are optional for publishing checks; polling needs no
+Contents write. Installations are discovered without an installation event,
+but importing an organization requires the signed-in user's current forge
+administration. Discovered repositories are not enrolled automatically.
+
+Helm exposes `hibou.forges[].eventMode`, `pollInterval` and
+`inventoryInterval`. Server YAML accepts a `forges` list with `event_mode`,
+`poll_interval` and `inventory_interval`; indexed environment variables win.
+GitHub Enterprise uses its configured API endpoint, including `/api/v3`.
+
+Instance admins can inspect **Settings → Forge delivery** for mode,
+freshness, next attempt, denied permissions and rate-limit deferral, and
+**Jobs & workers** for run history. The intervals are scheduling targets,
+not freshness guarantees. "Sync now" uses the durable scheduler rather than
+bypassing backoff.
+
+For hundreds of repositories, unchanged pages use ETags (including installation
+inventory), but HTTP headers, TLS and round trips still consume bandwidth.
+Inactive discovery uses the slower interval; uploads wake their own repo's
+PR/build scopes. Unchanged successful run history is sampled hourly, while
+material changes and errors are retained. Reconciliation counts describe
+samples, not every successful poll. Explicit shorter intervals are supported
+when the API budget and required freshness justify them.
+
+:::caution
+Polling cannot inspect a commit pushed and removed between polls. Retain
+webhooks or enforce scans in CI/pre-receive when every-push inspection is
+required. Neither a successful poll nor a successful workflow proves that
+analysis was uploaded or that scan coverage is complete.
 :::
 
 </TabItem>

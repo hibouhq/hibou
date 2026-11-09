@@ -300,8 +300,27 @@ max:
 #   HIBOU_FORGE_0_WEBHOOK_SECRET=...
 #   HIBOU_FORGE_0_TOKEN=...
 #
-# Outside development, startup fails when a declared forge has no CLIENT_ID or
-# no WEBHOOK_SECRET: webhooks are only accepted with a valid signature/token.
+# Outside development, startup requires CLIENT_ID and (for webhook/hybrid)
+# WEBHOOK_SECRET. GitHub App poll mode needs no inbound webhook or secret:
+#   HIBOU_FORGE_0_TYPE=github
+#   HIBOU_FORGE_0_EVENT_MODE=poll
+#   HIBOU_FORGE_0_POLL_INTERVAL=5m
+#   HIBOU_FORGE_0_INVENTORY_INTERVAL=30m
+#   HIBOU_FORGE_0_APP_ID=...
+#   HIBOU_FORGE_0_PRIVATE_KEY=...
+# Keep CLIENT_ID/CLIENT_SECRET for interactive OAuth login. Modes are explicit:
+# webhook (default), poll (receiver disabled), hybrid (both inputs).
+# The equivalent YAML list is also accepted; indexed env vars override it:
+# forges:
+#   - type: github
+#     id: github
+#     event_mode: poll
+#     poll_interval: 5m
+#     inventory_interval: 30m
+#     client_id: ...
+#     client_secret: ...
+#     app_id: 123
+#     private_key: ...
 #
 # TOKEN is the forge API token the server authenticates its own calls with —
 # commit statuses, PR comments, repository reads. The OAuth2 client credentials

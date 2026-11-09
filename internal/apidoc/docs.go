@@ -716,6 +716,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/instance/forges/events": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Delivery mode and durable reconciliation freshness/errors per scope. Instance administrators only.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "instance"
+                ],
+                "summary": "Forge event delivery status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/server.forgeDeliveryStatus"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/instance/jobs/overview": {
             "get": {
                 "security": [
@@ -12079,6 +12137,9 @@ const docTemplate = `{
                 "account": {
                     "type": "string"
                 },
+                "event_mode": {
+                    "type": "string"
+                },
                 "provider": {
                     "type": "string"
                 },
@@ -14043,6 +14104,61 @@ const docTemplate = `{
                 "unconfined_repositories": {
                     "description": "UnconfinedRepositories counts the repositories with an error finding.",
                     "type": "integer"
+                }
+            }
+        },
+        "server.forgeDeliveryScope": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "gate_pending": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "last_attempt_at": {
+                    "type": "string"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_success_at": {
+                    "type": "string"
+                },
+                "next_due_at": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.forgeDeliveryStatus": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.forgeDeliveryScope"
+                    }
                 }
             }
         },

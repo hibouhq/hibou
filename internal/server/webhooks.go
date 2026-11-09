@@ -47,6 +47,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusNotFound, "provider not configured")
 		return
 	}
+	if s.forgeEventConfig(providerID).DeliveryMode() == "poll" {
+		api.JSONError(w, http.StatusNotFound, "webhook receiver disabled for polling forge")
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, forge.MaxWebhookPayloadBytes)
 	payload, err := s.verifiedWebhookPayload(r, providerID, provider)
@@ -90,6 +94,23 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			s.log.Debug().Str("provider", providerID).Str("event_type", eventType).Msg("ignored unsupported webhook event")
 			api.JSON(w, http.StatusOK, webhookResponse{Received: true})
 			return
+		}
+		// Serialize fetching/applying poll state with webhook application. The
+		// poll fetch happens under the same lock, so it cannot overwrite an
+		// intervening webhook with an older observation.
+		release, err := s.lockForgeDelivery(r.Context(), providerID, false)
+		if err != nil {
+			s.log.Error().Err(err).Str("provider", providerID).Msg("lock forge delivery")
+			api.JSONError(w, http.StatusServiceUnavailable, "forge delivery busy")
+			return
+		}
+		defer release()
+		if s.forgeEventConfig(providerID).PollingEnabled() {
+			if err := s.verifyObservedWebhookIdentity(r.Context(), providerID, event); err != nil {
+				s.log.Warn().Err(err).Str("provider", providerID).Msg("webhook repository identity rejected")
+				api.JSONError(w, http.StatusForbidden, "repository identity does not match enrollment")
+				return
+			}
 		}
 		api.JSONError(w, http.StatusBadRequest, "unsupported webhook event")
 		return
@@ -370,7 +391,12 @@ func (s *Server) handleBuildWebhookEvent(ctx context.Context, providerID string,
 	if repo == nil {
 		return nil
 	}
-	failed, err := s.queries.FailPendingSnapshotsForBuild(ctx, repo.ID, event.CommitSHA, event.RunID)
+	var failed int64
+	if event.RunID != "" && event.RunAttempt != "" {
+		failed, err = s.queries.FailObservedBuild(ctx, repo.ID, event.RunID, event.RunAttempt, event.CommitSHA)
+	} else {
+		failed, err = s.queries.FailPendingSnapshotsForBuild(ctx, repo.ID, event.CommitSHA, event.RunID)
+	}
 	if err != nil {
 		return err
 	}
@@ -415,7 +441,7 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 			return err
 		}
 		if release != nil {
-			s.removeDerivedRelease(r.Context(), repo, release, "tag_deleted")
+			return s.removeDerivedRelease(r.Context(), repo, release, "tag_deleted")
 		}
 		return nil
 	}
@@ -424,9 +450,13 @@ func (s *Server) handlePushWebhookEvent(r *http.Request, providerID string, even
 		return err
 	}
 
-	s.maybeEnqueueSecretScan(r.Context(), repo, refType, refName, event)
-	s.maybeEnqueueDepExtraction(r.Context(), repo, refType, refName, event)
-	if refType == store.RefTypeBranch {
+	if err := s.maybeEnqueueSecretScan(r.Context(), repo, refType, refName, event); err != nil {
+		return err
+	}
+	if err := s.maybeEnqueueDepExtraction(r.Context(), repo, refType, refName, event); err != nil {
+		return err
+	}
+	if refType == store.RefTypeBranch && s.db != nil {
 		s.refreshApplicabilityAsync(repo, refName)
 	}
 	return nil
@@ -485,7 +515,7 @@ func (s *Server) handleReleaseWebhookEvent(r *http.Request, providerID string, e
 			return err
 		}
 		if release != nil {
-			s.removeDerivedRelease(r.Context(), repo, release, "forge_release_deleted")
+			return s.removeDerivedRelease(r.Context(), repo, release, "forge_release_deleted")
 		}
 		return nil
 	}
@@ -505,11 +535,16 @@ func (s *Server) handleReleaseWebhookEvent(r *http.Request, providerID string, e
 		return err
 	}
 	if existing == nil {
-		snapshot, err := s.queries.GetLatestCompleteSnapshotByRef(r.Context(), ref.ID)
+		var snapshot *store.Snapshot
+		if ref.LatestCommitSHA != nil {
+			snapshot, err = s.queries.GetSnapshotByRefCommit(r.Context(), ref.ID, *ref.LatestCommitSHA)
+		} else {
+			snapshot, err = s.queries.GetLatestCompleteSnapshotByRef(r.Context(), ref.ID)
+		}
 		if err != nil {
 			return err
 		}
-		if snapshot != nil {
+		if snapshot != nil && (snapshot.Status == store.SnapshotStatusComplete || snapshot.Status == store.SnapshotStatusActive) {
 			snapshotID = &snapshot.ID
 		}
 	}
@@ -545,6 +580,7 @@ func (s *Server) handleReleaseWebhookEvent(r *http.Request, providerID string, e
 	if release.SnapshotID != nil {
 		if err := s.pinReleaseSnapshot(r.Context(), *release.SnapshotID); err != nil {
 			s.log.Warn().Err(err).Str("snapshot_id", release.SnapshotID.String()).Msg("failed to pin release snapshot; retention may prune it")
+			return err
 		}
 	}
 	return nil
@@ -571,7 +607,7 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 
 	var mergeTargetRefID *uuid.UUID
 	if targetBranch := strings.TrimSpace(event.TargetBranch); targetBranch != "" {
-		targetRef, err := s.queries.UpsertRef(r.Context(), repo.ID, targetBranch, refTypeFromName(targetBranch), store.UpsertRefOptions{})
+		targetRef, err := s.queries.UpsertRef(r.Context(), repo.ID, targetBranch, refTypeFromName(targetBranch), store.UpsertRefOptions{LatestCommitSHA: stringPtr(event.BaseSHA)})
 		if err != nil {
 			return err
 		}
@@ -581,7 +617,14 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 	}
 
 	refName := pullRequestRefName(forgeType, event.Number)
+	authoritativeState := "open"
+	if event.Merged {
+		authoritativeState = "merged"
+	} else if strings.EqualFold(event.Action, "closed") {
+		authoritativeState = "closed"
+	}
 	ref, err := s.queries.UpsertRef(r.Context(), repo.ID, refName, refTypeFromName(refName), store.UpsertRefOptions{
+		PRState:          &authoritativeState,
 		MergeTargetRefID: mergeTargetRefID,
 		LatestCommitSHA:  stringPtr(event.HeadSHA),
 		PRTitle:          event.Title,
@@ -605,9 +648,11 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 		// awaited and the CI upload adopts the row rather than racing it.
 		if headSHA := strings.TrimSpace(event.HeadSHA); headSHA != "" {
 			if _, err := s.queries.CreatePlaceholderSnapshot(r.Context(), ref.ID, headSHA); err != nil {
-				s.log.Warn().Err(err).Str("ref_id", ref.ID.String()).Str("commit_sha", headSHA).Msg("create placeholder snapshot for PR head")
+				return fmt.Errorf("create placeholder snapshot for PR head: %w", err)
 			}
-			s.maybeEnqueuePRDepExtraction(r.Context(), repo, ref, headSHA)
+			if err := s.maybeEnqueuePRDepExtraction(r.Context(), repo, ref, headSHA); err != nil {
+				return err
+			}
 		}
 		s.bus.Publish(r.Context(), events.Event{
 			Type:    events.GateRecomputeRequested,
@@ -618,6 +663,12 @@ func (s *Server) handlePullRequestWebhookEvent(r *http.Request, providerID, forg
 	prState, prMergedAt, prClosedAt, shouldUpdate := pullRequestLifecycleState(event.Action, event.Merged)
 	if !shouldUpdate {
 		return nil
+	}
+	if event.ClosedAt != nil {
+		prClosedAt = event.ClosedAt
+	}
+	if event.MergedAt != nil {
+		prMergedAt = event.MergedAt
 	}
 
 	_, err = s.queries.UpdateRefPRState(r.Context(), ref.ID, stringPtr(prState), event.Title, event.SourceBranch, prMergedAt, prClosedAt)

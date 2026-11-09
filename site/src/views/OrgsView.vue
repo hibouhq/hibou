@@ -231,6 +231,12 @@
                     <p class="mt-1 text-sm text-gray-500">
                       {{ account.provider }} / {{ account.slug }}
                     </p>
+                    <p
+                      v-if="account.event_mode === 'poll'"
+                      class="mt-1 text-xs text-accent"
+                    >
+                      Outbound API reconciliation; no inbound webhook required.
+                    </p>
                   </div>
                 </div>
 

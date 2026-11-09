@@ -296,6 +296,9 @@ type SecretScanConfig struct {
 // ForgeConfig holds configuration for a single forge instance.
 // Populated from indexed env vars: HIBOU_FORGE_0_TYPE, HIBOU_FORGE_0_ID, etc.
 type ForgeConfig struct {
+	EventMode         string        `mapstructure:"event_mode"`
+	PollInterval      time.Duration `mapstructure:"poll_interval"`
+	InventoryInterval time.Duration `mapstructure:"inventory_interval"`
 	// Type is the forge type: "github", "forgejo", "gitlab".
 	Type string
 	// ID is the unique identifier used in routes and DB records.
@@ -305,11 +308,11 @@ type ForgeConfig struct {
 	// URL is the base URL for self-hosted instances. Not needed for github.com.
 	URL string
 	// ClientID is the OAuth2 application client ID.
-	ClientID string
+	ClientID string `mapstructure:"client_id"`
 	// ClientSecret is the OAuth2 application client secret.
-	ClientSecret string
+	ClientSecret string `mapstructure:"client_secret"`
 	// WebhookSecret is the secret used to validate webhook payloads.
-	WebhookSecret string
+	WebhookSecret string `mapstructure:"webhook_secret"`
 	// Token is a forge API token the server authenticates its own calls with:
 	// commit statuses, PR comments, repository reads. It is distinct from the
 	// OAuth2 client credentials, which only authenticate a user login — a forge
@@ -317,18 +320,18 @@ type ForgeConfig struct {
 	// tokens instead and leave this empty.
 	Token string
 	// AppID is the GitHub App ID. When set with PrivateKey, enables GitHub App mode.
-	AppID int64
+	AppID int64 `mapstructure:"app_id"`
 	// PrivateKey is the PEM-encoded private key for the GitHub App.
-	PrivateKey string
+	PrivateKey string `mapstructure:"private_key"`
 	// IPAllowlist enables source IP allowlisting on webhook routes for this forge.
 	// For GitHub forges, IPs are auto-refreshed from the /meta endpoint.
-	IPAllowlist bool
+	IPAllowlist bool `mapstructure:"ip_allowlist"`
 	// RateLimitRPS is the per-IP rate limit in requests/second for this forge's webhook routes (0 = disabled).
-	RateLimitRPS float64
+	RateLimitRPS float64 `mapstructure:"rate_limit_rps"`
 	// AllowedCIDRs is a comma-separated list of CIDR ranges allowed on webhook routes.
 	// For static IP allowlisting (GitLab SaaS, self-hosted forges).
 	// For GitHub forges, IPs are auto-fetched; this field provides additional static ranges.
-	AllowedCIDRs string
+	AllowedCIDRs string `mapstructure:"allowed_cidrs"`
 	// Tier caps what the forge's installation tokens may ask for (ADR-052
 	// §2): read, report or propose. Empty keeps the App installation's own
 	// permissions as the cap, with a startup warning.
@@ -738,7 +741,10 @@ func Load() (Config, error) {
 		}.Normalize(),
 	}
 
-	cfg.Forges = loadForgeConfigs()
+	cfg.Forges, err = loadForgeConfigs(v)
+	if err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -881,6 +887,18 @@ func (c Config) validateSessionSecret(log zerolog.Logger) error {
 func (c Config) validateForges(log zerolog.Logger) error {
 	var problems []string
 	for i, fc := range c.Forges {
+		switch fc.DeliveryMode() {
+		case "webhook":
+		case "poll", "hybrid":
+			if fc.Type != "github" || fc.AppID <= 0 || strings.TrimSpace(fc.PrivateKey) == "" {
+				return fmt.Errorf("forge %q: poll/hybrid requires GitHub App credentials", fc.ID)
+			}
+		default:
+			return fmt.Errorf("forge %q: invalid event_mode %q; want webhook, poll or hybrid", fc.ID, fc.EventMode)
+		}
+		if fc.PollInterval < 0 || fc.InventoryInterval < 0 {
+			return fmt.Errorf("forge %q: reconciliation intervals must be positive", fc.ID)
+		}
 		switch fc.Tier {
 		case "", "read", "report", "propose":
 		default:
@@ -893,7 +911,7 @@ func (c Config) validateForges(log zerolog.Logger) error {
 		if strings.TrimSpace(fc.ClientID) == "" {
 			problems = append(problems, fmt.Sprintf("forge %q (HIBOU_FORGE_%d_CLIENT_ID) has no OAuth client id", fc.ID, i))
 		}
-		if strings.TrimSpace(fc.WebhookSecret) == "" {
+		if fc.DeliveryMode() != "poll" && strings.TrimSpace(fc.WebhookSecret) == "" {
 			problems = append(problems, fmt.Sprintf("forge %q (HIBOU_FORGE_%d_WEBHOOK_SECRET) has no webhook secret, so webhook payloads cannot be verified", fc.ID, i))
 		}
 	}
@@ -1255,39 +1273,100 @@ func parseRetentionDuration(value string) (time.Duration, error) {
 //	HIBOU_FORGE_0_CLIENT_SECRET=def
 //	HIBOU_FORGE_0_WEBHOOK_SECRET=ghi
 //	HIBOU_FORGE_0_TOKEN=jkl
-func loadForgeConfigs() []ForgeConfig {
+func loadForgeConfigs(v *viper.Viper) ([]ForgeConfig, error) {
 	var configs []ForgeConfig
+	var raw []map[string]any
+	if err := v.UnmarshalKey("forges", &raw); err != nil {
+		return nil, fmt.Errorf("parse forges: %w", err)
+	}
+	if err := v.UnmarshalKey("forges", &configs); err != nil {
+		return nil, fmt.Errorf("parse forges: %w", err)
+	}
 
 	for i := 0; ; i++ {
 		prefix := "HIBOU_FORGE_" + strconv.Itoa(i) + "_"
 		forgeType := strings.TrimSpace(os.Getenv(prefix + "TYPE"))
 		if forgeType == "" {
-			break
+			if i >= len(configs) {
+				break
+			}
+			forgeType = configs[i].Type
 		}
-
-		id := strings.TrimSpace(os.Getenv(prefix + "ID"))
+		if i >= len(configs) {
+			configs = append(configs, ForgeConfig{})
+		}
+		fc := &configs[i]
+		env := func(key, fallback string) string {
+			if value, ok := os.LookupEnv(prefix + key); ok {
+				return strings.TrimSpace(value)
+			}
+			return fallback
+		}
+		id := env("ID", fc.ID)
 		if id == "" {
 			id = forgeType
 		}
 
-		configs = append(configs, ForgeConfig{
-			Type:          forgeType,
-			ID:            id,
-			URL:           strings.TrimSpace(os.Getenv(prefix + "URL")),
-			ClientID:      strings.TrimSpace(os.Getenv(prefix + "CLIENT_ID")),
-			ClientSecret:  strings.TrimSpace(os.Getenv(prefix + "CLIENT_SECRET")),
-			WebhookSecret: strings.TrimSpace(os.Getenv(prefix + "WEBHOOK_SECRET")),
-			Token:         strings.TrimSpace(os.Getenv(prefix + "TOKEN")),
-			AppID:         parseForgeInt64(prefix + "APP_ID"),
-			PrivateKey:    strings.TrimSpace(os.Getenv(prefix + "PRIVATE_KEY")),
-			IPAllowlist:   strings.EqualFold(strings.TrimSpace(os.Getenv(prefix+"IP_ALLOWLIST")), "true"),
-			RateLimitRPS:  parseForgeFloat64(prefix + "RATE_LIMIT_RPS"),
-			AllowedCIDRs:  strings.TrimSpace(os.Getenv(prefix + "ALLOWED_CIDRS")),
-			Tier:          strings.ToLower(strings.TrimSpace(os.Getenv(prefix + "TIER"))),
-		})
+		*fc = ForgeConfig{
+			Type:              forgeType,
+			ID:                id,
+			URL:               env("URL", fc.URL),
+			ClientID:          env("CLIENT_ID", fc.ClientID),
+			ClientSecret:      env("CLIENT_SECRET", fc.ClientSecret),
+			WebhookSecret:     env("WEBHOOK_SECRET", fc.WebhookSecret),
+			Token:             env("TOKEN", fc.Token),
+			AppID:             fc.AppID,
+			PrivateKey:        env("PRIVATE_KEY", fc.PrivateKey),
+			IPAllowlist:       strings.EqualFold(env("IP_ALLOWLIST", strconv.FormatBool(fc.IPAllowlist)), "true"),
+			RateLimitRPS:      fc.RateLimitRPS,
+			AllowedCIDRs:      env("ALLOWED_CIDRS", fc.AllowedCIDRs),
+			Tier:              strings.ToLower(env("TIER", fc.Tier)),
+			EventMode:         strings.ToLower(env("EVENT_MODE", fc.EventMode)),
+			PollInterval:      fc.PollInterval,
+			InventoryInterval: fc.InventoryInterval,
+		}
+		if _, ok := os.LookupEnv(prefix + "APP_ID"); ok {
+			fc.AppID = parseForgeInt64(prefix + "APP_ID")
+		}
+		if _, ok := os.LookupEnv(prefix + "RATE_LIMIT_RPS"); ok {
+			fc.RateLimitRPS = parseForgeFloat64(prefix + "RATE_LIMIT_RPS")
+		}
+		for key, dst := range map[string]*time.Duration{"POLL_INTERVAL": &fc.PollInterval, "INVENTORY_INTERVAL": &fc.InventoryInterval} {
+			value, ok := os.LookupEnv(prefix + key)
+			if !ok && i < len(raw) {
+				if original, exists := raw[i][strings.ToLower(key)]; exists {
+					value = fmt.Sprint(original)
+					ok = true
+				}
+			}
+			if ok {
+				duration, err := time.ParseDuration(value)
+				if err != nil || duration <= 0 {
+					return nil, fmt.Errorf("forge %q: %s must be a positive duration", id, key)
+				}
+				*dst = duration
+			}
+		}
+		if fc.PollInterval == 0 {
+			fc.PollInterval = 5 * time.Minute
+		}
+		if fc.InventoryInterval == 0 {
+			fc.InventoryInterval = 30 * time.Minute
+		}
 	}
 
-	return configs
+	return configs, nil
+}
+
+func (f ForgeConfig) DeliveryMode() string {
+	if f.EventMode == "" {
+		return "webhook"
+	}
+	return f.EventMode
+}
+
+func (f ForgeConfig) PollingEnabled() bool {
+	return f.DeliveryMode() == "poll" || f.DeliveryMode() == "hybrid"
 }
 
 func parseUploadWindow(value string) (time.Duration, error) {

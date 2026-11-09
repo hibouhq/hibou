@@ -76,6 +76,7 @@ type Repository struct {
 	ProviderID     string
 	ProviderRepoID string
 	Owner          string
+	OwnerID        string
 	Name           string
 	FullName       string
 	DefaultBranch  string
@@ -109,6 +110,8 @@ type Installation struct {
 	ID          int64
 	AccountName string
 	AccountType string
+	AccountID   string
+	Suspended   bool
 }
 
 type Branch struct {
@@ -193,6 +196,10 @@ type PullRequestEvent struct {
 	TargetBranch string
 	HeadSHA      string
 	Repo         Repository
+	BaseSHA      string
+	UpdatedAt    time.Time
+	ClosedAt     *time.Time
+	MergedAt     *time.Time
 }
 
 func (PullRequestEvent) EventType() string {

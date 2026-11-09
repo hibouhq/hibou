@@ -16,6 +16,7 @@ import (
 type RefType = dbgen.RefType
 
 type UpsertRefOptions struct {
+	PRState          *string
 	ProviderID       *string
 	MergeTargetRefID *uuid.UUID
 	LatestCommitSHA  *string
@@ -161,6 +162,7 @@ func (q *Queries) UpsertRef(ctx context.Context, repoID uuid.UUID, name string, 
 		MergeTargetRefID: nullUUIDFromPtr(opts.MergeTargetRefID),
 		LatestCommitSha:  nullStringFromPtr(opts.LatestCommitSHA),
 		PrNumber:         nullStringFromPtr(opts.PRNumber),
+		PrState:          nullStringFromPtr(opts.PRState),
 		PrTitle:          opts.PRTitle,
 		PrSourceBranch:   opts.PRSourceBranch,
 	})

@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/repoinventory"
 )
@@ -37,6 +39,20 @@ func (s *Server) handleSyncRepos(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.inventorySvc == nil {
 		api.JSONError(w, http.StatusServiceUnavailable, "repository inventory service unavailable")
+		return
+	}
+	if s.forgeEventConfig(org.Provider).PollingEnabled() {
+		if err := s.queries.EnsureForgeReconciliation(r.Context(), org.Provider, "app", "inventory", uuid.NullUUID{}); err != nil {
+			s.log.Error().Err(err).Msg("schedule forge inventory sync")
+			api.JSONError(w, http.StatusInternalServerError, "failed to schedule reconciliation")
+			return
+		}
+		if err := s.queries.RequestForgeReconciliation(r.Context(), org.Provider); err != nil {
+			s.log.Error().Err(err).Msg("request forge reconciliation")
+			api.JSONError(w, http.StatusInternalServerError, "failed to request reconciliation")
+			return
+		}
+		api.JSON(w, http.StatusAccepted, syncReposResponse{Outcome: "scheduled", Provider: org.Provider, Account: org.Slug})
 		return
 	}
 	outcome, err := s.inventorySvc.Sync(r.Context(), org.Provider, org.Slug)

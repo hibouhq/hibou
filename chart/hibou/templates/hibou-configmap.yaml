@@ -102,6 +102,9 @@ data:
   {{- end }}
   {{- range $i, $forge := .Values.hibou.forges }}
   {{ printf "HIBOU_FORGE_%d_TYPE" $i }}: {{ $forge.type | quote }}
+  {{ printf "HIBOU_FORGE_%d_EVENT_MODE" $i }}: {{ $forge.eventMode | default "webhook" | quote }}
+  {{ printf "HIBOU_FORGE_%d_POLL_INTERVAL" $i }}: {{ $forge.pollInterval | default "5m" | quote }}
+  {{ printf "HIBOU_FORGE_%d_INVENTORY_INTERVAL" $i }}: {{ $forge.inventoryInterval | default "30m" | quote }}
   {{ printf "HIBOU_FORGE_%d_ID" $i }}: {{ $forge.id | default $forge.type | quote }}
   {{- if $forge.url }}
   {{ printf "HIBOU_FORGE_%d_URL" $i }}: {{ $forge.url | quote }}

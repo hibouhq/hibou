@@ -85,7 +85,15 @@ SELECT 'advisory_scan'::text,
 		WHERE sc.status IN ('failed', 'cancelled') AND sc.completed_at >= NOW() - INTERVAL '24 hours'
 	)::bigint,
 	COALESCE((SELECT MIN(x.created_at) FROM scans x WHERE x.status = 'pending'), 'epoch'::timestamptz)::timestamptz
-FROM scans sc;
+FROM scans sc
+UNION ALL
+SELECT 'forge_reconciliation'::text,
+	(SELECT count(*) FROM forge_reconciliation WHERE next_due_at<=now() AND (claim_expires_at IS NULL OR claim_expires_at<now()))::bigint,
+	(SELECT count(*) FROM forge_reconciliation WHERE claim_expires_at>=now())::bigint,
+	COUNT(*) FILTER (WHERE finished_at>=now()-interval '24 hours' AND error='')::bigint,
+	COUNT(*) FILTER (WHERE finished_at>=now()-interval '24 hours' AND error<>'')::bigint,
+	COALESCE((SELECT min(next_due_at) FROM forge_reconciliation WHERE next_due_at<=now() AND (claim_expires_at IS NULL OR claim_expires_at<now())),'epoch'::timestamptz)::timestamptz
+FROM forge_reconciliation_runs;
 
 -- name: ListInstanceJobRuns :many
 -- Timeline feed: every run that finished inside the window plus everything
@@ -201,6 +209,22 @@ SELECT * FROM (
 	JOIN repositories r ON r.id = s.repo_id
 	JOIN organizations o ON o.id = s.org_id
 	WHERE sc.completed_at IS NULL OR sc.completed_at >= sqlc.arg(since)::timestamptz
+	UNION ALL
+	SELECT 'forge_reconciliation'::text, run.id,
+		(job.provider || '/' || job.scope)::text, job.kind::text,
+		CASE WHEN run.finished_at IS NULL THEN 'running'
+			WHEN run.error='' THEN 'complete' ELSE 'failed' END::text,
+		run.queued_at, run.started_at, run.finished_at,
+		COALESCE(job.claimed_by::text,''), job.attempts, run.error::text
+	FROM forge_reconciliation_runs run
+	JOIN forge_reconciliation job ON job.id=run.job_id
+	WHERE run.finished_at IS NULL OR run.finished_at>=sqlc.arg(since)::timestamptz
+	UNION ALL
+	SELECT 'forge_reconciliation'::text, job.claimed_by,
+		(job.provider || '/' || job.scope)::text, job.kind::text, 'running'::text,
+		job.next_due_at,job.last_attempt_at,NULL::timestamptz,job.claimed_by::text,job.attempts,''::text
+	FROM forge_reconciliation job WHERE job.claim_expires_at>=now()
+	AND NOT EXISTS(SELECT 1 FROM forge_reconciliation_runs run WHERE run.id=job.claimed_by)
 ) runs
 ORDER BY COALESCE(runs.started_at, runs.queued_at) DESC, runs.id DESC
 LIMIT sqlc.arg(max_rows);
@@ -241,6 +265,12 @@ WITH runs AS (
 		sc.completed_at
 	FROM scans sc
 	WHERE sc.completed_at >= sqlc.arg(since)::timestamptz
+	UNION ALL
+	SELECT 'forge_reconciliation'::text,
+		CASE WHEN error='' THEN 'complete' ELSE 'failed' END::text,
+		queued_at, started_at, finished_at
+	FROM forge_reconciliation_runs
+	WHERE finished_at>=sqlc.arg(since)::timestamptz
 )
 SELECT runs.kind,
 	to_timestamp(
@@ -299,6 +329,11 @@ WITH runs AS (
 	WHERE sc.completed_at >= sqlc.arg(since)::timestamptz - INTERVAL '7 days'
 		AND sc.completed_at < sqlc.arg(since)::timestamptz
 		AND sc.started_at IS NOT NULL
+	UNION ALL
+	SELECT 'forge_reconciliation'::text, queued_at, started_at, finished_at
+	FROM forge_reconciliation_runs
+	WHERE finished_at>=sqlc.arg(since)::timestamptz-interval '7 days'
+		AND finished_at<sqlc.arg(since)::timestamptz
 )
 SELECT runs.kind,
 	COUNT(*)::bigint AS samples,

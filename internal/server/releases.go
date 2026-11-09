@@ -103,39 +103,47 @@ func (s *Server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 // (ADR-024 §5b). Shipped history wins: any deployment row, whatever its
 // status, blocks removal (the FK RESTRICTs as the last line of defense).
 // Removal is audited with the webhook actor.
-func (s *Server) removeDerivedRelease(ctx context.Context, repo *store.Repository, release *store.Release, reason string) {
+func (s *Server) removeDerivedRelease(ctx context.Context, repo *store.Repository, release *store.Release, reason string) error {
 	deployments, err := s.queries.CountDeploymentsByRelease(ctx, release.ID)
 	if err != nil {
 		s.log.Warn().Err(err).Str("version", release.Version).Msg("release removal: failed to count deployments")
-		return
+		return err
 	}
 	if deployments > 0 {
 		s.log.Info().Str("version", release.Version).Str("repo", repo.Slug).Int64("deployments", deployments).Str("reason", reason).Msg("release source deleted but rollout history exists; keeping the release")
-		return
+		return nil
 	}
 
 	if err := s.queries.DeleteRelease(ctx, release.ID); err != nil {
 		s.log.Warn().Err(err).Str("version", release.Version).Msg("release removal failed")
-		return
+		return err
 	}
 	if release.SnapshotID != nil {
 		s.unpinSnapshotIfUnreferenced(ctx, *release.SnapshotID, release.ID)
 	}
 
 	orgID := uuid.NullUUID{UUID: repo.OrgID, Valid: true}
+	source, _ := ctx.Value(forgeObservationSourceKey{}).(string)
+	actorType := audit.ActorWebhook
+	if source == "poll" {
+		actorType = audit.ActorSystem
+	} else {
+		source = "webhook"
+	}
 	context := map[string]any{
-		"repo_id": repo.ID.String(),
-		"repo":    repo.Slug,
-		"version": release.Version,
-		"reason":  reason,
-		"source":  release.Source,
+		"repo_id":    repo.ID.String(),
+		"repo":       repo.Slug,
+		"version":    release.Version,
+		"reason":     reason,
+		"source":     release.Source,
+		"provenance": source,
 	}
 	encoded, err := json.Marshal(context)
 	if err != nil {
 		encoded = []byte(`{"status":"marshal_error"}`)
 	}
 	if _, err := s.queries.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
-		ActorType:    audit.ActorWebhook,
+		ActorType:    actorType,
 		ActorDisplay: "forge: " + reason,
 		Action:       "release.removed",
 		ResourceType: "release",
@@ -144,8 +152,10 @@ func (s *Server) removeDerivedRelease(ctx context.Context, repo *store.Repositor
 		Context:      encoded,
 	}); err != nil {
 		s.log.Warn().Err(err).Str("version", release.Version).Msg("audit log write failed; the release removal itself succeeded")
+		return err
 	}
 	s.log.Info().Str("version", release.Version).Str("repo", repo.Slug).Str("reason", reason).Msg("release removed: source deleted and nothing ever shipped")
+	return nil
 }
 
 func (s *Server) unpinSnapshotIfUnreferenced(ctx context.Context, snapshotID, excludedReleaseID uuid.UUID) {

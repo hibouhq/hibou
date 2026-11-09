@@ -295,7 +295,9 @@ async function syncNow() {
   try {
     const response = await api.syncRepos(provider.value, slug.value)
     await reloadRepos()
-    if (response.data.synced) {
+    if (response.data.outcome === 'scheduled') {
+      actionMessage.value = 'Reconciliation scheduled. Existing API backoff is preserved; reload after the worker finishes.'
+    } else if (response.data.synced) {
       actionMessage.value = formatSyncSummary(response.data)
     } else {
       actionError.value = formatSyncOutcome(response.data.outcome)

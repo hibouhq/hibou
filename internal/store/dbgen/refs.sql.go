@@ -477,12 +477,16 @@ INSERT INTO refs (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (repo_id, name, ref_type) DO UPDATE SET
 	provider_id = COALESCE(EXCLUDED.provider_id, refs.provider_id),
-	merge_target_ref_id = COALESCE(EXCLUDED.merge_target_ref_id, refs.merge_target_ref_id),
-	latest_commit_sha = COALESCE(EXCLUDED.latest_commit_sha, refs.latest_commit_sha),
+	merge_target_ref_id = CASE WHEN refs.pr_state IS NOT NULL AND EXCLUDED.pr_state IS NULL
+		THEN refs.merge_target_ref_id ELSE COALESCE(EXCLUDED.merge_target_ref_id, refs.merge_target_ref_id) END,
+	latest_commit_sha = CASE WHEN refs.pr_state IS NOT NULL AND EXCLUDED.pr_state IS NULL
+		THEN refs.latest_commit_sha ELSE COALESCE(EXCLUDED.latest_commit_sha, refs.latest_commit_sha) END,
 	pr_number = COALESCE(EXCLUDED.pr_number, refs.pr_number),
 	pr_state = COALESCE(EXCLUDED.pr_state, refs.pr_state),
-	pr_title = CASE WHEN EXCLUDED.pr_title != '' THEN EXCLUDED.pr_title ELSE refs.pr_title END,
-	pr_source_branch = CASE WHEN EXCLUDED.pr_source_branch != '' THEN EXCLUDED.pr_source_branch ELSE refs.pr_source_branch END,
+	pr_title = CASE WHEN refs.pr_state IS NOT NULL AND EXCLUDED.pr_state IS NULL THEN refs.pr_title
+		WHEN EXCLUDED.pr_title != '' THEN EXCLUDED.pr_title ELSE refs.pr_title END,
+	pr_source_branch = CASE WHEN refs.pr_state IS NOT NULL AND EXCLUDED.pr_state IS NULL THEN refs.pr_source_branch
+		WHEN EXCLUDED.pr_source_branch != '' THEN EXCLUDED.pr_source_branch ELSE refs.pr_source_branch END,
 	pr_merged_at = COALESCE(EXCLUDED.pr_merged_at, refs.pr_merged_at),
 	pr_closed_at = COALESCE(EXCLUDED.pr_closed_at, refs.pr_closed_at),
 	updated_at = NOW()

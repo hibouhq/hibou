@@ -155,6 +155,7 @@ export interface OnboardableAccount {
   account: string
   slug: string
   status: 'imported' | 'importable' | 'pending'
+  event_mode?: 'webhook' | 'poll' | 'hybrid'
 }
 
 export type RepoLifecycleStatus = 'discovered' | 'active' | 'archived' | 'deleted'
@@ -823,6 +824,22 @@ export interface InstanceJobsStats {
 }
 
 export type InstanceJobsWindow = '1h' | '6h' | '24h' | '7d'
+
+export interface ForgeDeliveryStatus {
+  provider: string
+  mode: 'webhook' | 'poll' | 'hybrid'
+  scopes: {
+    id: string
+    scope: string
+    kind: string
+    next_due_at: string
+    last_attempt_at: string | null
+    last_success_at: string | null
+    last_error: string
+    note?: string
+    gate_pending: boolean
+  }[]
+}
 
 // ADR-043 §4: how this org treats membership-wide CLI/IDE login tokens.
 export type LoginTokensPolicy = 'allow' | 'read_only' | 'deny'
@@ -2013,7 +2030,7 @@ export interface OrgDashboard {
 
 export interface SyncReposResponse {
   synced: boolean
-  outcome: 'synced' | 'provider_not_configured' | 'no_installations' | 'no_matching_installation'
+  outcome: 'synced' | 'scheduled' | 'provider_not_configured' | 'no_installations' | 'no_matching_installation'
   provider: string
   account: string
   repo_count: number
@@ -3915,6 +3932,10 @@ class ApiClient {
   // Instance admin only: latest storage usage sample (ADR-039).
   getInstanceStorage() {
     return this.request<ApiResponse<InstanceStorage>>('/instance/storage')
+  }
+
+  getForgeDeliveryStatus() {
+    return this.request<ApiResponse<ForgeDeliveryStatus[]>>('/instance/forges/events')
   }
 
   getInstanceJobsOverview() {

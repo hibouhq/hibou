@@ -335,43 +335,50 @@ func (s *Server) releaseTagPatternForRepo(ctx context.Context, repoID uuid.UUID)
 //     while no client runs the release — otherwise it flags a divergence for a
 //     release manager to adopt or keep.
 func (s *Server) reconcileReleasesForSnapshot(ctx context.Context, snapshotID uuid.UUID) {
+	if err := s.reconcileReleaseSnapshot(ctx, snapshotID); err != nil {
+		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("release derivation deferred")
+	}
+}
+
+func (s *Server) reconcileReleaseSnapshot(ctx context.Context, snapshotID uuid.UUID) error {
 	snapshot, err := s.queries.GetSnapshotByID(ctx, snapshotID)
 	if err != nil || snapshot == nil {
-		return
+		return err
 	}
 	attached, err := s.queries.AttachSnapshotToReleasesByRef(ctx, snapshot.RefID, snapshotID)
 	if err != nil {
 		s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("failed to attach snapshot to releases")
-		return
+		return err
 	}
 	if attached > 0 {
 		if err := s.pinReleaseSnapshot(ctx, snapshotID); err != nil {
 			s.log.Warn().Err(err).Str("snapshot_id", snapshotID.String()).Msg("failed to pin release snapshot; retention may prune it")
+			return err
 		}
 	}
 
 	ref, err := s.queries.GetRefByID(ctx, snapshot.RefID)
 	if err != nil || ref == nil {
-		return
+		return err
 	}
 	if ref.RefType != store.RefTypeTag {
-		return
+		return nil
 	}
 	pattern, ok := s.releaseTagPatternForRepo(ctx, ref.RepoID)
 	if !ok {
 		// Forge unreachable: don't guess the repo's release intent. The
 		// periodic reconcile sweep re-runs this once the config is readable.
 		s.log.Warn().Str("tag", ref.Name).Str("snapshot_id", snapshotID.String()).Msg("release derivation deferred: repo config unreadable (forge down?)")
-		return
+		return errors.New("release tag policy could not be loaded")
 	}
 	if !pattern.MatchString(ref.Name) {
-		return
+		return nil
 	}
 
 	release, err := s.queries.GetReleaseByRepoVersion(ctx, ref.RepoID, ref.Name)
 	if err != nil {
 		s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to load release for tag snapshot")
-		return
+		return err
 	}
 
 	if release == nil {
@@ -384,58 +391,59 @@ func (s *Server) reconcileReleasesForSnapshot(ctx context.Context, snapshotID uu
 			PublishedAt: &snapshot.CreatedAt,
 		}); err != nil {
 			s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to derive release from tag snapshot")
-			return
+			return err
 		}
 		s.log.Info().Str("tag", ref.Name).Str("snapshot_id", snapshotID.String()).Msg("release derived from version tag")
 		s.pinAfterRepoint(ctx, snapshotID, nil, uuid.Nil)
-		return
+		return s.pinReleaseSnapshot(ctx, snapshotID)
 	}
 
 	if release.SnapshotID == nil || *release.SnapshotID == snapshotID {
 		// attach above covered the nil case; identical snapshot needs nothing.
-		return
+		return nil
 	}
 
 	current, err := s.queries.GetSnapshotByID(ctx, *release.SnapshotID)
 	if err != nil {
-		return
+		return err
 	}
 	if current == nil || current.CommitSHA == snapshot.CommitSHA {
 		// Same code, newer analysis — follow it.
 		if _, err := s.queries.SetReleaseSnapshot(ctx, release.ID, snapshotID); err != nil {
 			s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to refresh release snapshot")
-			return
+			return err
 		}
 		s.pinAfterRepoint(ctx, snapshotID, release.SnapshotID, release.ID)
-		return
+		return s.pinReleaseSnapshot(ctx, snapshotID)
 	}
 
 	// The tag moved to another commit.
 	if release.DismissedCommitSHA == snapshot.CommitSHA {
-		return
+		return nil
 	}
 	activeDeployments, err := s.queries.CountActiveDeploymentsByRelease(ctx, release.ID)
 	if err != nil {
-		return
+		return err
 	}
 	if activeDeployments == 0 {
 		// Nobody runs it: the re-tag is a correction, follow it silently.
 		if _, err := s.queries.SetReleaseSnapshot(ctx, release.ID, snapshotID); err != nil {
 			s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to repoint re-tagged release")
-			return
+			return err
 		}
 		s.log.Info().Str("tag", ref.Name).Str("old_commit", current.CommitSHA).Str("new_commit", snapshot.CommitSHA).Msg("release repointed after re-tag (no active deployments)")
 		s.pinAfterRepoint(ctx, snapshotID, release.SnapshotID, release.ID)
-		return
+		return s.pinReleaseSnapshot(ctx, snapshotID)
 	}
 	if release.PendingSnapshotID != nil && *release.PendingSnapshotID == snapshotID {
-		return
+		return nil
 	}
 	if _, err := s.queries.SetReleaseDivergence(ctx, release.ID, snapshotID); err != nil {
 		s.log.Warn().Err(err).Str("tag", ref.Name).Msg("failed to flag release divergence")
-		return
+		return err
 	}
 	s.log.Warn().Str("tag", ref.Name).Str("shipped_commit", current.CommitSHA).Str("tag_commit", snapshot.CommitSHA).Int64("active_deployments", activeDeployments).Msg("release diverged: tag recreated on another commit while clients run it")
+	return nil
 }
 
 // pinAfterRepoint pins the snapshot a release now references and unpins the

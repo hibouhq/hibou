@@ -1656,6 +1656,14 @@ type FirstPartyAdvisory struct {
 	CreatedAt     time.Time      `json:"created_at"`
 }
 
+type ForgeAnalysisObservation struct {
+	RepoID           uuid.UUID `json:"repo_id"`
+	RefName          string    `json:"ref_name"`
+	CommitSha        string    `json:"commit_sha"`
+	AnalysisRevision string    `json:"analysis_revision"`
+	ObservedAt       time.Time `json:"observed_at"`
+}
+
 type ForgeOrgAdmin struct {
 	ID             uuid.UUID     `json:"id"`
 	Provider       string        `json:"provider"`
@@ -1665,6 +1673,37 @@ type ForgeOrgAdmin struct {
 	Granted        bool          `json:"granted"`
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
+}
+
+type ForgeReconciliation struct {
+	ID             uuid.UUID       `json:"id"`
+	Provider       string          `json:"provider"`
+	Scope          string          `json:"scope"`
+	Kind           string          `json:"kind"`
+	RepoID         uuid.NullUUID   `json:"repo_id"`
+	State          json.RawMessage `json:"state"`
+	NextDueAt      time.Time       `json:"next_due_at"`
+	LastAttemptAt  sql.NullTime    `json:"last_attempt_at"`
+	LastSuccessAt  sql.NullTime    `json:"last_success_at"`
+	LastError      string          `json:"last_error"`
+	Attempts       int32           `json:"attempts"`
+	ClaimedBy      uuid.NullUUID   `json:"claimed_by"`
+	ClaimExpiresAt sql.NullTime    `json:"claim_expires_at"`
+	Requested      bool            `json:"requested"`
+}
+
+type ForgeReconciliationBackoff struct {
+	Provider   string    `json:"provider"`
+	RetryAfter time.Time `json:"retry_after"`
+}
+
+type ForgeReconciliationRun struct {
+	ID         uuid.UUID    `json:"id"`
+	JobID      uuid.UUID    `json:"job_id"`
+	QueuedAt   time.Time    `json:"queued_at"`
+	StartedAt  time.Time    `json:"started_at"`
+	FinishedAt sql.NullTime `json:"finished_at"`
+	Error      string       `json:"error"`
 }
 
 type ForgeRepository struct {
@@ -1685,6 +1724,14 @@ type ForgeRepository struct {
 	RemovedAt      sql.NullTime   `json:"removed_at"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
+	AccountID      string         `json:"account_id"`
+}
+
+type ForgeRepositoryBinding struct {
+	RepoID       uuid.UUID `json:"repo_id"`
+	Provider     string    `json:"provider"`
+	AccountID    string    `json:"account_id"`
+	RepositoryID string    `json:"repository_id"`
 }
 
 type Incident struct {

@@ -250,7 +250,11 @@ func (s *Server) canonicalEnrollProviderID(ctx context.Context, provider string,
 	if owner == "" {
 		return "", errEnrollOwnerUnresolved
 	}
-	if !org.OwnsForgeOwner(owner) {
+	bound, err := s.queries.ForgeOwnerBoundToOrg(ctx, org.ID, owner)
+	if err != nil {
+		return "", err
+	}
+	if !bound {
 		return "", errEnrollForeignRepository
 	}
 	return canonical, nil

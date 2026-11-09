@@ -1,0 +1,2 @@
+DROP INDEX forge_repositories_account_identity_idx;
+DROP TABLE forge_reconciliation_backoff;

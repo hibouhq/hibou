@@ -601,13 +601,13 @@ func (s *Server) recordDepExtractionProducerRunFromModules(ctx context.Context, 
 // default branch, or a tag the repository's release pattern accepts
 // (ADR-045 §4.1.1). Other branches stay lazy. The webhook must succeed
 // regardless; a failed enqueue is logged and the next push covers it.
-func (s *Server) maybeEnqueueDepExtraction(ctx context.Context, repo *store.Repository, refType store.RefType, refName string, event forge.PushEvent) {
+func (s *Server) maybeEnqueueDepExtraction(ctx context.Context, repo *store.Repository, refType store.RefType, refName string, event forge.PushEvent) error {
 	if !s.cfg.DepInventory.Enabled || !s.cfg.DepInventory.OnPush || repo == nil {
-		return
+		return nil
 	}
 	after := strings.TrimSpace(event.After)
 	if after == "" || after == gitZeroSHA {
-		return
+		return nil
 	}
 	reason := ""
 	switch refType {
@@ -622,16 +622,18 @@ func (s *Server) maybeEnqueueDepExtraction(ctx context.Context, repo *store.Repo
 		}
 	}
 	if reason == "" {
-		return
+		return nil
 	}
-	if _, err := s.queries.EnqueueDepExtractionJob(ctx, store.EnqueueDepExtractionJobParams{
+	if err := s.queries.EnqueueObservedExtraction(ctx, store.EnqueueDepExtractionJobParams{
 		RepoID:    repo.ID,
 		RefName:   refName,
 		CommitSHA: after,
 		Reason:    reason,
-	}); err != nil {
+	}, depinventory.Version); err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Str("ref", refName).Msg("enqueue dependency extraction job")
+		return err
 	}
+	return nil
 }
 
 // enqueueEnrollmentDepExtraction inventories the default branch once at
@@ -973,9 +975,9 @@ func (s *Server) ingestInventoryNow(ctx context.Context, snapshot *store.Snapsho
 // its diff touches a lockfile or manifest (ADR-045 §4.1.2). When the
 // comparison is unavailable the extraction runs anyway: a sparse checkout
 // is cheaper than a wrong "nothing changed".
-func (s *Server) maybeEnqueuePRDepExtraction(ctx context.Context, repo *store.Repository, ref *store.Ref, headSHA string) {
+func (s *Server) maybeEnqueuePRDepExtraction(ctx context.Context, repo *store.Repository, ref *store.Ref, headSHA string) error {
 	if !s.cfg.DepInventory.Enabled || !s.cfg.DepInventory.OnPush || repo == nil || ref == nil {
-		return
+		return nil
 	}
 	touchesManifest := true
 	if ref.MergeTargetRefID != nil {
@@ -992,14 +994,16 @@ func (s *Server) maybeEnqueuePRDepExtraction(ctx context.Context, repo *store.Re
 		}
 	}
 	if !touchesManifest {
-		return
+		return nil
 	}
-	if _, err := s.queries.EnqueueDepExtractionJob(ctx, store.EnqueueDepExtractionJobParams{
+	if err := s.queries.EnqueueObservedExtraction(ctx, store.EnqueueDepExtractionJobParams{
 		RepoID:    repo.ID,
 		RefName:   ref.Name,
 		CommitSHA: headSHA,
 		Reason:    store.DepExtractionReasonPullRequest,
-	}); err != nil {
+	}, depinventory.Version); err != nil {
 		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Str("ref", ref.Name).Msg("enqueue pull request dependency extraction")
+		return err
 	}
+	return nil
 }

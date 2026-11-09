@@ -92,6 +92,7 @@ const nav = computed<{ title: string; items: NavItem[] }[]>(() => {
         { label: 'Administrators', icon: ShieldCheck, name: 'settings-instance-admins' },
         { label: 'Audit log', icon: ScrollText, name: 'settings-instance-audit' },
         { label: 'Jobs & workers', icon: Activity, name: 'settings-instance-jobs' },
+        { label: 'Forge delivery', icon: Radar, name: 'settings-instance-forges' },
         { label: 'Storage', icon: HardDrive, name: 'settings-instance-storage' },
         { label: 'People', icon: UsersRound, name: 'settings-instance-people' },
         { label: 'Advisories', icon: History, name: 'settings-instance-advisories' },

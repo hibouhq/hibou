@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,14 +43,17 @@ func ParseTier(value string) (Tier, error) {
 var tierPermissions = map[Tier]map[string]string{
 	TierRead: {
 		"contents": "read", "metadata": "read", "members": "read",
+		"pull_requests": "read", "actions": "read",
 	},
 	TierReport: {
 		"contents": "read", "metadata": "read", "members": "read",
 		"checks": "write", "statuses": "write", "pull_requests": "write",
+		"actions": "read",
 	},
 	TierPropose: {
 		"contents": "write", "metadata": "read", "members": "read",
 		"checks": "write", "statuses": "write", "pull_requests": "write",
+		"actions": "read",
 	},
 }
 
@@ -142,7 +146,7 @@ func scopeForRequest(request *http.Request) TokenScope {
 	if request == nil || request.URL == nil {
 		return TokenScope{}
 	}
-	path := request.URL.EscapedPath()
+	path := strings.TrimPrefix(request.URL.EscapedPath(), "/api/v3")
 	rest, ok := strings.CutPrefix(path, "/repos/")
 	if !ok {
 		return TokenScope{}
@@ -171,12 +175,14 @@ func scopeForRequest(request *http.Request) TokenScope {
 		scope.Permissions = map[string]string{"statuses": level}
 	case resource == "commits" && len(parts) > 4 && (parts[4] == "check-runs" || parts[4] == "check-suites"):
 		scope.Permissions = map[string]string{"checks": level}
-	case resource == "contents" || resource == "git" || resource == "branches" || resource == "commits" ||
+	case resource == "contents" || resource == "git" || resource == "branches" || resource == "commits" || resource == "tags" || resource == "releases" ||
 		resource == "compare" || resource == "tarball" || resource == "zipball" || resource == "readme":
 		scope.Permissions = map[string]string{"contents": level}
 	case resource == "pulls" || resource == "issues":
 		// Hibou uses the issues API only for pull request comments.
 		scope.Permissions = map[string]string{"pull_requests": level}
+	case resource == "actions":
+		scope.Permissions = map[string]string{"actions": level}
 	case resource == "collaborators":
 		// The collaborator permission lookup needs only Metadata.
 		scope.Permissions = map[string]string{"metadata": "read"}
@@ -212,6 +218,13 @@ func (g *GitHub) scopedInstallationToken(ctx context.Context, owner string, scop
 	if err != nil {
 		return "", err
 	}
+	if installation.SuspendedAt != nil {
+		return "", errors.New("GitHub App installation is suspended")
+	}
+	identity, bound := ctx.Value(repositoryIdentityKey{}).(repositoryIdentity)
+	if bound && identity.account != strconv.FormatInt(installation.Account.ID, 10) {
+		return "", errors.New("GitHub installation account identity differs from enrolled account")
+	}
 	if requireDeclaredScopes && scope.Repo != "" && scope.Permissions == nil {
 		return "", ErrUndeclaredScope
 	}
@@ -220,6 +233,9 @@ func (g *GitHub) scopedInstallationToken(ctx context.Context, owner string, scop
 		return "", err
 	}
 	key := tokenCacheKey(account, scope, permissions)
+	if bound && scope.Repo != "" {
+		key += "|repository-id:" + identity.repository
+	}
 
 	g.tokenMu.Lock()
 	cached, ok := g.ownerTokens[key]
@@ -230,7 +246,15 @@ func (g *GitHub) scopedInstallationToken(ctx context.Context, owner string, scop
 
 	request := installationTokenRequest{Permissions: permissions}
 	if scope.Repo != "" {
-		request.Repositories = []string{scope.Repo}
+		if bound {
+			id, err := strconv.ParseInt(identity.repository, 10, 64)
+			if err != nil || id <= 0 {
+				return "", errors.New("invalid enrolled GitHub repository identity")
+			}
+			request.RepositoryIDs = []int64{id}
+		} else {
+			request.Repositories = []string{scope.Repo}
+		}
 	}
 	token, err := g.createInstallationTokenWith(ctx, installation.ID, &request)
 	if err != nil {
@@ -245,8 +269,9 @@ func (g *GitHub) scopedInstallationToken(ctx context.Context, owner string, scop
 // installationTokenRequest is the body of POST
 // /app/installations/{id}/access_tokens: both fields narrow the token.
 type installationTokenRequest struct {
-	Repositories []string          `json:"repositories,omitempty"`
-	Permissions  map[string]string `json:"permissions,omitempty"`
+	Repositories  []string          `json:"repositories,omitempty"`
+	RepositoryIDs []int64           `json:"repository_ids,omitempty"`
+	Permissions   map[string]string `json:"permissions,omitempty"`
 }
 
 // installationCacheTTL bounds how long an installation's permissions are

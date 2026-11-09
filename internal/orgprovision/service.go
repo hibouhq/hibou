@@ -19,10 +19,11 @@ import (
 var ErrForgeOrgUnauthorized = errors.New("orgprovision: requester is not a verified forge admin of this account")
 
 type OnboardableAccount struct {
-	Provider string `json:"provider"`
-	Account  string `json:"account"`
-	Slug     string `json:"slug"`
-	Status   string `json:"status"`
+	Provider  string `json:"provider"`
+	Account   string `json:"account"`
+	Slug      string `json:"slug"`
+	Status    string `json:"status"`
+	EventMode string `json:"event_mode,omitempty"`
 }
 
 type Store interface {
@@ -535,6 +536,62 @@ type ForgeAccount struct {
 	ID string
 }
 
+// VerifyInstalledAccounts bootstraps the same binding as an installation
+// event, but only from fresh forge authority for the signed-in identity.
+// Merely observing an App installation never grants a user access.
+func (s *Service) VerifyInstalledAccounts(ctx context.Context, user *store.User) ([]OnboardableAccount, error) {
+	if user == nil || user.ProviderID == "" {
+		return nil, ErrForgeOrgUnauthorized
+	}
+	provider := s.forges[user.Provider]
+	verifier, ok := provider.(AccountAdminVerifier)
+	if !ok {
+		return nil, errors.New("forge cannot verify installed-account administration")
+	}
+	installations, err := provider.Installations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	allowed := map[string]bool{}
+	for _, installation := range installations {
+		if installation.Suspended {
+			continue
+		}
+		if installation.AccountID == "" {
+			return nil, errors.New("installation omitted immutable account identity")
+		}
+		admin, err := verifier.IsAccountAdmin(ctx, installation.AccountID, user.ProviderID)
+		if err != nil {
+			return nil, err
+		}
+		if !admin {
+			continue
+		}
+		account, err := s.verifyInstallation(ctx, user.Provider, installation)
+		if err != nil {
+			return nil, err
+		}
+		if account.id != installation.AccountID {
+			return nil, errors.New("installation account identity changed during authorization; retry")
+		}
+		if err := s.recordInstallationAccess(ctx, user.Provider, account, user.ProviderID); err != nil {
+			return nil, err
+		}
+		allowed[slugifyAccount(installation.AccountName)] = true
+	}
+	accounts, err := s.ListOnboardableAccounts(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	verified := []OnboardableAccount{}
+	for _, account := range accounts {
+		if allowed[account.Slug] {
+			verified = append(verified, account)
+		}
+	}
+	return verified, nil
+}
+
 // AuthorizeForgeOrgCreationAccount authorizes POST /orgs like
 // AuthorizeForgeOrgCreation and returns the installed account the new org
 // must be bound to. Binding at creation is what makes forge calls for the
@@ -558,6 +615,9 @@ func (s *Service) AuthorizeForgeOrgCreationAccount(ctx context.Context, requeste
 	}
 	matchedSlug := slugifyAccount(slug)
 	for _, installation := range installations {
+		if installation.Suspended {
+			continue
+		}
 		if slugifyAccount(installation.AccountName) != matchedSlug {
 			continue
 		}
@@ -613,6 +673,9 @@ func (s *Service) ListOnboardableAccounts(ctx context.Context, user *store.User)
 	}
 	liveAccounts := make(map[string]string, len(installations))
 	for _, installation := range installations {
+		if installation.Suspended {
+			continue
+		}
 		account := strings.TrimSpace(installation.AccountName)
 		if account == "" {
 			continue

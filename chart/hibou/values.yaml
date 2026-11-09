@@ -218,6 +218,9 @@ hibou:
   #   rateLimitRPS: 0     # per-IP rate limit (req/s) on webhooks. 0 = disabled
   #   allowedCIDRs: ""    # override default CIDRs (e.g., for self-hosted forges)
   #   tier: report        # read | report | propose: the most the forge's tokens may do (ADR-052)
+  #   eventMode: poll     # webhook (default) | poll | hybrid; poll/hybrid require GitHub App credentials
+  #   pollInterval: 5m    # active PR/pending-build target; explicit shorter intervals are supported
+  #   inventoryInterval: 30m # inventory/refs/releases and inactive discovery; CI uploads wake their repo
   # -- Optional dedicated worker deployment. Same binary, separate replica set.
   # Enable this and disable hibou.background.* on the primary deployment for an
   # API-only plus worker-only split.

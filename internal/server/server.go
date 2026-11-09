@@ -520,6 +520,9 @@ func configureForgeProtection(s *Server, cfg config.Config, log zerolog.Logger) 
 	s.forgeIPAllowlists = make(map[string]*forgeIPAllowlist)
 	s.forgeLimiters = make(map[string]*ipRateLimiter)
 	for _, fc := range cfg.Forges {
+		if fc.DeliveryMode() == "poll" {
+			continue
+		}
 		configureForgeAllowlist(s, fc, log)
 		configureForgeRateLimiter(s, fc)
 	}
@@ -665,6 +668,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Get("/instance/jobs/stats", s.handleInstanceJobsStats)
 			r.Get("/instance/storage", s.handleInstanceStorage)
 			r.Get("/instance/forges/confinement", s.handleInstanceForgeConfinement)
+			r.Get("/instance/forges/events", s.handleForgeDeliveryStatus)
 			r.Get("/instance/audit-logs", s.handleListInstanceAuditLogs)
 			// ADR-028. `advisories` not `cves`: the namespace has to hold
 			// `HSA-*` once an advisory exists that no CVE covers (§10).
@@ -1061,6 +1065,13 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 		go s.runAdvisoryScanLoop(runtimeCtx)
 	}
 	if s.db != nil && len(s.forges) > 0 {
+		for _, fc := range s.cfg.Forges {
+			if fc.PollingEnabled() {
+				loops = append(loops, "forge_reconciliation")
+				go s.runForgeReconciliationLoop(runtimeCtx)
+				break
+			}
+		}
 		// ADR-052: warn when a forge identity could write outside hibou/*.
 		loops = append(loops, "forge_confinement")
 		go s.runForgeConfinementLoop(runtimeCtx)

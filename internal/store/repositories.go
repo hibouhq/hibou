@@ -43,6 +43,21 @@ type RepositoryRetentionUsageRow struct {
 }
 
 func (q *Queries) CreateRepository(ctx context.Context, orgID uuid.UUID, teamID *uuid.UUID, name, slug, provider, providerID, defaultBranch, syncState string) (*Repository, error) {
+	if q.tx == nil {
+		tx, err := q.BeginTx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		repo, err := q.WithTx(tx).CreateRepository(ctx, orgID, teamID, name, slug, provider, providerID, defaultBranch, syncState)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return repo, nil
+	}
 	row, err := q.db.CreateRepository(ctx, dbgen.CreateRepositoryParams{
 		OrgID:         orgID,
 		TeamID:        nullUUIDFromPtr(teamID),
@@ -54,6 +69,9 @@ func (q *Queries) CreateRepository(ctx context.Context, orgID uuid.UUID, teamID 
 		SyncState:     syncState,
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := q.CaptureForgeRepositoryBinding(ctx, row.ID); err != nil {
 		return nil, err
 	}
 
@@ -179,7 +197,14 @@ func (q *Queries) ForgeOwnerBoundToOrg(ctx context.Context, orgID uuid.UUID, own
 	if err != nil || org == nil {
 		return false, err
 	}
-	return org.OwnsForgeOwner(owner), nil
+	if !org.OwnsForgeOwner(owner) {
+		return false, nil
+	}
+	var matched bool
+	err = q.rawDB().QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM forge_repositories
+	WHERE provider=$1 AND lower(account_login)=lower($2) AND removed_at IS NULL
+	AND account_id<>'' AND account_id<>$3)`, org.Provider, owner, org.ForgeAccountID).Scan(&matched)
+	return matched, err
 }
 
 func (q *Queries) GetRepositoryByID(ctx context.Context, id uuid.UUID) (*Repository, error) {

@@ -60,6 +60,19 @@ func (s *Server) handleListOnboardableOrgs(w http.ResponseWriter, r *http.Reques
 		api.JSON(w, http.StatusOK, []orgprovision.OnboardableAccount{})
 		return
 	}
+	if user != nil && s.forgeEventConfig(user.Provider).PollingEnabled() {
+		accounts, err := s.orgProvisionSvc.VerifyInstalledAccounts(r.Context(), user)
+		if err != nil {
+			s.log.Error().Err(err).Msg("verify no-webhook onboarding authority")
+			api.JSONError(w, http.StatusServiceUnavailable, "cannot verify installed-account administration")
+			return
+		}
+		for i := range accounts {
+			accounts[i].EventMode = s.forgeEventConfig(user.Provider).DeliveryMode()
+		}
+		api.JSON(w, http.StatusOK, accounts)
+		return
+	}
 
 	accounts, err := s.orgProvisionSvc.ListOnboardableAccounts(r.Context(), user)
 	if err != nil {
@@ -108,6 +121,29 @@ func (s *Server) handleCreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	var account orgprovision.ForgeAccount
 	if s.forges[input.Provider] != nil && s.orgProvisionSvc != nil {
+		if s.forgeEventConfig(input.Provider).PollingEnabled() {
+			if user.Provider != input.Provider {
+				api.JSONError(w, http.StatusForbidden, "sign in with this forge to verify organization administration")
+				return
+			}
+			accounts, err := s.orgProvisionSvc.VerifyInstalledAccounts(r.Context(), user)
+			if err != nil {
+				s.log.Error().Err(err).Msg("verify no-webhook organization creation")
+				api.JSONError(w, http.StatusServiceUnavailable, "cannot verify installed-account administration")
+				return
+			}
+			allowed := false
+			for _, candidate := range accounts {
+				if candidate.Slug == store.SlugifyForgeAccount(input.Slug) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				api.JSONError(w, http.StatusForbidden, "current forge administration could not be established")
+				return
+			}
+		}
 		var err error
 		account, err = s.orgProvisionSvc.AuthorizeForgeOrgCreationAccount(r.Context(), user, input.Provider, input.Slug)
 		if errors.Is(err, orgprovision.ErrForgeOrgUnauthorized) {

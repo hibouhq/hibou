@@ -14,7 +14,7 @@ import (
 )
 
 const getForgeRepositoryByAccountAndKey = `-- name: GetForgeRepositoryByAccountAndKey :one
-SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at, account_id
 FROM forge_repositories
 WHERE provider = $1
   AND lower(account_login) = lower($2)
@@ -50,12 +50,13 @@ func (q *Queries) GetForgeRepositoryByAccountAndKey(ctx context.Context, arg Get
 		&i.RemovedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountID,
 	)
 	return i, err
 }
 
 const getForgeRepositoryByAccountAndRepoID = `-- name: GetForgeRepositoryByAccountAndRepoID :one
-SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at, account_id
 FROM forge_repositories
 WHERE provider = $1
   AND lower(account_login) = lower($2)
@@ -92,12 +93,13 @@ func (q *Queries) GetForgeRepositoryByAccountAndRepoID(ctx context.Context, arg 
 		&i.RemovedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountID,
 	)
 	return i, err
 }
 
 const getForgeRepositoryByProviderKey = `-- name: GetForgeRepositoryByProviderKey :one
-SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at, account_id
 FROM forge_repositories
 WHERE provider = $1 AND provider_key = $2 AND removed_at IS NULL
 LIMIT 1
@@ -129,12 +131,13 @@ func (q *Queries) GetForgeRepositoryByProviderKey(ctx context.Context, arg GetFo
 		&i.RemovedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountID,
 	)
 	return i, err
 }
 
 const getForgeRepositoryByProviderRepoID = `-- name: GetForgeRepositoryByProviderRepoID :one
-SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at, account_id
 FROM forge_repositories
 WHERE provider = $1 AND provider_repo_id = $2 AND removed_at IS NULL
 ORDER BY updated_at DESC
@@ -167,12 +170,13 @@ func (q *Queries) GetForgeRepositoryByProviderRepoID(ctx context.Context, arg Ge
 		&i.RemovedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AccountID,
 	)
 	return i, err
 }
 
 const listForgeRepositoriesByAccount = `-- name: ListForgeRepositoriesByAccount :many
-SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at
+SELECT id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at, account_id
 FROM forge_repositories
 WHERE provider = $1 AND lower(account_login) = lower($2) AND removed_at IS NULL
 ORDER BY full_name ASC
@@ -210,6 +214,7 @@ func (q *Queries) ListForgeRepositoriesByAccount(ctx context.Context, arg ListFo
 			&i.RemovedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AccountID,
 		); err != nil {
 			return nil, err
 		}

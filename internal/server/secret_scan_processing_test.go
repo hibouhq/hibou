@@ -373,17 +373,25 @@ func TestMaybeEnqueueSecretScanPushShapes(t *testing.T) {
 	}
 
 	// Branch deletion: nothing to scan.
-	srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "gone", forge.PushEvent{Before: "aaa", After: gitZeroSHA})
+	if err := srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "gone", forge.PushEvent{Before: "aaa", After: gitZeroSHA}); err != nil {
+		t.Fatal(err)
+	}
 	// Tag push: out of scope.
-	srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeTag, "v1.0.0", forge.PushEvent{Before: gitZeroSHA, After: "bbb"})
+	if err := srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeTag, "v1.0.0", forge.PushEvent{Before: gitZeroSHA, After: "bbb"}); err != nil {
+		t.Fatal(err)
+	}
 	if got := jobsFor(); len(got) != 0 {
 		t.Fatalf("jobs after deletion+tag = %d, want 0", len(got))
 	}
 
 	// New branch: no base to diff against → full scan.
-	srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "feature", forge.PushEvent{Before: gitZeroSHA, After: "ccc"})
+	if err := srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "feature", forge.PushEvent{Before: gitZeroSHA, After: "ccc"}); err != nil {
+		t.Fatal(err)
+	}
 	// Ordinary push → incremental over the range.
-	srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "main", forge.PushEvent{Before: "ddd", After: "eee"})
+	if err := srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "main", forge.PushEvent{Before: "ddd", After: "eee"}); err != nil {
+		t.Fatal(err)
+	}
 
 	jobs := jobsFor()
 	if len(jobs) != 2 {
@@ -402,7 +410,9 @@ func TestMaybeEnqueueSecretScanPushShapes(t *testing.T) {
 
 	// Config off: enqueue must be inert.
 	srv.cfg.SecretScan.OnPush = false
-	srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "other", forge.PushEvent{Before: "fff", After: "ggg"})
+	if err := srv.maybeEnqueueSecretScan(ctx, repo, store.RefTypeBranch, "other", forge.PushEvent{Before: "fff", After: "ggg"}); err != nil {
+		t.Fatal(err)
+	}
 	if got := jobsFor(); len(got) != 2 {
 		t.Fatalf("jobs after disabled push = %d, want still 2", len(got))
 	}
