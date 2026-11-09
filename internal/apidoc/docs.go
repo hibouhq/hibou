@@ -12128,6 +12128,10 @@ const docTemplate = `{
                 },
                 "step": {
                     "type": "string"
+                },
+                "url": {
+                    "description": "URL is where the filing is made, when the recipient has a portal.",
+                    "type": "string"
                 }
             }
         },
