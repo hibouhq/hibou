@@ -216,6 +216,9 @@ type scaEnableError struct{ message string }
 func (e *scaEnableError) Error() string { return e.message }
 
 func (s *Server) enableSCA(ctx context.Context, org *store.Organization, providerID string) (enableSCAResult, *store.Repository, bool, error) {
+	if err := s.refreshSCAInventoryMetadata(ctx, org, providerID); err != nil {
+		return enableSCAResult{}, nil, false, err
+	}
 	// A CI upload can race enrollment without taking the org lock. Retry its
 	// unique-constraint race in a fresh transaction, adopting its repository.
 	for attempt := 0; attempt < 2; attempt++ {

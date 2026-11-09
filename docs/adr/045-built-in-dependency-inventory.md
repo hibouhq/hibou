@@ -448,6 +448,12 @@ it is not required to close this gap.
    rebound identities fail visibly. Archived repositories are excluded from
    bulk selection and cannot enable automatic SCA until unarchived on the
    forge.
+   Legacy discovery rows missing account metadata or a default branch are
+   refreshed on demand against the forge before enrollment, outside the
+   transaction. The live account and repository IDs must match the bound
+   organization and the recorded repository ID. The conditional metadata
+   update cannot overwrite a newer observation, revive removed access, or
+   bind an unverified organization by its mutable name.
 3. Share enrollment logic with the existing API; do not create a second
    repository model or make the frontend upload a synthetic SBOM. Make
    enablement idempotent under repeated clicks, concurrent admins and a racing

@@ -270,6 +270,51 @@ func (q *Queries) MarkInstallationRepositoriesRemoved(ctx context.Context, arg M
 	return items, nil
 }
 
+const refreshVerifiedForgeRepositoryMetadata = `-- name: RefreshVerifiedForgeRepositoryMetadata :execrows
+UPDATE forge_repositories f
+SET account_id = $1::text,
+    default_branch = $2::text,
+    updated_at = NOW()
+FROM organizations o
+WHERE f.id = $3
+  AND o.id = $4
+  AND f.provider = o.provider
+  AND lower(f.account_login) = lower(o.forge_account_login)
+  AND o.forge_account_id = $1::text
+  AND o.forge_account_id <> ''
+  AND f.account_id IN ('', $1::text)
+  AND f.provider_repo_id = $5::text
+  AND f.updated_at = $6::timestamptz
+  AND f.removed_at IS NULL
+  AND NOT f.archived
+`
+
+type RefreshVerifiedForgeRepositoryMetadataParams struct {
+	AccountID     string    `json:"account_id"`
+	DefaultBranch string    `json:"default_branch"`
+	InventoryID   uuid.UUID `json:"inventory_id"`
+	OrgID         uuid.UUID `json:"org_id"`
+	RepositoryID  string    `json:"repository_id"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
+// Fill legacy discovery metadata only after a live immutable-ID check.
+// A newer observation, removed repository or different bound account wins.
+func (q *Queries) RefreshVerifiedForgeRepositoryMetadata(ctx context.Context, arg RefreshVerifiedForgeRepositoryMetadataParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, refreshVerifiedForgeRepositoryMetadata,
+		arg.AccountID,
+		arg.DefaultBranch,
+		arg.InventoryID,
+		arg.OrgID,
+		arg.RepositoryID,
+		arg.ObservedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setForgeRepositoryArchived = `-- name: SetForgeRepositoryArchived :many
 UPDATE forge_repositories
 SET archived = $3, updated_at = NOW()

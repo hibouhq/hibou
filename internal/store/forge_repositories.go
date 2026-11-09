@@ -93,6 +93,14 @@ func (q *Queries) UpsertForgeRepository(ctx context.Context, repository ForgeRep
 	}, nil
 }
 
+func (q *Queries) RefreshVerifiedForgeRepositoryMetadata(ctx context.Context, inventoryID, orgID uuid.UUID, accountID, repositoryID, defaultBranch string, observedAt time.Time) (bool, error) {
+	rows, err := q.db.RefreshVerifiedForgeRepositoryMetadata(ctx, dbgen.RefreshVerifiedForgeRepositoryMetadataParams{
+		InventoryID: inventoryID, OrgID: orgID, AccountID: accountID,
+		RepositoryID: repositoryID, DefaultBranch: defaultBranch, ObservedAt: observedAt,
+	})
+	return rows > 0, err
+}
+
 func (q *Queries) SoftDeleteForgeRepository(ctx context.Context, provider, providerKey string) (*ForgeRepositoryChange, error) {
 	rows, err := q.db.SoftDeleteForgeRepository(ctx, dbgen.SoftDeleteForgeRepositoryParams{
 		Provider:    strings.TrimSpace(provider),

@@ -38,6 +38,26 @@ SET installation_id = COALESCE(EXCLUDED.installation_id, forge_repositories.inst
     removed_at = NULL
 RETURNING id, provider, installation_id, provider_repo_id, account_login, owner, name, full_name, provider_key, private, default_branch, html_url, archived, last_seen_at, removed_at, created_at, updated_at, account_id, (xmax = 0) AS inserted, (SELECT removed_at FROM prev) AS previous_removed_at;
 
+-- name: RefreshVerifiedForgeRepositoryMetadata :execrows
+-- Fill legacy discovery metadata only after a live immutable-ID check.
+-- A newer observation, removed repository or different bound account wins.
+UPDATE forge_repositories f
+SET account_id = sqlc.arg(account_id)::text,
+    default_branch = sqlc.arg(default_branch)::text,
+    updated_at = NOW()
+FROM organizations o
+WHERE f.id = sqlc.arg(inventory_id)
+  AND o.id = sqlc.arg(org_id)
+  AND f.provider = o.provider
+  AND lower(f.account_login) = lower(o.forge_account_login)
+  AND o.forge_account_id = sqlc.arg(account_id)::text
+  AND o.forge_account_id <> ''
+  AND f.account_id IN ('', sqlc.arg(account_id)::text)
+  AND f.provider_repo_id = sqlc.arg(repository_id)::text
+  AND f.updated_at = sqlc.arg(observed_at)::timestamptz
+  AND f.removed_at IS NULL
+  AND NOT f.archived;
+
 -- name: SoftDeleteForgeRepository :many
 UPDATE forge_repositories
 SET removed_at = NOW(), updated_at = NOW()
