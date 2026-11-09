@@ -184,7 +184,7 @@
                 v-if="notificationsStore.unreadCount > 0"
                 class="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-semibold leading-5 text-white"
               >
-                {{ Math.min(notificationsStore.unreadCount, 99) }}
+                {{ notificationsStore.unreadCountLabel }}
               </span>
             </button>
 

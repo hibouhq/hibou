@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { onScopeDispose, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 
 import { api, type AnnouncementBanner, type Notification } from '@/api/client'
 import { useBannersStore } from '@/stores/banners'
@@ -11,6 +11,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
   const gateEvents = useGateEventsStore()
   const banners = useBannersStore()
   const unreadCount = ref(0)
+  const unreadCountLabel = computed(() => unreadCount.value > 99 ? '+99' : String(unreadCount.value))
   const items = ref<Notification[]>([])
   const loading = ref(false)
   // Reactive WS connection state; consumers (e.g. the PR gate page) use it to fall
@@ -45,7 +46,6 @@ export const useNotificationsStore = defineStore('notifications', () => {
     try {
       const res = await api.listNotifications({ per_page: 30 })
       items.value = res.data
-      unreadCount.value = res.data.filter((item) => item.status === 'unread').length
       hasFetched = true
     } catch {
       // leave existing items in place on failure
@@ -71,7 +71,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
   }
 
   async function markAllRead() {
-    if (items.value.every((item) => item.status === 'read')) {
+    if (unreadCount.value === 0) {
       return
     }
 
@@ -208,5 +208,5 @@ export const useNotificationsStore = defineStore('notifications', () => {
     disconnect()
   })
 
-  return { unreadCount, items, loading, connected, fetchUnreadCount, fetchItems, markRead, markAllRead, connect, disconnect }
+  return { unreadCount, unreadCountLabel, items, loading, connected, fetchUnreadCount, fetchItems, markRead, markAllRead, connect, disconnect }
 })

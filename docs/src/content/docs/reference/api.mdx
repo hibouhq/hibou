@@ -80,6 +80,21 @@ See [Authentication](../../admin/authentication/) for details on session cookies
 | `POST` | `/api/v1/apikeys` | Create API key |
 | `DELETE` | `/api/v1/apikeys/{id}` | Revoke API key |
 
+### Notifications
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/notifications` | List the current user's notifications |
+| `GET` | `/api/v1/notifications/unread-count` | Count all unread notifications for the current user |
+| `POST` | `/api/v1/notifications/{id}/read` | Mark one notification as read |
+| `POST` | `/api/v1/notifications/read-all` | Mark all notifications as read |
+
+The notification badge uses the full unread count, not the unread subset of a
+paginated list. The dropdown shows the latest 30 notifications; opening it does
+not mark them as read or change the total. Counts above 99 display as `+99`.
+**Mark all read** applies to all notifications, including those outside the
+loaded page.
+
 ## Pagination
 
 List endpoints support pagination via query parameters:
