@@ -1,0 +1,2 @@
+DROP INDEX scans_snapshot_created_idx;
+DROP INDEX dep_extraction_jobs_repo_ref_created_idx;

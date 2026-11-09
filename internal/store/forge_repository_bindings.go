@@ -25,6 +25,12 @@ func (q *Queries) CaptureForgeRepositoryBinding(ctx context.Context, repoID uuid
 // match the enrollment captured before namespace reuse can alter inventory.
 type ForgeRepositoryTarget struct{ Owner, Name, AccountID, RepositoryID string }
 
+func (q *Queries) HasForgeRepositoryBinding(ctx context.Context, repoID uuid.UUID) (bool, error) {
+	var exists bool
+	err := q.rawDB().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM forge_repository_bindings WHERE repo_id=$1)`, repoID).Scan(&exists)
+	return exists, err
+}
+
 func (q *Queries) VerifiedForgeRepositoryTarget(ctx context.Context, repoID uuid.UUID) (*ForgeRepositoryTarget, error) {
 	target := &ForgeRepositoryTarget{}
 	err := q.rawDB().QueryRowContext(ctx, `SELECT f.owner,f.name,b.account_id,b.repository_id FROM repositories r

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
 
 const advisoryScanTimeout = 30 * time.Minute
@@ -154,26 +156,44 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 		baseCtx = context.Background()
 	}
 	providers := append([]string(nil), s.advisoryProviders...)
+	queued, err := s.queries.CreateScan(baseCtx, dbgen.CreateScanParams{
+		SnapshotID: snapshotID, Status: "pending", ProvidersRequested: providers, TriggeredBy: triggeredBy,
+	})
+	if err != nil {
+		s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("persist queued advisory scan")
+		return
+	}
 	go func() {
+		var runErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				runErr = fmt.Errorf("advisory scan worker panicked: %v", recovered)
 				s.log.Error().Any("panic", recovered).Str("snapshot_id", snapshotID.String()).Msg("advisory scan goroutine panicked")
 			}
+			if runErr != nil {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(baseCtx), 10*time.Second)
+				defer cancel()
+				if err := s.queries.FailUnfinishedScan(cleanupCtx, queued.ID, truncateSecretScanError(runErr)); err != nil {
+					s.log.Error().Err(err).Str("scan_id", queued.ID.String()).Msg("finalize interrupted advisory scan")
+				}
+			}
 		}()
+		scanCtx, cancel := context.WithTimeout(baseCtx, advisoryScanTimeout)
+		defer cancel()
 		// A burst of builds waits its turn: the first scan of an inventory
 		// set matches, the later ones copy it (ADR-049 §4).
 		if s.advisoryScanSlots != nil {
 			select {
 			case s.advisoryScanSlots <- struct{}{}:
 				defer func() { <-s.advisoryScanSlots }()
-			case <-baseCtx.Done():
+			case <-scanCtx.Done():
+				runErr = scanCtx.Err()
 				return
 			}
 		}
-		scanCtx, cancel := context.WithTimeout(baseCtx, advisoryScanTimeout)
-		defer cancel()
-		if _, err := s.advisoryScanner.RunScan(scanCtx, snapshotID, providers, triggeredBy); err != nil && !errors.Is(err, context.Canceled) {
-			s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
+		_, runErr = s.advisoryScanner.RunQueuedScan(scanCtx, queued)
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			s.log.Error().Err(runErr).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
 		}
 		// SBOM matching is a producer (ADR-034): its dependency findings were
 		// carried as pending until this scan finished.

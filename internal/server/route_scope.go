@@ -153,9 +153,10 @@ var routeScopes = map[string]routeScope{
 	"POST /api/v1/upload":             needs(apitoken.CapUploads, apitoken.AccessWrite),
 	"GET /api/v1/uploads/{id}/status": needs(apitoken.CapUploads, apitoken.AccessRead),
 
-	"GET " + orgRoute + "/":    anyGrantRoute(),
-	"PUT " + orgRoute + "/":    needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
-	"DELETE " + orgRoute + "/": sessionOnlyRoute(),
+	"GET " + orgRoute + "/":            anyGrantRoute(),
+	"PUT " + orgRoute + "/":            needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
+	"DELETE " + orgRoute + "/":         sessionOnlyRoute(),
+	"POST " + orgRoute + "/sca/enable": needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 
 	"GET " + orgRoute + "/dashboard":                                   needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),
 	"GET " + orgRoute + "/vulnerabilities":                             needsOrgWide(apitoken.CapVulnerabilities, apitoken.AccessRead),

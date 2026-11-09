@@ -17,6 +17,11 @@
     <div class="grid gap-5 lg:grid-cols-[1fr_18rem]">
       <!-- Main column -->
       <div class="min-w-0 space-y-4 lg:order-1">
+        <ScaStatus
+          :sca="sca"
+          :components="summary?.components_total"
+          :findings="vulnerabilitiesTotal"
+        />
         <div
           v-if="scanFailed"
           class="flex items-start gap-2.5 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
@@ -88,8 +93,8 @@
               </p>
 
               <div class="flex items-end gap-2">
-                <span class="text-3xl font-semibold text-white">{{ vulnerabilitiesTotal }}</span>
-                <span class="pb-1 text-sm text-gray-400">open vulnerabilities</span>
+                <span class="text-3xl font-semibold text-white">{{ scaKnownCount(vulnerabilitiesTotal, sca) }}</span>
+                <span class="pb-1 text-sm text-gray-400">known open vulnerabilities</span>
               </div>
 
               <div class="h-2 overflow-hidden rounded-full bg-surface-border-subtle">
@@ -114,7 +119,7 @@
                     class="text-lg font-semibold"
                     :class="item.valueClass"
                   >
-                    {{ item.value }}
+                    {{ scaKnownCount(item.value, sca) }}
                   </div>
                   <div class="text-[10px] uppercase tracking-[0.14em] text-gray-500">
                     {{ item.label }}
@@ -135,10 +140,10 @@
                 Components
               </div>
               <p class="mt-2 text-2xl font-semibold text-white">
-                {{ summary.components_total }}
+                {{ inventoryKnownCount(summary.components_total, sca) }}
               </p>
               <p class="mt-0.5 text-xs text-gray-500">
-                packages tracked in the SBOM
+                known packages in the dependency inventory
               </p>
               <span class="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent">
                 View dependencies
@@ -325,6 +330,8 @@ import { api, type RefSummary, type Repository, type SeverityCounts, type Snapsh
 import { relativeTime } from '@/lib/datetime'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import ScanCoveragePanel from '@/components/ScanCoveragePanel.vue'
+import ScaStatus from '@/components/ScaStatus.vue'
+import { inventoryKnownCount, scaKnownCount } from '@/lib/sca'
 import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 
 type SeverityKey = keyof SeverityCounts
@@ -347,6 +354,7 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 const loading = ref(true)
 const error = ref('')
 const summary = ref<RefSummary | null>(null)
+const sca = computed(() => !route.query.snapshot && (!route.query.ref || route.query.ref === repo.value?.default_branch) ? repo.value?.sca : undefined)
 const malwareOpen = computed(() => summary.value?.malware_open ?? 0)
 const kevOpen = computed(() => summary.value?.kev_open ?? null)
 const coverageRate = ref<number | null>(null)

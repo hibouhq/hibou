@@ -58,6 +58,7 @@ import (
 	"github.com/hibouhq/hibou/internal/secretscan"
 	"github.com/hibouhq/hibou/internal/shipped"
 	"github.com/hibouhq/hibou/internal/store"
+	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/toolcatalog"
 	"github.com/hibouhq/hibou/internal/updatecheck"
 	"github.com/hibouhq/hibou/internal/version"
@@ -171,6 +172,7 @@ type backgroundStarter interface {
 
 type advisoryScanner interface {
 	RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error)
+	RunQueuedScan(ctx context.Context, queued dbgen.Scan) (uuid.UUID, error)
 	TriggerRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error)
 	// MatchPurls is the stateless match behind the CLI's local scans
 	// (ADR-046 §2).
@@ -884,6 +886,7 @@ func (s *Server) routes(siteFS fs.FS) {
 							})
 						})
 					})
+					r.With(limitScans).Post("/sca/enable", s.handleEnableSCA)
 					r.Route("/repos", func(r chi.Router) {
 						r.Post("/", s.handleEnrollRepo)
 						r.With(limitScans).Post("/sync", s.handleSyncRepos)
@@ -1164,6 +1167,7 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 		loops = append(loops, "dep_extraction")
 		go s.runDepExtractionLoop(runtimeCtx)
 		go s.runDepExtractionUpgradeLoop(runtimeCtx)
+		go s.runSCABootstrapLoop(runtimeCtx)
 	}
 	if s.gatePublisher != nil {
 		loops = append(loops, "gate_reconcile")

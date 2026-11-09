@@ -38,6 +38,7 @@ type repositoryInventoryEntry struct {
 	Status        repoLifecycleStatus `json:"status"`
 	LastScanned   *time.Time          `json:"last_scanned,omitempty"`
 	Outdated      bool                `json:"outdated"`
+	SCA           scaCoverage         `json:"sca"`
 }
 
 type repoInventorySummary struct {
@@ -47,6 +48,8 @@ type repoInventorySummary struct {
 	Active          int `json:"active"`
 	Archived        int `json:"archived"`
 	Outdated        int `json:"outdated"`
+	Assessed        int `json:"assessed"`
+	Unassessed      int `json:"unassessed"`
 }
 
 type repoSnapshotState struct {
@@ -74,6 +77,17 @@ func (s *Server) listRepositoryInventory(r *http.Request, org *store.Organizatio
 	seen := make(map[string]struct{}, len(inventoryRepos)+len(enrolledRepos))
 	entries = append(entries, s.inventoryBackedEntries(org, forgeURL, inventoryRepos, repoByKey, snapshotByKey, seen)...)
 	entries = append(entries, s.enrolledOnlyEntries(org, forgeURL, enrolledRepos, snapshotByKey, seen)...)
+	observations, err := s.queries.ListSCAObservations(r.Context(), org.ID, uuid.Nil, "", store.RefTypeBranch)
+	if err != nil {
+		return nil, repoInventorySummary{}, err
+	}
+	for i := range entries {
+		var observation store.SCAObservation
+		if entries[i].ID != nil {
+			observation = observations[*entries[i].ID]
+		}
+		entries[i].SCA = s.scaCoverage(entries[i].Enrolled, observation)
+	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
 		left := strings.ToLower(strings.TrimSpace(entries[i].FullName))
@@ -181,6 +195,11 @@ func buildRepositoryInventoryEntry(org *store.Organization, forgeURL string, rep
 func summarizeRepositoryInventory(entries []repositoryInventoryEntry) repoInventorySummary {
 	summary := repoInventorySummary{TotalAccessible: len(entries)}
 	for _, entry := range entries {
+		if entry.SCA.State == "complete" || entry.SCA.State == "partial" && entry.SCA.LastAssessed != nil {
+			summary.Assessed++
+		} else {
+			summary.Unassessed++
+		}
 		if entry.Enrolled {
 			summary.Enrolled++
 		}

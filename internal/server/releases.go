@@ -94,8 +94,35 @@ func (s *Server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 			releases[i].KEVOpen = nil
 		}
 	}
-
-	api.JSONList(w, releases, pagination.Page, pagination.PerPage, total)
+	ids := make([]uuid.UUID, len(releases))
+	for i := range releases {
+		ids[i] = releases[i].ID
+	}
+	inventories, err := s.queries.ListReleaseInventories(r.Context(), repo.ID, ids)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load release inventory coverage")
+		return
+	}
+	for i := range releases {
+		releases[i].Inventory = inventories[releases[i].ID]
+		releases[i].Inventory.CanExtract = releases[i].Inventory.CanExtract && s.cfg.DepInventory.Enabled
+	}
+	summary, err := s.queries.GetReleaseInventorySummary(r.Context(), repo.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load release backfill status")
+		return
+	}
+	summary.Enabled = s.cfg.DepInventory.Enabled
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		api.ListResponse
+		Inventory store.ReleaseInventorySummary `json:"inventory"`
+	}{
+		ListResponse: api.ListResponse{Data: releases, Pagination: api.Pagination{
+			Page: pagination.Page, PerPage: pagination.PerPage, Total: total,
+		}},
+		Inventory: summary,
+	})
 }
 
 // removeDerivedRelease deletes a release in reaction to its source

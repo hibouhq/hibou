@@ -8,6 +8,13 @@
     </div>
 
     <template v-else>
+      <ScaActionResults
+        :provider="provider"
+        :slug="slug"
+        :results="scaResults"
+        :error="scaError"
+        @dismiss="dismissSca"
+      />
       <RouterLink
         v-if="malwareOpen > 0"
         :to="{ name: 'org-vulnerabilities', params: route.params, query: { q: OPEN_RISK_MALWARE_QUERY } }"
@@ -67,8 +74,8 @@
             </RouterLink>
           </div>
           <div class="mt-2 flex items-end gap-2">
-            <span class="text-3xl font-semibold text-white">{{ totalVulnerabilities }}</span>
-            <span class="pb-1 text-sm text-gray-400">across {{ dashboard.totals.components_total }} components</span>
+            <span class="text-3xl font-semibold text-white">{{ !hasAnalysisEvidence && totalVulnerabilities === 0 ? 'Not reported' : totalVulnerabilities }}</span>
+            <span class="pb-1 text-sm text-gray-400">known across {{ dashboard.totals.components_total }} components</span>
           </div>
           <div class="mt-3 flex flex-wrap gap-2">
             <span
@@ -79,8 +86,12 @@
             <span
               v-if="severityItems.length === 0"
               class="text-xs text-gray-500"
-            >No open vulnerabilities</span>
+            >{{ !hasAnalysisEvidence ? 'No dependency analysis reported' : 'No known open vulnerabilities in available analysis' }}</span>
           </div>
+          <p class="mt-2 text-xs text-gray-400">
+            {{ inventoryCount }} with inventory · {{ findingsOnlyCount }} findings only · {{ withoutInventoryCount }} without inventory.
+            <span v-if="unknownInventoryCount > 0">{{ unknownInventoryCount }} status unavailable.</span>
+          </p>
         </div>
 
         <div
@@ -117,22 +128,29 @@
           class="overflow-x-auto"
         >
           <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
+            <caption class="border-b border-surface-border-subtle px-4 py-2 text-left text-xs leading-relaxed text-gray-500">
+              Counts reflect the latest available analysis, not necessarily the current commit or complete shipped inventory.
+              Inventory source describes provenance; Last analysis shows freshness.
+            </caption>
             <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.16em] text-gray-500">
               <tr>
-                <th class="px-4 py-2.5 font-medium">
+                <th class="min-w-44 px-4 py-2.5 font-medium">
                   Repository
                 </th>
-                <th class="px-4 py-2.5 font-medium">
+                <th class="w-24 px-3 py-2.5 font-medium">
                   Status
                 </th>
-                <th class="px-4 py-2.5 font-medium">
+                <th class="px-3 py-2.5 font-medium">
+                  Inventory
+                </th>
+                <th class="min-w-[34rem] px-4 py-2.5 font-medium">
                   Vulnerabilities
                 </th>
-                <th class="px-4 py-2.5 font-medium">
+                <th class="w-24 px-3 py-2.5 font-medium">
                   Components
                 </th>
-                <th class="px-4 py-2.5 font-medium">
-                  Last scan
+                <th class="w-32 whitespace-nowrap px-3 py-2.5 font-medium">
+                  Last analysis
                 </th>
               </tr>
             </thead>
@@ -142,7 +160,7 @@
                 :key="repoEntryKey(entry)"
                 class="transition hover:bg-white/5"
               >
-                <td class="px-4 py-3">
+                <td class="min-w-44 px-4 py-3">
                   <component
                     :is="entry.enrolled && entry.repo_slug ? 'RouterLink' : 'div'"
                     :to="entry.enrolled && entry.repo_slug ? `/orgs/${provider}/${slug}/repos/${entry.repo_slug}` : undefined"
@@ -155,7 +173,7 @@
                       class="text-gray-400"
                     />
                     <div>
-                      <div class="font-medium">
+                      <div class="whitespace-nowrap font-medium">
                         {{ entry.repo_name }}
                       </div>
                       <div class="text-[11px] text-gray-500">
@@ -164,14 +182,37 @@
                     </div>
                   </component>
                 </td>
-                <td class="px-4 py-3">
+                <td class="whitespace-nowrap px-3 py-3">
                   <span
                     class="rounded-full border px-2 py-0.5 text-xs font-medium capitalize"
                     :class="statusClass(entry.status)"
                   >{{ entry.status }}</span>
                 </td>
-                <td class="px-4 py-3">
-                  <div class="flex flex-wrap items-center gap-1.5">
+                <td class="px-3 py-3">
+                  <ScaStatus
+                    compact
+                    :sca="entry.sca"
+                    :enrolled="entry.enrolled"
+                    :can-manage="canManage"
+                    :components="entry.components_total"
+                    :findings="sumCounts(entry.vulnerabilities)"
+                  />
+                  <button
+                    v-if="canManage && entryAction(entry)"
+                    type="button"
+                    class="mt-2 rounded-lg border border-accent/40 px-2.5 py-1.5 text-xs text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!canEnableSca(entry.status, entry.sca) || scaBusy.length > 0"
+                    :title="entry.status === 'archived' ? 'Archived repositories cannot enable SCA' : 'Read default-branch manifests and lockfiles and match advisories; no workflow, upload, write permission or secret scan'"
+                    @click="enableSca(entry)"
+                  >
+                    {{ scaBusy.includes(entry.provider_id) ? 'Requesting…' : entryAction(entry) }}
+                  </button>
+                </td>
+                <td class="min-w-[34rem] px-4 py-3">
+                  <div
+                    class="flex flex-nowrap items-center gap-1.5 whitespace-nowrap [&>*]:shrink-0"
+                    data-testid="repository-vulnerability-badges"
+                  >
                     <!-- Malware first: it outranks every other chip in the row. -->
                     <component
                       :is="entry.enrolled && entry.repo_slug ? RouterLink : 'span'"
@@ -196,7 +237,7 @@
                       v-for="item in toSeverityItems(entry.vulnerabilities)"
                       :key="`${repoEntryKey(entry)}-${item.key}`"
                       :to="entry.repo_slug ? repoVulnerabilities(entry.repo_slug, openRiskSeverityQuery(item.key)) : undefined"
-                      :class="[severityBadgeClass(item.key), 'transition hover:brightness-125']"
+                      :class="[severityBadgeClass(item.key), 'shrink-0 whitespace-nowrap transition hover:brightness-125']"
                       :title="`Open the ${item.value} open ${item.key} findings`"
                     >
                       {{ item.value }} {{ item.key }}
@@ -204,19 +245,19 @@
                     <span
                       v-if="toSeverityItems(entry.vulnerabilities).length === 0"
                       class="text-gray-500"
-                    >None</span>
+                    >{{ scaAssessed(entry.sca) ? entry.sca?.state === 'partial' ? '0 known · partial' : '0 known' : entry.sca ? 'Not assessed' : 'Not reported' }}</span>
                   </div>
                 </td>
-                <td class="px-4 py-3 text-gray-300">
-                  {{ entry.components_total }}
+                <td class="whitespace-nowrap px-3 py-3 text-gray-300">
+                  {{ hasInventory(entry.sca, entry.components_total) ? entry.components_total : 'Not reported' }}
                 </td>
-                <td class="px-4 py-3 text-gray-400">
-                  <div>{{ formatDate(entry.last_scanned) }}</div>
+                <td class="whitespace-nowrap px-3 py-3 text-gray-400">
+                  <div>{{ formatDate(entry.sca?.last_assessed || entry.last_scanned) }}</div>
                   <div
-                    v-if="entry.outdated"
-                    class="mt-0.5 text-xs text-amber-300"
+                    v-if="entry.sca?.state === 'outdated' || (entry.sca?.previous_results && entry.sca.has_inventory === false) || entry.outdated"
+                    class="mt-0.5 text-xs text-gray-500"
                   >
-                    Out of date
+                    {{ entry.sca?.state === 'outdated' || (entry.sca?.previous_results && entry.sca.has_inventory === false) ? 'Previous commit' : 'Out of date' }}
                   </div>
                 </td>
               </tr>
@@ -230,11 +271,15 @@
 
 <script setup lang="ts">
 import { Flame, ShieldAlert } from 'lucide-vue-next'
-import { computed, inject, ref, type Ref } from 'vue'
+import { computed, inject, onUnmounted, ref, watch, type Ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import type { OrgDashboard, RepoDashboardEntry, RepoLifecycleStatus, SeverityCounts } from '@/api/client'
+import { api, type Organization, type OrgDashboard, type RepoDashboardEntry, type RepoLifecycleStatus, type SeverityCounts } from '@/api/client'
 import ForgeIcon from '@/components/ForgeIcon.vue'
+import ScaStatus from '@/components/ScaStatus.vue'
+import ScaActionResults from '@/components/ScaActionResults.vue'
+import { useScaActions, useScaPolling } from '@/composables/useScaActions'
+import { canEnableSca, hasInventory, hasReportedFindings, scaAction, scaAssessed, scaErrorMessage, scaPending, scaResultCoverage } from '@/lib/sca'
 import { severityBadgeClass } from '@/lib/findingDisplay'
 import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY, openRiskSeverityQuery } from '@/lib/openRiskPreset'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
@@ -244,6 +289,45 @@ const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
 
 const dashboard = inject<Ref<OrgDashboard | null>>('orgDashboard', ref(null))
+const org = inject<Ref<Organization | null>>('org', ref(null))
+const canManage = computed(() => org.value?.provider === provider.value && org.value?.slug === slug.value && org.value?.role === 'admin')
+const { pending: scaBusy, results: scaResults, error: scaError, enable, dismiss: dismissSca } = useScaActions(provider, slug)
+const scope = computed(() => `${provider.value}/${slug.value}`)
+let generation = 0
+watch(scope, () => { generation++ })
+onUnmounted(() => { generation++ })
+useScaPolling(scope, computed(() => dashboard.value?.repos.some(entry => scaPending(entry.sca)) ?? false), refreshDashboard, error => { scaError.value = scaErrorMessage(error) })
+
+async function refreshDashboard() {
+  const request = generation
+  const response = await api.getOrgDashboard(provider.value, slug.value)
+  if (request === generation) dashboard.value = response.data
+}
+
+async function enableSca(entry: RepoDashboardEntry) {
+  if (!canManage.value || !entryAction(entry) || !canEnableSca(entry.status, entry.sca)) return
+  const request = generation
+  const results = await enable([entry.provider_id])
+  if (!results) return
+  const result = results[0]
+  if (result && result.status !== 'failed') {
+    entry.enrolled = true
+    entry.repo_slug = result.repo_slug || entry.repo_slug
+    entry.sca = scaResultCoverage(result, entry.sca)
+  }
+  await refreshDashboard().catch(error => {
+    if (request === generation) scaError.value = `Request recorded, but the latest status could not be loaded. ${scaErrorMessage(error)}`
+  })
+}
+
+function entryAction(entry: RepoDashboardEntry) {
+  return scaAction(entry.enrolled, entry.sca, entry.components_total, sumCounts(entry.vulnerabilities))
+}
+const inventoryCount = computed(() => dashboard.value?.repos.filter(entry => hasInventory(entry.sca, entry.components_total)).length ?? 0)
+const findingsOnlyCount = computed(() => dashboard.value?.repos.filter(entry => !hasInventory(entry.sca, entry.components_total) && hasReportedFindings(entry.sca, sumCounts(entry.vulnerabilities))).length ?? 0)
+const unknownInventoryCount = computed(() => (dashboard.value?.repos ?? []).filter(entry => !entry.sca && !hasInventory(entry.sca, entry.components_total) && !hasReportedFindings(entry.sca, sumCounts(entry.vulnerabilities))).length)
+const withoutInventoryCount = computed(() => (dashboard.value?.repos.length ?? 0) - inventoryCount.value - findingsOnlyCount.value - unknownInventoryCount.value)
+const hasAnalysisEvidence = computed(() => (dashboard.value?.repos ?? []).some(entry => scaAssessed(entry.sca) || hasReportedFindings(entry.sca, sumCounts(entry.vulnerabilities))))
 
 const severityOrder: Array<keyof SeverityCounts> = ['critical', 'high', 'medium', 'unknown', 'low', 'info']
 const severityRank: Record<string, number> = { critical: 6, high: 5, medium: 4, unknown: 3, low: 2, info: 1 }
@@ -263,6 +347,10 @@ const coverageCards = computed(() => {
     { label: 'Active', value: coverage?.active ?? 0 },
     { label: 'Discovered', value: coverage?.discovered ?? 0 },
     { label: 'Out of date', value: coverage?.outdated ?? 0 },
+    { label: 'Inventory available', value: inventoryCount.value },
+    { label: 'Findings only', value: findingsOnlyCount.value },
+    { label: 'No inventory', value: withoutInventoryCount.value },
+    ...(unknownInventoryCount.value > 0 ? [{ label: 'Status unavailable', value: unknownInventoryCount.value }] : []),
   ]
 })
 
@@ -320,7 +408,7 @@ function statusClass(status: RepoLifecycleStatus) {
 }
 
 function formatDate(value?: string) {
-  return value ? new Date(value).toLocaleDateString() : 'Never'
+  return value ? new Date(value).toLocaleDateString() : 'Not recorded'
 }
 
 function repoEntryKey(entry: RepoDashboardEntry) {

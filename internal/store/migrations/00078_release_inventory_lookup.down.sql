@@ -1,0 +1,1 @@
+DROP INDEX dep_extraction_jobs_snapshot_created_idx;

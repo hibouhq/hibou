@@ -7,6 +7,14 @@ Originally proposed 2026-10-15. The implementation notes below cover
 extraction, release backfill, provenance/shipped policy, container inventory,
 immutable inventory sets and advisory scan reuse.
 
+**Implemented amendment (2026-11-09):** close the
+discovery-to-SCA onboarding gap (§4.0). The extractor and enrolled-repository
+pipeline are reused by explicit single/bulk enablement from repository and
+organization views. Discovery alone still does not enroll or monitor a
+repository. Bootstrap recovery is limited to verified enrolled repositories
+whose default branch has never had an extraction job or usable inventory;
+existing failed/empty/partial attempts are not retried by that pass.
+
 **Deferred, not missing from this implementation:** ADR-047's approval
 workflows. **Deliberately excluded:** server-side execution of repository
 tooling and server-side image pulls; CLI/CI paths provide those trusted
@@ -32,7 +40,7 @@ applicability, `hibou scan`), and reuses the clone path of
 
 ## Context
 
-Hibou only knows a repository's dependencies when someone uploads a CycloneDX
+Before this ADR, Hibou only knew a repository's dependencies when someone uploaded a CycloneDX
 or SPDX SBOM. Repositories without an SBOM step in CI have an empty
 Dependencies tab, no advisory matching, no license policy and no CRA
 inventory. Releases tagged before a repository was onboarded have no SBOM at
@@ -388,6 +396,217 @@ never enabled on the server.
 
 ### 4. Where and when it runs
 
+#### 4.0 From discovered repository to monitored SCA
+
+**Observed gap (2026-11-09).** An organization can show accessible repositories
+as **Discovered**, with zero components, "None" vulnerabilities and "Never"
+scanned, but no action to start monitoring them. Uploading an SBOM must not be
+the prerequisite for turning those repositories into usable SCA targets.
+
+The missing part is onboarding and coverage visibility, not another parser:
+
+- [The extractor](../../internal/depinventory/depinventory.go) already embeds
+  Google's `github.com/google/osv-scalibr` with offline, allowlisted parsers.
+- [Repository inventory](../../internal/server/repo_inventory.go) joins forge
+  discovery with enrolled repositories. A discovery-only entry has no Hibou
+  repository ID or slug. The current **Discovered** lifecycle also includes
+  enrolled repositories with no snapshot; it is not an enrollment flag.
+- [Explicit enrollment](../../internal/server/repos.go) already calls
+  `enqueueEnrollmentDepExtraction` for the default branch.
+  [The extraction worker](../../internal/server/dep_extraction.go) can create
+  a scan-only snapshot, ingest the inventory through the existing pipeline
+  and complete it without a CI upload. Manual extraction and lazy reads
+  already serve enrolled repositories.
+- [Repositories](../../site/src/views/ReposView.vue) exposes **Sync now** and
+  **Open forge**, but no enrollment action; the
+  [organization overview](../../site/src/views/org/OverviewTab.vue) does not
+  link discovery-only entries to a Hibou repository.
+- Push and [forge reconciliation](054-github-without-webhooks.md) operate on
+  enrolled repositories. Discovery intentionally does not enroll them.
+  The extractor-upgrade pass only repairs older extraction runs; it is not
+  a bootstrap for repositories that have never had an inventory.
+
+**Recommendation: explicit, one-step "Enable SCA", then automatic upkeep.**
+Keep discovery read-only by default. Forge access is not consent to clone
+and analyze every repository, especially installations exposing hundreds of
+repositories. Do not silently auto-enroll existing installations. An
+organization-wide automatic-enrollment policy can be considered separately;
+it is not required to close this gap.
+
+##### 4.0.1 Enrollment and first scan
+
+1. Add an org-admin-only **Enable SCA** action to discovery-only rows in the
+   repository list and organization overview, plus **Enable SCA for selected
+   repositories** in the list. Explain that Hibou will read the default
+   branch's supported manifests and lockfiles, run advisory matching and keep
+   monitoring changes; no workflow, SBOM upload or write permission is needed.
+   Non-admins see "Not monitored — ask an organization admin", not a dead end.
+2. Resolve selection against the server's forge inventory, not client-supplied
+   clone URLs, owners or default branches. Reuse enrollment authorization and
+   ADR-052/054's immutable account, installation and repository identity checks
+   before enrollment and again before content access. Denied, missing or
+   rebound identities fail visibly. Archived repositories are excluded from
+   bulk selection and cannot enable automatic SCA until unarchived on the
+   forge.
+3. Share enrollment logic with the existing API; do not create a second
+   repository model or make the frontend upload a synthetic SBOM. Make
+   enablement idempotent under repeated clicks, concurrent admins and a racing
+   first CI upload. Existing enrollment, team, configuration and history stay
+   intact. Already-enrolled entries offer **Extract dependencies** instead.
+4. Persist enrollment and the initial default-branch extraction request
+   atomically, or through a transactional outbox. Success means a durable job
+   exists, not just that enrollment succeeded. Return the repository route and
+   job identity so the UI can open Dependencies and show progress immediately.
+   Bulk requests report each repository's accepted, existing or failed result;
+   one inaccessible repository must not erase the other results.
+5. Keep this action scoped to dependency extraction and advisory matching.
+   The existing enrollment handler also queues a full-history secret scan;
+   factor the shared enrollment path so **Enable SCA** does not implicitly
+   request that unrelated workload. Preserve existing enrollment API behavior.
+6. Honor `dep_inventory.enabled`: report disabled extraction before changing
+   enrollment and explain the operator action required. Do not use CI upload
+   as a success-shaped fallback. `dep_inventory.on_push` controls subsequent
+   push-triggered work, not an explicit first scan; disclose when automatic
+   upkeep is disabled.
+
+The initial job reads the current default-branch commit and records its SHA;
+all inventory evidence belongs to that immutable commit. Subsequent webhook
+or poll observations use §4.1. A branch advancing during extraction must not
+make the older result appear current. No all-branch or release-history sweep
+is implied; eager/lazy branches and release backfill retain their own rules.
+
+##### 4.0.2 Recover enrolled repositories without inventory
+
+Add a bounded, durable bootstrap reconciliation for **already-enrolled**
+repositories, on startup and periodically. It repairs missed initial enqueue
+and pre-existing repositories without waiting for another push or CI upload.
+It must never enroll discovery-only repositories.
+
+Select repositories whose default branch has neither an extraction job nor
+usable inventory evidence; reuse existing job leases and retry limits.
+Capture the observed head commit when known; otherwise the worker resolves
+and records it. Respect disabled
+extraction, access revocation, per-org fairness and global worker bounds.
+Do not enqueue another job while the same target is pending or processing.
+Exhausted failures require an explicit retry or a changed target, not an
+infinite bootstrap loop. Completed empty, unsupported or partial attempts
+are recorded outcomes, not "missing inventory" to retry on every pass.
+An uploaded usable inventory does not need extraction merely because it has
+no Hibou extraction run; existing CI evidence and source merge rules remain.
+
+Implementation bounds: startup and once per minute, at most 100 jobs per pass
+and 10 per organization, leader-locked across replicas and row-locked against
+concurrent enablement. Only current, non-archived forge inventory matching the
+enrollment's immutable account/repository binding is eligible. Unknown legacy
+identity requires a forge sync/verified binding, not a guessed owner. This is
+an enrollment-repair pass, not another all-branch, extractor-upgrade or
+configuration-change scheduler. Subsequent observations and explicit retries
+use the existing extraction paths.
+
+##### 4.0.3 Coverage and results must be honest
+
+Expose enrollment and dependency-analysis state separately from lifecycle
+and snapshot existence in repository/organization APIs and views. Reuse
+extraction-job, producer-run and advisory-scan status rather than inventing a
+second job system. Keep **inventory source**, **analysis progress** and **result
+freshness** separate. Repository tables show a compact source badge and the
+date of the displayed analysis, not a repeated warning paragraph. Detailed
+views retain commit, last successful analysis, attempt/error and appropriate
+enable/update/retry actions.
+
+- "0 vulnerabilities" is a result only after advisory matching succeeds on
+  the available inventory. Unmonitored, pending, unsupported and failed
+  repositories must not show a healthy zero. Reported dependency findings
+  remain valid evidence even when no Hibou `scans` row exists: their state is
+  `reported`, not "never assessed". Inventory without a matching pass is
+  `inventory_ready`; a newer commit with older available results is
+  `outdated`. Neither state discards or hides known findings.
+- A partial inventory shows its known matches and coverage warning, not a
+  repository-wide clean bill of health. Unresolved version ranges remain
+  unmatched; no lockfile means unknown indirect dependencies (§1.1–2.2).
+- An empty result distinguishes no recognized files from parse failures and
+  exclusions. A snapshot alone does not establish SCA coverage. Organization
+  totals distinguish assessed repositories from discovered/unassessed ones.
+- Sources retain the **Hibou scan** origin, paths, extractor version and
+  module completeness. CI/uploaded SBOM evidence remains additive under §5;
+  enabling SCA neither replaces it nor implies build-accurate transitive
+  coverage or complete license data.
+- The source summary distinguishes repository extraction, Hibou CLI inventory,
+  uploaded SBOMs, mixed sources and unknown legacy provenance. It comes from
+  active inventory-source/artifact links, excludes revoked evidence, and
+  preserves the inventory's commit when displaying older results. CI/manual
+  upload origin is not a completeness ranking: a CLI-produced SBOM can be
+  static, resolved or artifact-based; an external SBOM can also be partial.
+  Mixed inventories expose their concrete source categories together (for
+  example **Repository files + SBOM**) rather than selecting a single winner.
+  The table reserves space for the vulnerability badges and keeps their
+  severity order on one line; narrow views scroll the table, not individual
+  badges onto another row.
+- A frontend talking to an older server must treat missing coverage metadata
+  as unknown capability, not missing inventory. Existing component/finding
+  counts stay visible and extraction actions require explicit support.
+  An unavailable endpoint is an actionable deployment/version error, not a
+  persisted raw "HTTP 404" banner or a failed dependency assessment.
+
+##### 4.0.4 Acceptance and rollout
+
+Ship the shared enrollment/queue path and coverage API first, then the
+repository-list/overview actions, then bootstrap reconciliation. Validate:
+
+1. A discovery-only repository with a supported lockfile can go from **Enable
+   SCA** to components and advisory results without any CI run or SBOM upload.
+   A controlled vulnerable-package fixture produces the expected advisory,
+   not merely a completed extraction job.
+2. Repeated/bulk enablement, concurrent enrollment and a racing CI upload
+   preserve one repository identity and coalesce equivalent extraction work.
+   A queue failure cannot return successful enablement without durable work.
+3. Cross-org selection, immutable-ID mismatch, revoked access, non-admin
+   requests and disabled extraction fail explicitly without unauthorized
+   enrollment, cloning or secret-scan jobs.
+4. An enrolled, never-scanned repository is bootstrapped after restart without
+   a new push; stable empty/partial outcomes and exhausted failures do not
+   create queue storms. Existing CI inventory is preserved.
+5. A subsequent default-branch change refreshes results in webhook and
+   GitHub/GHES poll modes. An older in-flight job cannot mark a newer head
+   current. Other branches remain lazy.
+6. Unsupported files, unresolved ranges, parser failure, extraction failure
+   and advisory-provider failure render distinct coverage states in the
+   repository list, overview and Dependencies tab, never false clean zeros.
+
+Implemented surfaces and validation (2026-11-09):
+
+- `POST /api/v1/orgs/{provider}/{slug}/sca/enable` accepts 1–50 inventory keys
+  and returns per-repository accepted/existing/failed results. Org-wide
+  `admin:write` is required for scoped tokens as well as admin membership.
+  Repository enrollment and queue insertion commit together; processing jobs
+  are reused. The action never queues a full-history secret scan.
+- Repository inventory, dashboard entries and extraction status expose `sca`
+  separately from lifecycle, plus assessed/unassessed organization counts.
+  Coverage observations are loaded in one batched query, not one new query
+  per repository. Migration `00077` indexes latest extraction-job and
+  advisory-scan lookups.
+- Forge inventory sync/webhooks persist the observed account ID, including
+  slim installation payloads, so verified enrollment works outside poll mode.
+  Enablement fails explicitly if the provider cannot supply the immutable
+  account/repository metadata; it never substitutes a matching name.
+  Bound extraction jobs recheck identity before fetching content, and token
+  minting errors fail rather than attempting an anonymous clone. The check
+  compares live forge account/repository IDs with the captured binding, not
+  just the mirrored inventory; checkout uses the live forge's clone URL.
+- Advisory matching persists a pending scan before waiting for a worker slot
+  and executes that same record when a slot is available. Waiting work remains
+  **Matching advisories**, not **Not assessed**, so progress polling continues.
+  Timeout/cancellation failures are recorded. A newer successful assessment
+  of the current inventory supersedes an earlier extraction failure, including
+  when CI subsequently provides the inventory.
+- Backend tests exercise concurrent enablement, rollback, access denial,
+  identity reuse, bootstrap bounds and coverage states. A local Git fixture
+  with locked lodash 4.17.20 extracts without uploads and matches
+  CVE-2021-23337 using the real advisory pipeline and a controlled provider.
+  Frontend checks cover mixed bulk outcomes, partial/failed coverage,
+  navigation and retry recovery. Browser checks use mocked API responses,
+  not a live customer forge.
+
 #### 4.1 Automatic, server-side, on push
 
 Hibou analyses every onboarded repository without CI changes, the same way it
@@ -498,16 +717,33 @@ commit is skipped.
 
 On the Releases tab (ADR-024):
 
-- Each release whose snapshot has no inventory, or only a partial one, shows
-  **"Extract dependencies"**. Release managers and admins
+- A release without inventory shows **"Extract dependencies"** only when
+  extraction is enabled and no equivalent job is queued or running. A
+  terminal extraction failure offers **"Retry dependency extraction"**.
+  Complete or partial inventories (including uploaded SBOMs), completed
+  unsupported attempts, disabled extraction and unknown status do not show
+  an unnecessary extraction button. Release managers and admins
   (`requireReleaseManager`) can trigger it; the CLI equivalent is `hibou
   release scan <version>` without files (ADR-046).
-- A bulk **"Backfill all releases"** action queues every release without an
-  inventory, newest first, rate-limited per org.
+- **"Backfill missing inventories"** appears only while eligible releases
+  remain, across the repository rather than just the current page. Each
+  explicit request queues at most 100, newest published first; the result
+  reports queued, already covered/queued, failed and remaining counts, plus
+  individual enqueue errors. Another click queues the next batch. Queue
+  leases, retries and organization fairness are shared with normal extraction.
+  Enabling repository SCA alone does not request historical release backfill.
 - The job clones the tag's commit as in §4.1 and applies T1/T2 only (§1.1).
   If the release has no snapshot, it creates one for that commit and pins
   it, so the existing advisory pass covers it.
 - Idempotent per (commit, extractor version, input digest).
+- Release listing responses expose inventory eligibility and aggregate
+  progress without fetching sources once per row. Actions disappear after
+  queueing and stay hidden once inventory is present. Queued extraction and
+  advisory matching refresh automatically; extraction errors remain visible.
+- A released snapshot is never replaced with the current tag head. For a
+  release with no pinned snapshot, the first extraction records and pins
+  the observed tag commit. A tag and branch sharing a name are distinguished
+  explicitly. A conflicting pending target is reported, not overwritten.
 
 #### 4.3.1 Extractor upgrades
 
@@ -926,8 +1162,9 @@ Neither tool is reused as an engine (§3, E7/E8).
 - **Vulnerabilities tab**: the same Shipped, Relationship and Origin filters;
   findings on not-shipped components carry a "not shipped" badge and stay
   listed.
-- **Releases tab**: "Extract dependencies" per release, "Backfill all
-  releases", the extractor version per release, "Add deliverables" (shows
+- **Releases tab**: conditional "Extract dependencies"/retry per release and
+  "Backfill missing inventories", the extractor version per release,
+  "Add deliverables" (shows
   the ready-to-copy `hibou release scan` command, ADR-046), progress, and a
   "no inventory" filter. Releases with discrepancies (§5.3) carry a badge;
   the release page lists each one with both versions and their sources, and

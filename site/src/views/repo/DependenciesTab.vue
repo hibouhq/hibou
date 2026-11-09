@@ -1,5 +1,49 @@
 <template>
   <div class="space-y-5">
+    <section class="rounded-xl border border-surface-border bg-surface-overlay/40 px-4 py-3">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <ScaStatus
+          :sca="extraction?.sca"
+          :can-manage="canManage"
+          :components="components.length"
+          :findings="components.reduce((total, component) => total + component.vuln_count, 0)"
+        />
+        <button
+          v-if="canManage && !selectedSnapshot && needsDependencyExtraction(extraction?.sca, components.length)"
+          type="button"
+          class="rounded-lg border border-accent/40 px-3 py-1.5 text-xs font-medium text-accent disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="repo?.slug !== repoSlug || extracting || extractionPending || extraction?.enabled === false || !canEnableSca(repo?.status, extraction?.sca)"
+          @click="requestExtraction"
+        >
+          {{ extracting ? 'Requesting…' : scaAction(true, extraction?.sca) }}
+        </button>
+      </div>
+      <p
+        v-if="!canManage && !selectedSnapshot && needsDependencyExtraction(extraction?.sca, components.length)"
+        class="mt-2 text-xs text-gray-400"
+      >
+        Ask an organization admin to extract dependencies or retry.
+      </p>
+      <p class="mt-2 text-xs text-gray-500">
+        Supported manifests and lockfiles provide inventory, not build-accurate transitive coverage.
+        No workflow, SBOM upload or write permission is needed. Extraction does not start a secret scan.
+      </p>
+      <p
+        v-if="extractionError || extractionMessage"
+        class="mt-2 text-xs"
+        :class="extractionError ? 'text-red-200' : 'text-gray-300'"
+        aria-live="polite"
+      >
+        {{ extractionError || extractionMessage }}
+      </p>
+      <p
+        v-if="componentsError"
+        class="mt-2 text-xs text-red-200"
+        role="alert"
+      >
+        {{ componentsError }}
+      </p>
+    </section>
     <!-- Summary tiles -->
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <div
@@ -59,9 +103,15 @@
         >
           <!-- A ref without inventory asks for one on first read (ADR-045
                §4.1.1); the state here says whether it is on its way. -->
-          <template v-if="extractionPending">
+          <template v-if="componentsError">
+            Dependency inventory could not be loaded. Reload to try again.
+          </template>
+          <template v-else-if="extractionPending">
             <RefreshCw class="mx-auto mb-2 h-4 w-4 animate-spin text-accent" />
-            Extracting dependencies from the repository{{ extraction?.job?.status === 'processing' ? '…' : ' (queued)…' }}
+            {{ scaLabel(extraction?.sca) }}…
+          </template>
+          <template v-else-if="extraction?.sca">
+            {{ scaLabel(extraction.sca) }}
           </template>
           <template v-else-if="extraction?.job?.status === 'failed' && extraction.job.last_error">
             <p class="text-warn">
@@ -71,25 +121,9 @@
               {{ extraction.job.last_error }}
             </p>
           </template>
-          <template v-else-if="extraction?.run && extraction.run.component_count === 0">
-            No lockfile or manifest recognised at this commit.
-          </template>
           <template v-else>
-            No components found for this {{ selectedSnapshot ? 'snapshot' : 'ref' }}.
+            Not assessed — no dependency inventory available for this {{ selectedSnapshot ? 'snapshot' : 'ref' }}.
           </template>
-          <div
-            v-if="extraction?.enabled && !selectedSnapshot && !extractionPending"
-            class="mt-3"
-          >
-            <button
-              type="button"
-              class="rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:opacity-50"
-              :disabled="extracting"
-              @click="requestExtraction"
-            >
-              {{ extracting ? 'Requesting…' : 'Extract dependencies now' }}
-            </button>
-          </div>
         </div>
 
         <EcosystemSunburst
@@ -144,11 +178,11 @@
           Components
         </h2>
         <div class="flex items-center gap-3">
-          <span class="text-xs text-gray-500">{{ components.length }} total</span>
+          <span class="text-xs text-gray-500">{{ componentsError ? 'Inventory unavailable' : hasInventory(extraction?.sca, components.length) ? `${components.length} known total` : 'Not reported' }}</span>
           <button
             type="button"
             class="inline-flex items-center gap-1.5 rounded-lg border border-surface-border bg-surface-overlay/40 px-2.5 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="scanning || scanUnavailable"
+            :disabled="scanning || scanUnavailable || components.length === 0"
             :title="scanUnavailable ? scanError : 'Scan current snapshot components against enabled advisory providers'"
             @click="runComponentScan"
           >
@@ -519,10 +553,13 @@
 
 <script setup lang="ts">
 import { Archive, Clock, EyeOff, RefreshCw, ShieldCheck, ShieldOff, TriangleAlert, Workflow } from 'lucide-vue-next'
-import { computed, ref, watch } from 'vue'
+import { computed, inject, onUnmounted, ref, watch, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, type ComponentGraph, type ComponentGraphNode, type ComponentWithVulns, type DepExtractionStatus, type ShippingInfo } from '@/api/client'
+import { api, type ComponentGraph, type ComponentGraphNode, type ComponentWithVulns, type DepExtractionStatus, type Repository, type ShippingInfo } from '@/api/client'
+import ScaStatus from '@/components/ScaStatus.vue'
+import { canEnableSca, hasInventory, inventoryKnownCount, needsDependencyExtraction, scaAction, scaAssessed, scaErrorMessage, scaKnownCount, scaLabel, scaPending, scaResultCoverage } from '@/lib/sca'
+import { useOrgStore } from '@/stores/org'
 import { isMalwareComponent } from '@/lib/findingDisplay'
 import DependencyGraph from '@/components/DependencyGraph.vue'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
@@ -543,14 +580,33 @@ const slug = computed(() => route.params.slug as string)
 const repoSlug = computed(() => route.params.repoSlug as string)
 const selectedRef = computed(() => typeof route.query.ref === 'string' ? route.query.ref : undefined)
 const selectedSnapshot = computed(() => typeof route.query.snapshot === 'string' ? route.query.snapshot : undefined)
+const repo = inject<Ref<Repository | null>>('repo', ref(null))
+const orgStore = useOrgStore()
+const canManage = computed(() => orgStore.currentOrg?.provider === provider.value && orgStore.currentOrg?.slug === slug.value && orgStore.currentOrg?.role === 'admin')
+const scope = computed(() => `${provider.value}/${slug.value}/${repoSlug.value}/${selectedRef.value ?? ''}/${selectedSnapshot.value ?? ''}`)
+let generation = 0
+let loadRequest = 0
+let extractionRequest = 0
+let extractionPolls = 0
+let disposed = false
 
 const components = ref<ComponentWithVulns[]>([])
 // Built-in extraction state for an empty ref (ADR-045 §4.1.1), polled while
 // a job is queued or running so the table fills in on its own.
 const extraction = ref<DepExtractionStatus | null>(null)
 const extracting = ref(false)
-const extractionPending = computed(() => extraction.value?.job?.status === 'pending' || extraction.value?.job?.status === 'processing')
+const extractionError = ref('')
+const componentsError = ref('')
+const extractionMessage = ref('')
+const extractionPending = computed(() => extraction.value?.sca
+  ? scaPending(extraction.value.sca)
+  : extraction.value?.job?.status === 'pending' || extraction.value?.job?.status === 'processing')
 let extractionTimer: ReturnType<typeof setTimeout> | null = null
+onUnmounted(() => {
+  disposed = true
+  generation++
+  if (extractionTimer) clearTimeout(extractionTimer)
+})
 
 function humanWindow(seconds?: number): string {
   if (!seconds || seconds <= 0) return ''
@@ -591,35 +647,61 @@ const installConfigRows = computed(() => {
 })
 
 async function refreshExtraction() {
-  if (!provider.value || !slug.value || !repoSlug.value || selectedSnapshot.value) return
+  if (disposed || !provider.value || !slug.value || !repoSlug.value || selectedSnapshot.value) return
+  const request = ++extractionRequest
+  const current = generation
+  if (extractionTimer) clearTimeout(extractionTimer)
+  extractionTimer = null
   try {
     const response = await api.getDependencyExtraction(provider.value, slug.value, repoSlug.value, selectedRef.value || undefined)
+    if (disposed || current !== generation || request !== extractionRequest) return
     extraction.value = response.data
-  } catch {
-    extraction.value = null
+    extractionError.value = ''
+  } catch (error) {
+    if (disposed || current !== generation || request !== extractionRequest) return
+    extractionError.value = scaErrorMessage(error)
+    return
   }
-  if (extractionTimer) clearTimeout(extractionTimer)
-  if (extractionPending.value) {
+  if (extractionPending.value && extractionPolls < 75) {
     extractionTimer = setTimeout(async () => {
+      extractionTimer = null
+      extractionPolls++
       const wasPending = extractionPending.value
       await refreshExtraction()
-      if (wasPending && !extractionPending.value) {
+      if (!disposed && current === generation && wasPending && !extractionPending.value) {
         await loadComponents({ resetSelection: false, clearScanStatus: false })
       }
     }, 4000)
+  } else if (extractionPending.value) {
+    extractionMessage.value = 'Analysis is still running. Reload this page to check progress.'
   }
 }
 
 async function requestExtraction() {
-  if (!provider.value || !slug.value || !repoSlug.value || extracting.value) return
+  if (!canManage.value || !provider.value || !slug.value || !repoSlug.value || repo.value?.slug !== repoSlug.value || extracting.value || extractionPending.value || selectedSnapshot.value || !needsDependencyExtraction(extraction.value?.sca, components.value.length) || !canEnableSca(repo.value?.status, extraction.value?.sca)) return
+  const current = generation
   extracting.value = true
+  extractionError.value = ''
+  extractionMessage.value = ''
   try {
-    await api.triggerDependencyExtraction(provider.value, slug.value, repoSlug.value, selectedRef.value || undefined)
+    if (repo.value?.provider_id && (!selectedRef.value || selectedRef.value === repo.value.default_branch)) {
+      const response = await api.enableSca(provider.value, slug.value, [repo.value.provider_id])
+      if (disposed || current !== generation) return
+      const result = response.data.results[0]
+      if (!result || result.status === 'failed') throw new Error(result?.error || 'Dependency extraction was not accepted')
+      if (extraction.value) extraction.value.sca = scaResultCoverage(result, extraction.value.sca)
+      extractionMessage.value = result.job_id ? 'Dependency analysis queued.' : 'Existing inventory available.'
+    } else {
+      await api.triggerDependencyExtraction(provider.value, slug.value, repoSlug.value, selectedRef.value || undefined)
+    }
+    if (disposed || current !== generation) return
+    extractionPolls = 0
     await refreshExtraction()
+    if (current === generation) await loadComponents({ resetSelection: false, clearScanStatus: false })
   } catch (error) {
-    scanError.value = error instanceof Error ? error.message : 'Failed to request dependency extraction'
+    if (!disposed && current === generation) extractionError.value = scaErrorMessage(error)
   } finally {
-    extracting.value = false
+    if (current === generation) extracting.value = false
   }
 }
 const graph = ref<ComponentGraph | null>(null)
@@ -671,14 +753,15 @@ const shippingError = ref('')
 
 async function refreshShipping() {
   if (!provider.value || !slug.value || !repoSlug.value) return
+  const current = generation
   try {
     const response = await api.getDependencyShipping(provider.value, slug.value, repoSlug.value, {
       ref: selectedRef.value || undefined,
       snapshot: selectedSnapshot.value || undefined,
     })
-    shipping.value = response.data
+    if (!disposed && current === generation) shipping.value = response.data
   } catch {
-    shipping.value = null
+    if (!disposed && current === generation) shipping.value = null
   }
 }
 
@@ -813,12 +896,18 @@ const tiles = computed(() => {
   const indirect = components.value.filter((component) => component.relationship === 'indirect').length
   const unknown = components.value.length - direct - indirect
   const relationshipHint = components.value.length > 0 && (direct > 0 || indirect > 0) ? `${direct} direct · ${indirect} indirect · ${unknown} unknown` : ''
+  const coverage = componentsError.value ? undefined : extraction.value?.sca
+  const assessed = scaAssessed(coverage)
+  const known = assessed ? '' : !coverage ? 'Analysis metadata unavailable'
+    : coverage.state === 'reported' ? 'Reported findings; scan freshness not recorded'
+      : coverage.state === 'outdated' ? 'Previous inventory; current commit needs an update'
+        : 'Advisory matching not recorded'
 
   return [
-    { label: 'Components', value: components.value.length, hint: relationshipHint, accent: '', valueClass: 'text-white' },
-    { label: 'Vulnerable', value: vulnerable, hint: '', accent: vulnerable > 0 ? 'border-l-2 border-l-danger/70' : '', valueClass: vulnerable > 0 ? 'text-danger' : 'text-ok' },
-    { label: 'Ecosystems', value: ecosystems, hint: '', accent: '', valueClass: 'text-white' },
-    { label: 'Sources', value: sourceCount || '—', hint: sourceCount ? '' : 'backend TODO', accent: '', valueClass: sourceCount ? 'text-white' : 'text-gray-500' },
+    { label: 'Components', value: inventoryKnownCount(components.value.length, coverage), hint: relationshipHint || known, accent: '', valueClass: 'text-white' },
+    { label: 'Vulnerable', value: scaKnownCount(vulnerable, coverage), hint: coverage?.state === 'partial' ? 'Known results only · partial coverage' : known, accent: vulnerable > 0 ? 'border-l-2 border-l-danger/70' : '', valueClass: vulnerable > 0 ? 'text-danger' : assessed && coverage?.state === 'complete' ? 'text-ok' : 'text-gray-300' },
+    { label: 'Ecosystems', value: inventoryKnownCount(ecosystems, coverage), hint: '', accent: '', valueClass: 'text-white' },
+    { label: 'Sources', value: inventoryKnownCount(sourceCount, coverage), hint: '', accent: '', valueClass: sourceCount ? 'text-white' : 'text-gray-500' },
   ]
 })
 
@@ -908,6 +997,9 @@ const filteredComponents = computed(() => {
 })
 
 async function loadComponents(options?: { resetSelection?: boolean; clearScanStatus?: boolean }) {
+  if (disposed) return
+  const current = generation
+  const request = ++loadRequest
   const resetSelection = options?.resetSelection ?? true
   const clearScanStatus = options?.clearScanStatus ?? true
 
@@ -922,6 +1014,7 @@ async function loadComponents(options?: { resetSelection?: boolean; clearScanSta
   }
 
   loading.value = true
+  componentsError.value = ''
   if (resetSelection) {
     activeComponent.value = null
     focusedNodeRef.value = null
@@ -940,6 +1033,8 @@ async function loadComponents(options?: { resetSelection?: boolean; clearScanSta
       api.listRefComponents(provider.value, slug.value, repoSlug.value, params),
       api.getComponentGraph(provider.value, slug.value, repoSlug.value, params),
     ])
+    if (disposed || current !== generation || request !== loadRequest) return
+    if (componentsRes.status === 'rejected') componentsError.value = componentsRes.reason instanceof Error ? componentsRes.reason.message : 'Could not load dependency inventory'
 
     components.value = componentsRes.status === 'fulfilled' ? componentsRes.value.data : []
     graph.value = graphRes.status === 'fulfilled' ? graphRes.value.data : null
@@ -949,10 +1044,12 @@ async function loadComponents(options?: { resetSelection?: boolean; clearScanSta
     void refreshExtraction()
     void refreshShipping()
   } catch {
+    if (disposed || current !== generation || request !== loadRequest) return
     components.value = []
     graph.value = null
+    componentsError.value = 'Could not load dependency inventory'
   } finally {
-    loading.value = false
+    if (!disposed && current === generation && request === loadRequest) loading.value = false
   }
 }
 
@@ -961,6 +1058,7 @@ async function runComponentScan() {
     return
   }
 
+  const current = generation
   scanning.value = true
   scanError.value = ''
   scanMessage.value = ''
@@ -970,20 +1068,36 @@ async function runComponentScan() {
       ref: selectedRef.value,
       snapshot: selectedSnapshot.value,
     })
+    if (disposed || current !== generation) return
     await loadComponents({ resetSelection: false, clearScanStatus: false })
+    if (disposed || current !== generation) return
 
     const providers = response.data.providers.join(', ')
     scanMessage.value = providers ? `Component scan completed with ${providers}.` : 'Component scan completed.'
   } catch (error) {
-    scanError.value = error instanceof Error ? error.message : 'Failed to trigger component scan'
+    if (!disposed && current === generation) scanError.value = error instanceof Error ? error.message : 'Failed to trigger component scan'
   } finally {
-    scanning.value = false
+    if (current === generation) scanning.value = false
   }
 }
 
 watch(
-  [provider, slug, repoSlug, selectedRef, selectedSnapshot],
+  scope,
   async () => {
+    generation++
+    extractionRequest++
+    extractionPolls = 0
+    if (extractionTimer) clearTimeout(extractionTimer)
+    extractionTimer = null
+    extraction.value = null
+    extracting.value = false
+    scanning.value = false
+    extractionError.value = ''
+    componentsError.value = ''
+    extractionMessage.value = ''
+    components.value = []
+    graph.value = null
+    shipping.value = null
     await loadComponents()
   },
   { immediate: true },

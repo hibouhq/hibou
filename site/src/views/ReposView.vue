@@ -38,6 +38,14 @@
       </div>
     </section>
 
+    <ScaActionResults
+      :provider="provider"
+      :slug="slug"
+      :results="scaResults"
+      :error="scaError"
+      @dismiss="dismissSca"
+    />
+
     <section
       v-if="actionError"
       class="rounded-2xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-red-200"
@@ -77,6 +85,25 @@
         <p class="mt-1 text-sm text-gray-400">
           Lifecycle badge reflects forge state. Scan recency is shown separately.
         </p>
+        <p class="mt-2 text-xs text-gray-400">
+          Enable SCA to read supported manifests and lockfiles on the default branch and match advisories.
+          Subsequent pushes are monitored when automatic upkeep is enabled.
+          No workflow, SBOM upload or write permission is needed. This does not start a secret scan.
+        </p>
+        <div
+          v-if="canManage && canSelectSca"
+          class="mt-3 flex flex-wrap items-center gap-3"
+        >
+          <button
+            type="button"
+            class="rounded-xl border border-accent/40 px-3 py-2 text-xs text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="!scaSelectionValid(selected) || scaBusy.length > 0"
+            @click="enableSca(selected)"
+          >
+            Enable SCA for selected repositories ({{ selected.length }}/{{ MAX_SCA_SELECTION }})
+          </button>
+          <span class="text-xs text-gray-500">Archived repositories cannot be selected.</span>
+        </div>
       </div>
 
       <ul class="divide-y divide-surface-border-subtle">
@@ -88,6 +115,15 @@
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="min-w-0 flex-1">
               <div class="flex items-start gap-3">
+                <input
+                  v-if="canManage && scaAction(!!repo.enrolled, repo.sca, repo.components_total)"
+                  v-model="selected"
+                  type="checkbox"
+                  :value="repo.provider_id"
+                  :aria-label="`Select ${repo.name} for SCA`"
+                  :disabled="!scaAction(!!repo.enrolled, repo.sca, repo.components_total) || !canEnableSca(repo.status, repo.sca) || scaBusy.length > 0 || (!selected.includes(repo.provider_id) && selected.length >= MAX_SCA_SELECTION)"
+                  class="mt-1 accent-accent"
+                >
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
                     <ForgeIcon
@@ -139,11 +175,28 @@
                   <p class="mt-3 text-sm text-gray-500">
                     {{ lastScanLabel(repo) }}
                   </p>
+                  <ScaStatus
+                    class="mt-3"
+                    :sca="repo.sca"
+                    :enrolled="!!repo.enrolled"
+                    :can-manage="canManage"
+                    :components="repo.components_total"
+                  />
                 </div>
               </div>
             </div>
 
             <div class="flex flex-wrap gap-3 lg:justify-end">
+              <button
+                v-if="canManage && scaAction(!!repo.enrolled, repo.sca, repo.components_total)"
+                type="button"
+                class="rounded-2xl border border-accent/40 px-4 py-2.5 text-sm text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!canEnableSca(repo.status, repo.sca) || scaBusy.length > 0"
+                :title="repo.status === 'archived' ? 'Archived repositories cannot enable SCA' : undefined"
+                @click="enableSca([repo.provider_id])"
+              >
+                {{ scaBusy.includes(repo.provider_id) ? 'Requesting…' : scaAction(!!repo.enrolled, repo.sca, repo.components_total) }}
+              </button>
               <a
                 v-if="repo.html_url && isSafeUrl(repo.html_url)"
                 :href="repo.html_url"
@@ -163,11 +216,15 @@
 
 <script setup lang="ts">
 import { isSafeUrl } from '@/lib/safeUrl'
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { api, type Organization, type RepoLifecycleStatus, type Repository, type SyncReposResponse } from '@/api/client'
 import ForgeIcon from '@/components/ForgeIcon.vue'
+import ScaStatus from '@/components/ScaStatus.vue'
+import ScaActionResults from '@/components/ScaActionResults.vue'
+import { useScaActions, useScaPolling } from '@/composables/useScaActions'
+import { MAX_SCA_SELECTION, canEnableSca, hasInventory, hasReportedFindings, scaAction, scaErrorMessage, scaPending, scaResultCoverage, scaSelectionValid } from '@/lib/sca'
 
 const route = useRoute()
 const provider = computed(() => route.params.provider as string)
@@ -178,8 +235,36 @@ const loading = ref(true)
 const syncing = ref(false)
 const actionError = ref('')
 const actionMessage = ref('')
+const selected = ref<string[]>([])
+const { pending: scaBusy, results: scaResults, error: scaError, enable, dismiss: dismissSca } = useScaActions(provider, slug)
+let generation = 0
+onUnmounted(() => { generation++ })
+const scope = computed(() => `${provider.value}/${slug.value}`)
+useScaPolling(scope, computed(() => repos.value.some(repo => scaPending(repo.sca))), reloadRepos, error => { scaError.value = scaErrorMessage(error) })
+
+async function enableSca(ids: string[]) {
+  if (!canManage.value) return
+  const request = generation
+  const eligible = ids.filter(id => repos.value.some(repo => repo.provider_id === id && scaAction(!!repo.enrolled, repo.sca, repo.components_total) && canEnableSca(repo.status, repo.sca)))
+  if (eligible.length !== ids.length) return
+  const results = await enable([...ids])
+  if (!results) return
+  for (const result of results) {
+    const repo = repos.value.find(repo => repo.provider_id === result.provider_id)
+    if (repo && result.status !== 'failed') {
+      repo.enrolled = true
+      repo.slug = result.repo_slug || repo.slug
+      repo.sca = scaResultCoverage(result, repo.sca)
+    }
+  }
+  selected.value = selected.value.filter(id => !results.some(result => result.provider_id === id && result.status !== 'failed'))
+  await reloadRepos().catch(error => {
+    if (request === generation) scaError.value = `Request recorded, but the latest status could not be loaded. ${scaErrorMessage(error)}`
+  })
+}
 
 const canManage = computed(() => org.value?.role === 'admin')
+const canSelectSca = computed(() => repos.value.some(repo => scaAction(!!repo.enrolled, repo.sca, repo.components_total) && canEnableSca(repo.status, repo.sca)))
 const emptyStateMessage = computed(() => (
   canManage.value
     ? 'No repositories discovered yet - install the App or click Sync now.'
@@ -193,12 +278,20 @@ const summaryCards = computed(() => {
     { label: 'Active', value: counts.active },
     { label: 'Archived', value: counts.archived },
     { label: 'Out of date', value: counts.outdated },
+    { label: 'Inventory available', value: repos.value.filter(repo => hasInventory(repo.sca, repo.components_total)).length },
+    { label: 'Findings only', value: repos.value.filter(repo => !hasInventory(repo.sca, repo.components_total) && hasReportedFindings(repo.sca)).length },
+    ...(repos.value.some(repo => !repo.sca && !repo.components_total) ? [{ label: 'Status unavailable', value: repos.value.filter(repo => !repo.sca && !repo.components_total).length }] : []),
   ]
 })
 
 watch(
   [provider, slug],
   async ([newProvider, newSlug]) => {
+    const request = ++generation
+    selected.value = []
+    syncing.value = false
+    repos.value = []
+    org.value = null
     if (!newProvider || !newSlug) {
       repos.value = []
       org.value = null
@@ -214,14 +307,16 @@ watch(
         api.listRepos(newProvider, newSlug),
         api.getOrg(newProvider, newSlug),
       ])
+      if (request !== generation) return
       repos.value = repoResponse.data
       org.value = orgResponse.data
     } catch (error) {
+      if (request !== generation) return
       repos.value = []
       org.value = null
       actionError.value = error instanceof Error ? error.message : 'Failed to load repositories'
     } finally {
-      loading.value = false
+      if (request === generation) loading.value = false
     }
   },
   { immediate: true },
@@ -274,13 +369,14 @@ function statusClass(status?: RepoLifecycleStatus) {
 }
 
 function lastScanLabel(repo: Repository) {
-  if (repo.last_scanned) {
-    return `Last scanned: ${new Date(repo.last_scanned).toLocaleString()}`
+  const date = repo.sca?.last_assessed || repo.last_scanned
+  if (date) {
+    return `Last analysis: ${new Date(date).toLocaleString()}`
   }
   if (repo.status === 'archived') {
     return 'Archived in forge inventory.'
   }
-  return 'Never'
+  return 'Last analysis not recorded.'
 }
 
 async function syncNow() {
@@ -289,12 +385,15 @@ async function syncNow() {
   }
 
   syncing.value = true
+  const request = generation
   actionError.value = ''
   actionMessage.value = ''
 
   try {
     const response = await api.syncRepos(provider.value, slug.value)
+    if (request !== generation) return
     await reloadRepos()
+    if (request !== generation) return
     if (response.data.outcome === 'scheduled') {
       actionMessage.value = 'Reconciliation scheduled. Existing API backoff is preserved; reload after the worker finishes.'
     } else if (response.data.synced) {
@@ -303,15 +402,17 @@ async function syncNow() {
       actionError.value = formatSyncOutcome(response.data.outcome)
     }
   } catch (error) {
+    if (request !== generation) return
     actionError.value = error instanceof Error ? error.message : 'Failed to sync repositories'
   } finally {
-    syncing.value = false
+    if (request === generation) syncing.value = false
   }
 }
 
 async function reloadRepos() {
+  const request = generation
   const response = await api.listRepos(provider.value, slug.value)
-  repos.value = response.data
+  if (request === generation) repos.value = response.data
 }
 
 function formatSyncSummary(response: SyncReposResponse) {

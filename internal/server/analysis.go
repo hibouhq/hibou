@@ -176,6 +176,7 @@ type repoDashboardEntryResponse struct {
 	ComponentsTotal int            `json:"components_total"`
 	LastScanned     *time.Time     `json:"last_scanned,omitempty"`
 	Outdated        bool           `json:"outdated"`
+	SCA             scaCoverage    `json:"sca"`
 }
 
 type orgDashboardTotalsResponse struct {
@@ -929,6 +930,7 @@ func (s *Server) buildRepoDashboardEntry(r *http.Request, repo repositoryInvento
 		Status:      string(repo.Status),
 		LastScanned: repo.LastScanned,
 		Outdated:    repo.Outdated,
+		SCA:         repo.SCA,
 	}
 
 	if !repo.Enrolled || repo.ID == nil {

@@ -79,6 +79,11 @@ func CheckoutManifests(ctx context.Context, parentDir, cloneURL, ref, commit, au
 	}
 
 	args := []string{"clone", "--filter=blob:none", "--no-checkout", "--depth", "1", "--single-branch"}
+	tagRef := ""
+	if strings.HasPrefix(ref, "refs/tags/") {
+		tagRef = ref
+		ref = strings.TrimPrefix(ref, "refs/tags/")
+	}
 	if ref = strings.TrimSpace(ref); ref != "" {
 		args = append(args, "--branch", ref)
 	}
@@ -89,6 +94,13 @@ func CheckoutManifests(ctx context.Context, parentDir, cloneURL, ref, commit, au
 	}
 
 	target := "HEAD"
+	if commit == "" && tagRef != "" {
+		if output, err := gitCommand(ctx, home, authEnv, "-C", repoDir, "fetch", "--filter=blob:none", "--depth", "1", "origin", tagRef).CombinedOutput(); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("fetch release tag: %w: %s", err, scrubSecrets(string(output), authToken))
+		}
+		target = "FETCH_HEAD"
+	}
 	if commit != "" {
 		head, err := gitOutput(ctx, home, nil, repoDir, "rev-parse", "HEAD")
 		if err != nil {

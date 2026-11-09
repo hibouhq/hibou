@@ -103,12 +103,27 @@ var (
 )
 
 func (s *Service) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error) {
-	return s.runScan(ctx, snapshotID, providerNames, triggeredBy, nil)
+	return s.runScan(ctx, snapshotID, providerNames, triggeredBy, nil, nil)
 }
 
-func (s *Service) runScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string, triggeredByUserID *uuid.UUID) (uuid.UUID, error) {
+// RunQueuedScan uses the pending scan persisted before a worker slot is free.
+func (s *Service) RunQueuedScan(ctx context.Context, queued dbgen.Scan) (uuid.UUID, error) {
+	return s.runScan(ctx, queued.SnapshotID, queued.ProvidersRequested, queued.TriggeredBy, nil, &queued)
+}
+
+func (s *Service) runScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string, triggeredByUserID *uuid.UUID, queued *dbgen.Scan) (uuid.UUID, error) {
 	resolvedProviders := s.resolveProviders(providerNames)
-	scanRecord, startedAt, err := s.startScan(ctx, snapshotID, resolvedProviders, triggeredBy)
+	var scanRecord dbgen.Scan
+	var startedAt time.Time
+	var err error
+	if queued == nil {
+		scanRecord, startedAt, err = s.startScan(ctx, snapshotID, resolvedProviders, triggeredBy)
+	} else {
+		scanRecord, startedAt = *queued, time.Now().UTC()
+		_, err = s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
+			ID: scanRecord.ID, Status: "running", StartedAt: sql.NullTime{Time: startedAt, Valid: true},
+		})
+	}
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create scan: %w", err)
 	}
@@ -188,7 +203,7 @@ func (s *Service) TriggerRescan(ctx context.Context, snapshotID uuid.UUID, provi
 	if actor.ActorType == audit.ActorUser {
 		triggeredByUserID = actor.ActorID
 	}
-	scanID, err := s.runScan(ctx, snapshotID, providerNames, normalizeTriggeredBy(actor.ActorDisplay), triggeredByUserID)
+	scanID, err := s.runScan(ctx, snapshotID, providerNames, normalizeTriggeredBy(actor.ActorDisplay), triggeredByUserID, nil)
 	if err != nil {
 		return scanID, err
 	}

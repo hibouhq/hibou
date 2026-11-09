@@ -160,6 +160,31 @@ export interface OnboardableAccount {
 
 export type RepoLifecycleStatus = 'discovered' | 'active' | 'archived' | 'deleted'
 
+export interface ScaCoverage {
+  has_inventory?: boolean
+  inventory_source?: 'repository' | 'cli' | 'sbom' | 'mixed' | 'unknown' | 'none'
+  inventory_sources?: Array<'repository' | 'cli' | 'sbom' | 'unknown'>
+  inventory_commit_sha?: string
+  head_commit_sha?: string
+  previous_results?: boolean
+  state: 'not_monitored' | 'not_assessed' | 'reported' | 'inventory_ready' | 'outdated' | 'queued' | 'extracting' | 'matching' | 'complete' | 'partial' | 'unsupported' | 'failed' | 'disabled'
+  detail?: string
+  commit_sha?: string
+  last_assessed?: string
+  last_attempt?: string
+  job_id?: string
+  enabled: boolean
+  on_push: boolean
+}
+
+export interface ScaEnableResult {
+  provider_id: string
+  repo_slug?: string
+  job_id?: string
+  status: 'accepted' | 'existing' | 'failed'
+  error?: string
+}
+
 export interface Team {
   id: string
   name: string
@@ -168,6 +193,7 @@ export interface Team {
 }
 
 export interface Repository {
+  components_total?: number
   id?: string
   name: string
   slug: string
@@ -182,6 +208,7 @@ export interface Repository {
   private?: boolean
   visibility?: 'public' | 'private' | 'internal'
   enrolled?: boolean
+  sca?: ScaCoverage
   status?: RepoLifecycleStatus
   last_scanned?: string | null
   outdated?: boolean
@@ -238,6 +265,7 @@ export interface ReleaseClient {
 
 // Release enriched with its pinned snapshot's open-risk posture (ADR-024).
 export interface ReleaseWithRisk extends Release {
+  inventory?: ReleaseInventory
   ref_name: string
   commit_sha?: string
   pending_commit_sha?: string
@@ -250,6 +278,25 @@ export interface ReleaseWithRisk extends Release {
   open_finding_count: number
   last_scanned_at?: string
   clients: ReleaseClient[]
+}
+
+export interface ReleaseInventory {
+  state: 'missing' | 'queued' | 'processing' | 'matching' | 'complete' | 'partial' | 'unsupported' | 'failed' | 'unavailable'
+  has_inventory: boolean
+  can_extract: boolean
+  detail?: string
+  job_id?: string
+}
+
+export interface ReleaseInventorySummary {
+  enabled: boolean
+  eligible: number
+  queued: number
+  processing: number
+  matching: number
+  failed: number
+  inventoried: number
+  unsupported: number
 }
 
 export interface Deployment {
@@ -1994,6 +2041,7 @@ export interface TestReport {
 }
 
 export interface RepoDashboardEntry {
+  sca?: ScaCoverage
   repo_id?: string
   repo_name: string
   repo_slug: string
@@ -2019,6 +2067,8 @@ export interface OrgDashboard {
     components_total: number
   }
   coverage: {
+    assessed?: number
+    unassessed?: number
     total_accessible: number
     enrolled: number
     discovered: number
@@ -2316,6 +2366,7 @@ export interface ReleaseSources {
 }
 
 export interface DepExtractionStatus {
+  sca?: ScaCoverage
   enabled: boolean
   ref: string
   job?: DepExtractionJob
@@ -2357,6 +2408,13 @@ export interface InstanceMember {
   grants: InstanceGrant[]
 }
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string, public readonly structured = false) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 /** The JSON request every API module shares: errors surface the server's message. */
 export async function apiRequest<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -2366,7 +2424,8 @@ export async function apiRequest<T>(path: string, opts?: RequestInit): Promise<T
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body?.error?.message || `HTTP ${res.status}`)
+    const message = body?.error?.message
+    throw new ApiError(res.status, message || `HTTP ${res.status}`, typeof message === 'string' && message.length > 0)
   }
 
   if (res.status === 204) {
@@ -2768,6 +2827,13 @@ class ApiClient {
     return this.request<PaginatedResponse<Repository>>(`/orgs/${provider}/${slug}/repos`)
   }
 
+  enableSca(provider: string, slug: string, providerIDs: string[]) {
+    return this.request<ApiResponse<{ results: ScaEnableResult[] }>>(`/orgs/${provider}/${slug}/sca/enable`, {
+      method: 'POST',
+      body: JSON.stringify({ provider_ids: providerIDs }),
+    })
+  }
+
   enrollRepo(
     provider: string,
     slug: string,
@@ -2979,7 +3045,7 @@ class ApiClient {
     }
 
     const qs = query.toString()
-    return this.request<PaginatedResponse<ReleaseWithRisk>>(
+    return this.request<PaginatedResponse<ReleaseWithRisk> & { inventory?: ReleaseInventorySummary }>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/releases${qs ? `?${qs}` : ''}`,
     )
   }
@@ -3652,7 +3718,7 @@ class ApiClient {
   }
 
   extractAllReleases(provider: string, slug: string, repoSlug: string) {
-    return this.request<ApiResponse<{ queued: number; skipped: number }>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/extract-all`, { method: 'POST' })
+    return this.request<ApiResponse<{ queued: number; skipped: number; failed: number; remaining: number; errors: Array<{ release_id: string; error: string }> }>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/releases/extract-all`, { method: 'POST' })
   }
 
   triggerComponentScan(provider: string, slug: string, repoSlug: string, params?: { ref?: string; snapshot?: string }) {

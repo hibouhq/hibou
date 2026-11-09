@@ -18,6 +18,7 @@ type ForgeRepository struct {
 	InstallationID *int64     `json:"installation_id,omitempty"`
 	ProviderRepoID *string    `json:"provider_repo_id,omitempty"`
 	AccountLogin   string     `json:"account_login"`
+	AccountID      string     `json:"account_id"`
 	Owner          string     `json:"owner"`
 	Name           string     `json:"name"`
 	FullName       string     `json:"full_name"`
@@ -51,6 +52,7 @@ func (q *Queries) UpsertForgeRepository(ctx context.Context, repository ForgeRep
 		InstallationID: nullInt64FromPtr(repository.InstallationID),
 		ProviderRepoID: nullStringFromPtr(repository.ProviderRepoID),
 		AccountLogin:   strings.TrimSpace(repository.AccountLogin),
+		AccountID:      strings.TrimSpace(repository.AccountID),
 		Owner:          strings.TrimSpace(repository.Owner),
 		Name:           strings.TrimSpace(repository.Name),
 		FullName:       strings.TrimSpace(repository.FullName),
@@ -70,6 +72,7 @@ func (q *Queries) UpsertForgeRepository(ctx context.Context, repository ForgeRep
 		InstallationID: int64PtrFromNull(row.InstallationID),
 		ProviderRepoID: stringPtrFromNull(row.ProviderRepoID),
 		AccountLogin:   row.AccountLogin,
+		AccountID:      row.AccountID,
 		Owner:          row.Owner,
 		Name:           row.Name,
 		FullName:       row.FullName,
@@ -243,6 +246,7 @@ func forgeRepositoryFromRow(row dbgen.ForgeRepository) *ForgeRepository {
 		InstallationID: int64PtrFromNull(row.InstallationID),
 		ProviderRepoID: stringPtrFromNull(row.ProviderRepoID),
 		AccountLogin:   row.AccountLogin,
+		AccountID:      row.AccountID,
 		Owner:          row.Owner,
 		Name:           row.Name,
 		FullName:       row.FullName,

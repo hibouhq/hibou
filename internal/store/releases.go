@@ -56,18 +56,19 @@ type ReleaseClient struct {
 // snapshot and the clients currently running it (ADR-024 §3).
 type ReleaseWithRisk struct {
 	Release
-	RefName          string          `json:"ref_name"`
-	CommitSHA        string          `json:"commit_sha,omitempty"`
-	PendingCommitSHA string          `json:"pending_commit_sha,omitempty"`
-	CriticalCount    int64           `json:"critical_count"`
-	HighCount        int64           `json:"high_count"`
-	MediumCount      int64           `json:"medium_count"`
-	LowCount         int64           `json:"low_count"`
-	KEVOpen          *int64          `json:"kev_open"`
-	MalwareOpen      int64           `json:"malware_open"`
-	OpenFindingCount int64           `json:"open_finding_count"`
-	LastScannedAt    *time.Time      `json:"last_scanned_at,omitempty"`
-	Clients          []ReleaseClient `json:"clients"`
+	Inventory        ReleaseInventory `json:"inventory"`
+	RefName          string           `json:"ref_name"`
+	CommitSHA        string           `json:"commit_sha,omitempty"`
+	PendingCommitSHA string           `json:"pending_commit_sha,omitempty"`
+	CriticalCount    int64            `json:"critical_count"`
+	HighCount        int64            `json:"high_count"`
+	MediumCount      int64            `json:"medium_count"`
+	LowCount         int64            `json:"low_count"`
+	KEVOpen          *int64           `json:"kev_open"`
+	MalwareOpen      int64            `json:"malware_open"`
+	OpenFindingCount int64            `json:"open_finding_count"`
+	LastScannedAt    *time.Time       `json:"last_scanned_at,omitempty"`
+	Clients          []ReleaseClient  `json:"clients"`
 }
 
 // ReleaseListFilters narrows the enriched release listing. Zero values mean

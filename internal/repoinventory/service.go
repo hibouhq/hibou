@@ -313,9 +313,13 @@ func (s *Service) upsertRepositoryCore(ctx context.Context, providerID string, i
 	}
 	owner := strings.TrimSpace(repo.Owner)
 	accountLogin := owner
+	accountID := strings.TrimSpace(repo.OwnerID)
 	var installationID *int64
 	if inst != nil {
 		accountLogin = strings.TrimSpace(inst.AccountName)
+		if strings.TrimSpace(inst.AccountID) != "" {
+			accountID = strings.TrimSpace(inst.AccountID)
+		}
 		if accountLogin == "" {
 			accountLogin = owner
 		}
@@ -334,6 +338,7 @@ func (s *Service) upsertRepositoryCore(ctx context.Context, providerID string, i
 		InstallationID: installationID,
 		ProviderRepoID: providerRepoID,
 		AccountLogin:   accountLogin,
+		AccountID:      accountID,
 		Owner:          owner,
 		Name:           strings.TrimSpace(repo.Name),
 		FullName:       fullName,

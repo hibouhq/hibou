@@ -149,6 +149,19 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	if repo == nil {
 		return nil, fmt.Errorf("%w: repository %s no longer exists", errDepExtractionSkipped, job.RepoID)
 	}
+	bound, err := s.queries.HasForgeRepositoryBinding(ctx, repo.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load extraction repository binding: %w", err)
+	}
+	var binding *store.ForgeRepositoryTarget
+	if bound {
+		binding, err = s.queries.VerifiedForgeRepositoryTarget(ctx, repo.ID)
+		if err != nil {
+			return nil, fmt.Errorf("verify extraction repository identity: %w", err)
+		}
+	} else if job.Reason == store.DepExtractionReasonEnableSCA {
+		return nil, errors.New("SCA enrollment has no verified repository binding")
+	}
 	provider, ok := s.forges[repo.Provider]
 	if !ok {
 		return nil, fmt.Errorf("no forge provider configured for %q", repo.Provider)
@@ -160,21 +173,51 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 		}
 		return nil, err
 	}
+	if binding != nil {
+		live, err := provider.GetRepository(ctx, binding.Owner, binding.Name)
+		if err != nil {
+			return nil, fmt.Errorf("verify live extraction repository identity: %w", err)
+		}
+		if live == nil || live.OwnerID != binding.AccountID || live.ProviderRepoID != binding.RepositoryID {
+			return nil, errors.New("live repository identity differs from SCA enrollment")
+		}
+		if live.Archived {
+			return nil, errors.New("repository was archived after SCA enrollment")
+		}
+		if live.CloneURL == "" {
+			return nil, errors.New("verified repository has no clone URL")
+		}
+		target.owner, target.name, target.cloneURL = live.Owner, live.Name, live.CloneURL
+	}
 	var token string
 	if auth, ok := provider.(forge.CloneAuthProvider); ok {
 		token, err = auth.CloneToken(ctx, target.owner, target.name)
 		if err != nil {
-			s.log.Warn().Err(err).Str("repo", repo.Slug).Msg("clone token minting failed, attempting tokenless checkout")
-			token = ""
+			return nil, fmt.Errorf("mint dependency extraction clone token: %w", err)
 		}
 	}
 
 	refType := refTypeFromName(job.RefName)
-	ref, err := s.queries.GetRefByRepoAndName(ctx, repo.ID, job.RefName, refType)
+	if job.Reason == store.DepExtractionReasonRelease {
+		refType = store.RefTypeTag
+	}
+	storedRefName := normalizeStoredRefName(job.RefName)
+	ref, err := s.queries.GetRefByRepoAndName(ctx, repo.ID, storedRefName, refType)
 	if err != nil {
 		return nil, fmt.Errorf("load ref %s: %w", job.RefName, err)
 	}
 	commit := strings.TrimSpace(job.CommitSHA)
+	if job.Reason == store.DepExtractionReasonRelease && job.SnapshotID != nil {
+		pinned, err := s.queries.GetSnapshotByID(ctx, *job.SnapshotID)
+		if err != nil {
+			return nil, fmt.Errorf("load pinned release snapshot: %w", err)
+		}
+		if pinned == nil || ref == nil || pinned.RefID != ref.ID ||
+			(commit != "" && commit != pinned.CommitSHA) {
+			return nil, errors.New("release extraction target differs from its pinned snapshot")
+		}
+		commit = pinned.CommitSHA
+	}
 	if commit == "" && ref != nil && ref.LatestCommitSHA != nil {
 		commit = strings.TrimSpace(*ref.LatestCommitSHA)
 	}
@@ -185,7 +228,10 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	// A pull request ref is not a branch the clone can ask for; its head is
 	// fetched by commit from a clone of the default branch (reachable from
 	// the forge's advertised PR refs).
-	cloneRef := job.RefName
+	cloneRef := storedRefName
+	if refType == store.RefTypeTag {
+		cloneRef = "refs/tags/" + storedRefName
+	}
 	if refType == store.RefTypePullRequest {
 		cloneRef = normalizeStoredRefName(strings.TrimSpace(repo.DefaultBranch))
 		if commit == "" {
@@ -219,7 +265,7 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	commit = checkout.Commit
 
 	if ref == nil {
-		ref, err = s.queries.UpsertRef(ctx, repo.ID, job.RefName, refType, store.UpsertRefOptions{LatestCommitSHA: &commit})
+		ref, err = s.queries.UpsertRef(ctx, repo.ID, storedRefName, refType, store.UpsertRefOptions{LatestCommitSHA: &commit})
 		if err != nil {
 			return nil, fmt.Errorf("create ref %s: %w", job.RefName, err)
 		}
@@ -227,6 +273,11 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 	snapshot, err := s.resolveDepExtractionSnapshot(ctx, job, ref, commit)
 	if err != nil {
 		return nil, err
+	}
+	if job.Reason == store.DepExtractionReasonRelease {
+		if err := s.pinReleaseInventorySnapshot(ctx, ref, snapshot); err != nil {
+			return &snapshot.ID, err
+		}
 	}
 
 	existing, err := s.queries.GetDepExtractionRunBySnapshot(ctx, snapshot.ID)
@@ -252,6 +303,9 @@ func (s *Server) executeDepExtractionJob(ctx context.Context, job *store.DepExtr
 
 	if len(checkout.Paths) == 0 {
 		detail := "no lockfile or manifest recognised at this commit"
+		if len(excluded) > 0 {
+			detail = "all recognized dependency files were excluded by repository configuration"
+		}
 		s.recordDepExtractionProducerRun(ctx, snapshot.ID, nil, nil, &detail, excluded)
 		s.completeScanOnlySnapshot(ctx, repo.ID, snapshot)
 		return &snapshot.ID, nil
@@ -674,12 +728,22 @@ func (s *Server) handleTriggerDepExtraction(w http.ResponseWriter, r *http.Reque
 		api.JSONError(w, http.StatusBadRequest, "no ref to extract: pass ?ref= or set a default branch")
 		return
 	}
-	job, err := s.queries.EnqueueDepExtractionJob(r.Context(), store.EnqueueDepExtractionJobParams{
+	tx, err := s.queries.BeginTx(r.Context())
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to enqueue dependency extraction")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, _, err := s.queries.WithTx(tx).EnqueueSCAExtraction(r.Context(), store.EnqueueDepExtractionJobParams{
 		RepoID:  repo.ID,
 		RefName: refName,
 		Reason:  store.DepExtractionReasonManual,
 	})
 	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to enqueue dependency extraction")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to enqueue dependency extraction")
 		return
 	}
@@ -770,6 +834,7 @@ func (s *Server) enqueueLazyDepExtraction(ctx context.Context, repo *store.Repos
 }
 
 type depExtractionStatusResponse struct {
+	SCA     scaCoverage             `json:"sca"`
 	Enabled bool                    `json:"enabled"`
 	Ref     string                  `json:"ref"`
 	Job     *store.DepExtractionJob `json:"job,omitempty"`
@@ -792,6 +857,16 @@ func (s *Server) handleGetDepExtractionStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 	response := depExtractionStatusResponse{Enabled: s.cfg.DepInventory.Enabled, Ref: refName, CurrentExtractorVersion: depinventory.Version}
+	coverageRef := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if coverageRef == "" {
+		coverageRef = repo.DefaultBranch
+	}
+	coverage, err := s.dependencyCoverageForRepo(r.Context(), repo, coverageRef)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load dependency coverage")
+		return
+	}
+	response.SCA = coverage
 	job, err := s.queries.GetLatestDepExtractionJobForRef(r.Context(), repo.ID, refName)
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to load extraction status")
@@ -799,8 +874,10 @@ func (s *Server) handleGetDepExtractionStatus(w http.ResponseWriter, r *http.Req
 	}
 	response.Job = job
 	if job != nil && job.SnapshotID != nil {
-		if run, err := s.queries.GetDepExtractionRunBySnapshot(r.Context(), *job.SnapshotID); err == nil {
-			response.Run = run
+		response.Run, err = s.queries.GetDepExtractionRunBySnapshot(r.Context(), *job.SnapshotID)
+		if err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to load extraction run")
+			return
 		}
 	}
 	api.JSON(w, http.StatusOK, response)
@@ -819,6 +896,10 @@ func (s *Server) handleExtractReleaseDependencies(w http.ResponseWriter, r *http
 		return
 	}
 	job, err := s.enqueueReleaseExtraction(r.Context(), repo, release)
+	if errors.Is(err, errReleaseInventoryNotNeeded) || errors.Is(err, errReleaseInventoryConflict) {
+		api.JSONError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to enqueue dependency extraction")
 		return
@@ -844,60 +925,51 @@ func (s *Server) handleExtractAllReleases(w http.ResponseWriter, r *http.Request
 		api.JSONError(w, http.StatusConflict, "dependency inventory extraction is disabled on this instance")
 		return
 	}
+	candidates, err := s.queries.ListReleaseInventoryCandidates(r.Context(), repo.ID, 100)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to select releases missing inventory")
+		return
+	}
+	type failure struct {
+		ReleaseID uuid.UUID `json:"release_id"`
+		Error     string    `json:"error"`
+	}
 	queued, skipped := 0, 0
-	const pageSize = 200
-	for offset := 0; ; offset += pageSize {
-		releases, total, err := s.queries.ListReleasesByRepo(r.Context(), repo.ID, pageSize, offset)
-		if err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to list releases")
-			return
-		}
-		for i := range releases {
-			release := releases[i]
-			if release.SnapshotID != nil {
-				run, err := s.queries.GetDepExtractionRunBySnapshot(r.Context(), *release.SnapshotID)
-				if err == nil && run != nil {
-					skipped++
-					continue
-				}
-			}
-			job, err := s.enqueueReleaseExtraction(r.Context(), repo, &release)
-			if err != nil || job == nil {
-				skipped++
-				continue
-			}
+	failures := []failure{}
+	for _, id := range candidates {
+		_, added, err := s.queueReleaseInventory(r.Context(), repo, id)
+		switch {
+		case errors.Is(err, errReleaseInventoryNotNeeded):
+			skipped++
+		case err != nil:
+			s.log.Error().Err(err).Str("release_id", id.String()).Msg("queue release inventory backfill")
+			failures = append(failures, failure{id, "Could not queue release extraction; verify access and retry."})
+		case added:
 			queued++
-		}
-		if offset+len(releases) >= total || len(releases) == 0 {
-			break
+		default:
+			skipped++
 		}
 	}
-	api.JSON(w, http.StatusAccepted, map[string]int{"queued": queued, "skipped": skipped})
+	summary, err := s.queries.GetReleaseInventorySummary(r.Context(), repo.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "backfill requests were processed but coverage status could not be refreshed")
+		return
+	}
+	api.JSON(w, http.StatusAccepted, struct {
+		Queued    int       `json:"queued"`
+		Skipped   int       `json:"skipped"`
+		Failed    int       `json:"failed"`
+		Remaining int64     `json:"remaining"`
+		Errors    []failure `json:"errors"`
+	}{queued, skipped, len(failures), summary.Eligible, failures})
 }
 
 // enqueueReleaseExtraction records a job for a release's tag, bound to its
 // pinned snapshot and commit so the inventory lands on the build clients
 // run, not on wherever the tag points today.
 func (s *Server) enqueueReleaseExtraction(ctx context.Context, repo *store.Repository, release *store.Release) (*store.DepExtractionJob, error) {
-	ref, err := s.queries.GetRefByID(ctx, release.RefID)
-	if err != nil {
-		return nil, err
-	}
-	if ref == nil {
-		return nil, nil
-	}
-	params := store.EnqueueDepExtractionJobParams{
-		RepoID:     repo.ID,
-		RefName:    ref.Name,
-		Reason:     store.DepExtractionReasonRelease,
-		SnapshotID: release.SnapshotID,
-	}
-	if release.SnapshotID != nil {
-		if snapshot, err := s.queries.GetSnapshotByID(ctx, *release.SnapshotID); err == nil && snapshot != nil {
-			params.CommitSHA = snapshot.CommitSHA
-		}
-	}
-	return s.queries.EnqueueDepExtractionJob(ctx, params)
+	job, _, err := s.queueReleaseInventory(ctx, repo, release.ID)
+	return job, err
 }
 
 // ingestExtractedInventory ingests an extraction's document directly, with

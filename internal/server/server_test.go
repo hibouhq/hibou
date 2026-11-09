@@ -53,6 +53,10 @@ func (s *advisoryScannerStub) RunScan(_ context.Context, snapshotID uuid.UUID, p
 	return uuid.New(), s.err
 }
 
+func (s *advisoryScannerStub) RunQueuedScan(ctx context.Context, queued dbgen.Scan) (uuid.UUID, error) {
+	return s.RunScan(ctx, queued.SnapshotID, queued.ProvidersRequested, queued.TriggeredBy)
+}
+
 func (s *advisoryScannerStub) MatchPurls(_ context.Context, purls []string) ([]scanner.PurlMatch, error) {
 	out := make([]scanner.PurlMatch, 0, len(purls))
 	for _, purl := range purls {

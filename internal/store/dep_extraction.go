@@ -19,6 +19,7 @@ const (
 	DepExtractionReasonRelease    = "release"
 	DepExtractionReasonEnrollment = "enrollment"
 	DepExtractionReasonManual     = "manual"
+	DepExtractionReasonEnableSCA  = "sca_enable"
 	// DepExtractionReasonLazy: a ref someone opened that had no inventory
 	// yet (ADR-045 §4.1.1).
 	DepExtractionReasonLazy = "lazy"

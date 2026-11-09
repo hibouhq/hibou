@@ -48,17 +48,47 @@
         >{{ total }} release{{ total === 1 ? '' : 's' }}</span>
         <!-- ADR-045 §4.3: every release without an inventory, newest first. -->
         <button
+          v-if="isReleaseManager && !loading && !loadError && canBackfillReleases(inventorySummary)"
           class="inline-flex h-8 items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-2.5 text-sm text-gray-400 transition hover:text-gray-200 disabled:opacity-50"
           type="button"
-          :disabled="backfilling || total === 0"
-          title="Queue a dependency extraction for every release that has no inventory yet"
+          :disabled="backfilling"
+          title="Queue up to 100 missing release inventories across this repository, newest first; existing SBOMs are preserved"
           @click="backfillReleases"
         >
           <PackageSearch class="h-3.5 w-3.5" />
-          {{ backfilling ? 'Queuing…' : 'Backfill dependencies' }}
+          {{ backfilling ? 'Queuing…' : `Backfill missing inventories (${inventorySummary?.eligible})` }}
         </button>
       </div>
     </div>
+
+    <p
+      v-if="releaseInventoryPending(inventorySummary)"
+      class="mt-3 text-xs text-gray-400"
+      role="status"
+    >
+      Release inventories: {{ inventorySummary?.queued }} queued · {{ inventorySummary?.processing }} extracting · {{ inventorySummary?.matching }} matching advisories.
+      {{ inventoryPolls >= 120 ? 'Automatic refresh paused; reload to check progress.' : 'Progress refreshes automatically.' }}
+    </p>
+    <p
+      v-if="inventorySummary?.enabled === false"
+      class="mt-3 text-xs text-gray-500"
+    >
+      Dependency extraction is disabled on this instance.
+    </p>
+    <p
+      v-if="loadError"
+      class="mt-3 text-sm text-danger"
+      role="alert"
+    >
+      {{ loadError }}
+    </p>
+    <p
+      v-if="backfillError"
+      class="mt-3 text-sm text-danger"
+      role="alert"
+    >
+      {{ backfillError }}
+    </p>
 
     <!-- List -->
     <div
@@ -139,9 +169,13 @@
               class="rounded border border-surface-border px-2 py-0.5 text-xs text-gray-500"
               title="No analysis snapshot is attached to this release yet"
             >Not analyzed</span>
-            <template v-else-if="release.open_finding_count === 0">
+            <template v-else-if="release.open_finding_count === 0 && release.inventory?.has_inventory && release.inventory.state !== 'matching' && release.last_scanned_at">
               <span class="rounded border border-ok/40 px-2 py-0.5 text-xs font-medium text-ok">No open findings</span>
             </template>
+            <span
+              v-else-if="release.open_finding_count === 0"
+              class="text-xs text-gray-500"
+            >Not assessed</span>
             <!-- The org overview's labels: malware, exploited, then severities,
                  each opening this release's matching findings. -->
             <template v-else>
@@ -325,7 +359,7 @@
                   View findings ({{ release.open_finding_count }})
                 </RouterLink>
                 <button
-                  v-if="release.snapshot_id"
+                  v-if="isReleaseManager && release.snapshot_id && release.inventory?.has_inventory"
                   class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                   type="button"
                   :disabled="rescanning === release.id"
@@ -342,6 +376,7 @@
                      without an SBOM (ADR-045 §4.3): extracted from the tag's
                      lockfiles, onto the release's pinned snapshot. -->
                 <button
+                  v-if="isReleaseManager && !loadError && canExtractReleaseInventory(release.inventory, inventorySummary?.enabled)"
                   class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                   type="button"
                   :disabled="extractingRelease === release.id"
@@ -349,9 +384,17 @@
                   @click="extractRelease(release)"
                 >
                   <PackageSearch class="h-3.5 w-3.5" />
-                  {{ extractingRelease === release.id ? 'Queued…' : 'Extract dependencies' }}
+                  {{ extractingRelease === release.id ? 'Queuing…' : release.inventory?.state === 'failed' ? 'Retry dependency extraction' : 'Extract dependencies' }}
                 </button>
               </div>
+              <p
+                class="mt-3 text-xs"
+                :class="release.inventory?.state === 'failed' ? 'text-danger' : 'text-gray-400'"
+                role="status"
+              >
+                {{ releaseInventoryLabel(release.inventory) }}
+                <span v-if="release.inventory?.detail"> · {{ release.inventory.detail }}</span>
+              </p>
             </div>
 
             <!-- Inventory sources (ADR-046 §4): every artifact behind the
@@ -562,10 +605,10 @@
 <script setup lang="ts">
 import { safeHref } from '@/lib/safeUrl'
 import { ChevronDown, ExternalLink, Flame, PackageSearch, RefreshCw, Rocket, Search, ShieldAlert, Tag, TriangleAlert, Users, X } from 'lucide-vue-next'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
-import { api, type Client, type ReleaseClient, type ReleaseSource, type ReleaseSources, type ReleaseWithRisk } from '@/api/client'
+import { api, type Client, type ReleaseClient, type ReleaseInventorySummary, type ReleaseSource, type ReleaseSources, type ReleaseWithRisk } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'
@@ -573,6 +616,7 @@ import { formatDateTime, relativeTime } from '@/lib/datetime'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { severityBadgeClass } from '@/lib/findingDisplay'
 import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY, openRiskSeverityQuery } from '@/lib/openRiskPreset'
+import { canBackfillReleases, canExtractReleaseInventory, releaseInventoryLabel, releaseInventoryPending } from '@/lib/releaseInventory'
 
 const { confirmDialog } = useDialog()
 const route = useRoute()
@@ -586,6 +630,9 @@ const repoSlug = computed(() => route.params.repoSlug as string)
 const releases = ref<ReleaseWithRisk[]>([])
 const orgClients = ref<Client[]>([])
 const loading = ref(true)
+const loadError = ref('')
+const backfillError = ref('')
+const inventorySummary = ref<ReleaseInventorySummary | null>(null)
 const total = ref(0)
 const page = ref(1)
 const perPage = 25
@@ -643,10 +690,15 @@ function toggleExpanded(id: string) {
 }
 
 let requestToken = 0
+let disposed = false
+let inventoryPolls = 0
+let inventoryTimer: ReturnType<typeof setTimeout> | undefined
+const currentScope = () => `${provider.value}/${orgSlug.value}/${repoSlug.value}`
 
-async function loadReleases() {
+async function loadReleases(background = false) {
+  clearTimeout(inventoryTimer)
   const token = ++requestToken
-  loading.value = true
+  if (!background) loading.value = true
   try {
     const response = await api.listReleases(provider.value, orgSlug.value, repoSlug.value, {
       page: page.value,
@@ -655,15 +707,22 @@ async function loadReleases() {
       client: clientFilter.value || undefined,
       vulnerable: vulnerableOnly.value || undefined,
     })
-    if (token !== requestToken) {
+    if (disposed || token !== requestToken) {
       return
     }
     releases.value = response.data
     total.value = response.pagination.total
-  } catch {
-    if (token === requestToken) {
-      releases.value = []
-      total.value = 0
+    inventorySummary.value = response.inventory ?? null
+    loadError.value = ''
+    if (releaseInventoryPending(inventorySummary.value) && inventoryPolls < 120) {
+      inventoryTimer = setTimeout(() => {
+        inventoryPolls++
+        void loadReleases(true)
+      }, 5000)
+    }
+  } catch (err) {
+    if (!disposed && token === requestToken) {
+      loadError.value = err instanceof Error ? err.message : 'Failed to load release inventory status'
     }
   } finally {
     if (token === requestToken) {
@@ -781,26 +840,47 @@ async function restoreSource(release: ReleaseWithRisk, source: ReleaseSource) {
 const backfilling = ref(false)
 
 async function extractRelease(release: ReleaseWithRisk) {
+  if (!isReleaseManager.value || extractingRelease.value || !canExtractReleaseInventory(release.inventory, inventorySummary.value?.enabled)) return
+  const scope = currentScope()
   extractingRelease.value = release.id
   try {
     await api.extractReleaseDependencies(provider.value, orgSlug.value, repoSlug.value, release.id)
-    pushToast({ title: 'Extraction queued', description: `Dependencies of ${release.version} will be extracted from its tag; reload in a moment.`, tone: 'success' })
+    if (disposed || scope !== currentScope()) return
+    if (release.inventory) release.inventory = { ...release.inventory, state: 'queued', can_extract: false }
+    inventoryPolls = 0
+    pushToast({ title: 'Extraction queued', description: `Dependencies of ${release.version} will be extracted at its pinned commit, or its tag if not yet pinned.`, tone: 'success' })
+    await loadReleases(true)
   } catch (err) {
+    if (disposed || scope !== currentScope()) return
     pushToast({ title: 'Extraction failed to queue', description: err instanceof Error ? err.message : undefined, tone: 'error' })
   } finally {
-    extractingRelease.value = null
+    if (scope === currentScope()) extractingRelease.value = null
   }
 }
 
 async function backfillReleases() {
+  if (!isReleaseManager.value || backfilling.value || !canBackfillReleases(inventorySummary.value)) return
+  const scope = currentScope()
   backfilling.value = true
+  backfillError.value = ''
   try {
     const response = await api.extractAllReleases(provider.value, orgSlug.value, repoSlug.value)
-    pushToast({ title: 'Backfill queued', description: `${response.data.queued} release(s) queued, ${response.data.skipped} already inventoried.`, tone: 'success' })
+    if (disposed || scope !== currentScope()) return
+    const result = response.data
+    backfillError.value = result.errors.map(item => `${item.release_id}: ${item.error}`).join(' ')
+    inventoryPolls = 0
+    pushToast({
+      title: result.failed ? 'Backfill partially queued' : 'Backfill queued',
+      description: `${result.queued} queued, ${result.skipped} already covered or queued, ${result.failed} failed. ${result.remaining} still eligible; each request queues up to 100 releases.`,
+      tone: result.failed ? 'error' : 'success',
+    })
+    await loadReleases(true)
   } catch (err) {
+    if (disposed || scope !== currentScope()) return
+    backfillError.value = err instanceof Error ? err.message : 'Failed to queue release backfill'
     pushToast({ title: 'Backfill failed to queue', description: err instanceof Error ? err.message : undefined, tone: 'error' })
   } finally {
-    backfilling.value = false
+    if (scope === currentScope()) backfilling.value = false
   }
 }
 
@@ -839,6 +919,15 @@ watch([clientFilter, vulnerableOnly], () => {
 watch(page, () => void loadReleases())
 
 watch([provider, orgSlug, repoSlug], () => {
+  clearTimeout(inventoryTimer)
+  clearTimeout(searchDebounce)
+  inventorySummary.value = null
+  releases.value = []
+  loadError.value = ''
+  backfillError.value = ''
+  extractingRelease.value = null
+  backfilling.value = false
+  inventoryPolls = 0
   page.value = 1
   expandedId.value = null
   void loadReleases()
@@ -848,5 +937,12 @@ watch([provider, orgSlug, repoSlug], () => {
 onMounted(() => {
   void loadReleases()
   void loadClients()
+})
+
+onUnmounted(() => {
+  disposed = true
+  requestToken++
+  clearTimeout(inventoryTimer)
+  clearTimeout(searchDebounce)
 })
 </script>
