@@ -15742,6 +15742,9 @@ const docTemplate = `{
                 "archived": {
                     "type": "integer"
                 },
+                "assessed": {
+                    "type": "integer"
+                },
                 "discovered": {
                     "type": "integer"
                 },
@@ -15752,6 +15755,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "total_accessible": {
+                    "type": "integer"
+                },
+                "unassessed": {
                     "type": "integer"
                 }
             }
@@ -15833,6 +15839,9 @@ const docTemplate = `{
                 "provider_id": {
                     "type": "string"
                 },
+                "sca": {
+                    "$ref": "#/definitions/server.scaCoverage"
+                },
                 "slug": {
                     "type": "string"
                 },
@@ -15865,6 +15874,56 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "action": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.scaCoverage": {
+            "type": "object",
+            "properties": {
+                "commit_sha": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "has_inventory": {
+                    "type": "boolean"
+                },
+                "head_commit_sha": {
+                    "type": "string"
+                },
+                "inventory_commit_sha": {
+                    "type": "string"
+                },
+                "inventory_source": {
+                    "type": "string"
+                },
+                "inventory_sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "last_assessed": {
+                    "type": "string"
+                },
+                "last_attempt": {
+                    "type": "string"
+                },
+                "on_push": {
+                    "type": "boolean"
+                },
+                "previous_results": {
+                    "type": "boolean"
+                },
+                "state": {
                     "type": "string"
                 }
             }
@@ -17732,6 +17791,26 @@ const docTemplate = `{
                 }
             }
         },
+        "store.ReleaseInventory": {
+            "type": "object",
+            "properties": {
+                "can_extract": {
+                    "type": "boolean"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "has_inventory": {
+                    "type": "boolean"
+                },
+                "job_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
         "store.ReleaseWithRisk": {
             "type": "object",
             "properties": {
@@ -17773,6 +17852,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "string"
+                },
+                "inventory": {
+                    "$ref": "#/definitions/store.ReleaseInventory"
                 },
                 "kev_open": {
                     "type": "integer"

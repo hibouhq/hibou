@@ -3188,6 +3188,8 @@ definitions:
         type: integer
       archived:
         type: integer
+      assessed:
+        type: integer
       discovered:
         type: integer
       enrolled:
@@ -3195,6 +3197,8 @@ definitions:
       outdated:
         type: integer
       total_accessible:
+        type: integer
+      unassessed:
         type: integer
     type: object
   server.repoLifecycleStatus:
@@ -3250,6 +3254,8 @@ definitions:
         type: string
       provider_id:
         type: string
+      sca:
+        $ref: '#/definitions/server.scaCoverage'
       slug:
         type: string
       status:
@@ -3271,6 +3277,39 @@ definitions:
   server.resolveReleaseDivergenceRequest:
     properties:
       action:
+        type: string
+    type: object
+  server.scaCoverage:
+    properties:
+      commit_sha:
+        type: string
+      detail:
+        type: string
+      enabled:
+        type: boolean
+      has_inventory:
+        type: boolean
+      head_commit_sha:
+        type: string
+      inventory_commit_sha:
+        type: string
+      inventory_source:
+        type: string
+      inventory_sources:
+        items:
+          type: string
+        type: array
+      job_id:
+        type: string
+      last_assessed:
+        type: string
+      last_attempt:
+        type: string
+      on_push:
+        type: boolean
+      previous_results:
+        type: boolean
+      state:
         type: string
     type: object
   server.scanPlanResponse:
@@ -4524,6 +4563,19 @@ definitions:
       slug:
         type: string
     type: object
+  store.ReleaseInventory:
+    properties:
+      can_extract:
+        type: boolean
+      detail:
+        type: string
+      has_inventory:
+        type: boolean
+      job_id:
+        type: string
+      state:
+        type: string
+    type: object
   store.ReleaseWithRisk:
     properties:
       artifact_ids:
@@ -4552,6 +4604,8 @@ definitions:
         type: string
       id:
         type: string
+      inventory:
+        $ref: '#/definitions/store.ReleaseInventory'
       kev_open:
         type: integer
       last_scanned_at:
