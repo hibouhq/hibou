@@ -160,6 +160,11 @@ func (c *Client) Post(path string, body any, out any) error {
 	return c.do(http.MethodPost, path, body, out)
 }
 
+// Patch performs an authenticated PATCH request with a JSON body.
+func (c *Client) Patch(path string, body any, out any) error {
+	return c.do(http.MethodPatch, path, body, out)
+}
+
 // Delete sends a DELETE; a 204 has no body to decode.
 func (c *Client) Delete(path string) error {
 	return c.do(http.MethodDelete, path, nil, nil)

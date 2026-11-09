@@ -66,7 +66,11 @@ export interface OrgIntegration {
   updated_at: string
 }
 
-export const INTEGRATION_TYPES = ['webhook', 'slack', 'teams', 'discord', 'email'] as const
+// Trackers (jira, github_issues, gitlab_issues, tracker_webhook) mirror
+// incidents (ADR-053 §8); they are integrations but never notification
+// destinations.
+export const INTEGRATION_TYPES = ['webhook', 'slack', 'teams', 'discord', 'email', 'jira', 'github_issues', 'gitlab_issues', 'tracker_webhook'] as const
+export const NOTIFICATION_DESTINATION_TYPES = ['webhook', 'slack', 'teams', 'discord', 'email'] as const
 
 export interface IntegrationReplayResult {
   integration_id: string
@@ -99,6 +103,14 @@ export const NOTIFICATION_EVENT_TYPES = [
   'scan.completed',
   'scan.failed',
   'scan.stale',
+  'incident.opened',
+  'incident.due_soon',
+  'incident.overdue',
+  'incident.delivery_failed',
+  'incident.reopened',
+  'incident.closed',
+  'incident.mirror_lagging',
+  'advisory.exploitation_observed',
 ] as const
 
 export interface QualityGate {
@@ -814,6 +826,16 @@ export type InstanceJobsWindow = '1h' | '6h' | '24h' | '7d'
 
 // ADR-043 §4: how this org treats membership-wide CLI/IDE login tokens.
 export type LoginTokensPolicy = 'allow' | 'read_only' | 'deny'
+
+/** An autolink reference (ADR-053): "SEC-" + a URL with <num>. */
+export interface OrgAutolink {
+  id: string
+  org_id: string
+  prefix: string
+  url_template: string
+  alphanumeric: boolean
+  created_at: string
+}
 
 export interface OrgSettings {
   vex_auto_propagate: boolean
@@ -2318,23 +2340,28 @@ export interface InstanceMember {
   grants: InstanceGrant[]
 }
 
+/** The JSON request every API module shares: errors surface the server's message. */
+export async function apiRequest<T>(path: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...opts?.headers },
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body?.error?.message || `HTTP ${res.status}`)
+  }
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+
+  return res.json()
+}
+
 class ApiClient {
-  private async request<T>(path: string, opts?: RequestInit): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
-      ...opts,
-      headers: { 'Content-Type': 'application/json', ...opts?.headers },
-    })
-
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body?.error?.message || `HTTP ${res.status}`)
-    }
-
-    if (res.status === 204) {
-      return undefined as T
-    }
-
-    return res.json()
+  private request<T>(path: string, opts?: RequestInit): Promise<T> {
+    return apiRequest<T>(path, opts)
   }
 
   getProviders() {
@@ -2785,6 +2812,21 @@ class ApiClient {
       method: 'PUT',
       body: JSON.stringify(body),
     })
+  }
+
+  listAutolinks(provider: string, slug: string) {
+    return this.request<ApiResponse<OrgAutolink[]>>(`/orgs/${provider}/${slug}/autolinks`)
+  }
+
+  createAutolink(provider: string, slug: string, body: { prefix: string; url_template: string; alphanumeric: boolean }) {
+    return this.request<ApiResponse<OrgAutolink>>(`/orgs/${provider}/${slug}/autolinks`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  deleteAutolink(provider: string, slug: string, id: string) {
+    return this.request<void>(`/orgs/${provider}/${slug}/autolinks/${id}`, { method: 'DELETE' })
   }
 
   listClients(provider: string, slug: string, params?: { page?: number; per_page?: number }) {
@@ -3446,7 +3488,7 @@ class ApiClient {
   // Batch triage: one decision + one reason across many fingerprints. The UI
   // routes single-finding actions through here too, so there is one validated
   // path rather than two that can drift.
-  batchFindingAcceptance(provider: string, slug: string, repoSlug: string, body: { fingerprints: string[]; status: string; reason_kind?: AcceptanceReasonKind; reason?: string; labels?: string[]; expires_at?: string }) {
+  batchFindingAcceptance(provider: string, slug: string, repoSlug: string, body: { fingerprints: string[]; status: string; reason_kind?: AcceptanceReasonKind; reason?: string; labels?: string[]; expires_at?: string; vex_justification?: VexJustification }) {
     return this.request<ApiResponse<{ status: string; applied: number; skipped: number }>>(
       `/orgs/${provider}/${slug}/repos/${repoSlug}/vulnerabilities/acceptance`,
       { method: 'PUT', body: JSON.stringify(body) },

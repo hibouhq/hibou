@@ -146,7 +146,7 @@
 
 <script setup lang="ts">
 import { isSafeUrl } from '@/lib/safeUrl'
-import { Building2, History, LayoutDashboard, Mail, Plus, UserRound } from 'lucide-vue-next'
+import { Building2, History, LayoutDashboard, Mail, Plus, Siren, UserRound } from 'lucide-vue-next'
 import { computed, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
@@ -188,6 +188,7 @@ const clientSlug = computed(() => route.params.clientSlug as string)
 const tabs = computed(() => [
   { label: 'Overview', name: 'client-overview', icon: LayoutDashboard, count: null },
   { label: 'History', name: 'client-history', icon: History, count: deploymentsLoading.value ? null : deployments.value.length },
+  { label: 'Security notices', name: 'client-notices', icon: Siren, count: null },
 ])
 
 function isActiveTab(name: string) {

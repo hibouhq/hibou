@@ -18,7 +18,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
@@ -1391,107 +1390,80 @@ func (s *Server) importUploadedVEX(r *http.Request, userID uuid.UUID, input uplo
 	return nil
 }
 
+// upsertImportedVEXStatement makes an imported statement current for its
+// scope (ADR-053 §4a): unchanged content is a no-op, changed content
+// supersedes the previous import, and a statement someone recorded in hibou
+// is never overwritten by a document.
 func upsertImportedVEXStatement(ctx context.Context, tx *sql.Tx, params dbgen.CreateVEXStatementParams) error {
-	var statementID uuid.UUID
-	err := tx.QueryRowContext(ctx, `
-		INSERT INTO vex_statements (
-			org_id,
-			advisory_id,
-			repo_id,
-			component_purl,
-			status,
-			justification,
-			impact_statement,
-			action_statement,
-			source,
-			source_document_url,
-			supplier,
-			created_by,
-			expires_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (
-			org_id,
-			advisory_id,
-			COALESCE(repo_id, '00000000-0000-0000-0000-000000000000'::UUID),
-			COALESCE(component_purl, '')
-		) DO UPDATE
-		SET
-			repo_id = EXCLUDED.repo_id,
-			component_purl = EXCLUDED.component_purl,
-			status = EXCLUDED.status,
-			justification = EXCLUDED.justification,
-			impact_statement = EXCLUDED.impact_statement,
-			action_statement = EXCLUDED.action_statement,
-			source = EXCLUDED.source,
-			source_document_url = EXCLUDED.source_document_url,
-			supplier = EXCLUDED.supplier,
-			created_by = EXCLUDED.created_by,
-			expires_at = EXCLUDED.expires_at,
-			updated_at = CASE
-				WHEN vex_statements.repo_id IS DISTINCT FROM EXCLUDED.repo_id
-					OR vex_statements.component_purl IS DISTINCT FROM EXCLUDED.component_purl
-					OR vex_statements.status IS DISTINCT FROM EXCLUDED.status
-					OR vex_statements.justification IS DISTINCT FROM EXCLUDED.justification
-					OR vex_statements.impact_statement IS DISTINCT FROM EXCLUDED.impact_statement
-					OR vex_statements.action_statement IS DISTINCT FROM EXCLUDED.action_statement
-					OR vex_statements.source IS DISTINCT FROM EXCLUDED.source
-					OR vex_statements.source_document_url IS DISTINCT FROM EXCLUDED.source_document_url
-					OR vex_statements.supplier IS DISTINCT FROM EXCLUDED.supplier
-					OR vex_statements.created_by IS DISTINCT FROM EXCLUDED.created_by
-					OR vex_statements.expires_at IS DISTINCT FROM EXCLUDED.expires_at
-				THEN NOW()
-				ELSE vex_statements.updated_at
-			END
-		WHERE vex_statements.source = 'imported'
-		RETURNING id
-	`,
-		params.OrgID,
-		params.AdvisoryID,
-		params.RepoID,
-		params.ComponentPurl,
-		params.Status,
-		params.Justification,
-		params.ImpactStatement,
-		params.ActionStatement,
-		params.Source,
-		params.SourceDocumentUrl,
-		params.Supplier,
-		params.CreatedBy,
-		params.ExpiresAt,
-	).Scan(&statementID)
-	if errors.Is(err, sql.ErrNoRows) {
+	db := dbgen.New(tx)
+	current, err := db.GetCurrentVEXStatementForScope(ctx, dbgen.GetCurrentVEXStatementForScopeParams{
+		OrgID: params.OrgID, AdvisoryID: params.AdvisoryID, RepoID: params.RepoID, ComponentPurl: params.ComponentPurl,
+		ReleaseID: params.ReleaseID, VersionRange: params.VersionRange,
+	})
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	case current.Source != dbgen.VexSourceImported && !current.Withdrawn:
 		return errConflict("conflicting non-imported VEX statement already exists for this advisory/component scope")
+	case !current.Withdrawn && importedStatementUnchanged(current, params):
+		return nil
+	default:
+		if _, err := db.MarkVEXStatementSuperseded(ctx, dbgen.MarkVEXStatementSupersededParams{ID: current.ID, OrgID: params.OrgID}); err != nil {
+			return err
+		}
+		params.Supersedes = uuid.NullUUID{UUID: current.ID, Valid: true}
 	}
+	if len(params.Evidence) == 0 {
+		params.Evidence = json.RawMessage(`{}`)
+	}
+	_, err = db.CreateVEXStatement(ctx, params)
 	return err
 }
 
-func pruneImportedVEXStatements(ctx context.Context, tx *sql.Tx, importCtx uploadedVEXImportContext, scopes []uploadedVEXStatementScope) error {
-	advisoryIDs := make([]uuid.UUID, len(scopes))
-	componentPURLs := make([]string, len(scopes))
-	for i, scope := range scopes {
-		advisoryIDs[i] = scope.advisoryID
-		componentPURLs[i] = scope.componentPURL
-	}
+func importedStatementUnchanged(current dbgen.VexStatement, params dbgen.CreateVEXStatementParams) bool {
+	return current.Status == params.Status &&
+		current.Justification == params.Justification &&
+		current.ImpactStatement == params.ImpactStatement &&
+		current.ActionStatement == params.ActionStatement &&
+		current.SourceDocumentUrl == params.SourceDocumentUrl &&
+		current.Supplier == params.Supplier &&
+		current.ExpiresAt == params.ExpiresAt
+}
 
-	_, err := tx.ExecContext(ctx, `
-		WITH input_scopes AS (
-			SELECT advisory_id, component_purl
-			FROM unnest($3::uuid[], $4::text[]) AS scope(advisory_id, component_purl)
-		)
-		DELETE FROM vex_statements v
-		WHERE v.org_id = $1
-		  AND v.repo_id = $2
-		  AND v.source = 'imported'
-		  AND v.source_document_url = $5
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM input_scopes s
-			WHERE s.advisory_id = v.advisory_id
-			  AND s.component_purl = COALESCE(v.component_purl, '')
-		  )
-	`, importCtx.orgID, importCtx.repoID, pq.Array(advisoryIDs), pq.Array(componentPURLs), importCtx.sourceDocumentURL)
-	return err
+// pruneImportedVEXStatements withdraws the statements a re-uploaded document
+// no longer carries; the history keeps what it said before.
+func pruneImportedVEXStatements(ctx context.Context, tx *sql.Tx, importCtx uploadedVEXImportContext, scopes []uploadedVEXStatementScope) error {
+	keep := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		keep[scope.advisoryID.String()+"|"+scope.componentPURL] = struct{}{}
+	}
+	db := dbgen.New(tx)
+	rows, err := db.ListVEXStatementsByRepo(ctx, dbgen.ListVEXStatementsByRepoParams{
+		OrgID: importCtx.orgID, RepoID: uuid.NullUUID{UUID: importCtx.repoID, Valid: true}, Limit: 1 << 30, Offset: 0,
+	})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.Source != dbgen.VexSourceImported || row.SourceDocumentUrl != importCtx.sourceDocumentURL || row.ReleaseID.Valid || row.VersionRange.Valid {
+			continue
+		}
+		if _, ok := keep[row.AdvisoryID.String()+"|"+vexScopeComponentPURL(row.ComponentPurl)]; ok {
+			continue
+		}
+		if _, err := db.MarkVEXStatementSuperseded(ctx, dbgen.MarkVEXStatementSupersededParams{ID: row.ID, OrgID: row.OrgID}); err != nil {
+			return err
+		}
+		params := store.VEXParamsFromStatement(row)
+		params.Withdrawn = true
+		params.Supersedes = uuid.NullUUID{UUID: row.ID, Valid: true}
+		params.CreatedBy = uuid.NullUUID{UUID: importCtx.userID, Valid: importCtx.userID != uuid.Nil}
+		if _, err := db.CreateVEXStatement(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func vexScopeComponentPURL(value sql.NullString) string {

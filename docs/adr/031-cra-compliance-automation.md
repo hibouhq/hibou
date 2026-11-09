@@ -87,7 +87,9 @@ ADR-024) gains the flag, raise a distinct event — this is the trigger the
 regulation defines ("becoming aware", Art. 14(1), FAQ 5.1); it needs a diff of
 `kev_entries` against matched advisories inside the sync pass.
 
-**2. Reporting-clock workflow.** A new `report` entity attached to an advisory + release:
+**2. Reporting-clock workflow.** ✅ **Shipped as the incident of
+[ADR-053](053-incidents.md)**, which supersedes the sketch below.
+A new `report` entity attached to an advisory + release:
 created manually or from the exploitation event, it tracks the Art. 14 deadlines
 (24 h early warning → 72 h notification → 14 d final report; the incident variant with
 its 1-month final report) with countdown surfacing in the UI and escalation through the
@@ -99,7 +101,8 @@ itself: the platform's API surface is not yet stable, submission is a legal act 
 manufacturer, and a wrong automated filing is worse than a late one. Revisit when the
 Art. 16 platform publishes a machine interface.
 
-**3. User notification via CSAF.** Extend the existing CSAF export (`internal/vex`) to
+**3. User notification via CSAF.** ✅ **Shipped in [ADR-053](053-incidents.md) §5**
+(client document sets and recorded deliveries). Extend the existing CSAF export (`internal/vex`) to
 generate the Art. 14(8) user-facing advisory ("inform the impacted users … in a
 structured, machine-readable format") from the same report entity, scoped by the
 deployments/client data — which promotes the ADR-024 Deployments phase from design-only

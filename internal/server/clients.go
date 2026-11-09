@@ -433,6 +433,8 @@ func (s *Server) handleCreateDeployment(w http.ResponseWriter, r *http.Request) 
 		api.JSONError(w, http.StatusInternalServerError, "failed to create deployment")
 		return
 	}
+	// A client on a new release can enter an incident's scope (ADR-053 §3).
+	s.queueIncidentReconcileForRepo(r.Context(), release.RepoID)
 
 	response := deploymentResponse{Deployment: *deployment, ReleaseVersion: &release.Version}
 	api.JSON(w, http.StatusCreated, response)

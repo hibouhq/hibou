@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted — implemented (2026-08-05). Supersedes the three-way triage actions in the
+Accepted — implemented (2026-08-05). Amended by [ADR-053](053-incidents.md):
+the decision on a finding with a vulnerability identifier writes the VEX
+statement (a not-affected decision names its justification; accepting an
+exploited vulnerability's risk needs an expiry), and a secret also resolves
+when a validator confirms the credential dead, with the revocation
+checklist as its primary action. Supersedes the three-way triage actions in the
 vulnerabilities views; feeds [TODO-FIX-gate-triage-notifications.md](../../TODO-FIX-gate-triage-notifications.md).
 
 Implementation notes (alpha, no compat window):

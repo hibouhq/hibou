@@ -50,6 +50,16 @@
                     title="Call-graph analysis found the vulnerable symbol on this code's call path"
                   >reachable</span>
                   <FindingOriginBadge :finding="detail.finding" />
+                  <RouterLink
+                    v-for="incident in incidents"
+                    :key="`badge-${incident.id}`"
+                    :to="{ name: 'incident-detail', params: { provider, slug, number: incident.number } }"
+                    class="inline-flex items-center gap-1 rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[11px] font-medium text-red-200 transition hover:border-danger/70"
+                    :title="`${KIND_LABELS[incident.kind] ?? incident.kind}, ${(STATE_LABELS[incident.state] ?? incident.state).toLowerCase()}: ${incident.title}`"
+                  >
+                    <Siren class="h-3 w-3" />
+                    Incident #{{ incident.number }}
+                  </RouterLink>
                   <span
                     v-if="showsPresenceBadge(detail.finding)"
                     class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
@@ -179,7 +189,6 @@
                 :repo-slug="repoSlug"
                 :repo-html-url="repoHtmlUrl"
                 :forge-provider="forgeProvider"
-                @navigate="emit('close')"
               />
 
               <div class="mt-5 space-y-5">
@@ -205,7 +214,6 @@
                       <RouterLink
                         :to="{ name: 'repo-compare', params: { provider, slug, repoSlug }, query: { head: fix.ref_name } }"
                         class="underline decoration-ok/40 underline-offset-2 transition hover:decoration-ok"
-                        @click="emit('close')"
                       >
                         #{{ fix.number }}<template v-if="fix.title">
                           — {{ fix.title }}
@@ -247,7 +255,11 @@
                     v-if="detail.dispute"
                     class="mt-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger"
                   >
-                    Disputed — {{ detail.dispute.reason }}
+                    Disputed — <AutolinkedText
+                      :text="detail.dispute.reason"
+                      :provider="provider"
+                      :slug="slug"
+                    />
                     <span
                       v-if="detail.dispute.created_at"
                       class="text-xs opacity-75"
@@ -275,7 +287,11 @@
                     class="mt-2 rounded-lg border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-300"
                   >
                     {{ detail.assertion.closed_kind === 'resolved' ? 'Resolved' : 'Retracted' }}<template v-if="detail.assertion.closed_reason">
-                      — {{ detail.assertion.closed_reason }}
+                      — <AutolinkedText
+                        :text="detail.assertion.closed_reason"
+                        :provider="provider"
+                        :slug="slug"
+                      />
                     </template>
                     <span
                       v-if="detail.assertion.closed_at"
@@ -290,8 +306,12 @@
                   boxed
                 >
                   <p class="text-sm text-gray-200">
-                    <span class="font-medium">{{ detail.acceptance.reason_kind === 'false_positive' ? 'False positive' : 'Risk accepted' }}</span>
-                    <span v-if="detail.acceptance.reason"> — {{ detail.acceptance.reason }}</span>
+                    <span class="font-medium">{{ decisionLabel }}</span>
+                    <span v-if="detail.acceptance.reason"> — <AutolinkedText
+                      :text="detail.acceptance.reason"
+                      :provider="provider"
+                      :slug="slug"
+                    /></span>
                   </p>
                   <p class="mt-1 text-xs text-gray-500">
                     <template v-if="detail.acceptance.created_at">
@@ -312,6 +332,46 @@
                     >{{ label }}</span>
                   </div>
                 </FindingSection>
+
+                <!-- ADR-053: the incidents this finding is part of, or the
+                     way to open one when it can carry one. -->
+                <FindingSection
+                  v-if="incidents.length > 0 || openIncidentLocation"
+                  title="Incidents"
+                  boxed
+                >
+                  <ul
+                    v-if="incidents.length > 0"
+                    class="space-y-1 text-sm text-gray-200"
+                  >
+                    <li
+                      v-for="incident in incidents"
+                      :key="incident.id"
+                    >
+                      <RouterLink
+                        :to="{ name: 'incident-detail', params: { provider, slug, number: incident.number } }"
+                        class="underline decoration-gray-600 underline-offset-2 transition hover:decoration-gray-300"
+                      >
+                        #{{ incident.number }} {{ incident.title }}
+                      </RouterLink>
+                      <span class="text-xs text-gray-500"> · {{ STATE_LABELS[incident.state] ?? incident.state }}</span>
+                    </li>
+                  </ul>
+                  <div
+                    v-else-if="openIncidentLocation"
+                    class="flex flex-wrap items-center gap-3"
+                  >
+                    <p class="text-xs text-gray-500">
+                      No incident covers this finding.
+                    </p>
+                    <RouterLink
+                      :to="openIncidentLocation"
+                      class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                    >
+                      Open incident…
+                    </RouterLink>
+                  </div>
+                </FindingSection>
               </div>
             </template>
 
@@ -326,7 +386,6 @@
                 :repo-slug="repoSlug"
                 :repo-html-url="repoHtmlUrl"
                 :forge-provider="forgeProvider"
-                @navigate="emit('close')"
               />
 
               <FindingSection
@@ -356,10 +415,10 @@
                 </ul>
               </FindingSection>
               <p
-                v-else-if="!componentBacked"
+                v-else-if="!makesStatement"
                 class="mt-5 text-xs text-gray-600"
               >
-                VEX not applicable — VEX describes third-party component exploitability; this is a first-party code finding.
+                No vulnerability identifier (this finding names a rule, not a CVE), so no VEX statement is written.
               </p>
             </template>
 
@@ -487,11 +546,70 @@
                   Reopen
                 </button>
               </template>
+              <!-- ADR-053 §4: a secret's primary action is revocation; accept
+                   risk and false positive sit behind the menu. -->
+              <template v-else-if="detail.finding.type === 'secret'">
+                <div class="relative flex">
+                  <button
+                    type="button"
+                    class="rounded-l-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 transition hover:bg-amber-500/20"
+                    :title="detail.finding.status === 'resolved' ? 'Record the rotation or exposure assessment of the revoked credential' : 'Record the revocation checklist — with a validator\'s confirmation, the only ways a secret resolves'"
+                    @click="emit('revoke', detail.finding)"
+                  >
+                    {{ detail.finding.status === 'resolved' ? 'Record rotation…' : 'Revoke…' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-r-lg border border-l-0 border-amber-500/40 px-2 py-1.5 text-xs text-amber-200 transition hover:bg-amber-500/20"
+                    aria-label="More triage options"
+                    :aria-expanded="secretMenuOpen"
+                    @click="secretMenuOpen = !secretMenuOpen"
+                  >
+                    ▾
+                  </button>
+                  <div
+                    v-if="secretMenuOpen"
+                    class="absolute bottom-full left-0 z-20 mb-1 w-56 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
+                  >
+                    <button
+                      type="button"
+                      class="block w-full px-3 py-1.5 text-left text-xs text-gray-200 transition hover:bg-surface-overlay"
+                      :title="detail.finding.verified ? 'A validator confirmed the credential live: accepting the risk requires an expiry' : 'Real, but deliberately not revoking now. Requires a reason; suppressed from the gate.'"
+                      @click="secretMenuOpen = false; emit('accept', 'risk_accepted', detail.finding, Boolean(detail.kev))"
+                    >
+                      Accept risk…
+                    </button>
+                    <button
+                      type="button"
+                      class="block w-full px-3 py-1.5 text-left text-xs text-gray-200 transition hover:bg-surface-overlay"
+                      title="A placeholder or a fixture, not a real credential"
+                      @click="secretMenuOpen = false; emit('accept', 'false_positive', detail.finding, Boolean(detail.kev))"
+                    >
+                      False positive…
+                    </button>
+                  </div>
+                </div>
+                <button
+                  v-if="detail.finding.status !== 'resolved'"
+                  type="button"
+                  class="rounded-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white disabled:opacity-50"
+                  :disabled="recheckBusy"
+                  title="Asks the validators again; a credential confirmed dead resolves on its own"
+                  @click="recheck"
+                >
+                  {{ recheckBusy ? 'Queueing…' : 'Re-check now' }}
+                </button>
+                <span
+                  v-if="recheckMessage"
+                  class="text-xs"
+                  :class="recheckFailed ? 'text-danger' : 'text-gray-400'"
+                >{{ recheckMessage }}</span>
+              </template>
               <template v-else>
                 <button
                   type="button"
                   class="rounded-l-lg border border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
-                  title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
+                  :title="makesStatement ? 'Affected, deliberately not fixed now: a VEX affected statement with your action statement.' : 'Real, but deliberately not fixing now. Requires a reason; suppressed from the gate.'"
                   @click="emit('accept', 'risk_accepted', detail.finding, Boolean(detail.kev))"
                 >
                   Accept risk…
@@ -499,9 +617,10 @@
                 <button
                   type="button"
                   class="-ml-2 rounded-r-lg border border-l-0 border-surface-border px-3 py-1.5 text-xs text-gray-300 transition hover:border-accent/50 hover:text-white"
+                  :title="makesStatement ? 'Not affected: a VEX not_affected statement with its justification.' : 'Not a real issue: excluded from the gate and from risk reporting.'"
                   @click="emit('accept', 'false_positive', detail.finding, Boolean(detail.kev))"
                 >
-                  False positive…
+                  {{ makesStatement ? 'Not affected…' : 'False positive…' }}
                 </button>
               </template>
               <template v-if="isAssertion">
@@ -573,15 +692,6 @@
                   class="text-xs text-danger"
                 >{{ assertionError }}</span>
               </template>
-              <button
-                v-if="detail.finding.type === 'secret' && detail.finding.status !== 'resolved'"
-                type="button"
-                class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 transition hover:bg-amber-500/20"
-                title="Attest that the credential was revoked and rotated — the only way a secret resolves"
-                @click="emit('revoke', detail.finding)"
-              >
-                Mark revoked…
-              </button>
               <span class="ml-auto hidden text-[11px] text-gray-600 sm:inline">j/k walks findings · esc closes</span>
             </div>
           </footer>
@@ -592,9 +702,11 @@
 </template>
 
 <script setup lang="ts">
+import AutolinkedText from '@/components/incidents/AutolinkedText.vue'
 import { computed, inject, onMounted, onUnmounted, ref, watch, type Ref } from 'vue'
+import type { RouteLocationRaw } from 'vue-router'
 
-import { Clock, Flame, X } from 'lucide-vue-next'
+import { Clock, Flame, Siren, X } from 'lucide-vue-next'
 
 import { api, type FindingCWE, type AcceptanceReasonKind, type FindingDetail, type FindingDispute, type Repository, type Vulnerability } from '@/api/client'
 import CommitLink from '@/components/CommitLink.vue'
@@ -610,10 +722,11 @@ import GenericFindingDetails from '@/components/finding/GenericFindingDetails.vu
 import FindingCweList from '@/components/finding/FindingCweList.vue'
 import SecretFindingDetails from '@/components/finding/SecretFindingDetails.vue'
 import { formatDateTime, relativeTime } from '@/lib/datetime'
-import { advisoryUrl, findingShape, findingTypeBadgeClass, isComponentBacked, severityBadgeClass } from '@/lib/findingDisplay'
+import { advisoryUrl, findingShape, findingTypeBadgeClass, severityBadgeClass } from '@/lib/findingDisplay'
 import { forgeRefUrl } from '@/lib/forgeLinks'
 import { kevSourceLabel } from '@/lib/kev'
-import { triageState } from '@/lib/triage'
+import { triageMakesStatement, triageState, VEX_JUSTIFICATIONS } from '@/lib/triage'
+import { incidentsApi, KIND_LABELS, STATE_LABELS, type Incident, type IncidentKind } from '@/api/incidents'
 
 const props = defineProps<{
   provider: string
@@ -753,7 +866,73 @@ async function withdrawDispute() {
     disputeBusy.value = false
   }
 }
-const componentBacked = computed(() => isComponentBacked(detail.value?.finding?.type))
+const makesStatement = computed(() => triageMakesStatement(detail.value?.finding))
+
+const decisionLabel = computed(() => {
+  const acceptance = detail.value?.acceptance
+  if (!acceptance) return ''
+  if (acceptance.reason_kind === 'risk_accepted') return 'Risk accepted'
+  const justification = VEX_JUSTIFICATIONS.find((item) => item.value === acceptance.vex_justification)
+  return justification ? `Not affected · ${justification.label}` : 'False positive'
+})
+
+// ADR-053 §4: Re-check asks the validators again; a confirmed-dead
+// credential resolves without an attestation.
+const secretMenuOpen = ref(false)
+const recheckBusy = ref(false)
+const recheckMessage = ref('')
+const recheckFailed = ref(false)
+
+async function recheck() {
+  if (recheckBusy.value || !detail.value) return
+  recheckBusy.value = true
+  recheckMessage.value = ''
+  recheckFailed.value = false
+  try {
+    await incidentsApi.recheckSecret(props.provider, props.slug, props.repoSlug, detail.value.finding.id)
+    recheckMessage.value = 'Re-check queued: a credential confirmed dead resolves on its own.'
+  } catch (err) {
+    recheckFailed.value = true
+    recheckMessage.value = err instanceof Error ? err.message : 'Failed to queue the re-check'
+  } finally {
+    recheckBusy.value = false
+  }
+}
+
+// ADR-053: incidents on this finding (by fingerprint or by its advisory).
+const incidents = ref<Incident[]>([])
+
+async function loadIncidents(vulnID: string) {
+  try {
+    const res = await incidentsApi.findingIncidents(props.provider, props.slug, props.repoSlug, vulnID)
+    if (detail.value?.finding.id === vulnID) incidents.value = res.data ?? []
+  } catch {
+    // Decoration: the finding stays usable without its incidents.
+  }
+}
+
+// The kinds a finding can open by itself; the incidents page takes it from
+// the query and asks the rest.
+const openIncidentLocation = computed<RouteLocationRaw | null>(() => {
+  const finding = detail.value?.finding
+  if (!finding) return null
+  let kind: IncidentKind
+  const query: Record<string, string> = { open: '1', repo: props.repoSlug }
+  if (makesStatement.value) {
+    kind = 'exploited_vulnerability'
+    query.vulnerability = detail.value?.advisory?.canonical_id || finding.primary_identifier_value || ''
+    if (!query.vulnerability) return null
+  } else if (finding.type === 'secret') {
+    kind = 'secret_leak'
+    query.finding = finding.id
+  } else if (finding.type === 'malware') {
+    kind = 'malware'
+    query.finding = finding.id
+  } else {
+    return null
+  }
+  return { name: 'org-incidents', params: { provider: props.provider, slug: props.slug }, query: { ...query, kind } }
+})
 const identifier = computed(() => detail.value?.finding.primary_identifier_value || detail.value?.finding.scanner_name || '')
 const identifierUrl = computed(() => advisoryUrl(detail.value?.advisory?.canonical_id || identifier.value))
 const firstSeen = computed(() => detail.value?.finding.first_seen_at || detail.value?.finding.detected_at || '')
@@ -807,6 +986,7 @@ async function load() {
   try {
     const res = await api.getFindingDetail(props.provider, props.slug, props.repoSlug, props.fingerprint)
     detail.value = res.data
+    if (res.data?.finding.id) void loadIncidents(res.data.finding.id)
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load the finding'
   } finally {
@@ -818,6 +998,9 @@ watch(() => props.fingerprint, () => {
   // Walking to the next finding should land on its overview, not on whichever
   // tab the previous one was left open at.
   tab.value = 'overview'
+  incidents.value = []
+  secretMenuOpen.value = false
+  recheckMessage.value = ''
   void load()
 }, { immediate: true })
 

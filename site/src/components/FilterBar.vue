@@ -207,7 +207,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div class="flex flex-wrap items-start gap-2">
         <div
-          v-for="filter in filters.filter(filter => !filter.hidden || filter.primary || filter.control === 'boolean')"
+          v-for="filter in filters.filter(filter => !filter.group && (!filter.hidden || filter.primary || filter.control === 'boolean'))"
           :key="filter.key"
           class="relative"
         >
@@ -320,6 +320,80 @@
               </div>
             </div>
           </Transition>
+        </div>
+
+        <!-- Grouped server-side qualifiers (Risk: cvss, epss, …) share one
+             pill so the row stays short; picking a value edits the bar. -->
+        <div
+          v-for="group in pillGroups"
+          :key="`group-${group.name}`"
+          class="relative"
+        >
+          <button
+            class="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-40"
+            :class="isFilterMenuOpen(groupMenuKey(group.name)) || groupSelectionCount(group) > 0
+              ? 'border-accent/40 bg-accent-muted text-accent'
+              : 'border-surface-border bg-surface-raised text-gray-300 hover:border-surface-border-subtle hover:text-gray-100'"
+            type="button"
+            aria-haspopup="true"
+            :aria-expanded="isFilterMenuOpen(groupMenuKey(group.name))"
+            :disabled="advancedActive"
+            :title="advancedActive ? 'Dropdowns are disabled while the query uses OR or parentheses — edit the query directly' : group.filters.map(filter => filter.label).join(', ')"
+            @click.stop="openGroupMenu(group)"
+          >
+            <span>{{ group.name }}</span>
+            <span
+              v-if="groupSelectionCount(group) > 0"
+              class="rounded-full bg-accent/20 px-1.5 text-[11px] tabular-nums"
+            >{{ groupSelectionCount(group) }}</span>
+            <span class="text-xs">▾</span>
+          </button>
+
+          <div
+            v-if="isFilterMenuOpen(groupMenuKey(group.name))"
+            class="absolute left-0 top-[calc(100%+0.5rem)] z-30 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-lg"
+          >
+            <div class="max-h-96 overflow-y-auto py-1">
+              <div
+                v-for="filter in group.filters"
+                :key="filter.key"
+                class="border-b border-surface-border-subtle px-3 py-2 last:border-b-0"
+              >
+                <p class="text-xs font-medium text-gray-200">
+                  {{ filter.label }}
+                </p>
+                <p
+                  v-if="filter.description"
+                  class="mb-1 text-[11px] text-gray-500"
+                >
+                  {{ filter.description }}
+                </p>
+                <button
+                  v-for="suggestion in groupSuggestions[filter.key] ?? []"
+                  :key="`${filter.key}-${suggestion.value}`"
+                  role="option"
+                  :aria-selected="serverTokenValues(filter.key).includes(suggestion.value.toLowerCase())"
+                  class="flex w-full items-center gap-3 rounded-md px-2 py-1 text-left text-sm transition hover:bg-surface-overlay"
+                  type="button"
+                  @click="toggleServerToken(filter.key, suggestion.value)"
+                >
+                  <span
+                    class="flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold"
+                    :class="serverTokenValues(filter.key).includes(suggestion.value.toLowerCase())
+                      ? 'border-accent bg-accent text-surface'
+                      : 'border-surface-border text-transparent'"
+                  >✓</span>
+                  <span class="min-w-0">
+                    <span class="font-mono text-xs text-gray-100">{{ filter.key }}:{{ suggestion.value }}</span>
+                    <span
+                      v-if="suggestion.label"
+                      class="ml-1.5 text-xs text-gray-400"
+                    >{{ suggestion.label }}</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -437,6 +511,7 @@ import {
   isConnectiveWord,
   getCursorContext,
   parseBarQuery,
+  tokenizeBarQuery,
 } from '@/lib/filterBarQuery'
 
 /** A value the completion offers; `detail` is a second line (a CWE title). */
@@ -472,6 +547,9 @@ interface FilterDef {
   // Hover card text for one value; may read reactive caches.
   describeValue?: (value: string) => FilterValueDescription | undefined
   primary?: boolean
+  // Filters sharing a group render as one pill whose menu lists each
+  // member's suggested values (server-side qualifiers only).
+  group?: string
   control?: 'select' | 'boolean'
   toggleIcon?: Component
   tone?: 'accent' | 'danger'
@@ -1063,6 +1141,60 @@ function autocompleteItemKey(item: AutocompleteItem, index: number) {
 
 function isFilterMenuOpen(key: string) {
   return openMenu.value?.type === 'filter' && openMenu.value.key === key
+}
+
+interface PillGroup {
+  name: string
+  filters: FilterDef[]
+}
+
+const pillGroups = computed<PillGroup[]>(() => {
+  const groups = new Map<string, FilterDef[]>()
+  for (const filter of props.filters) {
+    if (!filter.group || !filter.serverQuery) continue
+    groups.set(filter.group, [...(groups.get(filter.group) ?? []), filter])
+  }
+  return [...groups].map(([name, filters]) => ({ name, filters }))
+})
+const groupSuggestions = ref<Record<string, FilterValueSuggestion[]>>({})
+
+function groupMenuKey(name: string) {
+  return `group:${name}`
+}
+
+async function openGroupMenu(group: PillGroup) {
+  toggleFilterMenu(groupMenuKey(group.name))
+  for (const filter of group.filters) {
+    if (groupSuggestions.value[filter.key] || !filter.suggestValues) continue
+    const suggestions = await filter.suggestValues('').catch(() => [])
+    groupSuggestions.value = { ...groupSuggestions.value, [filter.key]: suggestions }
+  }
+}
+
+// A server-side qualifier lives only in the bar text: its selection is read
+// from the tokens and a pick rewrites them.
+function barTokens(): string[] {
+  return tokenizeBarQuery(barQuery.value).filter(chunk => !chunk.isWhitespace).map(chunk => chunk.text)
+}
+
+function serverTokenValues(key: string): string[] {
+  const prefix = `${key.toLowerCase()}:`
+  return barTokens()
+    .filter(token => token.toLowerCase().startsWith(prefix))
+    .map(token => token.slice(prefix.length).toLowerCase())
+}
+
+function groupSelectionCount(group: PillGroup): number {
+  return group.filters.filter(filter => serverTokenValues(filter.key).length > 0).length
+}
+
+function toggleServerToken(key: string, value: string) {
+  const prefix = `${key.toLowerCase()}:`
+  const tokens = barTokens()
+  const selected = tokens.some(token => token.toLowerCase() === `${prefix}${value.toLowerCase()}`)
+  const kept = tokens.filter(token => !token.toLowerCase().startsWith(prefix))
+  barQuery.value = [...kept, ...(selected ? [] : [`${key}:${value}`])].join(' ')
+  openMenu.value = null
 }
 
 function toggleFilterMenu(key: string) {

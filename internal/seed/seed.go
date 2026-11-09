@@ -3,6 +3,7 @@ package seed
 import (
 	"context"
 	"crypto/sha1" // #nosec G505 -- SHA1 is used only for deterministic fake git hashes in seed data.
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -1613,8 +1614,11 @@ func nullSeedUUID(value any) uuid.NullUUID {
 	return uuid.NullUUID{UUID: id, Valid: true}
 }
 
+// dependencySeedFingerprint is the scanner's dependencyFingerprint: with any
+// other value the first advisory scan pass re-creates every seeded finding.
 func dependencySeedFingerprint(advisoryID, componentID uuid.UUID) string {
-	return advisoryID.String() + ":" + componentID.String()
+	sum := sha256.Sum256([]byte(advisoryID.String() + ":" + componentID.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // seedClients creates the org's downstream clients (ADR-024): the parties the

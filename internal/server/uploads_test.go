@@ -1058,8 +1058,9 @@ func TestImportUploadedVEXSameDocumentRevisionConverges(t *testing.T) {
 	}
 	revisedRow := revisedState[0]
 	originalRow := firstByScope[vexStateScopeKey(importedVEXStateRow{AdvisoryID: revisedRow.AdvisoryID, ComponentPURL: revisedRow.ComponentPURL})]
-	if revisedRow.ID != originalRow.ID {
-		t.Fatalf("revised row id = %s, want preserved id %s", revisedRow.ID, originalRow.ID)
+	// A revision is a new row superseding the previous one (ADR-053 §4a).
+	if revisedRow.ID == originalRow.ID || !statementSupersedes(t, srv, revisedRow.ID, originalRow.ID) {
+		t.Fatalf("revised row %s does not supersede %s", revisedRow.ID, originalRow.ID)
 	}
 	if revisedRow.Status != string(dbgen.VexStatusFixed) {
 		t.Fatalf("revised row status = %q, want fixed", revisedRow.Status)
@@ -1126,8 +1127,8 @@ func TestImportUploadedVEXDifferentDocumentsPreserveUniqueScopes(t *testing.T) {
 	sharedRow := importedVEXStateRowByComponentPURL(t, stateAfterDocumentB, "pkg:golang/example/one@1.0.0")
 	sharedScope := vexStateScopeKey(sharedRow)
 	firstSharedRow := firstByScope[sharedScope]
-	if sharedRow.ID != firstSharedRow.ID {
-		t.Fatalf("shared row id changed across documents: %s -> %s", firstSharedRow.ID, sharedRow.ID)
+	if sharedRow.ID == firstSharedRow.ID || !statementSupersedes(t, srv, sharedRow.ID, firstSharedRow.ID) {
+		t.Fatalf("shared row %s does not supersede %s", sharedRow.ID, firstSharedRow.ID)
 	}
 	if sharedRow.Status != string(dbgen.VexStatusFixed) {
 		t.Fatalf("shared row status = %q, want fixed", sharedRow.Status)
@@ -2084,4 +2085,13 @@ func snapshotIDFromResponse(t *testing.T, response uploadResponse) uuid.UUID {
 		t.Fatalf("uuid.Parse(%q): %v", response.SnapshotID, err)
 	}
 	return id
+}
+
+func statementSupersedes(t *testing.T, srv *Server, current, previous uuid.UUID) bool {
+	t.Helper()
+	row, err := srv.queries.GetVEXStatementByID(context.Background(), current)
+	if err != nil {
+		t.Fatalf("GetVEXStatementByID: %v", err)
+	}
+	return row.Supersedes.Valid && row.Supersedes.UUID == previous
 }

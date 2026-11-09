@@ -201,7 +201,19 @@ func (s *Server) loadBoundRepoConfig(ctx context.Context, repo *store.Repository
 		return nil, false, nil
 	}
 	cfg, err := s.repoConfigLoader.Load(forgeOwnerContext(ctx, owner), repo.Provider, owner, name, repo.DefaultBranch)
+	if err == nil {
+		s.persistRepoIncidentConfig(ctx, repo.ID, configOrEmpty(cfg))
+	}
 	return cfg, true, err
+}
+
+// configOrEmpty stands for "no .hibou.yaml": a removed section must stop
+// applying, so the persisted copy is cleared rather than kept.
+func configOrEmpty(cfg *repoconfig.RepoConfig) *repoconfig.RepoConfig {
+	if cfg == nil {
+		return &repoconfig.RepoConfig{Version: repoconfig.CurrentVersion}
+	}
+	return cfg
 }
 
 // forgeOwnerContext binds ctx to the top-level account of an owner already

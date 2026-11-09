@@ -217,13 +217,14 @@ GROUP BY scanner_name, type
 ORDER BY count DESC;
 
 -- name: UpsertFindingAcceptance :one
-INSERT INTO finding_acceptances (repo_id, fingerprint, reason_kind, reason, labels, vex_justification, accepted_by, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO finding_acceptances (repo_id, fingerprint, reason_kind, reason, labels, vex_justification, accepted_by, expires_at, vex_statement_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (repo_id, fingerprint) DO UPDATE SET
 	reason_kind = EXCLUDED.reason_kind,
 	reason = EXCLUDED.reason,
 	labels = EXCLUDED.labels,
 	vex_justification = EXCLUDED.vex_justification,
+	vex_statement_id = EXCLUDED.vex_statement_id,
 	accepted_by = EXCLUDED.accepted_by,
 	expires_at = EXCLUDED.expires_at,
 	created_at = now()
@@ -246,18 +247,6 @@ JOIN snapshots s ON s.id = v.snapshot_id
 JOIN refs rf ON rf.id = s.ref_id
 WHERE rf.repo_id = $1
   AND v.fingerprint = ANY($2::text[]);
-
--- name: ListAcceptedDependencyAdvisories :many
--- Acceptance decisions on component-backed findings, joined to their advisory
--- for VEX synthesis at export time (ADR-023: acceptances GENERATE VEX; no
--- materialized rows to drift).
-SELECT DISTINCT fa.fingerprint, fa.reason_kind, fa.reason, fa.vex_justification, fa.expires_at,
-  v.advisory_id, a.canonical_id, v.component_purl
-FROM finding_acceptances fa
-JOIN vulnerabilities v ON v.repo_id = fa.repo_id AND v.fingerprint = fa.fingerprint
-JOIN advisories a ON a.id = v.advisory_id
-WHERE fa.repo_id = $1 AND (fa.expires_at IS NULL OR fa.expires_at > now())
-  AND v.advisory_id IS NOT NULL AND v.type IN ('dependency', 'container');
 
 -- name: GetLatestVulnerabilityByFingerprint :one
 -- The newest occurrence of a fingerprint on a repo — the finding-detail
@@ -297,18 +286,6 @@ WHERE repo_id = $1 AND fingerprint = $2
 SELECT id, ecosystem, component_name, advisory_id, reachability
 FROM vulnerabilities
 WHERE snapshot_id = $1 AND type IN ('dependency', 'container');
-
--- name: ListUnreachableDependencyAdvisories :many
--- Machine-proven not_reachable dependency findings on one snapshot — the
--- source for synthesized VEX not_affected/vulnerable_code_not_in_execute_path
--- statements. Human statements and acceptances take precedence at export.
-SELECT DISTINCT a.canonical_id, v.advisory_id, v.component_purl
-FROM vulnerabilities v
-JOIN advisories a ON a.id = v.advisory_id
-WHERE v.snapshot_id = $1
-  AND v.type IN ('dependency', 'container')
-  AND v.reachability = 'not_reachable'
-  AND v.advisory_id IS NOT NULL;
 
 -- name: ListFindingTransitions :many
 -- The scan-observed life of a fingerprint, per ref: the snapshot that first

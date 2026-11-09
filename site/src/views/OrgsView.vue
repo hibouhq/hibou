@@ -6,7 +6,10 @@
 
         <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div class="max-w-2xl">
-            <div class="inline-flex items-center gap-2 rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-accent">
+            <div
+              v-if="!hasOrgs"
+              class="inline-flex items-center gap-2 rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.22em] text-accent"
+            >
               <Sparkles class="h-3.5 w-3.5" />
               Onboarding
             </div>

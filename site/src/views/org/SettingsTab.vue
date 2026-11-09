@@ -6,7 +6,7 @@
 </template>
 
 <script setup lang="ts">
-import { Bell, GitPullRequestArrow, KeyRound, Package, Plug, Radar, Scale, ScrollText, Settings2, ShieldCheck, Users } from 'lucide-vue-next'
+import { Bell, GitPullRequestArrow, KeyRound, Package, Plug, Radar, Scale, ScrollText, Settings2, ShieldCheck, Siren, Users } from 'lucide-vue-next'
 
 import SettingsLayout, { type SettingsNavGroup } from '@/components/settings/SettingsLayout.vue'
 import { useOrgRole } from '@/composables/useOrgRole'
@@ -36,6 +36,7 @@ const groups: SettingsNavGroup[] = [
       { label: 'Scanner requirements', icon: ShieldCheck, name: 'org-settings-scanner-requirements' },
       { label: 'Integrations', icon: Plug, name: 'org-settings-integrations' },
       { label: 'Notifications', icon: Bell, name: 'org-settings-notifications' },
+      { label: 'Incidents', icon: Siren, name: 'org-settings-incidents' },
     ],
   },
   {

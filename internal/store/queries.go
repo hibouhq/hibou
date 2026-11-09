@@ -294,10 +294,6 @@ func (q *Queries) CreateVEXStatement(ctx context.Context, arg dbgen.CreateVEXSta
 	return q.db.CreateVEXStatement(ctx, arg)
 }
 
-func (q *Queries) UpdateVEXStatement(ctx context.Context, arg dbgen.UpdateVEXStatementParams) (dbgen.VexStatement, error) {
-	return q.db.UpdateVEXStatement(ctx, arg)
-}
-
 func (q *Queries) GetVEXStatementByID(ctx context.Context, id uuid.UUID) (dbgen.VexStatement, error) {
 	return q.db.GetVEXStatementByID(ctx, id)
 }
@@ -312,10 +308,6 @@ func (q *Queries) ListVEXStatementsByRepo(ctx context.Context, arg dbgen.ListVEX
 
 func (q *Queries) ListVEXStatementsByAdvisory(ctx context.Context, arg dbgen.ListVEXStatementsByAdvisoryParams) ([]dbgen.VexStatement, error) {
 	return q.db.ListVEXStatementsByAdvisory(ctx, arg)
-}
-
-func (q *Queries) DeleteVEXStatement(ctx context.Context, arg dbgen.DeleteVEXStatementParams) error {
-	return q.db.DeleteVEXStatement(ctx, arg)
 }
 
 func (q *Queries) GetEffectiveVEXStatus(ctx context.Context, arg dbgen.GetEffectiveVEXStatusParams) (dbgen.VexStatement, error) {

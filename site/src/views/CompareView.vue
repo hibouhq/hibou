@@ -506,6 +506,7 @@
           v-if="groupDialog"
           :kind="groupDialog.kind"
           :count="groupDialog.group.rows.length"
+          :statement="groupDialog.group.rows.some(triageMakesStatement)"
           :error="groupDialogError"
           :submitting="groupDialogSubmitting"
           @cancel="groupDialog = null"
@@ -574,7 +575,7 @@
             <span
               v-if="groupAcceptedKeys.has(group.key)"
               class="whitespace-nowrap rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
-            >Risk accepted</span>
+            >{{ groupAcceptedKeys.get(group.key) }}</span>
             <template v-else-if="group.kind === 'dependency' && group.fingerprints.length > 0">
               <button
                 type="button"
@@ -1408,6 +1409,7 @@ import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
 import CoverageTreeView from '@/components/CoverageTreeView.vue'
 import PatchDiffFile from '@/components/PatchDiffFile.vue'
 import { forgeFileUrl, forgeLabel, forgeRefUrl } from '@/lib/forgeLinks'
+import { triageMakesStatement, type TriageConfirmPayload } from '@/lib/triage'
 import { newLicensesIntroduced } from '@/lib/licenses'
 import { isClaimableFix, presenceReasonText, resolutionReasonText } from '@/lib/presence'
 
@@ -1773,28 +1775,33 @@ function openSecurityForReason(reason: string) {
 const groupDialog = ref<{ kind: AcceptanceReasonKind; group: SecurityGroup } | null>(null)
 const groupDialogError = ref('')
 const groupDialogSubmitting = ref(false)
-const groupAcceptedKeys = ref<Set<string>>(new Set())
+// The decision taken per group, shown in place of its button.
+const groupAcceptedKeys = ref<Map<string, string>>(new Map())
 
 function openGroupAccept(kind: AcceptanceReasonKind, group: SecurityGroup) {
   groupDialogError.value = ''
   groupDialog.value = { kind, group }
 }
 
-async function confirmGroupAccept(payload: { reason: string; labels: string[]; expiresAt?: string }) {
+async function confirmGroupAccept(payload: TriageConfirmPayload) {
   if (!groupDialog.value) return
-  const { kind, group } = groupDialog.value
+  const { group } = groupDialog.value
+  const kind = payload.kind
   groupDialogSubmitting.value = true
   groupDialogError.value = ''
   try {
-    await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, {
+    // ADR-053 §4a: the justification goes to the findings with an advisory.
+    const body: Parameters<typeof api.batchFindingAcceptance>[3] = {
       fingerprints: [...new Set(group.fingerprints)],
       status: 'accepted',
       reason_kind: kind,
       reason: payload.reason || undefined,
       labels: payload.labels,
       expires_at: payload.expiresAt,
-    })
-    groupAcceptedKeys.value = new Set([...groupAcceptedKeys.value, group.key])
+      vex_justification: payload.vexJustification,
+    }
+    await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, body)
+    groupAcceptedKeys.value = new Map([...groupAcceptedKeys.value, [group.key, kind === 'risk_accepted' ? 'Risk accepted' : payload.vexJustification ? 'Not affected' : 'False positive']])
     groupDialog.value = null
   } catch (err) {
     groupDialogError.value = err instanceof Error ? err.message : 'Failed to accept the findings'

@@ -28,7 +28,7 @@ func (q *Queries) CountClientsByOrg(ctx context.Context, orgID uuid.UUID) (int64
 const createClient = `-- name: CreateClient :one
 INSERT INTO clients (org_id, name, slug, labels, client_type, contact_email, contact_name, notification_prefs, metadata)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at
+RETURNING id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at, security_contacts, delivery_config
 `
 
 type CreateClientParams struct {
@@ -69,6 +69,8 @@ func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Cli
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SecurityContacts,
+		&i.DeliveryConfig,
 	)
 	return i, err
 }
@@ -83,7 +85,7 @@ func (q *Queries) DeleteClient(ctx context.Context, id uuid.UUID) error {
 }
 
 const getClientByID = `-- name: GetClientByID :one
-SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at FROM clients WHERE id = $1
+SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at, security_contacts, delivery_config FROM clients WHERE id = $1
 `
 
 func (q *Queries) GetClientByID(ctx context.Context, id uuid.UUID) (Client, error) {
@@ -102,12 +104,14 @@ func (q *Queries) GetClientByID(ctx context.Context, id uuid.UUID) (Client, erro
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SecurityContacts,
+		&i.DeliveryConfig,
 	)
 	return i, err
 }
 
 const getClientBySlug = `-- name: GetClientBySlug :one
-SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at FROM clients WHERE org_id = $1 AND slug = $2
+SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at, security_contacts, delivery_config FROM clients WHERE org_id = $1 AND slug = $2
 `
 
 type GetClientBySlugParams struct {
@@ -131,6 +135,8 @@ func (q *Queries) GetClientBySlug(ctx context.Context, arg GetClientBySlugParams
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SecurityContacts,
+		&i.DeliveryConfig,
 	)
 	return i, err
 }
@@ -223,7 +229,7 @@ func (q *Queries) ListClientLabelKeys(ctx context.Context, orgID uuid.UUID) ([]s
 }
 
 const listClientsByOrg = `-- name: ListClientsByOrg :many
-SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at FROM clients WHERE org_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3
+SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at, security_contacts, delivery_config FROM clients WHERE org_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3
 `
 
 type ListClientsByOrgParams struct {
@@ -254,6 +260,8 @@ func (q *Queries) ListClientsByOrg(ctx context.Context, arg ListClientsByOrgPara
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SecurityContacts,
+			&i.DeliveryConfig,
 		); err != nil {
 			return nil, err
 		}
@@ -270,7 +278,7 @@ func (q *Queries) ListClientsByOrg(ctx context.Context, arg ListClientsByOrgPara
 
 const listClientsWithStatsByOrg = `-- name: ListClientsWithStatsByOrg :many
 SELECT
-    c.id, c.org_id, c.name, c.slug, c.client_type, c.contact_email, c.contact_name, c.notification_prefs, c.labels, c.metadata, c.created_at, c.updated_at,
+    c.id, c.org_id, c.name, c.slug, c.client_type, c.contact_email, c.contact_name, c.notification_prefs, c.labels, c.metadata, c.created_at, c.updated_at, c.security_contacts, c.delivery_config,
     COALESCE(stats.deployments_count, 0)::bigint AS deployments_count,
     stats.last_deployment_at,
     CASE
@@ -318,6 +326,8 @@ type ListClientsWithStatsByOrgRow struct {
 	Metadata          json.RawMessage `json:"metadata"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
+	SecurityContacts  json.RawMessage `json:"security_contacts"`
+	DeliveryConfig    json.RawMessage `json:"delivery_config"`
 	DeploymentsCount  int64           `json:"deployments_count"`
 	LastDeploymentAt  interface{}     `json:"last_deployment_at"`
 	ActiveVersion     interface{}     `json:"active_version"`
@@ -345,6 +355,8 @@ func (q *Queries) ListClientsWithStatsByOrg(ctx context.Context, arg ListClients
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SecurityContacts,
+			&i.DeliveryConfig,
 			&i.DeploymentsCount,
 			&i.LastDeploymentAt,
 			&i.ActiveVersion,
@@ -373,7 +385,7 @@ SET name = $2,
     metadata = $8,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at
+RETURNING id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at, security_contacts, delivery_config
 `
 
 type UpdateClientParams struct {
@@ -412,6 +424,8 @@ func (q *Queries) UpdateClient(ctx context.Context, arg UpdateClientParams) (Cli
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SecurityContacts,
+		&i.DeliveryConfig,
 	)
 	return i, err
 }

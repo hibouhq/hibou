@@ -32,7 +32,7 @@
         <div class="flex items-center justify-between border-b border-surface-border-subtle px-4 py-3">
           <RouterLink
             id="navigation-drawer-title"
-            to="/orgs"
+            to="/"
             class="flex items-center gap-2 text-sm font-semibold text-white"
             @click="close"
           >
@@ -183,6 +183,7 @@ function close() {
 function isActive(item: NavigationDrawerItem) {
   if (item.to === '/settings') return route.path.startsWith('/settings')
   if (item.to === '/orgs') return route.path === '/orgs'
+  if (item.to === '/') return route.path === '/'
   return route.path === item.to || route.path.startsWith(`${item.to}/`)
 }
 

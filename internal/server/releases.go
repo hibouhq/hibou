@@ -224,6 +224,7 @@ func (s *Server) handleAddReleaseClient(w http.ResponseWriter, r *http.Request) 
 		api.JSONError(w, http.StatusInternalServerError, "failed to create deployment")
 		return
 	}
+	s.queueIncidentReconcileForRepo(r.Context(), repo.ID)
 
 	s.writeAuditLog(r, user, uuid.NullUUID{UUID: org.ID, Valid: true}, auditEntry{
 		Action:       "release.client_added",
@@ -285,6 +286,7 @@ func (s *Server) handleRemoveReleaseClient(w http.ResponseWriter, r *http.Reques
 		api.JSONError(w, http.StatusInternalServerError, "failed to update deployment")
 		return
 	}
+	s.queueIncidentReconcileForRepo(r.Context(), release.RepoID)
 
 	s.writeAuditLog(r, user, uuid.NullUUID{UUID: org.ID, Valid: true}, auditEntry{
 		Action:       "release.client_removed",

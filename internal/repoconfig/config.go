@@ -32,6 +32,10 @@ type RepoConfig struct {
 	// Dependencies configures the built-in inventory (ADR-045 §8) and the
 	// package signals policy (ADR-048 §3–4).
 	Dependencies *DependenciesConfig `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
+	// Product names what the repository ships (ADR-053 §4a).
+	Product *ProductConfig `yaml:"product,omitempty" json:"product,omitempty"`
+	// Incidents configures when findings open incidents (ADR-053 §1).
+	Incidents *IncidentsConfig `yaml:"incidents,omitempty" json:"incidents,omitempty"`
 }
 
 // DependenciesConfig is the `dependencies` section of .hibou.yaml.
@@ -487,6 +491,12 @@ func (c *RepoConfig) validate() error {
 		return err
 	}
 	if err := validateReleasesConfig(c.Releases); err != nil {
+		return err
+	}
+	if err := validateProductConfig(c.Product); err != nil {
+		return err
+	}
+	if err := validateIncidentsConfig(c.Incidents); err != nil {
 		return err
 	}
 

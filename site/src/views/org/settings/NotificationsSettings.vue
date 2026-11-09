@@ -132,7 +132,7 @@
             class="mt-1 w-full rounded-md border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-sm text-gray-100 focus:border-accent/50 focus:outline-none"
           >
             <option
-              v-for="destinationType in INTEGRATION_TYPES"
+              v-for="destinationType in NOTIFICATION_DESTINATION_TYPES"
               :key="destinationType"
               :value="destinationType"
             >
@@ -195,7 +195,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { api, INTEGRATION_TYPES, NOTIFICATION_EVENT_TYPES, type NotificationRule } from '@/api/client'
+import { api, NOTIFICATION_DESTINATION_TYPES, NOTIFICATION_EVENT_TYPES, type NotificationRule } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 import { useToast } from '@/composables/useToast'

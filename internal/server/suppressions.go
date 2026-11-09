@@ -14,6 +14,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/audit"
+	"github.com/hibouhq/hibou/internal/incident"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 	"github.com/hibouhq/hibou/internal/vex"
@@ -30,19 +31,16 @@ type createVEXStatementRequest struct {
 	SourceDocumentURL string     `json:"source_document_url"`
 	Supplier          string     `json:"supplier"`
 	ExpiresAt         *time.Time `json:"expires_at"`
+	// ReleaseID or VersionRange (a vers range) narrow the statement to
+	// shipped versions (ADR-053 §4a); neither means the whole repository.
+	ReleaseID    string          `json:"release_id,omitempty"`
+	VersionRange string          `json:"version_range,omitempty"`
+	Evidence     json.RawMessage `json:"evidence,omitempty" swaggertype:"object"`
 }
 
-type updateVEXStatementRequest struct {
-	Status            string     `json:"status"`
-	Justification     string     `json:"justification"`
-	ImpactStatement   string     `json:"impact_statement"`
-	ActionStatement   string     `json:"action_statement"`
-	ComponentPURL     string     `json:"component_purl"`
-	Source            string     `json:"source"`
-	SourceDocumentURL string     `json:"source_document_url"`
-	Supplier          string     `json:"supplier"`
-	ExpiresAt         *time.Time `json:"expires_at"`
-}
+// updateVEXStatementRequest revises a statement; vulnerability_id is ignored
+// (a revision keeps the advisory).
+type updateVEXStatementRequest createVEXStatementRequest
 
 func (s *Server) handleCreateVEXStatement(w http.ResponseWriter, r *http.Request) {
 	org, repo, ok := s.loadAuthorizedRepo(r, w)
@@ -74,12 +72,25 @@ func (s *Server) handleCreateVEXStatement(w http.ResponseWriter, r *http.Request
 		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.applyVEXProductAxis(r.Context(), repo.ID, input.ReleaseID, input.VersionRange, &params); err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(input.Evidence) > 0 {
+		params.Evidence = input.Evidence
+	}
+	s.applyVEXApprovalPolicy(r.Context(), org.ID, &params)
 
-	statement, err := s.queries.CreateVEXStatement(r.Context(), params)
+	statement, err := s.queries.RecordVEXStatement(r.Context(), params)
 	if err != nil {
+		if isUniqueViolation(err) {
+			api.JSONError(w, http.StatusConflict, "another statement was recorded for this scope meanwhile; reload and retry")
+			return
+		}
 		api.JSONError(w, http.StatusInternalServerError, "failed to create VEX statement")
 		return
 	}
+	s.queueIncidentReconcileForAdvisory(r.Context(), org.ID, statement.AdvisoryID)
 
 	s.writeVEXAuditLog(r, user, org.ID, statement.ID, audit.ActionVEXCreate, map[string]any{
 		"repo_id":          repo.ID,
@@ -139,6 +150,10 @@ func (s *Server) handleGetVEXStatement(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, statement)
 }
 
+// handleUpdateVEXStatement revises a statement (ADR-053 §4a): the revision is
+// a new row that supersedes the current one; the old row keeps its content.
+// A revision that moves the statement to another scope withdraws the old
+// scope's statement and records the new one.
 func (s *Server) handleUpdateVEXStatement(w http.ResponseWriter, r *http.Request) {
 	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
@@ -153,6 +168,10 @@ func (s *Server) handleUpdateVEXStatement(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	if existing.SupersededAt.Valid || existing.Withdrawn {
+		api.JSONError(w, http.StatusConflict, "this statement was already revised or withdrawn; revise the current one")
+		return
+	}
 
 	var input updateVEXStatementRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -160,28 +179,52 @@ func (s *Server) handleUpdateVEXStatement(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	params, err := buildUpdateVEXParams(existing.ID, org.ID, repo.ID, input)
+	actorID := uuid.Nil
+	if user != nil {
+		actorID = user.ID
+	}
+	params, err := buildCreateVEXParams(org.ID, repo.ID, actorID, existing.AdvisoryID, createVEXStatementRequest(input))
 	if err != nil {
 		api.JSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.applyVEXProductAxis(r.Context(), repo.ID, input.ReleaseID, input.VersionRange, &params); err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	params.Evidence = existing.Evidence
+	s.applyVEXApprovalPolicy(r.Context(), org.ID, &params)
 
-	statement, err := s.queries.UpdateVEXStatement(r.Context(), params)
+	sameScope := existing.ComponentPurl == params.ComponentPurl && existing.ReleaseID == params.ReleaseID && existing.VersionRange == params.VersionRange && existing.RepoID == params.RepoID
+	if !sameScope {
+		if _, err := s.queries.WithdrawVEXStatement(r.Context(), org.ID, existing.ID, params.CreatedBy); err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to withdraw the previous statement")
+			return
+		}
+	}
+	statement, err := s.queries.RecordVEXStatement(r.Context(), params)
 	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to update VEX statement")
+		if isUniqueViolation(err) {
+			api.JSONError(w, http.StatusConflict, "another statement was recorded for this scope meanwhile; reload and retry")
+			return
+		}
+		api.JSONError(w, http.StatusInternalServerError, "failed to record VEX statement")
 		return
 	}
 
 	s.writeVEXAuditLog(r, user, org.ID, statement.ID, audit.ActionVEXUpdate, map[string]any{
-		"repo_id": repo.ID,
-		"status":  statement.Status,
+		"repo_id":    repo.ID,
+		"status":     statement.Status,
+		"supersedes": existing.ID,
 	})
-
 	s.publishGateRecompute(r.Context(), repo.ID)
+	s.queueIncidentReconcileForAdvisory(r.Context(), org.ID, statement.AdvisoryID)
 
 	api.JSON(w, http.StatusOK, statement)
 }
 
+// handleDeleteVEXStatement withdraws a statement: a withdrawn row becomes the
+// scope's current one, and the history keeps everything that was said.
 func (s *Server) handleDeleteVEXStatement(w http.ResponseWriter, r *http.Request) {
 	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
@@ -196,20 +239,86 @@ func (s *Server) handleDeleteVEXStatement(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if err := s.queries.DeleteVEXStatement(r.Context(), dbgen.DeleteVEXStatementParams{ID: statement.ID, OrgID: org.ID}); err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to delete VEX statement")
+	actor := uuid.NullUUID{}
+	if user != nil {
+		actor = uuid.NullUUID{UUID: user.ID, Valid: true}
+	}
+	if _, err := s.queries.WithdrawVEXStatement(r.Context(), org.ID, statement.ID, actor); err != nil {
+		if errors.Is(err, store.ErrVEXStatementNotCurrent) {
+			api.JSONError(w, http.StatusConflict, "this statement was already revised or withdrawn")
+			return
+		}
+		api.JSONError(w, http.StatusInternalServerError, "failed to withdraw VEX statement")
 		return
 	}
 
 	s.writeVEXAuditLog(r, user, org.ID, statement.ID, audit.ActionVEXRevoke, map[string]any{
 		"repo_id": repo.ID,
 	})
-
 	s.publishGateRecompute(r.Context(), repo.ID)
+	s.queueIncidentReconcileForAdvisory(r.Context(), org.ID, statement.AdvisoryID)
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleGetVEXStatementHistory returns the chain a statement belongs to.
+func (s *Server) handleGetVEXStatementHistory(w http.ResponseWriter, r *http.Request) {
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+	statement, ok := s.loadVEXStatement(r, w, org.ID, repo.ID)
+	if !ok {
+		return
+	}
+	history, err := s.queries.ListVEXStatementHistory(r.Context(), org.ID, statement.ID)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to load statement history")
+		return
+	}
+	api.JSON(w, http.StatusOK, history)
+}
+
+// handleApproveVEXStatement records a second person's approval, required when
+// the organisation asks for it before a statement counts for an incident.
+func (s *Server) handleApproveVEXStatement(w http.ResponseWriter, r *http.Request) {
+	org, repo, ok := s.loadAuthorizedRepo(r, w)
+	if !ok {
+		return
+	}
+	if !s.requireReleaseManager(r, w, org.ID) {
+		return
+	}
+	user := UserFromContext(r.Context())
+	if user == nil {
+		api.JSONError(w, http.StatusForbidden, "approval needs a person")
+		return
+	}
+	statement, ok := s.loadVEXStatement(r, w, org.ID, repo.ID)
+	if !ok {
+		return
+	}
+	if statement.CreatedBy.Valid && statement.CreatedBy.UUID == user.ID {
+		api.JSONError(w, http.StatusForbidden, "a statement is approved by someone other than its author")
+		return
+	}
+	approved, err := s.queries.ApproveVEXStatement(r.Context(), org.ID, statement.ID, user.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrVEXStatementNotCurrent) {
+			api.JSONError(w, http.StatusConflict, "only the current statement can be approved")
+			return
+		}
+		api.JSONError(w, http.StatusInternalServerError, "failed to approve VEX statement")
+		return
+	}
+	s.writeVEXAuditLog(r, user, org.ID, approved.ID, audit.ActionVEXApprove, map[string]any{"repo_id": repo.ID, "supersedes": statement.ID})
+	s.queueIncidentReconcileForAdvisory(r.Context(), org.ID, approved.AdvisoryID)
+	api.JSON(w, http.StatusOK, approved)
+}
+
+// handleExportVEX renders the repository's current statements on the fly
+// (ADR-053 §5): OpenVEX, CycloneDX or CSAF. The statements table is the only
+// source; documents sent to clients are stored separately, as sent.
 func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 	org, repo, ok := s.loadAuthorizedRepo(r, w)
 	if !ok {
@@ -221,8 +330,8 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = vex.FormatOpenVEX
 	}
-	if format != vex.FormatOpenVEX && format != vex.FormatCSAF {
-		api.JSONError(w, http.StatusBadRequest, "format must be openvex or csaf")
+	if format != vex.FormatOpenVEX && format != vex.FormatCSAF && format != vex.FormatCycloneDX {
+		api.JSONError(w, http.StatusBadRequest, "format must be openvex, cyclonedx or csaf")
 		return
 	}
 
@@ -245,23 +354,16 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	synthesized, err := s.acceptanceVEXStatements(r.Context(), repo.ID, rows)
+	now := time.Now().UTC()
+	statements, err := s.vexStatementsForExport(r.Context(), org, repo, rows)
 	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to derive VEX from acceptances")
+		api.JSONError(w, http.StatusInternalServerError, "failed to resolve VEX statements")
 		return
 	}
-	// Machine-proven unreachability speaks when no human has: a dependency
-	// whose vulnerable symbol the call graph provably never reaches exports
-	// as not_affected with the CISA justification made for exactly this.
-	reachabilityStatements, err := s.reachabilityVEXStatements(r.Context(), repo, rows, synthesized)
+	meta := s.vexExportMeta(org, user, fmt.Sprintf("%s-%s-%s", org.Slug, repo.Slug, now.Format("20060102150405")), now)
+	payload, err := renderVEX(format, statements, meta)
 	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to derive VEX from reachability")
-		return
-	}
-	synthesized = append(synthesized, reachabilityStatements...)
-	payload, err := s.exportVEXDocument(r.Context(), rows, synthesized, org, user, format)
-	if err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to export VEX document")
+		api.JSONError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
@@ -272,6 +374,17 @@ func (s *Server) handleExportVEX(w http.ResponseWriter, r *http.Request) {
 	})
 
 	api.JSON(w, http.StatusOK, json.RawMessage(payload))
+}
+
+func renderVEX(format string, statements []vex.Statement, meta vex.ExportMeta) ([]byte, error) {
+	switch format {
+	case vex.FormatCSAF:
+		return vex.ExportCSAF(statements, meta)
+	case vex.FormatCycloneDX:
+		return vex.ExportCycloneDX(statements, meta)
+	default:
+		return vex.ExportOpenVEX(statements, meta)
+	}
 }
 
 func (s *Server) loadVEXStatement(r *http.Request, w http.ResponseWriter, orgID, repoID uuid.UUID) (dbgen.VexStatement, bool) {
@@ -319,27 +432,6 @@ func buildCreateVEXParams(orgID, repoID, userID, advisoryID uuid.UUID, input cre
 		Supplier:          strings.TrimSpace(input.Supplier),
 		CreatedBy:         uuid.NullUUID{UUID: userID, Valid: userID != uuid.Nil},
 		ExpiresAt:         expiresAt,
-	}, nil
-}
-
-func buildUpdateVEXParams(statementID, orgID, repoID uuid.UUID, input updateVEXStatementRequest) (dbgen.UpdateVEXStatementParams, error) {
-	status, justification, source, componentPURL, expiresAt, err := normalizeVEXFields(input.Status, input.Justification, input.Source, input.ComponentPURL, input.ExpiresAt)
-	if err != nil {
-		return dbgen.UpdateVEXStatementParams{}, err
-	}
-	return dbgen.UpdateVEXStatementParams{
-		RepoID:            uuid.NullUUID{UUID: repoID, Valid: true},
-		ComponentPurl:     componentPURL,
-		Status:            status,
-		Justification:     justification,
-		ImpactStatement:   strings.TrimSpace(input.ImpactStatement),
-		ActionStatement:   strings.TrimSpace(input.ActionStatement),
-		Source:            source,
-		SourceDocumentUrl: strings.TrimSpace(input.SourceDocumentURL),
-		Supplier:          strings.TrimSpace(input.Supplier),
-		ExpiresAt:         expiresAt,
-		ID:                statementID,
-		OrgID:             orgID,
 	}, nil
 }
 
@@ -456,123 +548,10 @@ func (s *Server) handleVEXLookupError(w http.ResponseWriter, err error) {
 	api.JSONError(w, http.StatusInternalServerError, "failed to resolve advisory")
 }
 
-// acceptanceVEXStatements synthesizes standard-conformant statements from
-// acceptance decisions on dependency findings (ADR-023): false_positive →
-// not_affected + justification; risk_accepted → affected + action statement.
-// Stored VEX statements win — an advisory already covered is skipped, so the
-// export never carries two voices about one advisory.
-func (s *Server) acceptanceVEXStatements(ctx context.Context, repoID uuid.UUID, stored []dbgen.VexStatement) ([]vex.Statement, error) {
-	rows, err := s.queries.ListAcceptedDependencyAdvisories(ctx, repoID)
-	if err != nil {
-		return nil, err
-	}
-	covered := make(map[uuid.UUID]struct{}, len(stored))
-	for _, statement := range stored {
-		covered[statement.AdvisoryID] = struct{}{}
-	}
-
-	statements := make([]vex.Statement, 0, len(rows))
-	seen := make(map[string]struct{}, len(rows))
-	for _, row := range rows {
-		if !row.AdvisoryID.Valid {
-			continue
-		}
-		if _, ok := covered[row.AdvisoryID.UUID]; ok {
-			continue
-		}
-		key := row.CanonicalID + "|" + row.ComponentPurl.String
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		statement := vex.Statement{
-			VulnerabilityID: row.CanonicalID,
-			ComponentPURL:   row.ComponentPurl.String,
-		}
-		if row.ReasonKind == dbgen.AcceptanceReasonKindFalsePositive {
-			statement.Status = string(dbgen.VexStatusNotAffected)
-			if row.VexJustification.Valid {
-				statement.Justification = string(row.VexJustification.VexJustification)
-			}
-			statement.ImpactStatement = row.Reason
-		} else {
-			// The standard requires an action statement on affected — and
-			// forbids a justification there.
-			statement.Status = string(dbgen.VexStatusAffected)
-			action := "Risk accepted"
-			if row.ExpiresAt.Valid {
-				action += " until " + row.ExpiresAt.Time.UTC().Format("2006-01-02")
-			}
-			if strings.TrimSpace(row.Reason) != "" {
-				action += ": " + strings.TrimSpace(row.Reason)
-			}
-			statement.ActionStatement = action
-		}
-		statements = append(statements, statement)
-	}
-	return statements, nil
-}
-
-// reachabilityVEXStatements synthesizes not_affected statements for
-// dependency advisories the call-graph analysis proved unreachable on the
-// default branch's latest analyzed snapshot. Precedence: stored statements
-// and acceptance-derived statements always win — this only fills what no
-// human has spoken for. The verdict already reflects code changes: removing
-// the problematic call produces a new snapshot whose analysis flips the
-// finding to not_reachable, and the next export says so.
-func (s *Server) reachabilityVEXStatements(ctx context.Context, repo *store.Repository, stored []dbgen.VexStatement, synthesized []vex.Statement) ([]vex.Statement, error) {
-	ref, err := s.queries.GetRefByRepoAndName(ctx, repo.ID, repo.DefaultBranch, store.RefTypeBranch)
-	if err != nil || ref == nil {
-		return nil, err
-	}
-	snapshot, err := s.queries.GetLatestSnapshotWithVulnerabilitiesByRef(ctx, ref.ID)
-	if err != nil || snapshot == nil {
-		return nil, err
-	}
-	rows, err := s.queries.ListUnreachableDependencyAdvisories(ctx, snapshot.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	covered := make(map[uuid.UUID]struct{}, len(stored))
-	for _, statement := range stored {
-		covered[statement.AdvisoryID] = struct{}{}
-	}
-	coveredIDs := make(map[string]struct{}, len(synthesized))
-	for _, statement := range synthesized {
-		coveredIDs[statement.VulnerabilityID] = struct{}{}
-	}
-
-	statements := make([]vex.Statement, 0, len(rows))
-	seen := make(map[string]struct{}, len(rows))
-	for _, row := range rows {
-		if !row.AdvisoryID.Valid {
-			continue
-		}
-		if _, ok := covered[row.AdvisoryID.UUID]; ok {
-			continue
-		}
-		if _, ok := coveredIDs[row.CanonicalID]; ok {
-			continue
-		}
-		key := row.CanonicalID + "|" + row.ComponentPurl.String
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		statements = append(statements, vex.Statement{
-			VulnerabilityID: row.CanonicalID,
-			ComponentPURL:   row.ComponentPurl.String,
-			Status:          string(dbgen.VexStatusNotAffected),
-			Justification:   string(dbgen.VexJustificationVulnerableCodeNotInExecutePath),
-			ImpactStatement: "Static call-graph analysis found no execution path from this repository's code to the vulnerable symbol (machine-verified per build; re-evaluated on every push).",
-		})
-	}
-	return statements, nil
-}
-
-func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatement, synthesized []vex.Statement, org *store.Organization, user *store.User, format string) ([]byte, error) {
+// vexStatementsForExport resolves stored statements into renderer input:
+// identifiers and aliases from the canonical advisory, the repository's
+// product as the product, a release's version for release-scoped statements.
+func (s *Server) vexStatementsForExport(ctx context.Context, org *store.Organization, repo *store.Repository, rows []dbgen.VexStatement) ([]vex.Statement, error) {
 	ids := make([]uuid.UUID, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.AdvisoryID)
@@ -585,6 +564,8 @@ func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatemen
 	for _, advisory := range advisories {
 		advisoryByID[advisory.ID] = advisory
 	}
+	product := s.repoProduct(ctx, org, repo)
+	versions := map[uuid.UUID]string{}
 	statements := make([]vex.Statement, 0, len(rows))
 	for _, row := range rows {
 		advisory, ok := advisoryByID[row.AdvisoryID]
@@ -593,11 +574,15 @@ func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatemen
 		}
 		statement := vex.Statement{
 			VulnerabilityID:   advisory.CanonicalID,
+			Aliases:           s.advisoryAliases(ctx, advisory.ID),
 			Status:            string(row.Status),
 			ImpactStatement:   row.ImpactStatement,
 			ActionStatement:   row.ActionStatement,
 			Supplier:          row.Supplier,
 			SourceDocumentURL: row.SourceDocumentUrl,
+			ProductPURL:       product.PURL,
+			ProductName:       product.Name,
+			ProductCPE:        product.CPE,
 		}
 		if row.ComponentPurl.Valid {
 			statement.ComponentPURL = row.ComponentPurl.String
@@ -605,29 +590,96 @@ func (s *Server) exportVEXDocument(ctx context.Context, rows []dbgen.VexStatemen
 		if row.Justification.Valid {
 			statement.Justification = string(row.Justification.VexJustification)
 		}
+		if row.ReleaseID.Valid {
+			version, ok := versions[row.ReleaseID.UUID]
+			if !ok {
+				if release, err := s.queries.GetReleaseByID(ctx, row.ReleaseID.UUID); err == nil && release != nil {
+					version = release.Version
+				}
+				versions[row.ReleaseID.UUID] = version
+			}
+			statement.ProductVersion = version
+			statement.ProductCPE = cpeForVersion(product.CPE, version)
+		}
+		if row.VersionRange.Valid {
+			statement.ProductVersion = row.VersionRange.String
+		}
 		statements = append(statements, statement)
 	}
-	statements = append(statements, synthesized...)
+	return statements, nil
+}
+
+func (s *Server) advisoryAliases(ctx context.Context, advisoryID uuid.UUID) []string {
+	rows, err := s.queries.Incidents().ListAliasesByAdvisory(ctx, advisoryID)
+	if err != nil {
+		return nil
+	}
+	aliases := make([]string, 0, len(rows))
+	for _, row := range rows {
+		aliases = append(aliases, row.Alias)
+	}
+	return aliases
+}
+
+func (s *Server) vexExportMeta(org *store.Organization, user *store.User, documentID string, at time.Time) vex.ExportMeta {
 	meta := vex.ExportMeta{
 		Author: actorDisplay(user),
 		Publisher: vex.ExportPublisher{
-			Category:  "tool",
+			Category:  "vendor",
 			Name:      org.DisplayName,
 			Namespace: s.vexPublisherNamespace(org),
 		},
-		DocumentID: fmt.Sprintf("%s-%s-vex", org.Slug, time.Now().UTC().Format("20060102150405")),
-		TrackingID: fmt.Sprintf("%s-%s-csaf", org.Slug, time.Now().UTC().Format("20060102150405")),
+		DocumentID: documentID,
+		TrackingID: documentID,
 		TLPLabel:   "TLP:CLEAR",
-		Timestamp:  time.Now().UTC(),
+		Timestamp:  at,
+		Title:      org.DisplayName + " VEX",
 	}
 	if strings.TrimSpace(meta.Publisher.Name) == "" {
 		meta.Publisher.Name = org.Name
+		meta.Title = org.Name + " VEX"
 	}
-	switch format {
-	case vex.FormatCSAF:
-		return vex.ExportCSAF(statements, meta)
-	default:
-		return vex.ExportOpenVEX(statements, meta)
+	return meta
+}
+
+// applyVEXProductAxis narrows a statement to one release (which must belong to
+// the repository) or to a vers range.
+func (s *Server) applyVEXProductAxis(ctx context.Context, repoID uuid.UUID, releaseID, versionRange string, params *dbgen.CreateVEXStatementParams) error {
+	releaseID, versionRange = strings.TrimSpace(releaseID), strings.TrimSpace(versionRange)
+	if releaseID != "" && versionRange != "" {
+		return errors.New("a statement names one release or one version range, not both")
+	}
+	if releaseID != "" {
+		id, err := uuid.Parse(releaseID)
+		if err != nil {
+			return errors.New("invalid release_id")
+		}
+		release, err := s.queries.GetReleaseByID(ctx, id)
+		if err != nil || release == nil || release.RepoID != repoID {
+			return errors.New("release not found in this repository")
+		}
+		params.ReleaseID = uuid.NullUUID{UUID: id, Valid: true}
+	}
+	if versionRange != "" {
+		if _, err := incident.ParseVers(versionRange); err != nil {
+			return err
+		}
+		params.VersionRange = sql.NullString{String: versionRange, Valid: true}
+	}
+	return nil
+}
+
+// applyVEXApprovalPolicy leaves a statement unapproved when the organisation
+// requires a second person; otherwise the author's statement stands approved.
+func (s *Server) applyVEXApprovalPolicy(ctx context.Context, orgID uuid.UUID, params *dbgen.CreateVEXStatementParams) {
+	settings, err := s.loadIncidentSettings(ctx, orgID)
+	if err == nil && settings.Row.RequireVexApproval {
+		params.ApprovedBy, params.ApprovedAt = uuid.NullUUID{}, sql.NullTime{}
+		return
+	}
+	if params.CreatedBy.Valid {
+		params.ApprovedBy = params.CreatedBy
+		params.ApprovedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
 	}
 }
 

@@ -415,15 +415,20 @@ func (q *Queries) SetEPSSCatalog(ctx context.Context, arg SetEPSSCatalogParams) 
 }
 
 const setFindingRating = `-- name: SetFindingRating :exec
-UPDATE vulnerabilities
-SET original_severity = $1,
-    severity = CASE WHEN severity_override_by IS NULL THEN $1 ELSE severity END,
-    cvss_score = $2,
-    cvss_version = $3,
-    cvss_vector = $4,
-    rated_by = $5,
-    updated_at = NOW()
-WHERE id = $6
+WITH rated AS (
+    UPDATE findings
+       SET severity = CASE WHEN severity_override_by IS NULL THEN $1 ELSE severity END,
+           cvss_version = $3,
+           cvss_vector = $4,
+           rated_by = $5,
+           updated_at = NOW()
+     WHERE id = $6
+ RETURNING id
+)
+UPDATE snapshot_findings
+   SET severity = $1,
+       cvss_score = $2
+ WHERE finding_id IN (SELECT id FROM rated)
 `
 
 type SetFindingRatingParams struct {
@@ -437,6 +442,8 @@ type SetFindingRatingParams struct {
 
 // A manual override keeps its severity; the rating and original severity
 // still follow the data, so the override's "was" stays truthful.
+// vulnerabilities is a view (ADR-049): the vector and its source live on the
+// finding, the scanned severity and score on each occurrence.
 func (q *Queries) SetFindingRating(ctx context.Context, arg SetFindingRatingParams) error {
 	_, err := q.db.ExecContext(ctx, setFindingRating,
 		arg.Severity,

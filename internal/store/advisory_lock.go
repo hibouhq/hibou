@@ -27,7 +27,17 @@ const (
 	// LockForgeConfinement runs the forge confinement check (ADR-052) on one
 	// replica: it reads several rules per repository from the forge API.
 	LockForgeConfinement = "hibou:forge-confinement"
+	// LockIncidentSweep and LockIncidentClock run the incident rule sweep and
+	// the deadline clock (ADR-053) on one replica.
+	LockIncidentSweep = "hibou:incident-sweep"
+	LockIncidentClock = "hibou:incident-clock"
 )
+
+// AdvisoryLockID exposes the key hashing for transaction-scoped locks taken
+// with pg_advisory_xact_lock.
+func AdvisoryLockID(key string) int64 {
+	return advisoryLockID(key)
+}
 
 // WithLeaderLock runs fn only if this connection wins a Postgres session-level
 // advisory lock, and reports whether it ran.

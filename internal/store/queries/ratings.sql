@@ -61,15 +61,22 @@ SELECT id, advisory_id, type, ecosystem, component_purl, severity, original_seve
 -- name: SetFindingRating :exec
 -- A manual override keeps its severity; the rating and original severity
 -- still follow the data, so the override's "was" stays truthful.
-UPDATE vulnerabilities
-SET original_severity = sqlc.arg(severity),
-    severity = CASE WHEN severity_override_by IS NULL THEN sqlc.arg(severity) ELSE severity END,
-    cvss_score = sqlc.narg(cvss_score),
-    cvss_version = sqlc.narg(cvss_version),
-    cvss_vector = sqlc.arg(cvss_vector),
-    rated_by = sqlc.arg(rated_by),
-    updated_at = NOW()
-WHERE id = sqlc.arg(id);
+-- vulnerabilities is a view (ADR-049): the vector and its source live on the
+-- finding, the scanned severity and score on each occurrence.
+WITH rated AS (
+    UPDATE findings
+       SET severity = CASE WHEN severity_override_by IS NULL THEN sqlc.arg(severity) ELSE severity END,
+           cvss_version = sqlc.narg(cvss_version),
+           cvss_vector = sqlc.arg(cvss_vector),
+           rated_by = sqlc.arg(rated_by),
+           updated_at = NOW()
+     WHERE id = sqlc.arg(id)
+ RETURNING id
+)
+UPDATE snapshot_findings
+   SET severity = sqlc.arg(severity),
+       cvss_score = sqlc.narg(cvss_score)
+ WHERE finding_id IN (SELECT id FROM rated);
 
 -- name: ListAdvisoriesWithStaleCVERating :many
 -- Advisories whose CVE-feed rating (provider 'cve') differs from what the

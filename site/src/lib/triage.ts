@@ -5,7 +5,8 @@
 // snapshot) and an optional fingerprint-keyed acceptance — the human decision,
 // which survives snapshots. Every view derives one displayed state from here.
 
-import type { FindingAcceptance, FindingDispute, Vulnerability } from '@/api/client'
+import type { AcceptanceReasonKind, FindingAcceptance, FindingDispute, VexJustification, Vulnerability } from '@/api/client'
+import { isComponentBacked } from '@/lib/findingDisplay'
 
 export type TriageState = 'open' | 'accepted_risk' | 'false_positive' | 'fixed' | 'suppressed' | 'disputed'
 
@@ -129,10 +130,18 @@ export const ACCEPT_KINDS = [
   },
 ]
 
+/**
+ * Whether a decision on this finding writes a VEX statement (ADR-053 §4a): it
+ * needs a vulnerability identifier on a component. Code and secret findings
+ * name a rule, not a CVE, and keep the free reason only.
+ */
+export function triageMakesStatement(finding: Pick<Vulnerability, 'type' | 'advisory_id'> | null | undefined): boolean {
+  return Boolean(finding && isComponentBacked(finding.type) && finding.advisory_id)
+}
+
 /** Common reasons, offered as one-click prefills that stay editable. */
 export const REASON_PRESETS: Record<string, string[]> = {
   risk_accepted: [
-    'Not exploitable in this context',
     'Risk accepted by the team for this release',
     'Fix scheduled — tracked separately',
     'No upstream fix available yet',
@@ -144,11 +153,68 @@ export const REASON_PRESETS: Record<string, string[]> = {
   ],
 }
 
-/** The CISA/OpenVEX justifications, offered for dependency false-positives. */
+/** Presets of the "Not affected" VEX decision: the evidence detail. */
+export const NOT_AFFECTED_PRESETS = [
+  'Not exploitable in this context',
+  'The vulnerable function is never called',
+  'Input to the vulnerable code is not attacker-controlled',
+]
+
+/** The presets offered for a decision; `statement` selects the VEX wording. */
+export function reasonPresets(kind: AcceptanceReasonKind, statement: boolean): string[] {
+  if (statement && kind === 'false_positive') return NOT_AFFECTED_PRESETS
+  return REASON_PRESETS[kind] ?? []
+}
+
+/**
+ * The CISA/OpenVEX justifications of a not_affected statement. The first two
+ * say the detection is wrong; the last three that it is right but not
+ * exploitable in this product.
+ */
 export const VEX_JUSTIFICATIONS = [
-  { value: 'component_not_present', label: 'Component not present' },
-  { value: 'vulnerable_code_not_present', label: 'Vulnerable code not present' },
-  { value: 'vulnerable_code_not_in_execute_path', label: 'Vulnerable code not in execute path' },
-  { value: 'vulnerable_code_cannot_be_controlled_by_adversary', label: 'Code cannot be controlled by adversary' },
-  { value: 'inline_mitigations_already_exist', label: 'Inline mitigations already exist' },
-] as const
+  { value: 'component_not_present', label: 'Component not present', hint: 'The package is not in the product: the detection is wrong.' },
+  { value: 'vulnerable_code_not_present', label: 'Vulnerable code not present', hint: 'This version or build does not include the flawed code.' },
+  { value: 'vulnerable_code_not_in_execute_path', label: 'Vulnerable code never runs', hint: 'The code is shipped but no execution path reaches it.' },
+  { value: 'vulnerable_code_cannot_be_controlled_by_adversary', label: 'Attacker cannot reach it', hint: 'The code runs, but an adversary cannot control its input.' },
+  { value: 'inline_mitigations_already_exist', label: 'Already mitigated', hint: 'A control in the product blocks exploitation.' },
+] as const satisfies ReadonlyArray<{ value: VexJustification; label: string; hint: string }>
+
+export interface TriageDecisionInput {
+  kind: AcceptanceReasonKind
+  /** The decision writes a VEX statement for at least one finding. */
+  statement: boolean
+  /** A justification is required (statement known), not just offered. */
+  justificationRequired: boolean
+  justification: '' | VexJustification
+  reason: string
+  expiresAt: string
+  expiryRequired: boolean
+}
+
+/**
+ * What still blocks a triage decision, or '' when it can be submitted. A
+ * not-affected statement needs its justification; an affected one, its action
+ * statement; and the expiry is required where the caller says so (an
+ * exploited advisory, a live credential).
+ */
+export function triageDecisionProblem(input: TriageDecisionInput): string {
+  const reason = input.reason.trim()
+  if (input.statement && input.kind === 'false_positive') {
+    if (input.justificationRequired && !input.justification) return 'Pick the justification of the not-affected statement.'
+    if (!input.justification && !reason) return 'Pick a justification or give a reason.'
+  } else if (!reason) {
+    return input.statement ? 'The action statement is required.' : 'A reason is required.'
+  }
+  if (input.kind === 'risk_accepted' && input.expiryRequired && !input.expiresAt) return 'An expiry is required.'
+  return ''
+}
+
+/** What the triage dialog emits on confirm. */
+export interface TriageConfirmPayload {
+  /** The decision taken; the VEX question may change the kind the dialog opened with. */
+  kind: AcceptanceReasonKind
+  reason: string
+  labels: string[]
+  vexJustification?: VexJustification
+  expiresAt?: string
+}

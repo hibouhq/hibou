@@ -6,7 +6,7 @@
 </template>
 
 <script setup lang="ts">
-import { FileCog, Radar, ScrollText, Settings2 } from 'lucide-vue-next'
+import { FileCog, Radar, ScrollText, Settings2, Siren } from 'lucide-vue-next'
 import type { Ref } from 'vue'
 import { computed, inject, ref } from 'vue'
 
@@ -27,6 +27,7 @@ const groups: SettingsNavGroup[] = [
       { label: 'General', icon: Settings2, name: 'repo-settings-general' },
       { label: 'Configuration', icon: FileCog, name: 'repo-settings-config' },
       { label: 'Scanners', icon: Radar, name: 'repo-settings-scanners' },
+      { label: 'Incidents & product', icon: Siren, name: 'repo-settings-incidents' },
       { label: 'Audit log', icon: ScrollText, name: 'repo-settings-audit', adminOnly: true },
     ],
   },

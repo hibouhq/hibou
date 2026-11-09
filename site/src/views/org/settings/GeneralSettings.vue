@@ -197,6 +197,93 @@
     </section>
 
     <!-- Danger zone -->
+    <section>
+      <div class="flex items-center justify-between border-b border-surface-border pb-2">
+        <h2 class="text-base font-semibold text-white">
+          Autolink references
+        </h2>
+        <span class="text-xs text-gray-500">Like a tracker's issue keys: "SEC-7" becomes a link in notes, reasons and references</span>
+      </div>
+
+      <ul
+        v-if="autolinks.length > 0"
+        class="mt-2 divide-y divide-surface-border-subtle rounded-md border border-surface-border"
+      >
+        <li
+          v-for="link in autolinks"
+          :key="link.id"
+          class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
+        >
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <code class="rounded bg-surface-overlay px-1.5 py-0.5 text-xs text-gray-200">{{ link.prefix }}<span class="text-gray-500">{{ link.alphanumeric ? 'ABC-123' : '123' }}</span></code>
+            <span class="truncate font-mono text-xs text-gray-400">{{ link.url_template }}</span>
+          </div>
+          <button
+            v-if="isOrgAdmin"
+            type="button"
+            class="rounded-md border border-surface-border px-2 py-1 text-xs text-gray-400 transition hover:border-danger/50 hover:text-danger"
+            @click="removeAutolink(link.id)"
+          >
+            Remove
+          </button>
+        </li>
+      </ul>
+      <p
+        v-else
+        class="mt-2 text-sm text-gray-500"
+      >
+        None yet.
+      </p>
+
+      <form
+        v-if="isOrgAdmin"
+        class="mt-3 flex flex-wrap items-end gap-3"
+        @submit.prevent="addAutolink"
+      >
+        <label class="flex flex-col gap-1.5 text-xs font-medium text-gray-300">
+          Prefix
+          <input
+            v-model="autolinkForm.prefix"
+            type="text"
+            required
+            placeholder="SEC-"
+            class="h-8 w-32 rounded-md border border-surface-border bg-surface-overlay px-2.5 font-mono text-sm font-normal text-gray-200 focus:border-accent/50 focus:outline-none"
+          >
+        </label>
+        <label class="flex min-w-[18rem] flex-1 flex-col gap-1.5 text-xs font-medium text-gray-300">
+          Target URL, with <code>&lt;num&gt;</code> for the reference
+          <input
+            v-model="autolinkForm.url_template"
+            type="url"
+            required
+            placeholder="https://tracker.example/browse/SEC-<num>"
+            class="h-8 rounded-md border border-surface-border bg-surface-overlay px-2.5 font-mono text-sm font-normal text-gray-200 focus:border-accent/50 focus:outline-none"
+          >
+        </label>
+        <label class="flex items-center gap-2 pb-1.5 text-xs text-gray-300">
+          <input
+            v-model="autolinkForm.alphanumeric"
+            type="checkbox"
+            class="h-4 w-4 accent-accent"
+          >
+          Letters allowed after the prefix
+        </label>
+        <button
+          type="submit"
+          :disabled="autolinkSaving || !autolinkForm.prefix.trim() || !autolinkForm.url_template.includes('<num>')"
+          class="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Add
+        </button>
+      </form>
+      <p
+        v-if="autolinkError"
+        class="mt-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-red-200"
+      >
+        {{ autolinkError }}
+      </p>
+    </section>
+
     <section v-if="isOrgAdmin">
       <h2 class="border-b border-danger/30 pb-2 text-base font-semibold text-danger">
         Danger zone
@@ -236,7 +323,8 @@ import type { Ref } from 'vue'
 import { computed, inject, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { api, type Organization, type OrgSettings } from '@/api/client'
+import { api, type OrgAutolink, type Organization, type OrgSettings } from '@/api/client'
+import { invalidateAutolinks } from '@/composables/useAutolinks'
 import { useDialog } from '@/composables/useDialog'
 import { useOrgRole } from '@/composables/useOrgRole'
 
@@ -292,6 +380,48 @@ watch(
   },
   { immediate: true },
 )
+
+// Autolink references (ADR-053): listed for everyone, edited by admins.
+const autolinks = ref<OrgAutolink[]>([])
+const autolinkForm = reactive({ prefix: '', url_template: '', alphanumeric: true })
+const autolinkSaving = ref(false)
+const autolinkError = ref('')
+
+async function loadAutolinks() {
+  try {
+    autolinks.value = (await api.listAutolinks(provider.value, slug.value)).data
+  } catch {
+    autolinks.value = []
+  }
+}
+
+async function addAutolink() {
+  autolinkSaving.value = true
+  autolinkError.value = ''
+  try {
+    await api.createAutolink(provider.value, slug.value, { prefix: autolinkForm.prefix.trim(), url_template: autolinkForm.url_template.trim(), alphanumeric: autolinkForm.alphanumeric })
+    Object.assign(autolinkForm, { prefix: '', url_template: '', alphanumeric: true })
+    await loadAutolinks()
+    invalidateAutolinks(provider.value, slug.value)
+  } catch (error) {
+    autolinkError.value = error instanceof Error ? error.message : 'Failed to add the autolink'
+  } finally {
+    autolinkSaving.value = false
+  }
+}
+
+async function removeAutolink(id: string) {
+  autolinkError.value = ''
+  try {
+    await api.deleteAutolink(provider.value, slug.value, id)
+    autolinks.value = autolinks.value.filter(link => link.id !== id)
+    invalidateAutolinks(provider.value, slug.value)
+  } catch (error) {
+    autolinkError.value = error instanceof Error ? error.message : 'Failed to remove the autolink'
+  }
+}
+
+watch([provider, slug], () => { void loadAutolinks() }, { immediate: true })
 
 async function save() {
   saving.value = true

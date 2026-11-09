@@ -54,6 +54,439 @@ definitions:
       slug:
         type: string
     type: object
+  dbgen.Incident:
+    properties:
+      aware_at:
+        $ref: '#/definitions/sql.NullTime'
+      closed_at:
+        $ref: '#/definitions/sql.NullTime'
+      created_at:
+        type: string
+      created_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      decided_at:
+        $ref: '#/definitions/sql.NullTime'
+      decided_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      decided_state:
+        $ref: '#/definitions/dbgen.NullIncidentState'
+      decision_reason:
+        $ref: '#/definitions/sql.NullString'
+      decision_step:
+        $ref: '#/definitions/sql.NullString'
+      due_at:
+        $ref: '#/definitions/sql.NullTime'
+      external_ref:
+        type: string
+      fix_available_at:
+        $ref: '#/definitions/sql.NullTime'
+      id:
+        type: string
+      kind:
+        type: string
+      merged_into:
+        $ref: '#/definitions/uuid.NullUUID'
+      number:
+        type: integer
+      org_id:
+        type: string
+      owner_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      owner_team_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      priority:
+        type: string
+      proposed_decision:
+        items:
+          type: integer
+        type: array
+      proposed_merge:
+        items:
+          type: integer
+        type: array
+      regimes:
+        items:
+          type: string
+        type: array
+      repo_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      signal_at:
+        type: string
+      signal_source:
+        type: string
+      state:
+        $ref: '#/definitions/dbgen.IncidentState'
+      subject_id:
+        type: string
+      subject_type:
+        type: string
+      target_seconds:
+        $ref: '#/definitions/sql.NullInt64'
+      title:
+        type: string
+      trigger_rule:
+        $ref: '#/definitions/sql.NullString'
+      updated_at:
+        type: string
+    type: object
+  dbgen.IncidentAction:
+    properties:
+      assignee_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      automatic:
+        type: boolean
+      created_at:
+        type: string
+      done_at:
+        $ref: '#/definitions/sql.NullTime'
+      done_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      due_at:
+        $ref: '#/definitions/sql.NullTime'
+      evidence:
+        items:
+          type: integer
+        type: array
+      id:
+        type: string
+      incident_id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      obsolete:
+        type: boolean
+      optional:
+        type: boolean
+      state:
+        type: string
+      subject_id:
+        type: string
+      subject_type:
+        type: string
+      waived_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      waived_reason:
+        $ref: '#/definitions/sql.NullString'
+    type: object
+  dbgen.IncidentDeadline:
+    properties:
+      due_at:
+        type: string
+      incident_id:
+        type: string
+      met_at:
+        $ref: '#/definitions/sql.NullTime'
+      notified:
+        type: string
+      reference:
+        type: string
+      regime:
+        type: string
+      step:
+        type: string
+    type: object
+  dbgen.IncidentEvent:
+    properties:
+      actor_display:
+        type: string
+      actor_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      actor_type:
+        type: string
+      at:
+        type: string
+      detail:
+        items:
+          type: integer
+        type: array
+      id:
+        type: string
+      incident_id:
+        type: string
+      kind:
+        type: string
+    type: object
+  dbgen.IncidentState:
+    enum:
+    - signal
+    - assessing
+    - reportable
+    - not_reportable
+    - confirmed
+    - dismissed
+    - closed
+    - withdrawn
+    type: string
+    x-enum-varnames:
+    - IncidentStateSignal
+    - IncidentStateAssessing
+    - IncidentStateReportable
+    - IncidentStateNotReportable
+    - IncidentStateConfirmed
+    - IncidentStateDismissed
+    - IncidentStateClosed
+    - IncidentStateWithdrawn
+  dbgen.ListExposedClientsForOrgsRow:
+    properties:
+      client_id:
+        type: string
+      client_name:
+        type: string
+      client_slug:
+        type: string
+      number:
+        type: integer
+      org_id:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+      version:
+        type: string
+    type: object
+  dbgen.ListIncidentDeliveriesRow:
+    properties:
+      ack_evidence:
+        items:
+          type: integer
+        type: array
+      acknowledged_at:
+        $ref: '#/definitions/sql.NullTime'
+      action_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      approved_at:
+        $ref: '#/definitions/sql.NullTime'
+      approved_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      audit_log_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      channel:
+        type: string
+      client_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      client_name:
+        $ref: '#/definitions/sql.NullString'
+      client_slug:
+        $ref: '#/definitions/sql.NullString'
+      created_at:
+        type: string
+      created_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      documents:
+        items:
+          type: integer
+        type: array
+      error:
+        type: string
+      id:
+        type: string
+      incident_id:
+        type: string
+      provider_ref:
+        type: string
+      recipient:
+        type: string
+      sent_at:
+        $ref: '#/definitions/sql.NullTime'
+      status:
+        type: string
+    type: object
+  dbgen.ListIncidentTrackerLinksRow:
+    properties:
+      external_key:
+        type: string
+      external_url:
+        type: string
+      incident_id:
+        type: string
+      integration_id:
+        type: string
+      integration_name:
+        type: string
+      integration_type:
+        type: string
+      last_error:
+        type: string
+      last_synced_at:
+        $ref: '#/definitions/sql.NullTime'
+      synced_events:
+        type: integer
+    type: object
+  dbgen.ListNoisyIncidentRulesRow:
+    properties:
+      opened:
+        type: integer
+      org_id:
+        type: string
+      repo_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      repo_slug:
+        $ref: '#/definitions/sql.NullString'
+      trigger_rule:
+        $ref: '#/definitions/sql.NullString'
+    type: object
+  dbgen.ListOpenIncidentsForOrgsRow:
+    properties:
+      aware_at:
+        $ref: '#/definitions/sql.NullTime'
+      closed_at:
+        $ref: '#/definitions/sql.NullTime'
+      created_at:
+        type: string
+      created_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      decided_at:
+        $ref: '#/definitions/sql.NullTime'
+      decided_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      decided_state:
+        $ref: '#/definitions/dbgen.NullIncidentState'
+      decision_reason:
+        $ref: '#/definitions/sql.NullString'
+      decision_step:
+        $ref: '#/definitions/sql.NullString'
+      due_at:
+        $ref: '#/definitions/sql.NullTime'
+      external_ref:
+        type: string
+      fix_available_at:
+        $ref: '#/definitions/sql.NullTime'
+      id:
+        type: string
+      kind:
+        type: string
+      merged_into:
+        $ref: '#/definitions/uuid.NullUUID'
+      number:
+        type: integer
+      org_id:
+        type: string
+      org_name:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      owner_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      owner_team_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      priority:
+        type: string
+      proposed_decision:
+        items:
+          type: integer
+        type: array
+      proposed_merge:
+        items:
+          type: integer
+        type: array
+      regimes:
+        items:
+          type: string
+        type: array
+      repo_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      repo_name:
+        $ref: '#/definitions/sql.NullString'
+      repo_slug:
+        $ref: '#/definitions/sql.NullString'
+      signal_at:
+        type: string
+      signal_source:
+        type: string
+      state:
+        $ref: '#/definitions/dbgen.IncidentState'
+      subject_id:
+        type: string
+      subject_type:
+        type: string
+      target_seconds:
+        $ref: '#/definitions/sql.NullInt64'
+      title:
+        type: string
+      trigger_rule:
+        $ref: '#/definitions/sql.NullString'
+      updated_at:
+        type: string
+    type: object
+  dbgen.ListPendingActionsForUserRow:
+    properties:
+      assignee_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      automatic:
+        type: boolean
+      created_at:
+        type: string
+      done_at:
+        $ref: '#/definitions/sql.NullTime'
+      done_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      due_at:
+        $ref: '#/definitions/sql.NullTime'
+      evidence:
+        items:
+          type: integer
+        type: array
+      id:
+        type: string
+      incident_id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      number:
+        type: integer
+      obsolete:
+        type: boolean
+      optional:
+        type: boolean
+      org_id:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      priority:
+        type: string
+      state:
+        type: string
+      subject_id:
+        type: string
+      subject_type:
+        type: string
+      title:
+        type: string
+      waived_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      waived_reason:
+        $ref: '#/definitions/sql.NullString'
+    type: object
+  dbgen.ListUnknownReleasesForOrgsRow:
+    properties:
+      number:
+        type: integer
+      org_id:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      release_id:
+        type: string
+      title:
+        type: string
+      version:
+        type: string
+    type: object
   dbgen.NotificationDestinationType:
     enum:
     - webhook
@@ -68,6 +501,31 @@ definitions:
     - NotificationDestinationTypeTeams
     - NotificationDestinationTypeEmail
     - NotificationDestinationTypeDiscord
+  dbgen.NullIncidentState:
+    properties:
+      incident_state:
+        $ref: '#/definitions/dbgen.IncidentState'
+      valid:
+        description: Valid is true if IncidentState is not NULL
+        type: boolean
+    type: object
+  dbgen.OrgAutolink:
+    properties:
+      alphanumeric:
+        type: boolean
+      created_at:
+        type: string
+      created_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      id:
+        type: string
+      org_id:
+        type: string
+      prefix:
+        type: string
+      url_template:
+        type: string
+    type: object
   devicelogin.Authorization:
     properties:
       device_code:
@@ -158,6 +616,36 @@ definitions:
     - ConfinementInfo
     - ConfinementWarning
     - ConfinementError
+  incident.Regime:
+    properties:
+      label:
+        type: string
+      name:
+        type: string
+      steps:
+        items:
+          $ref: '#/definitions/incident.StepSpec'
+        type: array
+    type: object
+  incident.StepSpec:
+    properties:
+      after:
+        description: a Go duration, or "1mo" for one calendar month
+        type: string
+      anchor:
+        type: string
+      filing:
+        description: |-
+          Filing is the action kind recording that the step was filed; empty for
+          an internal target with nothing to file.
+        type: string
+      label:
+        type: string
+      recipient:
+        type: string
+      step:
+        type: string
+    type: object
   orgprovision.OnboardableAccount:
     properties:
       account:
@@ -615,6 +1103,15 @@ definitions:
       tool_version:
         type: string
     type: object
+  server.autolinkRequest:
+    properties:
+      alphanumeric:
+        type: boolean
+      prefix:
+        type: string
+      url_template:
+        type: string
+    type: object
   server.batchAcceptanceRequest:
     properties:
       expires_at:
@@ -636,6 +1133,11 @@ definitions:
         type: string
       status:
         description: 'Status: "accepted" | "open"; ReasonKind required on accept (ADR-023).'
+        type: string
+      vex_justification:
+        description: |-
+          VEXJustification applies to the dependency findings of a not-affected
+          decision; required when the batch has any (ADR-053 §4a).
         type: string
     type: object
   server.batchAcceptanceResponse:
@@ -1550,6 +2052,341 @@ definitions:
       version:
         type: string
     type: object
+  server.homeApproval:
+    properties:
+      detail:
+        type: string
+      id:
+        type: string
+      incident_number:
+        type: integer
+      incident_title:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      type:
+        description: decision | delivery | waiver | merge
+        type: string
+    type: object
+  server.homeExposure:
+    properties:
+      clients:
+        items:
+          $ref: '#/definitions/dbgen.ListExposedClientsForOrgsRow'
+        type: array
+      unknown_releases:
+        items:
+          $ref: '#/definitions/dbgen.ListUnknownReleasesForOrgsRow'
+        type: array
+    type: object
+  server.homeOrg:
+    properties:
+      display_name:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      open_incidents:
+        type: integer
+      provider:
+        type: string
+      role:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.homeRecent:
+    properties:
+      catalogue_signals:
+        type: integer
+      failed_gates:
+        type: integer
+      malware_found:
+        type: integer
+      secrets_found:
+        type: integer
+      since:
+        type: string
+    type: object
+  server.homeRepo:
+    properties:
+      id:
+        type: string
+      last_visited_at:
+        type: string
+      name:
+        type: string
+      org_provider:
+        type: string
+      org_slug:
+        type: string
+      slug:
+        type: string
+      visited:
+        type: boolean
+    type: object
+  server.homeResponse:
+    properties:
+      approvals:
+        items:
+          $ref: '#/definitions/server.homeApproval'
+        type: array
+      exposure:
+        $ref: '#/definitions/server.homeExposure'
+      incidents:
+        items:
+          $ref: '#/definitions/dbgen.ListOpenIncidentsForOrgsRow'
+        type: array
+      needs_you:
+        items:
+          $ref: '#/definitions/dbgen.ListPendingActionsForUserRow'
+        type: array
+      noisy_rules:
+        items:
+          $ref: '#/definitions/dbgen.ListNoisyIncidentRulesRow'
+        type: array
+      orgs:
+        items:
+          $ref: '#/definitions/server.homeOrg'
+        type: array
+      recent:
+        $ref: '#/definitions/server.homeRecent'
+      repos:
+        items:
+          $ref: '#/definitions/server.homeRepo'
+        type: array
+    type: object
+  server.incidentAdvisoryRef:
+    properties:
+      aliases:
+        items:
+          type: string
+        type: array
+      canonical_id:
+        type: string
+      first_party:
+        type: boolean
+      id:
+        type: string
+      public:
+        description: |-
+          Public: carries a public identifier, so the component's maintainer is
+          deemed aware of it (guidance §223) and no upstream notice is owed.
+        type: boolean
+      title:
+        type: string
+    type: object
+  server.incidentClientRef:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      slug:
+        type: string
+    type: object
+  server.incidentDecision:
+    properties:
+      action_statement:
+        type: string
+      aware_at:
+        type: string
+      decision_step:
+        type: string
+      justification:
+        description: |-
+          Justification: the VEX justification of a "cannot be exploited here"
+          step (ADR-053 §4a); ActionStatement: what users can do, for an
+          affected one. WriteStatements records the step as the VEX statement of
+          every release in scope that has none yet; releases keep their own
+          statements, and a later per-release statement supersedes this one.
+        type: string
+      proposed_at:
+        type: string
+      proposed_by:
+        type: string
+      reason:
+        type: string
+      state:
+        type: string
+      write_statements:
+        type: boolean
+    type: object
+  server.incidentDetailResponse:
+    properties:
+      actions:
+        items:
+          $ref: '#/definitions/dbgen.IncidentAction'
+        type: array
+      advisory:
+        $ref: '#/definitions/server.incidentAdvisoryRef'
+      can_manage:
+        type: boolean
+      deadlines:
+        items:
+          $ref: '#/definitions/dbgen.IncidentDeadline'
+        type: array
+      decision_states:
+        items:
+          type: string
+        type: array
+      decision_steps:
+        items:
+          type: string
+        type: array
+      deliveries:
+        items:
+          $ref: '#/definitions/dbgen.ListIncidentDeliveriesRow'
+        type: array
+      events:
+        items:
+          $ref: '#/definitions/dbgen.IncidentEvent'
+        type: array
+      incident:
+        $ref: '#/definitions/server.incidentSummary'
+      regimes:
+        items:
+          $ref: '#/definitions/incident.Regime'
+        type: array
+      scope:
+        items:
+          $ref: '#/definitions/server.incidentScopeResponse'
+        type: array
+      settings:
+        $ref: '#/definitions/server.incidentSettingsFlags'
+      tracker_links:
+        items:
+          $ref: '#/definitions/dbgen.ListIncidentTrackerLinksRow'
+        type: array
+    type: object
+  server.incidentScopeResponse:
+    properties:
+      clients:
+        items:
+          $ref: '#/definitions/server.incidentClientRef'
+        type: array
+      component_purl:
+        type: string
+      decided_at:
+        $ref: '#/definitions/sql.NullTime'
+      decided_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      incident_id:
+        type: string
+      label:
+        type: string
+      manual:
+        type: boolean
+      reachability:
+        $ref: '#/definitions/sql.NullString'
+      reason:
+        type: string
+      status:
+        type: string
+      subject_id:
+        type: string
+      subject_type:
+        type: string
+      updated_at:
+        type: string
+      vex_statement_id:
+        $ref: '#/definitions/uuid.NullUUID'
+    type: object
+  server.incidentSettingsFlags:
+    properties:
+      four_eyes:
+        type: boolean
+      require_acknowledgement:
+        type: boolean
+      require_notice_approval:
+        type: boolean
+      require_vex_approval:
+        type: boolean
+    type: object
+  server.incidentSummary:
+    properties:
+      aware_at:
+        $ref: '#/definitions/sql.NullTime'
+      closed_at:
+        $ref: '#/definitions/sql.NullTime'
+      created_at:
+        type: string
+      created_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      decided_at:
+        $ref: '#/definitions/sql.NullTime'
+      decided_by:
+        $ref: '#/definitions/uuid.NullUUID'
+      decided_state:
+        $ref: '#/definitions/dbgen.NullIncidentState'
+      decision_reason:
+        $ref: '#/definitions/sql.NullString'
+      decision_step:
+        $ref: '#/definitions/sql.NullString'
+      due_at:
+        $ref: '#/definitions/sql.NullTime'
+      external_ref:
+        type: string
+      fix_available_at:
+        $ref: '#/definitions/sql.NullTime'
+      id:
+        type: string
+      kind:
+        type: string
+      kind_label:
+        type: string
+      merged_into:
+        $ref: '#/definitions/uuid.NullUUID'
+      number:
+        type: integer
+      org_id:
+        type: string
+      owner_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      owner_team_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      priority:
+        type: string
+      proposed_decision:
+        items:
+          type: integer
+        type: array
+      proposed_merge:
+        items:
+          type: integer
+        type: array
+      regimes:
+        items:
+          type: string
+        type: array
+      repo_id:
+        $ref: '#/definitions/uuid.NullUUID'
+      repo_name:
+        type: string
+      repo_slug:
+        type: string
+      signal_at:
+        type: string
+      signal_source:
+        type: string
+      state:
+        $ref: '#/definitions/dbgen.IncidentState'
+      subject_id:
+        type: string
+      subject_type:
+        type: string
+      target_seconds:
+        $ref: '#/definitions/sql.NullInt64'
+      title:
+        type: string
+      trigger_rule:
+        $ref: '#/definitions/sql.NullString'
+      updated_at:
+        type: string
+    type: object
   server.instanceAuditLogEntryResponse:
     properties:
       action:
@@ -1757,6 +2594,21 @@ definitions:
       updated_at:
         type: string
     type: object
+  server.mergeCandidate:
+    properties:
+      compatible:
+        type: boolean
+      number:
+        type: integer
+      reason:
+        type: string
+      state:
+        type: string
+      subject:
+        type: string
+      title:
+        type: string
+    type: object
   server.metricsResponse:
     properties:
       go_version:
@@ -1782,6 +2634,41 @@ definitions:
           MatchesCatalog: exported for the catalog this server pins. After an
           upgrade a mismatched bundle lacks the newly pinned artifacts.
         type: boolean
+    type: object
+  server.openIncidentRequest:
+    properties:
+      client_ids:
+        items:
+          type: string
+        type: array
+      finding_id:
+        type: string
+      kind:
+        type: string
+      note:
+        type: string
+      priority:
+        type: string
+      regimes:
+        items:
+          type: string
+        type: array
+      release_ids:
+        description: 'Scope for a severe incident: releases and clients, by id.'
+        items:
+          type: string
+        type: array
+      repo_slug:
+        type: string
+      signal_source:
+        type: string
+      title:
+        type: string
+      vulnerability_id:
+        description: |-
+          VulnerabilityID names the advisory of an exploited vulnerability
+          (canonical id or alias); FindingID the finding of the other kinds.
+        type: string
     type: object
   server.orgComponentScanResponse:
     properties:
@@ -2506,6 +3393,12 @@ definitions:
     type: object
   server.secretRevocationRequest:
     properties:
+      checklist:
+        description: |-
+          Checklist is the structured attestation (ADR-053 §4): where and by whom
+          the credential was revoked, rotation, exposure. Without it the request
+          keeps the older one-line attestation.
+        type: object
       comment:
         type: string
     type: object
@@ -2747,6 +3640,23 @@ definitions:
         type: integer
       valid:
         description: Valid is true if Int32 is not NULL
+        type: boolean
+    type: object
+  sql.NullInt64:
+    properties:
+      int64:
+        format: int64
+        type: integer
+      valid:
+        description: Valid is true if Int64 is not NULL
+        type: boolean
+    type: object
+  sql.NullString:
+    properties:
+      string:
+        type: string
+      valid:
+        description: Valid is true if String is not NULL
         type: boolean
     type: object
   sql.NullTime:
@@ -3083,6 +3993,8 @@ definitions:
       repo_id:
         type: string
       vex_justification:
+        type: string
+      vex_statement_id:
         type: string
     type: object
   store.FindingAssertion:
@@ -4782,6 +5694,32 @@ paths:
       summary: Instance storage usage
       tags:
       - instance
+  /me/home:
+    get:
+      description: Actions waiting for the user, approvals, open incidents, exposure
+        and recent activity across the user's organisations (ADR-053 §9).
+      parameters:
+      - description: 'RFC 3339 instant of the previous visit (default: 7 days ago)'
+        in: query
+        name: since
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.homeResponse'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Home dashboard
+      tags:
+      - home
   /metrics:
     get:
       description: Returns basic server metrics
@@ -5575,6 +6513,87 @@ paths:
       summary: List audit logs
       tags:
       - audit
+  /orgs/{provider}/{slug}/autolinks:
+    get:
+      parameters:
+      - description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/dbgen.OrgAutolink'
+            type: array
+      summary: List autolink references
+      tags:
+      - organizations
+    post:
+      consumes:
+      - application/json
+      description: 'A prefix ("SEC-") and a URL with <num>: "SEC-7" becomes a link
+        in notes, reasons, comments and references.'
+      parameters:
+      - description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Autolink
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.autolinkRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/dbgen.OrgAutolink'
+      summary: Add an autolink reference
+      tags:
+      - organizations
+  /orgs/{provider}/{slug}/autolinks/{autolinkID}:
+    delete:
+      parameters:
+      - description: Provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Autolink id
+        in: path
+        name: autolinkID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      summary: Remove an autolink reference
+      tags:
+      - organizations
   /orgs/{provider}/{slug}/clients:
     get:
       description: List clients in an organization visible to organization members
@@ -6142,6 +7161,350 @@ paths:
       summary: CWEs across an organization
       tags:
       - cwe
+  /orgs/{provider}/{slug}/incidents:
+    get:
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: open, closed, or a state
+        in: query
+        name: state
+        type: string
+      - description: Incident kind
+        in: query
+        name: kind
+        type: string
+      - description: P1, P2 or P3
+        in: query
+        name: priority
+        type: string
+      - description: Repository slug
+        in: query
+        name: repo
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.ListResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.incidentSummary'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: List incidents
+      tags:
+      - incidents
+    post:
+      consumes:
+      - application/json
+      description: 'A person opens an incident of any kind from any signal (ADR-053
+        §1): a customer report, a CSIRT, a researcher, internal evidence.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Incident
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.openIncidentRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dbgen.Incident'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Open an incident
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}:
+    get:
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Incident number
+        in: path
+        name: number
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.incidentDetailResponse'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Get an incident
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}/decide:
+    post:
+      consumes:
+      - application/json
+      description: 'The decision step (ADR-053 §2): reportable or not (or confirmed
+        / dismissed), with its reason, T0, and the ladder step for an exploited vulnerability.
+        Under four-eyes a decision that ends obligations is only proposed.'
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Incident number
+        in: path
+        name: number
+        required: true
+        type: integer
+      - description: Decision
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.incidentDecision'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dbgen.Incident'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Decide an incident
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}/deliveries/{deliveryID}/verify:
+    post:
+      description: Re-renders every document of a delivery from its recorded inputs
+        and compares with the stored bytes (ADR-053 §5).
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Incident number
+        in: path
+        name: number
+        required: true
+        type: integer
+      - description: Delivery id
+        in: path
+        name: deliveryID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Verify a delivery's documents
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}/dossier:
+    get:
+      description: The incident's timeline, scope, actions, clocks, deliveries and
+        documents in one zip, with a SHA-256 manifest (ADR-053 §5).
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Incident number
+        in: path
+        name: number
+        required: true
+        type: integer
+      produces:
+      - application/zip
+      responses:
+        "200":
+          description: OK
+      security:
+      - BearerAuth: []
+      summary: Export an incident dossier
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}/merge-candidates:
+    get:
+      description: Same kind, same repository, neither withdrawn nor merged. An exploited
+        vulnerability only merges with one naming exactly the same CVEs; the others
+        are listed with the reason (ADR-053 §3).
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Incident number
+        in: path
+        name: number
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/server.mergeCandidate'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Incidents this one can merge into
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}/merge/approve:
+    post:
+      description: Applies the merge another person proposed under the four-eyes setting
+        (ADR-053 §3).
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Number of the incident to absorb
+        in: path
+        name: number
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  additionalProperties:
+                    type: integer
+                  type: object
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Approve a proposed merge
+      tags:
+      - incidents
+  /orgs/{provider}/{slug}/incidents/{number}/merge/cancel:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Number of the incident to absorb
+        in: path
+        name: number
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Cancel or reject a proposed merge
+      tags:
+      - incidents
   /orgs/{provider}/{slug}/integrations:
     get:
       description: List integrations in an organization visible to organization members

@@ -1117,6 +1117,51 @@
                 }
             }
         },
+        "/me/home": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Actions waiting for the user, approvals, open incidents, exposure and recent activity across the user's organisations (ADR-053 §9).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "home"
+                ],
+                "summary": "Home dashboard",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "RFC 3339 instant of the previous visit (default: 7 days ago)",
+                        "name": "since",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.homeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/metrics": {
             "get": {
                 "description": "Returns basic server metrics",
@@ -2414,6 +2459,126 @@
                 }
             }
         },
+        "/orgs/{provider}/{slug}/autolinks": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "List autolink references",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/dbgen.OrgAutolink"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "A prefix (\"SEC-\") and a URL with \u003cnum\u003e: \"SEC-7\" becomes a link in notes, reasons, comments and references.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Add an autolink reference",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Autolink",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.autolinkRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/dbgen.OrgAutolink"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/autolinks/{autolinkID}": {
+            "delete": {
+                "tags": [
+                    "organizations"
+                ],
+                "summary": "Remove an autolink reference",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Autolink id",
+                        "name": "autolinkID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/clients": {
             "get": {
                 "security": [
@@ -3318,6 +3483,552 @@
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "List incidents",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "open, closed, or a state",
+                        "name": "state",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Incident kind",
+                        "name": "kind",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "P1, P2 or P3",
+                        "name": "priority",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repo",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.ListResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/server.incidentSummary"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "A person opens an incident of any kind from any signal (ADR-053 §1): a customer report, a CSIRT, a researcher, internal evidence.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Open an incident",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Incident",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.openIncidentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dbgen.Incident"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Get an incident",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Incident number",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.incidentDetailResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}/decide": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The decision step (ADR-053 §2): reportable or not (or confirmed / dismissed), with its reason, T0, and the ladder step for an exploited vulnerability. Under four-eyes a decision that ends obligations is only proposed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Decide an incident",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Incident number",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Decision",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.incidentDecision"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dbgen.Incident"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}/deliveries/{deliveryID}/verify": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Re-renders every document of a delivery from its recorded inputs and compares with the stored bytes (ADR-053 §5).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Verify a delivery's documents",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Incident number",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Delivery id",
+                        "name": "deliveryID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}/dossier": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The incident's timeline, scope, actions, clocks, deliveries and documents in one zip, with a SHA-256 manifest (ADR-053 §5).",
+                "produces": [
+                    "application/zip"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Export an incident dossier",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Incident number",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}/merge-candidates": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Same kind, same repository, neither withdrawn nor merged. An exploited vulnerability only merges with one naming exactly the same CVEs; the others are listed with the reason (ADR-053 §3).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Incidents this one can merge into",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Incident number",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/server.mergeCandidate"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}/merge/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Applies the merge another person proposed under the four-eyes setting (ADR-053 §3).",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Approve a proposed merge",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of the incident to absorb",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "integer"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/incidents/{number}/merge/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "incidents"
+                ],
+                "summary": "Cancel or reject a proposed merge",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Number of the incident to absorb",
+                        "name": "number",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
                     }
                 }
             }
@@ -10482,6 +11193,654 @@
                 }
             }
         },
+        "dbgen.Incident": {
+            "type": "object",
+            "properties": {
+                "aware_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "closed_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "decided_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "decided_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "decided_state": {
+                    "$ref": "#/definitions/dbgen.NullIncidentState"
+                },
+                "decision_reason": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "decision_step": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "due_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "external_ref": {
+                    "type": "string"
+                },
+                "fix_available_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "merged_into": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "owner_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "owner_team_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "proposed_decision": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "proposed_merge": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "regimes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repo_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "signal_at": {
+                    "type": "string"
+                },
+                "signal_source": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/dbgen.IncidentState"
+                },
+                "subject_id": {
+                    "type": "string"
+                },
+                "subject_type": {
+                    "type": "string"
+                },
+                "target_seconds": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trigger_rule": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "dbgen.IncidentAction": {
+            "type": "object",
+            "properties": {
+                "assignee_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "automatic": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "done_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "done_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "due_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "obsolete": {
+                    "type": "boolean"
+                },
+                "optional": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "subject_id": {
+                    "type": "string"
+                },
+                "subject_type": {
+                    "type": "string"
+                },
+                "waived_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "waived_reason": {
+                    "$ref": "#/definitions/sql.NullString"
+                }
+            }
+        },
+        "dbgen.IncidentDeadline": {
+            "type": "object",
+            "properties": {
+                "due_at": {
+                    "type": "string"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "met_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "notified": {
+                    "type": "string"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "regime": {
+                    "type": "string"
+                },
+                "step": {
+                    "type": "string"
+                }
+            }
+        },
+        "dbgen.IncidentEvent": {
+            "type": "object",
+            "properties": {
+                "actor_display": {
+                    "type": "string"
+                },
+                "actor_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "actor_type": {
+                    "type": "string"
+                },
+                "at": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "dbgen.IncidentState": {
+            "type": "string",
+            "enum": [
+                "signal",
+                "assessing",
+                "reportable",
+                "not_reportable",
+                "confirmed",
+                "dismissed",
+                "closed",
+                "withdrawn"
+            ],
+            "x-enum-varnames": [
+                "IncidentStateSignal",
+                "IncidentStateAssessing",
+                "IncidentStateReportable",
+                "IncidentStateNotReportable",
+                "IncidentStateConfirmed",
+                "IncidentStateDismissed",
+                "IncidentStateClosed",
+                "IncidentStateWithdrawn"
+            ]
+        },
+        "dbgen.ListExposedClientsForOrgsRow": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string"
+                },
+                "client_name": {
+                    "type": "string"
+                },
+                "client_slug": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "org_provider": {
+                    "type": "string"
+                },
+                "org_slug": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "dbgen.ListIncidentDeliveriesRow": {
+            "type": "object",
+            "properties": {
+                "ack_evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "acknowledged_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "action_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "approved_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "approved_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "audit_log_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "client_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "client_name": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "client_slug": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "documents": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "provider_ref": {
+                    "type": "string"
+                },
+                "recipient": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "dbgen.ListIncidentTrackerLinksRow": {
+            "type": "object",
+            "properties": {
+                "external_key": {
+                    "type": "string"
+                },
+                "external_url": {
+                    "type": "string"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "integration_id": {
+                    "type": "string"
+                },
+                "integration_name": {
+                    "type": "string"
+                },
+                "integration_type": {
+                    "type": "string"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "last_synced_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "synced_events": {
+                    "type": "integer"
+                }
+            }
+        },
+        "dbgen.ListNoisyIncidentRulesRow": {
+            "type": "object",
+            "properties": {
+                "opened": {
+                    "type": "integer"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "repo_slug": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "trigger_rule": {
+                    "$ref": "#/definitions/sql.NullString"
+                }
+            }
+        },
+        "dbgen.ListOpenIncidentsForOrgsRow": {
+            "type": "object",
+            "properties": {
+                "aware_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "closed_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "decided_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "decided_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "decided_state": {
+                    "$ref": "#/definitions/dbgen.NullIncidentState"
+                },
+                "decision_reason": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "decision_step": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "due_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "external_ref": {
+                    "type": "string"
+                },
+                "fix_available_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "merged_into": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "org_name": {
+                    "type": "string"
+                },
+                "org_provider": {
+                    "type": "string"
+                },
+                "org_slug": {
+                    "type": "string"
+                },
+                "owner_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "owner_team_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "proposed_decision": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "proposed_merge": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "regimes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repo_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "repo_name": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "repo_slug": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "signal_at": {
+                    "type": "string"
+                },
+                "signal_source": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/dbgen.IncidentState"
+                },
+                "subject_id": {
+                    "type": "string"
+                },
+                "subject_type": {
+                    "type": "string"
+                },
+                "target_seconds": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trigger_rule": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "dbgen.ListPendingActionsForUserRow": {
+            "type": "object",
+            "properties": {
+                "assignee_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "automatic": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "done_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "done_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "due_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "obsolete": {
+                    "type": "boolean"
+                },
+                "optional": {
+                    "type": "boolean"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "org_provider": {
+                    "type": "string"
+                },
+                "org_slug": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "subject_id": {
+                    "type": "string"
+                },
+                "subject_type": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "waived_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "waived_reason": {
+                    "$ref": "#/definitions/sql.NullString"
+                }
+            }
+        },
+        "dbgen.ListUnknownReleasesForOrgsRow": {
+            "type": "object",
+            "properties": {
+                "number": {
+                    "type": "integer"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "org_provider": {
+                    "type": "string"
+                },
+                "org_slug": {
+                    "type": "string"
+                },
+                "release_id": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
         "dbgen.NotificationDestinationType": {
             "type": "string",
             "enum": [
@@ -10498,6 +11857,44 @@
                 "NotificationDestinationTypeEmail",
                 "NotificationDestinationTypeDiscord"
             ]
+        },
+        "dbgen.NullIncidentState": {
+            "type": "object",
+            "properties": {
+                "incident_state": {
+                    "$ref": "#/definitions/dbgen.IncidentState"
+                },
+                "valid": {
+                    "description": "Valid is true if IncidentState is not NULL",
+                    "type": "boolean"
+                }
+            }
+        },
+        "dbgen.OrgAutolink": {
+            "type": "object",
+            "properties": {
+                "alphanumeric": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "url_template": {
+                    "type": "string"
+                }
+            }
         },
         "devicelogin.Authorization": {
             "type": "object",
@@ -10627,6 +12024,48 @@
                 "ConfinementWarning",
                 "ConfinementError"
             ]
+        },
+        "incident.Regime": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/incident.StepSpec"
+                    }
+                }
+            }
+        },
+        "incident.StepSpec": {
+            "type": "object",
+            "properties": {
+                "after": {
+                    "description": "a Go duration, or \"1mo\" for one calendar month",
+                    "type": "string"
+                },
+                "anchor": {
+                    "type": "string"
+                },
+                "filing": {
+                    "description": "Filing is the action kind recording that the step was filed; empty for\nan internal target with nothing to file.",
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "recipient": {
+                    "type": "string"
+                },
+                "step": {
+                    "type": "string"
+                }
+            }
         },
         "orgprovision.OnboardableAccount": {
             "type": "object",
@@ -11303,6 +12742,20 @@
                 }
             }
         },
+        "server.autolinkRequest": {
+            "type": "object",
+            "properties": {
+                "alphanumeric": {
+                    "type": "boolean"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "url_template": {
+                    "type": "string"
+                }
+            }
+        },
         "server.batchAcceptanceRequest": {
             "type": "object",
             "properties": {
@@ -11330,6 +12783,10 @@
                 },
                 "status": {
                     "description": "Status: \"accepted\" | \"open\"; ReasonKind required on accept (ADR-023).",
+                    "type": "string"
+                },
+                "vex_justification": {
+                    "description": "VEXJustification applies to the dependency findings of a not-affected\ndecision; required when the batch has any (ADR-053 §4a).",
                     "type": "string"
                 }
             }
@@ -12594,6 +14051,503 @@
                 }
             }
         },
+        "server.homeApproval": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "incident_number": {
+                    "type": "integer"
+                },
+                "incident_title": {
+                    "type": "string"
+                },
+                "org_provider": {
+                    "type": "string"
+                },
+                "org_slug": {
+                    "type": "string"
+                },
+                "type": {
+                    "description": "decision | delivery | waiver | merge",
+                    "type": "string"
+                }
+            }
+        },
+        "server.homeExposure": {
+            "type": "object",
+            "properties": {
+                "clients": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListExposedClientsForOrgsRow"
+                    }
+                },
+                "unknown_releases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListUnknownReleasesForOrgsRow"
+                    }
+                }
+            }
+        },
+        "server.homeOrg": {
+            "type": "object",
+            "properties": {
+                "display_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "open_incidents": {
+                    "type": "integer"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.homeRecent": {
+            "type": "object",
+            "properties": {
+                "catalogue_signals": {
+                    "type": "integer"
+                },
+                "failed_gates": {
+                    "type": "integer"
+                },
+                "malware_found": {
+                    "type": "integer"
+                },
+                "secrets_found": {
+                    "type": "integer"
+                },
+                "since": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.homeRepo": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "last_visited_at": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "org_provider": {
+                    "type": "string"
+                },
+                "org_slug": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                },
+                "visited": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.homeResponse": {
+            "type": "object",
+            "properties": {
+                "approvals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.homeApproval"
+                    }
+                },
+                "exposure": {
+                    "$ref": "#/definitions/server.homeExposure"
+                },
+                "incidents": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListOpenIncidentsForOrgsRow"
+                    }
+                },
+                "needs_you": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListPendingActionsForUserRow"
+                    }
+                },
+                "noisy_rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListNoisyIncidentRulesRow"
+                    }
+                },
+                "orgs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.homeOrg"
+                    }
+                },
+                "recent": {
+                    "$ref": "#/definitions/server.homeRecent"
+                },
+                "repos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.homeRepo"
+                    }
+                }
+            }
+        },
+        "server.incidentAdvisoryRef": {
+            "type": "object",
+            "properties": {
+                "aliases": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "canonical_id": {
+                    "type": "string"
+                },
+                "first_party": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "public": {
+                    "description": "Public: carries a public identifier, so the component's maintainer is\ndeemed aware of it (guidance §223) and no upstream notice is owed.",
+                    "type": "boolean"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.incidentClientRef": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "slug": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.incidentDecision": {
+            "type": "object",
+            "properties": {
+                "action_statement": {
+                    "type": "string"
+                },
+                "aware_at": {
+                    "type": "string"
+                },
+                "decision_step": {
+                    "type": "string"
+                },
+                "justification": {
+                    "description": "Justification: the VEX justification of a \"cannot be exploited here\"\nstep (ADR-053 §4a); ActionStatement: what users can do, for an\naffected one. WriteStatements records the step as the VEX statement of\nevery release in scope that has none yet; releases keep their own\nstatements, and a later per-release statement supersedes this one.",
+                    "type": "string"
+                },
+                "proposed_at": {
+                    "type": "string"
+                },
+                "proposed_by": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "write_statements": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.incidentDetailResponse": {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.IncidentAction"
+                    }
+                },
+                "advisory": {
+                    "$ref": "#/definitions/server.incidentAdvisoryRef"
+                },
+                "can_manage": {
+                    "type": "boolean"
+                },
+                "deadlines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.IncidentDeadline"
+                    }
+                },
+                "decision_states": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "decision_steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "deliveries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListIncidentDeliveriesRow"
+                    }
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.IncidentEvent"
+                    }
+                },
+                "incident": {
+                    "$ref": "#/definitions/server.incidentSummary"
+                },
+                "regimes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/incident.Regime"
+                    }
+                },
+                "scope": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.incidentScopeResponse"
+                    }
+                },
+                "settings": {
+                    "$ref": "#/definitions/server.incidentSettingsFlags"
+                },
+                "tracker_links": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dbgen.ListIncidentTrackerLinksRow"
+                    }
+                }
+            }
+        },
+        "server.incidentScopeResponse": {
+            "type": "object",
+            "properties": {
+                "clients": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.incidentClientRef"
+                    }
+                },
+                "component_purl": {
+                    "type": "string"
+                },
+                "decided_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "decided_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "incident_id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "manual": {
+                    "type": "boolean"
+                },
+                "reachability": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "subject_id": {
+                    "type": "string"
+                },
+                "subject_type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "vex_statement_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                }
+            }
+        },
+        "server.incidentSettingsFlags": {
+            "type": "object",
+            "properties": {
+                "four_eyes": {
+                    "type": "boolean"
+                },
+                "require_acknowledgement": {
+                    "type": "boolean"
+                },
+                "require_notice_approval": {
+                    "type": "boolean"
+                },
+                "require_vex_approval": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.incidentSummary": {
+            "type": "object",
+            "properties": {
+                "aware_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "closed_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "decided_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "decided_by": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "decided_state": {
+                    "$ref": "#/definitions/dbgen.NullIncidentState"
+                },
+                "decision_reason": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "decision_step": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "due_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "external_ref": {
+                    "type": "string"
+                },
+                "fix_available_at": {
+                    "$ref": "#/definitions/sql.NullTime"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "kind_label": {
+                    "type": "string"
+                },
+                "merged_into": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "org_id": {
+                    "type": "string"
+                },
+                "owner_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "owner_team_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "proposed_decision": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "proposed_merge": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "regimes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repo_id": {
+                    "$ref": "#/definitions/uuid.NullUUID"
+                },
+                "repo_name": {
+                    "type": "string"
+                },
+                "repo_slug": {
+                    "type": "string"
+                },
+                "signal_at": {
+                    "type": "string"
+                },
+                "signal_source": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/dbgen.IncidentState"
+                },
+                "subject_id": {
+                    "type": "string"
+                },
+                "subject_type": {
+                    "type": "string"
+                },
+                "target_seconds": {
+                    "$ref": "#/definitions/sql.NullInt64"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "trigger_rule": {
+                    "$ref": "#/definitions/sql.NullString"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "server.instanceAuditLogEntryResponse": {
             "type": "object",
             "properties": {
@@ -12893,6 +14847,29 @@
                 }
             }
         },
+        "server.mergeCandidate": {
+            "type": "object",
+            "properties": {
+                "compatible": {
+                    "type": "boolean"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "server.metricsResponse": {
             "type": "object",
             "properties": {
@@ -12923,6 +14900,55 @@
                 "matches_catalog": {
                     "description": "MatchesCatalog: exported for the catalog this server pins. After an\nupgrade a mismatched bundle lacks the newly pinned artifacts.",
                     "type": "boolean"
+                }
+            }
+        },
+        "server.openIncidentRequest": {
+            "type": "object",
+            "properties": {
+                "client_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "finding_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "priority": {
+                    "type": "string"
+                },
+                "regimes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "release_ids": {
+                    "description": "Scope for a severe incident: releases and clients, by id.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "repo_slug": {
+                    "type": "string"
+                },
+                "signal_source": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "vulnerability_id": {
+                    "description": "VulnerabilityID names the advisory of an exploited vulnerability\n(canonical id or alias); FindingID the finding of the other kinds.",
+                    "type": "string"
                 }
             }
         },
@@ -13964,6 +15990,10 @@
         "server.secretRevocationRequest": {
             "type": "object",
             "properties": {
+                "checklist": {
+                    "description": "Checklist is the structured attestation (ADR-053 §4): where and by whom\nthe credential was revoked, rotation, exposure. Without it the request\nkeeps the older one-line attestation.",
+                    "type": "object"
+                },
                 "comment": {
                     "type": "string"
                 }
@@ -14334,6 +16364,31 @@
                 },
                 "valid": {
                     "description": "Valid is true if Int32 is not NULL",
+                    "type": "boolean"
+                }
+            }
+        },
+        "sql.NullInt64": {
+            "type": "object",
+            "properties": {
+                "int64": {
+                    "type": "integer",
+                    "format": "int64"
+                },
+                "valid": {
+                    "description": "Valid is true if Int64 is not NULL",
+                    "type": "boolean"
+                }
+            }
+        },
+        "sql.NullString": {
+            "type": "object",
+            "properties": {
+                "string": {
+                    "type": "string"
+                },
+                "valid": {
+                    "description": "Valid is true if String is not NULL",
                     "type": "boolean"
                 }
             }
@@ -14826,6 +16881,9 @@
                     "type": "string"
                 },
                 "vex_justification": {
+                    "type": "string"
+                },
+                "vex_statement_id": {
                     "type": "string"
                 }
             }

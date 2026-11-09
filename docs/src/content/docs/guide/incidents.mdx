@@ -1,0 +1,194 @@
+---
+title: Incidents
+description: Track exploited vulnerabilities, leaked secrets and malicious packages from signal to closure, with CRA Article 14 clocks and proof of client notification
+---
+
+An incident binds a signal to the versions and clients it affects, derives the actions
+it requires, keeps the regulatory clocks, delivers documents to clients with a
+verifiable record, and closes itself when no action remains. At any moment an incident
+page says either *these actions remain, due by these times*, or *closed, here is why*.
+
+Hibou never decides for you. A person decides whether an exploited vulnerability is
+reportable, meaning owed to the CSIRT and ENISA under Article 14 (clients and the
+component's maintainer are separate duties, see the
+[CRA guide](/guide/cra-compliance/#third-party-components-the-ladder)), and when the
+organization became aware of it (T0). Hibou derives what
+follows, counts the clocks, records every step on the incident's timeline, and refuses
+to close the incident while anything is pending.
+
+## Kinds
+
+| Kind | Opened by | What it tracks |
+|------|-----------|----------------|
+| Exploited vulnerability | a known-exploited catalogue entry (CISA KEV, ENISA EUVD) on a released version, or a person | per-release VEX statements, filings, client notices, the fix |
+| Security incident (CRA Art. 14(3)) | a person: build chain or signing key compromised, update server breached | filings, client notices, remediation |
+| Secret leak | a secret finding | revocation, rotation, exposure assessment, removal |
+| Malicious package | a malware finding | removal, CI secret rotation, registry report, client notices if it shipped |
+| Policy breach | a finding crossing your own line (EPSS, severity, CWE) | a fix or an approved exception, by an internal deadline |
+
+## Rules
+
+Rules decide which findings open incidents. They are filter expressions, the same
+grammar as the search bar, in the repository's `.hibou.yaml`:
+
+```yaml
+version: 1
+
+incidents:
+  owner: team:product-security          # who receives signals and countdowns
+  rules:                                # first matching rule wins
+    - match: "exploited:true"           # refs: released (default)
+      regimes: [cra-article-14]
+      priority: P1
+    - match: "type:secret verified:true"  # refs: all (default for secrets and malware)
+      priority: P1
+    - match: "type:malware"
+      priority: P1
+    - match: "epss:>=0.5 OR (severity:critical AND fix:available)"
+      refs: [released, default]
+      due: 7d
+      priority: P2
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `match` | required | A filter expression. `exploited:true`, `epss:>=10%`, `cvss:>=9`, `fix:available`, `verified:true`, `type:secret` all work. |
+| `kind` | derived | Secrets open secret leaks, malware opens malicious packages, an exploited dependency matched by a rule asking for exploitation opens an exploited vulnerability, anything else a policy breach. |
+| `refs` | by kind | `released` (snapshots pinned by a release), `default` (the default branch), `all` (every branch and pull request), or branch globs such as `release/*`. Secrets and malware default to `all`, the rest to `released`. |
+| `regimes` | `[internal]` | `cra-article-14`, `nis2-article-23`, `national:<code>`, `internal`. |
+| `priority` | `P2` | Your own triage order. |
+| `due` | none | An internal deadline for a policy breach, e.g. `7d` or `48h`. |
+
+The three first rules above are the built-in defaults: a repository that writes nothing
+still opens incidents on exploited, verified-secret and malware findings. An
+organization can replace the defaults and lock rules repositories cannot remove, in
+**Settings → Incidents**.
+
+## Finding incidents
+
+Each repository has an **Incidents** tab with its own incidents; the organization's
+**Incidents** tab lists them all. In the vulnerability list, `incident:true` keeps the
+findings with a linked incident (opened on the finding, or on its advisory in that
+repository, in any state) and `incident:false` the others. A finding's detail shows its
+incidents as a badge in the header.
+
+## Merging duplicates
+
+**Merge into…** folds a duplicate into the incident that stays: its timeline, notices
+and completed actions move over, its pending actions are dropped, and the survivor is
+recomputed. Pick the survivor from the list; only incidents of the same kind on the same
+repository can merge, and an exploited vulnerability only with one about the same CVEs.
+With four-eyes on, one person proposes the merge and another applies it. A merge cannot
+be undone. Hibou merges on its own only when two advisories name the same vulnerability,
+such as a CVE and its GHSA.
+
+## The decision and the clocks
+
+For an exploited vulnerability in a third-party component, the decision follows the
+ladder the Commission's guidance on the CRA draws (C(2026) 5252, §218): the first step
+that applies, in order. Each step is also the VEX statement it means for the releases in
+scope.
+
+| | Step | Reportable? | VEX |
+|---|---|---|---|
+| 1 | No shipped version integrates the vulnerable version | No; nothing else owed | `not_affected` · `component_not_present` |
+| 2 | Present, but it cannot be exploited in our product (the vulnerable code never runs, its input is not attacker-controlled, a mitigation blocks it) | No; report it to the component maintainer unless they already know | `not_affected` · the justification |
+| 3 | Exploitable in our product, no reliable evidence it was exploited here | No; fix or mitigate without delay, warn the clients that run it if useful | `affected` |
+| 4 | Reliable evidence it was exploited in our product | **Yes**: T0, early warning within 24 h, notification within 72 h, final report 14 days after a fix is available; impacted users informed | `affected` |
+
+A known-exploited catalogue entry (CISA KEV, ENISA EUVD) is the signal that opens the
+incident. It says the vulnerability is exploited *somewhere*; steps 1 to 4 say whether
+it is in your product, exploitable there, and exploited there.
+
+The decision is one per incident: it answers for the product. Recording it writes the
+matching VEX statement for every release in scope that has none yet (untick the box to
+skip that); a release that differs gets its own statement in **Scope**, and that
+statement takes precedence. **T0** is when, after the initial assessment, you had a
+reasonable degree of certainty that the vulnerability in your product is being exploited
+(guidance §213); it moves backwards only, and never after a filing.
+
+Filings are made by a person on the single reporting platform; each filing action
+links to the portal (**Open portal**), Hibou pre-fills the content (**Filing draft**)
+and records the reference you got back. A national regime can carry its own portal URL.
+Actions are listed in the order the work happens: early warning, notification, VEX,
+client notices, fix and other remediation, upstream notice, final report. An organization can
+set stricter internal targets; the regulatory deadline stays shown next to them.
+
+With **four-eyes** on, a decision that ends obligations (not reportable, dismissed) and
+every waiver are proposed by one person and approved by another.
+
+For the regulation in plain words, see [CRA compliance](/guide/cra-compliance/).
+
+## Scope and VEX
+
+The scope of an exploited vulnerability is every release whose inventory carries the
+advisory, joined to the clients actively running it. Each release ends with a VEX
+statement or an explicit exclusion with a reason. A release with clients but no
+inventory is **unknown** and holds the incident open until an inventory is produced or
+a statement assumes a status. A row's branch or version links to the findings behind it: straight to the finding for an incident opened on one (policy breach, secret, malicious package), and to the list filtered with `incident:<number>` for an advisory, which may match several components on one branch.
+
+Statements are never edited: a change supersedes the previous one, and the history keeps
+both. Triage writes them too: marking a dependency finding *not affected* names the VEX
+justification.
+
+For a vulnerability in your own code, record a **first-party advisory** in the
+repository's **Settings → Incidents & product** (identifier, affected range in `vers`
+syntax). Set the product identity in `.hibou.yaml`:
+
+```yaml
+product:
+  name: Example Product
+  purl: pkg:generic/example/product
+  cpe: cpe:2.3:a:example:product:*:*:*:*:*:*:*:*
+```
+
+## Client notices
+
+**Send notice** renders, per client, a CSAF security advisory scoped to the versions the
+client runs, OpenVEX and CycloneDX statements, and a readable notice. Channels, set per
+client under **Clients → Security notices**: email (through the organization's email
+integration, to the client's security contacts), webhook (signed), portal (a token bound
+to the client), or manual (you send it and record how).
+
+Every document is stored under its SHA-256, and every delivery writes an audit entry with
+the digests. **Verify** re-renders each document from its recorded inputs and compares
+byte for byte. Hibou proves that a document was handed to a channel at a time; it cannot
+prove it was read. Acknowledgements (link, portal download, webhook 2xx) are recorded
+when they happen, and can be required in Settings.
+
+The **dossier** bundles the timeline, scope, actions, clocks, deliveries and documents
+with a SHA-256 manifest, for an authority or a client in a dispute. The dossier is not signed.
+
+## Reference and autolinks
+
+An incident carries one optional **reference**: the ticket or link your team tracks it
+under, edited in the header (`ref`). It replaces the per-action reference; completing
+an action takes a note only, and filings keep the platform's submission reference.
+
+In **Settings → General → Autolink references**, an organization declares its tracker
+prefixes the way a forge does: a prefix (`SEC-`), a target URL with `<num>`, and whether
+letters may follow the prefix. From then on `SEC-7` is a link wherever people write:
+incident notes, decision and waiver reasons, the reference, finding acceptance reasons
+and comments. Bare `https://` URLs are linked too.
+
+## Trackers
+
+Add a Jira, GitHub issues, GitLab issues or webhook integration in **Settings →
+Integrations** to mirror each incident as an issue: the timeline as comments, state and
+priority as labels. Hibou stays the source of truth. Inbound, a mapped tracker status can
+complete a manual action, and a comment starting with `hibou:` becomes a note; nothing
+from the tracker can set T0, change the scope, waive an action or close an incident.
+
+## CLI
+
+```sh
+hibou incident list
+hibou incident status 12
+hibou incident decide 12 --state reportable --step attacked --reason "customer evidence" --action "upgrade to 4.2.2"
+hibou incident decide 13 --state not_reportable --step not_reachable --justification inline_mitigations_already_exist --reason "entities disabled"
+hibou incident filing-draft 12 --step early_warning
+hibou incident action 12 <action-id> file --reference SRP-2026-0042
+hibou incident deliver 12 --client acme --measures "upgrade to 4.2.2"
+hibou incident export 12 -o incident-12.zip
+hibou verify-document 12 <delivery-id>
+```

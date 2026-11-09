@@ -599,6 +599,13 @@ func (s *Server) routes(siteFS fs.FS) {
 			}
 			// Public: the login page shows announcement banners too.
 			r.Get("/instance/banners", s.handleListActiveBanners)
+			// Incidents (ADR-053): a signed acknowledgement link, the client
+			// portal (its own client-bound token) and tracker webhooks (a
+			// shared secret). Each authorises itself; none reaches a session.
+			r.Get("/incident-ack/{deliveryID}", s.handleIncidentAck)
+			r.Get("/portal/notices", s.handlePortalList)
+			r.Get("/portal/notices/{deliveryID}/documents/{sha256}", s.handlePortalDocument)
+			r.Post("/hooks/incident-tracker/{integrationID}", s.handleIncidentTrackerWebhook)
 		})
 		r.Group(func(r chi.Router) {
 			r.Use(rateLimitMiddleware(s.rateLimiters.auth, ipRateKey))
@@ -635,6 +642,7 @@ func (s *Server) routes(siteFS fs.FS) {
 			r.Use(rateLimitMiddleware(s.rateLimiters.api, principalRateKey))
 			r.Use(s.requestTimeoutMiddleware)
 			r.Get("/users/me", s.handleGetMe)
+			r.Get("/me/home", s.handleHome)
 			// ADR-043 approval page: browser session only, user-code lookups
 			// limited per user.
 			r.Group(func(r chi.Router) {
@@ -817,6 +825,44 @@ func (s *Server) routes(siteFS fs.FS) {
 							r.Get("/deployments", s.handleListClientDeployments)
 							r.Post("/deployments", s.handleCreateDeployment)
 							r.Get("/impact", s.handleGetClientImpact)
+							r.Get("/delivery", s.handleGetClientDelivery)
+							r.Put("/delivery", s.handlePutClientDelivery)
+							r.Get("/incident-deliveries", s.handleListClientIncidentDeliveries)
+							r.Get("/portal-tokens", s.handleListPortalTokens)
+							r.Post("/portal-tokens", s.handleCreatePortalToken)
+							r.Delete("/portal-tokens/{tokenID}", s.handleRevokePortalToken)
+						})
+					})
+					r.Get("/incident-settings", s.handleGetIncidentSettings)
+					r.Put("/incident-settings", s.handlePutIncidentSettings)
+					r.Get("/autolinks", s.handleListAutolinks)
+					r.Post("/autolinks", s.handleCreateAutolink)
+					r.Delete("/autolinks/{autolinkID}", s.handleDeleteAutolink)
+					r.Route("/incidents", func(r chi.Router) {
+						r.Get("/", s.handleListIncidents)
+						r.Post("/", s.handleOpenIncident)
+						r.Route("/{number}", func(r chi.Router) {
+							r.Get("/", s.handleGetIncident)
+							r.Patch("/", s.handleUpdateIncident)
+							r.Post("/decide", s.handleDecideIncident)
+							r.Post("/decision/approve", s.handleApproveIncidentDecision)
+							r.Post("/withdraw", s.handleWithdrawIncident)
+							r.Post("/merge", s.handleMergeIncident)
+							r.Get("/merge-candidates", s.handleIncidentMergeCandidates)
+							r.Post("/merge/approve", s.handleApproveIncidentMerge)
+							r.Post("/merge/cancel", s.handleCancelIncidentMerge)
+							r.Post("/fix-available", s.handleIncidentFixAvailable)
+							r.Post("/reconcile", s.handleReconcileIncident)
+							r.Post("/notes", s.handleIncidentNote)
+							r.Post("/scope", s.handleIncidentScope)
+							r.Post("/statements", s.handleIncidentStatement)
+							r.Post("/actions/{actionID}/{op}", s.handleIncidentActionOp)
+							r.Get("/filing-draft", s.handleIncidentFilingDraft)
+							r.Post("/deliveries", s.handleIncidentDeliver)
+							r.Post("/deliveries/{deliveryID}/approve", s.handleApproveIncidentDelivery)
+							r.Post("/deliveries/{deliveryID}/verify", s.handleVerifyIncidentDelivery)
+							r.Get("/documents/{sha256}", s.handleGetIncidentDocument)
+							r.Get("/dossier", s.handleIncidentDossier)
 						})
 					})
 					r.Route("/teams", func(r chi.Router) {
@@ -887,6 +933,13 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Put("/{repoSlug}/vulnerabilities/{vulnID}/dispute", s.handleSetFindingDispute)
 						r.Delete("/{repoSlug}/vulnerabilities/{vulnID}/dispute", s.handleDeleteFindingDispute)
 						r.Post("/{repoSlug}/vulnerabilities/{vulnID}/revocation", s.handleAttestSecretRevocation)
+						r.Get("/{repoSlug}/vulnerabilities/{vulnID}/revocation", s.handleListSecretAttestations)
+						r.Post("/{repoSlug}/vulnerabilities/{vulnID}/recheck", s.handleRecheckSecret)
+						r.Get("/{repoSlug}/vulnerabilities/{vulnID}/incidents", s.handleFindingIncident)
+						r.Get("/{repoSlug}/incidents", s.handleListRepoIncidents)
+						r.Get("/{repoSlug}/incident-rules", s.handleGetRepoIncidentRules)
+						r.Get("/{repoSlug}/first-party-advisories", s.handleListFirstPartyAdvisories)
+						r.Post("/{repoSlug}/first-party-advisories", s.handleCreateFirstPartyAdvisory)
 						r.Get("/{repoSlug}/finding-acceptances", s.handleListFindingAcceptances)
 						r.Get("/{repoSlug}/components", s.handleGetRefComponents)
 						r.With(limitScans).Post("/{repoSlug}/components/scan", s.handleTriggerComponentScan)
@@ -920,6 +973,8 @@ func (s *Server) routes(siteFS fs.FS) {
 							r.Get("/{statementID}", s.handleGetVEXStatement)
 							r.Put("/{statementID}", s.handleUpdateVEXStatement)
 							r.Delete("/{statementID}", s.handleDeleteVEXStatement)
+							r.Get("/{statementID}/history", s.handleGetVEXStatementHistory)
+							r.Post("/{statementID}/approve", s.handleApproveVEXStatement)
 						})
 						r.Route("/{repoSlug}/delta", func(r chi.Router) {
 							r.Get("/", s.handleGetDelta)
@@ -1031,6 +1086,12 @@ func (s *Server) startBackgroundLoops(runtimeCtx context.Context) {
 			Log: s.log,
 		}
 		go s.runCVEFeedLoop(runtimeCtx, sweeper, s.cfg.CVEFeed.Interval)
+	}
+	// Incidents (ADR-053): rule sweeps, the reconcile worker, the deadline
+	// clock.
+	if s.db != nil && s.queries != nil {
+		loops = append(loops, "incidents")
+		go s.runIncidentLoop(runtimeCtx)
 	}
 	// The exploited-catalog mirrors (ADR-032): CISA KEV and the ENISA EUVD
 	// exploited set by default. Per-source switches, unlike the CVE feed: the

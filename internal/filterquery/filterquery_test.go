@@ -515,3 +515,36 @@ func TestToSQLPresence(t *testing.T) {
 		t.Fatal("unknown presence value must be rejected")
 	}
 }
+
+func TestFixAndVerifiedQualifiers(t *testing.T) {
+	for input, want := range map[string]string{
+		"fix:available":  fixAvailableSQL,
+		"fix:none":       "NOT " + fixAvailableSQL,
+		"incident:true":  linkedIncidentSQL,
+		"incident:false": "NOT " + linkedIncidentSQL,
+		"incident:#5":    strings.Replace(linkedIncidentSQL, "WHERE li.repo_id = v.repo_id", "WHERE li.repo_id = v.repo_id AND li.number = $2", 1),
+		"verified:true":  "COALESCE(v.verified, false)",
+		"verified:false": "NOT COALESCE(v.verified, false)",
+	} {
+		node, err := Parse(input)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", input, err)
+		}
+		result, err := ToSQL(node, 2)
+		if err != nil {
+			t.Fatalf("ToSQL(%q): %v", input, err)
+		}
+		if result.Where != want {
+			t.Fatalf("ToSQL(%q) = %q, want %q", input, result.Where, want)
+		}
+	}
+	for _, input := range []string{"fix:maybe", "verified:perhaps", "fix:available,none", "incident:maybe", "incident:0"} {
+		node, err := Parse(input)
+		if err != nil {
+			continue
+		}
+		if _, err := ToSQL(node, 2); err == nil {
+			t.Fatalf("ToSQL(%q) accepted an invalid value", input)
+		}
+	}
+}

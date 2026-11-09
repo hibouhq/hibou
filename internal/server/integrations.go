@@ -438,6 +438,16 @@ func normalizeIntegrationType(value string) (dbgen.IntegrationType, bool) {
 		return dbgen.IntegrationTypeEmail, true
 	case string(dbgen.IntegrationTypeDiscord):
 		return dbgen.IntegrationTypeDiscord, true
+	// Trackers mirror incidents (ADR-053 §8); the notification dispatcher has
+	// no sender for them and skips them.
+	case string(dbgen.IntegrationTypeJira):
+		return dbgen.IntegrationTypeJira, true
+	case string(dbgen.IntegrationTypeGithubIssues):
+		return dbgen.IntegrationTypeGithubIssues, true
+	case string(dbgen.IntegrationTypeGitlabIssues):
+		return dbgen.IntegrationTypeGitlabIssues, true
+	case string(dbgen.IntegrationTypeTrackerWebhook):
+		return dbgen.IntegrationTypeTrackerWebhook, true
 	default:
 		return "", false
 	}

@@ -313,7 +313,7 @@ func (q *Queries) DeleteFindingAcceptance(ctx context.Context, arg DeleteFinding
 }
 
 const getActiveFindingAcceptance = `-- name: GetActiveFindingAcceptance :one
-SELECT id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification FROM finding_acceptances
+SELECT id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification, vex_statement_id FROM finding_acceptances
 WHERE repo_id = $1 AND fingerprint = $2
   AND (expires_at IS NULL OR expires_at > now())
 `
@@ -337,6 +337,7 @@ func (q *Queries) GetActiveFindingAcceptance(ctx context.Context, arg GetActiveF
 		&i.ReasonKind,
 		pq.Array(&i.Labels),
 		&i.VexJustification,
+		&i.VexStatementID,
 	)
 	return i, err
 }
@@ -480,64 +481,8 @@ func (q *Queries) GetLatestVulnerabilityByFingerprint(ctx context.Context, arg G
 	return i, err
 }
 
-const listAcceptedDependencyAdvisories = `-- name: ListAcceptedDependencyAdvisories :many
-SELECT DISTINCT fa.fingerprint, fa.reason_kind, fa.reason, fa.vex_justification, fa.expires_at,
-  v.advisory_id, a.canonical_id, v.component_purl
-FROM finding_acceptances fa
-JOIN vulnerabilities v ON v.repo_id = fa.repo_id AND v.fingerprint = fa.fingerprint
-JOIN advisories a ON a.id = v.advisory_id
-WHERE fa.repo_id = $1 AND (fa.expires_at IS NULL OR fa.expires_at > now())
-  AND v.advisory_id IS NOT NULL AND v.type IN ('dependency', 'container')
-`
-
-type ListAcceptedDependencyAdvisoriesRow struct {
-	Fingerprint      string               `json:"fingerprint"`
-	ReasonKind       AcceptanceReasonKind `json:"reason_kind"`
-	Reason           string               `json:"reason"`
-	VexJustification NullVexJustification `json:"vex_justification"`
-	ExpiresAt        sql.NullTime         `json:"expires_at"`
-	AdvisoryID       uuid.NullUUID        `json:"advisory_id"`
-	CanonicalID      string               `json:"canonical_id"`
-	ComponentPurl    sql.NullString       `json:"component_purl"`
-}
-
-// Acceptance decisions on component-backed findings, joined to their advisory
-// for VEX synthesis at export time (ADR-023: acceptances GENERATE VEX; no
-// materialized rows to drift).
-func (q *Queries) ListAcceptedDependencyAdvisories(ctx context.Context, repoID uuid.UUID) ([]ListAcceptedDependencyAdvisoriesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listAcceptedDependencyAdvisories, repoID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListAcceptedDependencyAdvisoriesRow{}
-	for rows.Next() {
-		var i ListAcceptedDependencyAdvisoriesRow
-		if err := rows.Scan(
-			&i.Fingerprint,
-			&i.ReasonKind,
-			&i.Reason,
-			&i.VexJustification,
-			&i.ExpiresAt,
-			&i.AdvisoryID,
-			&i.CanonicalID,
-			&i.ComponentPurl,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listActiveFindingAcceptancesByRepo = `-- name: ListActiveFindingAcceptancesByRepo :many
-SELECT id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification FROM finding_acceptances
+SELECT id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification, vex_statement_id FROM finding_acceptances
 WHERE repo_id = $1 AND (expires_at IS NULL OR expires_at > now())
 `
 
@@ -561,6 +506,7 @@ func (q *Queries) ListActiveFindingAcceptancesByRepo(ctx context.Context, repoID
 			&i.ReasonKind,
 			pq.Array(&i.Labels),
 			&i.VexJustification,
+			&i.VexStatementID,
 		); err != nil {
 			return nil, err
 		}
@@ -994,48 +940,6 @@ func (q *Queries) ListStateTransitions(ctx context.Context, vulnerabilityID uuid
 			&i.ChangedAt,
 			&i.Comment,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUnreachableDependencyAdvisories = `-- name: ListUnreachableDependencyAdvisories :many
-SELECT DISTINCT a.canonical_id, v.advisory_id, v.component_purl
-FROM vulnerabilities v
-JOIN advisories a ON a.id = v.advisory_id
-WHERE v.snapshot_id = $1
-  AND v.type IN ('dependency', 'container')
-  AND v.reachability = 'not_reachable'
-  AND v.advisory_id IS NOT NULL
-`
-
-type ListUnreachableDependencyAdvisoriesRow struct {
-	CanonicalID   string         `json:"canonical_id"`
-	AdvisoryID    uuid.NullUUID  `json:"advisory_id"`
-	ComponentPurl sql.NullString `json:"component_purl"`
-}
-
-// Machine-proven not_reachable dependency findings on one snapshot — the
-// source for synthesized VEX not_affected/vulnerable_code_not_in_execute_path
-// statements. Human statements and acceptances take precedence at export.
-func (q *Queries) ListUnreachableDependencyAdvisories(ctx context.Context, snapshotID uuid.UUID) ([]ListUnreachableDependencyAdvisoriesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listUnreachableDependencyAdvisories, snapshotID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListUnreachableDependencyAdvisoriesRow{}
-	for rows.Next() {
-		var i ListUnreachableDependencyAdvisoriesRow
-		if err := rows.Scan(&i.CanonicalID, &i.AdvisoryID, &i.ComponentPurl); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1590,17 +1494,18 @@ func (q *Queries) SearchVulnerabilities(ctx context.Context, arg SearchVulnerabi
 }
 
 const upsertFindingAcceptance = `-- name: UpsertFindingAcceptance :one
-INSERT INTO finding_acceptances (repo_id, fingerprint, reason_kind, reason, labels, vex_justification, accepted_by, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO finding_acceptances (repo_id, fingerprint, reason_kind, reason, labels, vex_justification, accepted_by, expires_at, vex_statement_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (repo_id, fingerprint) DO UPDATE SET
 	reason_kind = EXCLUDED.reason_kind,
 	reason = EXCLUDED.reason,
 	labels = EXCLUDED.labels,
 	vex_justification = EXCLUDED.vex_justification,
+	vex_statement_id = EXCLUDED.vex_statement_id,
 	accepted_by = EXCLUDED.accepted_by,
 	expires_at = EXCLUDED.expires_at,
 	created_at = now()
-RETURNING id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification
+RETURNING id, repo_id, fingerprint, reason, accepted_by, expires_at, created_at, reason_kind, labels, vex_justification, vex_statement_id
 `
 
 type UpsertFindingAcceptanceParams struct {
@@ -1612,6 +1517,7 @@ type UpsertFindingAcceptanceParams struct {
 	VexJustification NullVexJustification `json:"vex_justification"`
 	AcceptedBy       uuid.NullUUID        `json:"accepted_by"`
 	ExpiresAt        sql.NullTime         `json:"expires_at"`
+	VexStatementID   uuid.NullUUID        `json:"vex_statement_id"`
 }
 
 func (q *Queries) UpsertFindingAcceptance(ctx context.Context, arg UpsertFindingAcceptanceParams) (FindingAcceptance, error) {
@@ -1624,6 +1530,7 @@ func (q *Queries) UpsertFindingAcceptance(ctx context.Context, arg UpsertFinding
 		arg.VexJustification,
 		arg.AcceptedBy,
 		arg.ExpiresAt,
+		arg.VexStatementID,
 	)
 	var i FindingAcceptance
 	err := row.Scan(
@@ -1637,6 +1544,7 @@ func (q *Queries) UpsertFindingAcceptance(ctx context.Context, arg UpsertFinding
 		&i.ReasonKind,
 		pq.Array(&i.Labels),
 		&i.VexJustification,
+		&i.VexStatementID,
 	)
 	return i, err
 }

@@ -31,6 +31,18 @@ type Statement struct {
 	ComponentPURL     string
 	Supplier          string
 	SourceDocumentURL string
+	// ProductPURL names the product the statement is about, version-less
+	// (pkg:generic/<vendor>/<product>); ProductVersion narrows it to one
+	// release. When set, ComponentPURL is the subcomponent carrying the
+	// vulnerability, not the product (ADR-053 §4a). Empty keeps the older
+	// reading where the component is the product.
+	ProductPURL    string
+	ProductName    string
+	ProductVersion string
+	ProductCPE     string
+	// Aliases are the advisory's other identifiers, carried into formats that
+	// hold them.
+	Aliases []string
 }
 
 type ParseResult struct {

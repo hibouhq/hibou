@@ -1,0 +1,281 @@
+---
+title: CRA Compliance
+description: What the Cyber Resilience Act's reporting duty (Article 14) asks of a software manufacturer, in plain words, and how Hibou's incidents carry it
+---
+
+This page is for the people who run security at a software manufacturer and have
+to live with Regulation (EU) 2024/2847, the Cyber Resilience Act (CRA), from
+11 September 2026. It explains the reporting duty of Article 14 in plain words, with the
+article and the paragraph of the Commission's guidance behind each sentence, and then
+how [Incidents](/guide/incidents/) carry it. It is not legal advice: the Commission's
+guidance quoted here (Communication C(2026) 5252, 27 July 2026) was approved as a draft
+and applies once formally adopted, and your legal counsel decides what applies to you.
+
+## Who and what
+
+- **Who:** the *manufacturer*, that is whoever develops a software product, or has it
+  developed, and markets it under its name, paid or free (Art. 3(13)). A product that
+  integrates open-source components is the integrator's responsibility (Art. 13(5)).
+  Open-source *stewards* get a lighter regime from 11 December 2027 (Art. 24(3)).
+- **What:** a *product with digital elements*, which includes its remote data processing
+  when the product cannot work without it (Art. 3(1), 3(2)). A pure service (SaaS) is not
+  a product; it falls under NIS2 (Directive 2022/2555, Art. 23), which has the same
+  24 h / 72 h / one-month clocks.
+- **When:** the reporting duty applies from **11 September 2026**, to every product in
+  scope, including products placed on the market before the rest of the CRA applies on
+  11 December 2027, and after their support period ends (Art. 69(3); guidance §210). The
+  other duties, fixing vulnerabilities, security updates, the SBOM, the CE marking, apply
+  from 11 December 2027 and only during the support period.
+
+## The two things you must report
+
+Article 14 makes you notify, within the deadlines below, two kinds of event you
+*become aware of*:
+
+1. **An actively exploited vulnerability contained in your product** (Art. 14(1)). An
+   actively exploited vulnerability is one "for which there is reliable evidence that a
+   malicious actor has exploited it in a system without permission of the system owner"
+   (Art. 3(42)).
+2. **A severe incident having an impact on the security of your product**
+   (Art. 14(3)): an incident that affects, or could affect, the product's ability to
+   protect sensitive or important data or functions, or that led, or could lead, to
+   malicious code running in the product or in a user's systems (Art. 14(5)). A
+   compromised build chain, signing key or update server is the textbook case
+   (Recital 68).
+
+Everything else is handled, not reported: a vulnerability found by a researcher, by a
+bug bounty, by a test lab, or merely listed somewhere with a high score, is not
+reportable by itself (Recital 68; FAQ 5.2). You may still notify any vulnerability or
+incident **voluntarily** (Art. 15); voluntary reports create no new obligations
+(Art. 15(5)).
+
+## Which case are you in
+
+The duty reads differently depending on where the vulnerability is and what you are to
+the product. Four situations cover almost everything a scanner surfaces.
+
+### 1. A vulnerability in your own code
+
+Your product *is* the vulnerable component: there is no ladder to climb. The
+vulnerability is in your product and exploitable in it by construction, so the only
+question left is the third one: is there reliable evidence that someone exploited it, in
+any installation of your product, without the owner's permission (Art. 3(42))? If yes,
+it is reportable: T0, 24 h, 72 h, users informed, final report after the fix. If no, it is
+handled under Annex I, Part II: fix it without undue delay, publish an advisory with the
+update, and run your coordinated vulnerability disclosure process. You may report it
+voluntarily (Art. 15). Nothing is owed "upstream": you are upstream.
+
+### 2. A vulnerability in a dependency
+
+The common case, and the one the ladder below is for. You integrate a component, a
+public advisory names a vulnerability in it, perhaps a known-exploited catalogue lists
+it. Reportable by you only when it is in a version you ship, can be exploited in your
+product, and has been exploited in your product (guidance §218). Otherwise you fix or
+mitigate it (Annex I, Part II) and, where you discovered something the maintainer does
+not know, you tell them (Art. 13(6), see [below](#telling-the-components-maintainer)).
+Worked example: your product embeds a logging library with a public, actively
+exploited vulnerability. It is in your product (step 1, yes). If your configuration never
+lets attacker-controlled text reach the vulnerable lookup, it cannot be exploited in your
+product (step 2, no): you record a `not_affected` statement with that justification,
+upgrade in due course, and report nothing; the maintainer already knows, so you owe
+them nothing either. If it can be exploited (step 2, yes) but nobody has exploited it in
+your product (step 3, no): fix without delay, tell the clients that run it if you choose,
+report nothing. If a customer's logs show the exploit against your product (step 3,
+yes): reportable; that is also the moment to check whether your own systems were
+reached, which would be a separate severe incident.
+
+### 3. Your product is open source
+
+Being open source changes nothing about what is reportable; it changes **who** owes the
+report, through three roles (guidance §69–84):
+
+- **Manufacturer**, when you place the software on the market: you sell it, sell
+  support or hosting that requires it, charge for a version of it, or otherwise monetise
+  it. All of Article 14 applies to you as to any manufacturer, including for a free
+  "community" edition published next to a paid one (§76).
+- **Open-source software steward** (Art. 3(14), Art. 24), when a legal person publishes
+  the software without placing it on the market, intends it for commercial use by
+  others, and provides sustained support: hosting, governance, release management,
+  paid developers. Stewards have a lighter regime from 11 December 2027 and report
+  under Article 14 "to the extent they are involved" (Art. 24(3)): a steward that only
+  manages branding and governance reports nothing (§80); one that runs the project's
+  build or signing infrastructure reports severe incidents on that infrastructure (§81);
+  one that pays developers who maintain the code reports actively exploited
+  vulnerabilities and informs users (§82).
+- **Neither**, when an individual, or a legal person without sustained support, publishes
+  software for free with no commercial intent: no CRA obligation at all (§74, footnote 14).
+  A contributor to someone else's project is not a manufacturer of it (Recital 18).
+
+For the integrators of your open-source product, you are the maintainer of case 2:
+they must tell you about vulnerabilities you do not know of, and share their fixes
+(Art. 13(6)).
+
+### 4. You run a service, not a product
+
+Software your customers only use over the network, never install, is not a product with
+digital elements unless it is the remote processing a product cannot work without
+(Art. 3(1), 3(2)). A pure SaaS falls under NIS2 instead (Directive 2022/2555, Art. 23),
+with the same 24 h / 72 h / one-month clocks and its own national rules. Hibou's
+`nis2-article-23` and `national:<code>` regimes exist for this case. A product that
+ships with a companion service is in scope for both.
+
+## Third-party components: the ladder
+
+Most of what a scanner finds is in a library you did not write. The Commission's
+guidance (§218) says when such a vulnerability is yours to report: you must notify an
+actively exploited vulnerability that originates from a component you integrate, **unless**
+the vulnerability "(i) cannot be exploited in [your] product with digital elements (e.g.
+because the vulnerable code is not reachable) or (ii) has not been exploited in [your]
+product". In those two cases it "does not qualify as an actively exploited vulnerability
+contained in [your] product" and is not subject to mandatory reporting. You still have
+to fix it (Annex I, Part II) and report it to the component's maintainer (Art. 13(6);
+see below).
+
+So a known-exploited catalogue entry on one of your dependencies is a signal, not a
+report. Three questions, in order, settle it:
+
+| | Question | If the answer is "yes" | If "no" |
+|---|---|---|---|
+| 1 | Does a version we shipped integrate the vulnerable version? | next question | not reportable; nothing owed to anyone |
+| 2 | Can it be exploited in our product? | next question | not reportable; tell the maintainer unless they know |
+| 3 | Has it been exploited in our product? (reliable evidence: a customer's logs, your telemetry, a CSIRT) | **reportable** | not reportable; fix without delay; advise clients with the fix |
+
+"Reportable" always means **to the authorities**: your national CSIRT and ENISA, through
+the single reporting platform (Art. 14, 16). Clients and the component's maintainer are
+separate audiences with separate rules:
+
+| Step | Authorities (Art. 14) | Your clients | Maintainer (Art. 13(6)) |
+|---|---|---|---|
+| 1. not in our product | no | nothing | no |
+| 2. not exploitable here | no | nothing | yes, unless they already know (a public CVE means they do) |
+| 3. exploitable, not exploited here | no; a voluntary report to the CSIRT is allowed (Art. 15) | fix without delay; an advisory with the security update once Annex I, Part II applies (11 December 2027); before that, telling them is your call | yes, if you found it or you patched it |
+| 4. exploited in our product | **yes**: 24 h, 72 h, 14 days | **yes**: impacted users, from the first notice on (Art. 14(8)) | as step 3 |
+
+Hibou shows these as a four-step ladder, because "no" to question 2 and "no" to
+question 3 lead to different follow-ups; each step is also the VEX statement it means
+for the versions concerned. Write every exit down with its reason: "we decided not to
+report, because …" is the record an authority asks for.
+
+## Becoming aware: T0
+
+The clocks count from the moment you *become aware*. The guidance (§213) puts that
+moment after a prompt initial assessment: you are aware when you have "a reasonable
+degree of certainty" that a vulnerability in your product is being actively exploited, or
+that a severe incident has compromised the product's security. A full forensic
+investigation is not a prerequisite, and the emphasis is on assessing suspicious events
+immediately (§214). Awareness can come from anywhere: a customer, a researcher, a
+CSIRT, threat intelligence, your own telemetry or scans (FAQ 5.1). Exploitation you
+already knew of before 11 September 2026 is not reported retroactively (§217).
+
+In Hibou, T0 is set by the person who records the decision, defaults to that moment,
+can be moved earlier, and is frozen once a filing is recorded.
+
+## The clocks
+
+All three go to the CSIRT of the Member State where you have your main establishment,
+and to ENISA at the same time, through ENISA's single reporting platform at
+[portal.cra-srp.enisa.europa.eu](https://portal.cra-srp.enisa.europa.eu/) (Art. 14(1),
+14(7), Art. 16). The platform is a web portal: a representative you registered signs in
+with EU Login and fills a form. It has no API; ENISA says it will extend it over time.
+
+| Step | Vulnerability (Art. 14(2)) | Severe incident (Art. 14(4)) |
+|---|---|---|
+| Early warning, **within 24 h** of awareness | that an actively exploited vulnerability exists; the Member States where the product is known to be available | that an incident occurred; whether unlawful or malicious acts are suspected; the Member States |
+| Notification, **within 72 h** of awareness | the product, the general nature of the exploit and of the vulnerability, measures taken, measures users can take, how sensitive the information is | nature of the incident, initial assessment, measures taken and measures users can take |
+| Final report | **14 days after a corrective or mitigating measure is available**: description, severity and impact, the actor where known, the update or other corrective measures | **one month after the notification**: detailed description, root cause, mitigations applied and ongoing |
+
+The CSIRT may ask for intermediate status reports (Art. 14(6)). Early warning does not
+mean a fix in 24 hours: the clocks are about telling the authorities; the final report
+follows the fix.
+
+## Informing your users
+
+After becoming aware, you inform the **impacted users** and, where appropriate, all users,
+of the vulnerability or incident and of the mitigations and corrective measures they can
+apply, "where appropriate in a structured, machine-readable format" (Art. 14(8)). This is
+not conditioned on a fix being available: the first notice may carry a workaround and a
+later one the fix. If you fail to inform users in time, the CSIRT may do it for you.
+
+The duty is risk-based and proportionate (guidance §219–221): it does not mean public
+disclosure; you may limit detailed information to the customers concerned, especially
+for products in sensitive environments, and disclose more broadly once the vulnerability
+is addressed. Independently, once a security update is available, Annex I, Part II,
+point (4) requires public information about the fixed vulnerabilities, and point (8)
+requires an advisory to accompany the update.
+
+## Telling the component's maintainer
+
+This duty is often misread as "tell every library author about every CVE". It is
+narrower. When you **identify** a vulnerability in a component you integrate, you report
+it to whoever maintains the component, and you share any fix you developed
+(Art. 13(6); guidance §222–228). Four limits:
+
+- Only for the **version you integrate**, through the maintainer's disclosure channel
+  when it has one, so an unpatched vulnerability is not disclosed prematurely (§223).
+- **Not when the maintainer already knows.** You are expected to check public
+  vulnerability databases, the project's advisories and its issue tracker before
+  reporting; a vulnerability with a CVE, GHSA or ecosystem identifier is one the
+  maintainer knows about (§223). So for the logging library of case 2 above you owe its
+  maintainers nothing, and certainly not the news that your product was attacked: that
+  goes to your CSIRT and your users, not upstream.
+- Only vulnerabilities **in the component itself**, not ones that arise from how you
+  integrated it with your own code or with other components (§224).
+- Not when the component **has no maintainer** any more, or you no longer rely on them
+  for fixes (§225); informing the component's other users through community channels
+  is encouraged instead.
+
+Sharing a fix means offering it in a usable form, under a licence the maintainer can
+accept (§227); they need not take it, and you need not take theirs (§228). Article 13
+applies from 11 December 2027.
+
+## What is not required
+
+- **Not every CVE**, however severe, scored or catalogued: the trigger is an actively
+  exploited vulnerability that is in, exploitable in, and exploited in your product.
+- **Not monitoring** any particular channel in order to become aware (FAQ 5.1).
+- **Not a fix within the clocks**: a workaround and an upgrade path are corrective
+  measures; the final report follows whichever is available first.
+- **Not a prescribed document format** for the user information: machine-readable "where
+  appropriate". The regulation names neither VEX nor CSAF; both are reasonable choices.
+- **Not automated filing**: the single reporting platform is where a legal act of the
+  manufacturer is filed, by a registered representative. It has no machine interface
+  and the filing is yours. Hibou links to the portal next to each filing and pre-fills
+  what you paste into it.
+
+## How Hibou carries this
+
+| The regulation | In Hibou |
+|---|---|
+| Awareness of an exploited vulnerability in a shipped version | a rule (`exploited:true` on released snapshots by default) opens an incident on the catalogue match; a person can open one by hand |
+| The ladder (guidance §218) | the **Decision**: one choice among the four steps, each with its consequence and the VEX statement it means; T0 asked only for the last step |
+| One statement per version | **Scope**: every shipped version with its VEX statement; the decision writes the statement for the versions that have none, a version that differs gets its own |
+| 24 h / 72 h / final report | **Clocks** from T0, with your internal targets next to them; pre-filled **filing drafts**; the reference you got back is recorded; the final report clock starts when you mark the fix available |
+| Informing impacted users (Art. 14(8)) | **Notices** per client running an affected version, by email, signed webhook, client portal or by hand, with CSAF, OpenVEX and CycloneDX VEX documents stored under their SHA-256 and verifiable by re-rendering |
+| Reporting upstream (Art. 13(6)) | an **upstream notice** action only when the vulnerability is in a component, not reportable, and the advisory has no public identifier; a public one means the maintainer knows (§223), and nothing is owed |
+| Where the incident stands | the **Resolution map** on the incident: the paths a decision can take, the one taken, what is done, what is next, what was not taken |
+| A severe incident (Art. 14(3)) | the **Security incident** kind, opened by hand, with the one-month final report clock; the decision form points to it when an attack reached your own systems |
+| NIS2, national rules, your own policy | regimes on the incident: `nis2-article-23`, `national:<code>` with your configured steps, `internal` with your deadlines |
+| The register | the **Timeline**: every signal, decision, statement, filing, notice and approval, with time and actor; the **dossier** exports it with a SHA-256 manifest |
+| Four-eyes | decisions that end obligations, waivers and merges proposed by one person and approved by another, when enabled |
+
+What Hibou does not do: it does not decide for you, it does not file on the platform, it
+does not sign the dossier, and a recorded delivery proves that a document was handed to
+a channel at a time, not that it was read.
+
+## Dates
+
+| Date | What |
+|---|---|
+| 11 June 2026 | Chapter IV (notified bodies) applies |
+| 11 September 2026 | Article 14 reporting applies, for every product in scope |
+| 11 December 2027 | the whole regulation applies: essential requirements, vulnerability handling (Annex I, Part II), SBOM, Article 13, CE marking, stewards' lighter regime |
+
+## Sources
+
+- Regulation (EU) 2024/2847 (Cyber Resilience Act): Articles 3, 13, 14, 15, 16, 24, 69, 71;
+  Annex I, Part II; Recitals 65–71.
+- Commission guidance on the application of the CRA, Communication C(2026) 5252,
+  27 July 2026 (draft approved; formally adopted once all language versions exist):
+  §209–221 reporting, §222–228 reporting upstream.
+- Commission FAQ on the CRA, v1.4 (September 2026): entries 5.1–5.5.
+- Directive (EU) 2022/2555 (NIS2), Article 23.

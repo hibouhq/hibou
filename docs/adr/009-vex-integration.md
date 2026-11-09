@@ -1,7 +1,11 @@
 # ADR-009: Standards-compliant VEX integration
 
 ## Status
-Accepted
+Accepted. Amended by [ADR-053](053-incidents.md) §4a: statements gain a
+version axis (one release or a vers range), are never edited (a revision
+supersedes, a withdrawal inserts a withdrawn row), and are the export's only
+source — acceptance and reachability no longer synthesize statements at
+export time.
 
 ## Context
 Modern dependency analysis produces large volumes of vulnerability matches, but raw CVE presence is not the same as exploitable risk. A typical product can inherit thousands of CVE references through transitive dependencies, container base images, and vendored libraries. In practice, many of those advisories are not exploitable in the deployed product because the vulnerable component is not present at runtime, the affected code path is never reached, the vulnerable feature is disabled, or a fix has already been applied downstream.

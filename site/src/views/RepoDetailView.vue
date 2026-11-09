@@ -252,11 +252,13 @@ import {
   Rocket,
   Settings,
   ShieldAlert,
+  Siren,
 } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { api, type EnhancedRef, type RefSummary, type Repository, type Snapshot } from '@/api/client'
+import { incidentsApi } from '@/api/incidents'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { relativeTime } from '@/lib/datetime'
@@ -271,6 +273,7 @@ const repo = ref<Repository | null>(null)
 const refs = ref<EnhancedRef[]>([])
 const snapshots = ref<Snapshot[]>([])
 const summary = ref<RefSummary | null>(null)
+const openIncidents = ref(0)
 const loading = ref(true)
 const snapshotsLoading = ref(false)
 let snapshotPollTimer: number | null = null
@@ -488,6 +491,8 @@ const tabs = computed(() => {
     // selector, so the tab renders as a pill between dividers and the
     // selector strip disappears while it is active.
     { label: 'Releases', name: 'repo-releases', icon: Rocket, fenced: true, to: { name: 'repo-releases', params: route.params } },
+    // Repo-level like Releases (ADR-053): a large organization's incidents, narrowed to this repository.
+    { label: 'Incidents', name: 'repo-incidents', icon: Siren, fenced: true, to: { name: 'repo-incidents', params: route.params } },
     { label: 'Deployments', name: 'repo-deployments', icon: Container, fenced: true, badge: 'Soon', to: { name: 'repo-deployments', params: route.params } },
     // Insights and Settings are repo-level like Releases: fencing them drops
     // the ref/snapshot selector strip, which does not apply to them.
@@ -554,6 +559,7 @@ const isFencedTabActive = computed(() => {
   if (typeof route.name !== 'string') return false
   return (
     route.name === 'repo-releases'
+    || route.name === 'repo-incidents'
     || route.name === 'repo-deployments'
     || route.name === 'repo-insights'
     || route.name.startsWith('repo-settings')
@@ -565,6 +571,16 @@ function isActiveTab(name: string) {
     return typeof route.name === 'string' && route.name.startsWith('repo-settings')
   }
   return route.name === name
+}
+
+// The Incidents tab's count: open incidents of this repository.
+async function loadOpenIncidents() {
+  try {
+    const response = await incidentsApi.list(provider.value, orgSlug.value, { state: 'open', repo: repoSlug.value, per_page: 1 })
+    openIncidents.value = response.pagination.total
+  } catch {
+    openIncidents.value = 0
+  }
 }
 
 async function loadRepoShell() {
@@ -584,7 +600,7 @@ async function loadRepoShell() {
       await router.replace({ query: { ...route.query, ref: repoRes.data.default_branch } })
     }
 
-    await Promise.all([loadSnapshots(), loadSummary()])
+    await Promise.all([loadSnapshots(), loadSummary(), loadOpenIncidents()])
   } catch {
     repo.value = null
     refs.value = []
@@ -674,6 +690,9 @@ function totalSeverity(counts?: { critical: number; high: number; medium: number
 }
 
 function tabCount(name: string): string | number | null {
+  if (name === 'repo-incidents') {
+    return openIncidents.value || null
+  }
   if (!summary.value) {
     return null
   }

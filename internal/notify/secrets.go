@@ -353,10 +353,15 @@ var destinationFields = map[string][]string{
 	"slack":   {"url", "webhook_url"},
 	"teams":   {"url", "webhook_url"},
 	"discord": {"url", "webhook_url"},
+	// Trackers (ADR-053 §8): the token goes wherever these point.
+	"jira":            {"base_url", "email"},
+	"github_issues":   {"api_url", "repository"},
+	"gitlab_issues":   {"base_url", "project"},
+	"tracker_webhook": {"url", "webhook_url"},
 }
 
 // allDestinationFields applies to an unknown type: every field any type uses.
-var allDestinationFields = []string{"smtp_host", "smtp_port", "smtp_username", "url", "webhook_url"}
+var allDestinationFields = []string{"smtp_host", "smtp_port", "smtp_username", "url", "webhook_url", "base_url", "api_url", "email", "repository", "project"}
 
 // DestinationFields lists the destination fields of an integration type.
 func DestinationFields(kind string) []string {

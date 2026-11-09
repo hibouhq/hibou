@@ -68,6 +68,12 @@ type TextNode struct {
 
 func (TextNode) nodeType() string { return "text" }
 
+// linkedIncidentSQL is true when an incident is linked to the finding.
+const linkedIncidentSQL = "EXISTS (SELECT 1 FROM incidents li WHERE li.repo_id = v.repo_id AND ((li.subject_type = 'finding' AND li.subject_id = v.fingerprint) OR (li.subject_type = 'advisory' AND li.subject_id = v.advisory_id::text)))"
+
+// fixAvailableSQL is true when a fixed version is known for the finding.
+const fixAvailableSQL = "(v.has_remediation OR EXISTS (SELECT 1 FROM affected_ranges ar WHERE ar.id = v.affected_range_id AND ar.fixed <> ''))"
+
 var AllowedColumns = map[string]string{
 	"type":     "type",
 	"severity": "severity",
@@ -87,6 +93,17 @@ var AllowedColumns = map[string]string{
 	// Known-exploited membership (ADR-032): resolved against the kev_entries
 	// mirror, not a column — see exploitedQualifierToSQL.
 	"exploited": "",
+	// ADR-053 §1: fix:available|none and verified:true|false (a secret the
+	// validator confirmed live), for incident rules and the search bar
+	// alike. A fix is known when the matched range names a fixed version
+	// (read at query time, so an advisory that gains one counts at once) or
+	// the producer reported a remediation.
+	"fix":      fixAvailableSQL,
+	"verified": "v.verified",
+	// incident:true|false — a finding with a linked incident (ADR-053), in
+	// any state: one opened on the finding itself, or on its advisory in the
+	// same repository, as the finding panel lists them.
+	"incident": linkedIncidentSQL,
 	// CWE (ADR-037): resolved against the finding_cwes view — see CWESQL.
 	cwe.KindExact: "",
 	cwe.KindTree:  "",
@@ -384,6 +401,12 @@ func qualifierToSQL(node QualifierNode, param int) (string, []interface{}, int, 
 		return riskQualifierToSQL(node.Key, values, param)
 	case "exploited":
 		return exploitedQualifierToSQL(values, param)
+	case "fix":
+		return fixQualifierToSQL(column, values, param)
+	case "verified":
+		return verifiedQualifierToSQL(column, values, param)
+	case "incident":
+		return incidentQualifierToSQL(column, values, param)
 	case "acceptance":
 		return acceptanceQualifierToSQL(values, param)
 	case "presence":
@@ -548,6 +571,55 @@ func ParseComparison(raw string, percent bool) (string, float64, error) {
 		return "", 0, fmt.Errorf("%q is not a number", raw)
 	}
 	return operator, number / scale, nil
+}
+
+func fixQualifierToSQL(column string, values []string, param int) (string, []interface{}, int, error) {
+	if len(values) != 1 {
+		return "", nil, param, errors.New("fix takes a single value: available or none")
+	}
+	switch strings.ToLower(values[0]) {
+	case "available", "true", "yes":
+		return column, nil, param, nil
+	case "none", "false", "no":
+		return "NOT " + column, nil, param, nil
+	default:
+		return "", nil, param, fmt.Errorf("fix must be available or none (got %q)", values[0])
+	}
+}
+
+func incidentQualifierToSQL(column string, values []string, param int) (string, []interface{}, int, error) {
+	if len(values) != 1 {
+		return "", nil, param, errors.New("incident takes a single value: true, false or an incident number")
+	}
+	value := strings.TrimPrefix(strings.ToLower(values[0]), "#")
+	switch value {
+	case "true", "yes":
+		return column, nil, param, nil
+	case "false", "no":
+		return "NOT " + column, nil, param, nil
+	}
+	// incident:5 — the rows of one incident (ADR-053): the Scope tab links
+	// here, since an advisory may match several components on one branch.
+	number, err := strconv.Atoi(value)
+	if err != nil || number <= 0 {
+		return "", nil, param, fmt.Errorf("incident must be true, false or an incident number (got %q)", values[0])
+	}
+	clause := strings.Replace(column, "WHERE li.repo_id = v.repo_id", fmt.Sprintf("WHERE li.repo_id = v.repo_id AND li.number = $%d", param), 1)
+	return clause, []interface{}{number}, param + 1, nil
+}
+
+func verifiedQualifierToSQL(column string, values []string, param int) (string, []interface{}, int, error) {
+	if len(values) != 1 {
+		return "", nil, param, errors.New("verified takes a single true/false value")
+	}
+	switch strings.ToLower(values[0]) {
+	case "true", "yes":
+		return "COALESCE(" + column + ", false)", nil, param, nil
+	case "false", "no":
+		return "NOT COALESCE(" + column + ", false)", nil, param, nil
+	default:
+		return "", nil, param, fmt.Errorf("verified must be true or false (got %q)", values[0])
+	}
 }
 
 func exploitedQualifierToSQL(values []string, param int) (string, []interface{}, int, error) {

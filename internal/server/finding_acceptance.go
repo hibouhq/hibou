@@ -129,6 +129,7 @@ func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Reque
 
 	switch status {
 	case "open":
+		s.withdrawTriageStatement(r.Context(), org.ID, repo.ID, user, fingerprint)
 		if _, err := s.queries.DeleteFindingAcceptance(r.Context(), repo.ID, fingerprint); err != nil {
 			api.JSONError(w, http.StatusInternalServerError, "failed to reopen finding")
 			return
@@ -146,6 +147,15 @@ func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Reque
 	reasonKind, err := validateAcceptanceDecision(input.ReasonKind, input.Reason, input.VEXJustification, input.ExpiresAt, componentBackedFindingType(vulnerability.Type))
 	if err != nil {
 		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.validateTriageStatement(r.Context(), vulnerability, reasonKind, input.VEXJustification, input.ExpiresAt); err != nil {
+		api.JSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	statementID, err := s.applyTriageStatement(r.Context(), org.ID, repo.ID, user, vulnerability, reasonKind, strings.TrimSpace(input.Reason), input.VEXJustification, input.ExpiresAt)
+	if err != nil {
+		api.JSONError(w, http.StatusInternalServerError, "failed to record the VEX statement")
 		return
 	}
 
@@ -166,6 +176,7 @@ func (s *Server) handleSetFindingAcceptance(w http.ResponseWriter, r *http.Reque
 		VEXJustification: vexJustification,
 		AcceptedBy:       acceptedBy,
 		ExpiresAt:        input.ExpiresAt,
+		VEXStatementID:   statementID,
 	})
 	if err != nil {
 		api.JSONError(w, http.StatusInternalServerError, "failed to store acceptance")
@@ -222,6 +233,9 @@ type batchAcceptanceRequest struct {
 	Reason     string     `json:"reason"`
 	Labels     []string   `json:"labels,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	// VEXJustification applies to the dependency findings of a not-affected
+	// decision; required when the batch has any (ADR-053 §4a).
+	VEXJustification string `json:"vex_justification,omitempty"`
 }
 
 type batchAcceptanceResponse struct {
@@ -268,10 +282,8 @@ func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Req
 	reason := strings.TrimSpace(input.Reason)
 	reasonKind := input.ReasonKind
 	if status == "accepted" {
-		// Batch decisions never carry VEX justifications: those are
-		// per-finding statements about specific components.
 		var err error
-		reasonKind, err = validateAcceptanceDecision(input.ReasonKind, reason, "", input.ExpiresAt, false)
+		reasonKind, err = validateAcceptanceDecision(input.ReasonKind, reason, input.VEXJustification, input.ExpiresAt, input.VEXJustification != "")
 		if err != nil {
 			api.JSONError(w, http.StatusBadRequest, err.Error())
 			return
@@ -303,24 +315,62 @@ func (s *Server) handleBatchFindingAcceptance(w http.ResponseWriter, r *http.Req
 	if user != nil {
 		acceptedBy = &user.ID
 	}
+	// Every finding is checked before anything is written: a batch refused
+	// half-way would leave statements without acceptances.
+	findings := make(map[string]*store.Vulnerability, len(owned))
+	if status == "accepted" {
+		for _, fingerprint := range owned {
+			finding, err := s.queries.GetLatestVulnerabilityByFingerprint(r.Context(), repo.ID, fingerprint)
+			if err != nil {
+				api.JSONError(w, http.StatusInternalServerError, "failed to load findings")
+				return
+			}
+			if finding == nil {
+				continue
+			}
+			if err := s.validateTriageStatement(r.Context(), finding, reasonKind, input.VEXJustification, input.ExpiresAt); err != nil {
+				api.JSONError(w, http.StatusBadRequest, fmt.Sprintf("%s: %s", finding.PrimaryIdentifierValue, err.Error()))
+				return
+			}
+			findings[fingerprint] = finding
+		}
+	}
 	applied := 0
 	for _, fingerprint := range owned {
 		if status == "open" {
+			s.withdrawTriageStatement(r.Context(), org.ID, repo.ID, user, fingerprint)
 			if _, err := s.queries.DeleteFindingAcceptance(r.Context(), repo.ID, fingerprint); err != nil {
 				api.JSONError(w, http.StatusInternalServerError, "failed to reopen findings")
 				return
 			}
-		} else if _, err := s.queries.UpsertFindingAcceptance(r.Context(), store.AcceptFindingInput{
-			RepoID:      repo.ID,
-			Fingerprint: fingerprint,
-			ReasonKind:  reasonKind,
-			Reason:      reason,
-			Labels:      normalizeAcceptanceLabels(input.Labels),
-			AcceptedBy:  acceptedBy,
-			ExpiresAt:   input.ExpiresAt,
-		}); err != nil {
-			api.JSONError(w, http.StatusInternalServerError, "failed to store acceptances")
-			return
+		} else {
+			var statementID *uuid.UUID
+			var justification *string
+			if finding := findings[fingerprint]; finding != nil {
+				var err error
+				statementID, err = s.applyTriageStatement(r.Context(), org.ID, repo.ID, user, finding, reasonKind, reason, input.VEXJustification, input.ExpiresAt)
+				if err != nil {
+					api.JSONError(w, http.StatusInternalServerError, "failed to record the VEX statement")
+					return
+				}
+				if statementID != nil && input.VEXJustification != "" && reasonKind == "false_positive" {
+					justification = &input.VEXJustification
+				}
+			}
+			if _, err := s.queries.UpsertFindingAcceptance(r.Context(), store.AcceptFindingInput{
+				RepoID:           repo.ID,
+				Fingerprint:      fingerprint,
+				ReasonKind:       reasonKind,
+				Reason:           reason,
+				Labels:           normalizeAcceptanceLabels(input.Labels),
+				VEXJustification: justification,
+				AcceptedBy:       acceptedBy,
+				ExpiresAt:        input.ExpiresAt,
+				VEXStatementID:   statementID,
+			}); err != nil {
+				api.JSONError(w, http.StatusInternalServerError, "failed to store acceptances")
+				return
+			}
 		}
 		applied++
 		// One audit entry per finding: a batch decision must stay individually
@@ -432,6 +482,10 @@ func (s *Server) writeAcceptanceAuditLog(r *http.Request, user *store.User, orgI
 
 type secretRevocationRequest struct {
 	Comment string `json:"comment"`
+	// Checklist is the structured attestation (ADR-053 §4): where and by whom
+	// the credential was revoked, rotation, exposure. Without it the request
+	// keeps the older one-line attestation.
+	Checklist json.RawMessage `json:"checklist,omitempty" swaggertype:"object"`
 }
 
 // @Summary      Attest secret revocation
@@ -486,6 +540,24 @@ func (s *Server) handleAttestSecretRevocation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if checklist, ok := decodeChecklist(input.Checklist); ok {
+		if problem := checklist.validate(); problem != "" {
+			api.JSONError(w, http.StatusBadRequest, problem)
+			return
+		}
+		if _, err := s.recordSecretChecklist(r, org, repo, user, vulnerability, checklist, input.Comment); err != nil {
+			api.JSONError(w, http.StatusInternalServerError, "failed to record the attestation")
+			return
+		}
+		if !checklist.Revoked {
+			// Rotation or exposure recorded on their own: the secret stays
+			// open until someone attests the revocation or a validator
+			// confirms it dead.
+			api.JSON(w, http.StatusOK, vulnerability)
+			return
+		}
+	}
+
 	comment := "secret revoked & rotated (attested)"
 	if strings.TrimSpace(input.Comment) != "" {
 		comment += ": " + strings.TrimSpace(input.Comment)
@@ -506,5 +578,6 @@ func (s *Server) handleAttestSecretRevocation(w http.ResponseWriter, r *http.Req
 		"comment":     strings.TrimSpace(input.Comment),
 	})
 	s.publishGateRecompute(r.Context(), repo.ID)
+	s.reconcileFindingIncidents(r, org.ID, repo.ID, vulnerability.Fingerprint)
 	api.JSON(w, http.StatusOK, updated)
 }

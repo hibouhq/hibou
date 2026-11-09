@@ -15,7 +15,7 @@
           </button>
 
           <RouterLink
-            to="/orgs"
+            to="/"
             aria-label="Hibou home"
             class="flex items-center gap-3 text-sm font-semibold text-white"
           >
@@ -340,6 +340,7 @@ import {
   Container,
   ChevronDown,
   FlaskConical,
+  House,
   LayoutDashboard,
   LineChart,
   Lock,
@@ -349,6 +350,7 @@ import {
   Search,
   Settings,
   ShieldAlert,
+  Siren,
   Users,
 } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -501,7 +503,10 @@ const navSections = computed<NavigationDrawerSection[]>(() => {
   // Global destinations first, GitHub-drawer style.
   sections.push({
     title: 'Global',
-    items: [{ label: 'Organizations', icon: Building2, to: '/orgs' }],
+    items: [
+      { label: 'Home', icon: House, to: '/' },
+      { label: 'Organizations', icon: Building2, to: '/orgs' },
+    ],
   })
 
   if (hasOrg) {
@@ -514,6 +519,7 @@ const navSections = computed<NavigationDrawerSection[]>(() => {
         { label: 'Vulnerabilities', icon: ShieldAlert, to: `${orgBase}/vulnerabilities` },
         { label: 'Dependencies', icon: Package, to: `${orgBase}/dependencies` },
         { label: 'Repositories', icon: BookOpen, to: `${orgBase}/repos` },
+        { label: 'Incidents', icon: Siren, to: `${orgBase}/incidents` },
         { label: 'Clients', icon: Users, to: `${orgBase}/clients` },
         { label: 'Teams', icon: Users, to: `${orgBase}/teams` },
         { label: 'Insights', icon: LineChart, to: `${orgBase}/insights` },

@@ -1,8 +1,16 @@
 // The filter bar's risk qualifiers (ADR-038 §6): cvss:, epss: and
-// epss-percentile:. Server-side like the CWE qualifiers: the value is a
-// comparison the server compiles, so the bar sends them as `q`.
+// epss-percentile:, grouped under one Risk pill; plus fix:, verified: and
+// incident: (ADR-053), typed with completion. Server-side like the CWE qualifiers: the
+// server compiles them, so the bar sends them as `q`.
 
 import type { CWEFilterDef, CWEValueSuggestion } from '@/lib/cweFilters'
+
+export type RiskFilterDef = CWEFilterDef & {
+  /** Filters sharing a group render as one pill in the bar. */
+  group?: string
+}
+
+export const RISK_GROUP = 'Risk'
 
 const COMPARISON = /^((>=|<=|>|<|=)?\d+(\.\d+)?%?|none|any)$/i
 
@@ -25,13 +33,33 @@ function suggestions(items: CWEValueSuggestion[]) {
   return async (fragment: string) => items.filter(item => !fragment || item.value.startsWith(fragment.toLowerCase()))
 }
 
-export function riskFilterDefs(): CWEFilterDef[] {
+// A closed set of values: completion and hover read the same list.
+function closedValues(...items: CWEValueSuggestion[]) {
+  return {
+    suggestValues: suggestions(items),
+    describeValue: (value: string) => {
+      const item = items.find(candidate => candidate.value === value.toLowerCase())
+      return item ? { title: item.label ?? item.value, detail: item.detail } : undefined
+    },
+  }
+}
+
+/**
+ * Completion and hover text for exploited:, whose definition each view owns
+ * (it is also the red toggle and a discrete parameter).
+ */
+export const EXPLOITED_VALUES = closedValues(
+  { value: 'true', label: 'known exploited', detail: 'On CISA KEV or ENISA EUVD: exploitation in the wild is documented' },
+  { value: 'false', label: 'not known exploited', detail: 'On no known-exploited catalog' },
+)
+
+export function riskFilterDefs(): RiskFilterDef[] {
   return [
     {
       key: 'cvss',
       label: 'CVSS',
       options: [],
-      hidden: true,
+      group: RISK_GROUP,
       serverQuery: true,
       valuePattern: COMPARISON,
       description: 'The CVSS score a finding uses: cvss:>=7, cvss:<4, cvss:none',
@@ -47,7 +75,7 @@ export function riskFilterDefs(): CWEFilterDef[] {
       key: 'epss',
       label: 'EPSS',
       options: [],
-      hidden: true,
+      group: RISK_GROUP,
       serverQuery: true,
       valuePattern: COMPARISON,
       description: 'Probability of exploitation in the next 30 days (FIRST): epss:>=10%, epss:>=0.5',
@@ -62,7 +90,7 @@ export function riskFilterDefs(): CWEFilterDef[] {
       key: 'epss-percentile',
       label: 'EPSS percentile',
       options: [],
-      hidden: true,
+      group: RISK_GROUP,
       serverQuery: true,
       valuePattern: COMPARISON,
       description: 'Rank of the EPSS score among all CVEs: epss-percentile:>=95%',
@@ -71,6 +99,45 @@ export function riskFilterDefs(): CWEFilterDef[] {
         { value: '>=99%', label: 'top 1%' },
       ]),
       describeValue: value => describeComparison(value, 'percentile'),
+    },
+    {
+      key: 'fix',
+      label: 'Fix',
+      options: [],
+      hidden: true,
+      serverQuery: true,
+      valuePattern: /^(available|none)$/i,
+      description: 'Whether a fixed version exists: fix:available, fix:none',
+      ...closedValues(
+        { value: 'available', label: 'fix available', detail: 'A fixed version of the component exists' },
+        { value: 'none', label: 'no fix yet', detail: 'No fixed version is published' },
+      ),
+    },
+    {
+      key: 'verified',
+      label: 'Verified',
+      options: [],
+      hidden: true,
+      serverQuery: true,
+      valuePattern: /^(true|false)$/i,
+      description: 'Secrets a validator confirmed live: verified:true',
+      ...closedValues(
+        { value: 'true', label: 'confirmed live', detail: 'A validator reached the provider and the credential works' },
+        { value: 'false', label: 'not confirmed live', detail: 'Unverified, or confirmed dead' },
+      ),
+    },
+    {
+      key: 'incident',
+      label: 'Incident',
+      options: [],
+      hidden: true,
+      serverQuery: true,
+      valuePattern: /^(true|false)$/i,
+      description: 'Findings with a linked incident, in any state: incident:true',
+      ...closedValues(
+        { value: 'true', label: 'linked to an incident', detail: 'An incident covers this finding or its advisory in this repository' },
+        { value: 'false', label: 'no incident', detail: 'No incident links to it' },
+      ),
     },
   ]
 }

@@ -20,7 +20,9 @@ const router = createRouter({
       path: '/',
       component: () => import('@/layouts/AppLayout.vue'),
       children: [
-        { path: '', redirect: '/orgs' },
+        // Home (ADR-053 §9): the person-centred dashboard; it hands users
+        // without an organisation to the onboarding page.
+        { path: '', name: 'home', component: () => import('@/views/HomeView.vue') },
         { path: 'orgs', name: 'orgs', component: () => import('@/views/OrgsView.vue') },
         // Tools: standalone utilities, no organization needed.
         { path: 'tools', name: 'tools', component: () => import('@/views/tools/ToolsView.vue') },
@@ -38,6 +40,7 @@ const router = createRouter({
             { path: 'dependencies', name: 'org-dependencies', component: () => import('@/views/org/DependenciesTab.vue') },
             { path: 'licenses', name: 'org-licenses', component: () => import('@/views/org/LicensesTab.vue') },
             { path: 'clients', name: 'org-clients', component: () => import('@/views/org/ClientsTab.vue') },
+            { path: 'incidents', name: 'org-incidents', component: () => import('@/views/org/IncidentsTab.vue') },
             { path: 'triage', name: 'org-triage', component: () => import('@/views/org/TriageTab.vue') },
             { path: 'scanners', name: 'org-scanners', component: () => import('@/views/org/ScannersTab.vue') },
             // The Access tab moved under Settings.
@@ -57,12 +60,14 @@ const router = createRouter({
                 { path: 'tools', name: 'org-settings-tools', component: () => import('@/views/org/settings/ToolsSettings.vue') },
                 { path: 'integrations', name: 'org-settings-integrations', component: () => import('@/views/org/settings/IntegrationsSettings.vue') },
                 { path: 'notifications', name: 'org-settings-notifications', component: () => import('@/views/org/settings/NotificationsSettings.vue') },
+                { path: 'incidents', name: 'org-settings-incidents', component: () => import('@/views/org/settings/IncidentSettings.vue') },
                 { path: 'audit', name: 'org-settings-audit', component: () => import('@/views/org/settings/AuditSettings.vue') },
               ],
             },
           ],
         },
         { path: 'orgs/:provider/:slug/search', name: 'search', component: () => import('@/views/SearchView.vue') },
+        { path: 'orgs/:provider/:slug/incidents/:number', name: 'incident-detail', component: () => import('@/views/IncidentView.vue') },
         { path: 'orgs/:provider/:slug/repos', name: 'repos', component: () => import('@/views/ReposView.vue') },
         {
           path: 'orgs/:provider/:slug/clients/:clientSlug',
@@ -71,6 +76,7 @@ const router = createRouter({
             { path: '', name: 'client-detail', redirect: to => ({ name: 'client-overview', params: to.params }) },
             { path: 'overview', name: 'client-overview', component: () => import('@/views/client/OverviewTab.vue') },
             { path: 'history', name: 'client-history', component: () => import('@/views/client/HistoryTab.vue') },
+            { path: 'notices', name: 'client-notices', component: () => import('@/views/client/NoticesTab.vue') },
           ],
         },
         {
@@ -123,6 +129,12 @@ const router = createRouter({
               component: () => import('@/views/repo/ReleasesTab.vue'),
             },
             {
+              // The organization's incident list narrowed to this repository (ADR-053).
+              path: 'incidents',
+              name: 'repo-incidents',
+              component: () => import('@/views/org/IncidentsTab.vue'),
+            },
+            {
               // Placeholder for the ADR-024 §8 phase; fenced with Releases.
               path: 'deployments',
               name: 'repo-deployments',
@@ -151,6 +163,7 @@ const router = createRouter({
                 { path: 'general', name: 'repo-settings-general', component: () => import('@/views/repo/settings/GeneralSettings.vue') },
                 { path: 'configuration', name: 'repo-settings-config', component: () => import('@/views/repo/settings/ConfigSettings.vue') },
                 { path: 'scanners', name: 'repo-settings-scanners', component: () => import('@/views/repo/settings/ScannersSettings.vue') },
+                { path: 'incidents', name: 'repo-settings-incidents', component: () => import('@/views/repo/settings/IncidentSettings.vue') },
                 { path: 'audit', name: 'repo-settings-audit', component: () => import('@/views/repo/settings/AuditSettings.vue') },
               ],
             },
@@ -176,7 +189,7 @@ const router = createRouter({
             { path: 'advisories/watches', name: 'settings-instance-watches', component: () => import('@/views/settings/WatchesSettings.vue') },
           ],
         },
-        { path: '/:pathMatch(.*)*', redirect: '/orgs' },
+        { path: '/:pathMatch(.*)*', redirect: '/' },
       ],
     },
   ],

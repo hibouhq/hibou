@@ -74,12 +74,24 @@
       v-if="dialog"
       :kind="dialog.kind"
       :count="dialog.fingerprints.length"
-      :component-backed="dialog.componentBacked"
+      :statement="dialog.statement"
+      :statement-unknown="dialog.statementUnknown"
       :exploited="dialog.exploited"
+      :live-credential="dialog.liveCredential"
       :error="dialogError"
       :submitting="dialogSubmitting"
       @cancel="closeTriageDialog"
       @confirm="confirmTriageDialog"
+    />
+
+    <SecretRevocationDialog
+      v-if="revocationTarget"
+      :provider="provider"
+      :slug="slug"
+      :repo-slug="repoSlug"
+      :finding="revocationTarget"
+      @cancel="revocationTarget = null"
+      @done="onRevocationDone"
     />
 
     <FindingDetailModal
@@ -92,7 +104,7 @@
       @cwes-updated="applyCWEsToRows"
       @accept="(kind, finding, exploited) => { closeDrawer(); openTriageDialog(kind, [finding.fingerprint], finding, exploited) }"
       @reopen="(fingerprint) => { closeDrawer(); void reopenFindings([fingerprint]) }"
-      @revoke="(finding) => { closeDrawer(); void markSecretRevoked(finding) }"
+      @revoke="(finding) => { closeDrawer(); markSecretRevoked(finding) }"
       @disputed="applyDisputeToRows"
       @navigate="navigateDrawer"
     />
@@ -407,7 +419,19 @@
                     v-else
                     class="relative flex"
                   >
+                    <!-- ADR-053 §4: a secret's primary action is revocation;
+                         accepting its risk sits behind the menu. -->
                     <button
+                      v-if="vulnerability.type === 'secret'"
+                      type="button"
+                      class="whitespace-nowrap rounded-l-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200 transition hover:bg-amber-500/20"
+                      title="Record the revocation checklist — with a validator's confirmation, the only ways a secret resolves"
+                      @click.stop="markSecretRevoked(vulnerability)"
+                    >
+                      Revoke…
+                    </button>
+                    <button
+                      v-else
                       type="button"
                       class="whitespace-nowrap rounded-l-lg border border-surface-border px-2 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
                       title="Real, but deliberately not fixing now. Requires a reason; suppressed from the gate."
@@ -417,35 +441,45 @@
                     </button>
                     <button
                       type="button"
-                      class="rounded-r-lg border border-l-0 border-surface-border px-1.5 py-1 text-[11px] text-gray-300 transition hover:border-accent/50 hover:text-white"
-                      aria-label="More accept options"
+                      class="rounded-r-lg border border-l-0 px-1.5 py-1 text-[11px] transition"
+                      :class="vulnerability.type === 'secret' ? 'border-amber-500/40 text-amber-200 hover:bg-amber-500/20' : 'border-surface-border text-gray-300 hover:border-accent/50 hover:text-white'"
+                      aria-label="More triage options"
                       @click.stop="rowMenuFor = rowMenuFor === vulnerability.id ? '' : vulnerability.id"
                     >
                       ▾
                     </button>
-                    <!-- The menu holds only the ALTERNATIVES: the main button
-                         already is "accept risk", repeating it here read as
-                         two different actions. -->
+                    <!-- The menu holds only the ALTERNATIVES to the main
+                         button: repeating it here read as two actions. -->
                     <div
                       v-if="rowMenuFor === vulnerability.id"
-                      class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
+                      class="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-md border border-surface-border bg-surface-raised shadow-xl"
                     >
+                      <button
+                        v-if="vulnerability.type === 'secret'"
+                        type="button"
+                        class="block w-full px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
+                        :title="vulnerability.verified ? 'The credential is confirmed live: accepting the risk requires an expiry' : 'Real, but deliberately not revoking now. Requires a reason; suppressed from the gate.'"
+                        @click.stop="rowMenuFor = ''; openTriageDialog('risk_accepted', [vulnerability.fingerprint], vulnerability)"
+                      >
+                        Accept risk…
+                      </button>
                       <button
                         type="button"
                         class="block w-full px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
-                        title="Not a real issue: excluded from the gate and from risk reporting."
+                        :title="triageMakesStatement(vulnerability) ? 'Not affected: a VEX not_affected statement with its justification; excluded from the gate and risk reporting.' : 'Not a real issue: excluded from the gate and from risk reporting.'"
                         @click.stop="rowMenuFor = ''; openTriageDialog('false_positive', [vulnerability.fingerprint], vulnerability)"
                       >
-                        False positive…
+                        {{ triageMakesStatement(vulnerability) ? 'Not affected…' : 'False positive…' }}
                       </button>
                       <button
                         v-if="vulnerability.type === 'secret'"
                         type="button"
-                        class="block w-full border-t border-surface-border-subtle px-3 py-1.5 text-left text-[11px] text-emerald-300 transition hover:bg-surface-overlay"
-                        title="Attest that the credential was revoked and rotated — the only way a secret resolves"
-                        @click.stop="rowMenuFor = ''; markSecretRevoked(vulnerability)"
+                        class="block w-full border-t border-surface-border-subtle px-3 py-1.5 text-left text-[11px] text-gray-200 transition hover:bg-surface-overlay"
+                        title="Asks the validators again; a credential confirmed dead resolves on its own"
+                        @click.stop="rowMenuFor = ''; recheckSecret(vulnerability)"
                       >
-                        Mark revoked…
+                        Re-check now
+                        <span class="block text-[10px] text-gray-500">Asks the validators again; a credential confirmed dead resolves on its own.</span>
                       </button>
                     </div>
                   </div>
@@ -489,27 +523,27 @@ import { type LocationQueryRaw, type RouteLocationRaw, RouterLink, useRoute, use
 import { Archive, Clock, EyeOff, Flame, KeyRound, TriangleAlert } from 'lucide-vue-next'
 
 import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type FindingDispute, type ScanRule, type SecretScanJob, type VexJustification, type Vulnerability, type VulnerabilityFacets } from '@/api/client'
-import { useDialog } from '@/composables/useDialog'
 import FilterBar from '@/components/FilterBar.vue'
 import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
 import FindingOriginBadge from '@/components/FindingOriginBadge.vue'
 import PresenceBadge from '@/components/finding/PresenceBadge.vue'
 import LinkedText from '@/components/LinkedText.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
+import SecretRevocationDialog from '@/components/SecretRevocationDialog.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
 import CweChips from '@/components/finding/CweChips.vue'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import CvssCell from '@/components/finding/CvssCell.vue'
 import EpssCell from '@/components/finding/EpssCell.vue'
 import { cweFilterDefs } from '@/lib/cweFilters'
-import { riskFilterDefs } from '@/lib/riskFilters'
+import { EXPLOITED_VALUES, riskFilterDefs } from '@/lib/riskFilters'
 import { appendBarToken, withHiddenDefaults } from '@/lib/filterBarQuery'
-import { triageState } from '@/lib/triage'
+import { triageMakesStatement, triageState, type TriageConfirmPayload } from '@/lib/triage'
+import { incidentsApi } from '@/api/incidents'
 import { sameFilterValues, sameListQueryState } from '@/lib/listQueryState'
 import { migrateRiskOnlyQuery, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 import { barQueryText, barStateFromQuery, BUILTIN_FINDINGS_PRESETS } from '@/lib/searchPresets'
 
-const { promptDialog } = useDialog()
 const route = useRoute()
 const router = useRouter()
 
@@ -642,7 +676,7 @@ const filterDefs = computed(() => [
   { key: 'file', label: 'File', options: fileOptions.value, multi: true, freeform: true },
   // hidden: no dropdown pill (the red toggle is the UI) — the def exists so a
   // typed `exploited:true` token validates and lands in activeFilters.
-  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
+  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly, ...EXPLOITED_VALUES },
   // ADR-037: server-side qualifiers; suggestions and hover show CWE titles.
   ...cweFilterDefs(() => facetCounts.value.cwe),
   // ADR-038 §6: server-side comparisons on the rating and the EPSS mirror.
@@ -1085,7 +1119,15 @@ const selected = reactive(new Set<string>())
 // Targets are fingerprints, not row objects: a filter-wide selection includes
 // findings that are not on the current page, and keying off rows would have
 // silently triaged only the visible subset.
-const dialog = ref<{ kind: AcceptanceReasonKind; fingerprints: string[]; componentBacked: boolean; vulnID?: string; exploited?: boolean } | null>(null)
+const dialog = ref<{
+  kind: AcceptanceReasonKind
+  fingerprints: string[]
+  statement: boolean
+  statementUnknown: boolean
+  vulnID?: string
+  exploited?: boolean
+  liveCredential?: boolean
+} | null>(null)
 
 // ── Finding detail drawer: deep-linkable (?finding=<fingerprint>) so
 // notifications, gate comments, and search can land on it open.
@@ -1222,16 +1264,21 @@ function openTriageDialog(kind: AcceptanceReasonKind, fingerprints: string[], vu
   if (unique.length === 0) return
   dialogError.value = ''
   batchMessage.value = ''
+  // ADR-053 §4a: the VEX question is asked when the decision writes a
+  // statement. A filter-wide selection holds findings off this page, whose
+  // types are unknown here.
+  const rows = vulnerability ? [vulnerability] : vulnerabilities.value.filter((row) => unique.includes(row.fingerprint))
+  const single = unique.length === 1 ? (vulnerability ?? rows[0]) : undefined
   dialog.value = {
     kind,
     fingerprints: unique,
-    // VEX vocabulary only for a single component-backed finding — batch
-    // decisions never carry per-component statements.
-    componentBacked: unique.length === 1 && !!vulnerability && (vulnerability.type === 'dependency' || vulnerability.type === 'container'),
-    vulnID: unique.length === 1 ? vulnerability?.id : undefined,
-    // Only the drawer knows the advisory is KEV-listed (the flag lives on the
-    // loaded detail, not on list rows); batch decisions never carry it.
-    exploited: unique.length === 1 && exploited === true,
+    statement: rows.some(triageMakesStatement),
+    statementUnknown: rows.length < unique.length,
+    vulnID: single?.id,
+    // Only the drawer knows for sure the advisory is KEV-listed; batch
+    // decisions never carry it and the server checks each finding.
+    exploited: unique.length === 1 && (exploited === true || single?.kev === true),
+    liveCredential: unique.length === 1 && single?.type === 'secret' && single.verified === true,
   }
 }
 
@@ -1241,15 +1288,14 @@ function closeTriageDialog() {
   dialogSubmitting.value = false
 }
 
-async function confirmTriageDialog(payload: { reason: string; labels: string[]; vexJustification?: VexJustification; expiresAt?: string }) {
+async function confirmTriageDialog(payload: TriageConfirmPayload) {
   if (!dialog.value) return
-  const { kind, fingerprints, vulnID } = dialog.value
+  const { fingerprints, vulnID } = dialog.value
+  const kind = payload.kind
   dialogSubmitting.value = true
   dialogError.value = ''
   try {
-    if (vulnID && payload.vexJustification) {
-      // Single finding with a VEX justification goes through the per-finding
-      // endpoint — the batch endpoint deliberately rejects VEX vocabulary.
+    if (vulnID && fingerprints.length === 1) {
       await api.setFindingAcceptance(provider.value, slug.value, repoSlug.value, vulnID, {
         status: 'accepted',
         reason_kind: kind,
@@ -1259,7 +1305,7 @@ async function confirmTriageDialog(payload: { reason: string; labels: string[]; 
         expires_at: payload.expiresAt,
       })
     } else {
-      await applyTriage('accepted', fingerprints, payload.reason, payload.expiresAt, kind, payload.labels)
+      await applyTriage('accepted', fingerprints, payload.reason, payload.expiresAt, kind, payload.labels, payload.vexJustification)
     }
     patchRowsAfterTriage(fingerprints, {
       reason_kind: kind,
@@ -1296,16 +1342,20 @@ async function reopenFindings(fingerprints: string[]) {
 
 // One finding still goes through the batch endpoint: same validation, same audit
 // shape, one code path to keep correct.
-async function applyTriage(status: 'accepted' | 'open', fingerprints: string[], reason: string, expiresAt?: string, reasonKind?: AcceptanceReasonKind, labels?: string[]) {
+async function applyTriage(status: 'accepted' | 'open', fingerprints: string[], reason: string, expiresAt?: string, reasonKind?: AcceptanceReasonKind, labels?: string[], vexJustification?: VexJustification) {
   if (fingerprints.length === 0) return
-  await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, {
+  // The batch applies the justification to its dependency findings with an
+  // advisory (ADR-053 §4a).
+  const body: Parameters<typeof api.batchFindingAcceptance>[3] = {
     fingerprints,
     status,
     reason_kind: reasonKind,
     reason: reason || undefined,
     labels,
     expires_at: expiresAt,
-  })
+    vex_justification: vexJustification,
+  }
+  await api.batchFindingAcceptance(provider.value, slug.value, repoSlug.value, body)
 }
 
 // ADR-023 UX: accept/reopen patch the rows in place — no list refetch. The one
@@ -1330,23 +1380,35 @@ function applyDisputeToRows(fingerprint: string, dispute: FindingDispute | null)
   )
 }
 
-async function markSecretRevoked(vulnerability: Vulnerability) {
-  const comment = await promptDialog({
-    title: 'Attest secret revocation',
-    message: 'Recorded in the audit log.',
-    confirmLabel: 'Mark revoked',
-    input: { label: 'How was this secret revoked/rotated?' },
-  })
-  if (comment === null) return
-  batchMessage.value = ''
-  try {
-    await api.attestSecretRevocation(provider.value, slug.value, repoSlug.value, vulnerability.id, comment)
-    batchMessage.value = 'Secret marked revoked.'
+// ADR-053 §4: the revocation is a checklist, not a text box.
+const revocationTarget = ref<Vulnerability | null>(null)
+
+function markSecretRevoked(vulnerability: Vulnerability) {
+  secretScanMessage.value = ''
+  revocationTarget.value = vulnerability
+}
+
+function onRevocationDone(revoked: boolean) {
+  const target = revocationTarget.value
+  revocationTarget.value = null
+  if (!target) return
+  secretScanMessage.value = revoked ? 'Secret revoked.' : 'Checklist recorded; the secret stays open until it is revoked.'
+  if (revoked) {
     vulnerabilities.value = vulnerabilities.value.map((row) =>
-      row.id === vulnerability.id ? { ...row, status: 'resolved' } : row,
+      row.id === target.id ? { ...row, status: 'resolved' } : row,
     )
+  }
+}
+
+async function recheckSecret(vulnerability: Vulnerability) {
+  secretScanMessage.value = ''
+  secretScanError.value = ''
+  try {
+    await incidentsApi.recheckSecret(provider.value, slug.value, repoSlug.value, vulnerability.id)
+    secretScanMessage.value = 'Re-check queued: a credential the validators confirm dead resolves on its own.'
+    void refreshSecretScanStatus()
   } catch (error) {
-    secretScanError.value = error instanceof Error ? error.message : 'Failed to record revocation'
+    secretScanError.value = error instanceof Error ? error.message : 'Failed to queue the re-check'
   }
 }
 

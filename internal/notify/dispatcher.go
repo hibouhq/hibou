@@ -160,6 +160,11 @@ func (d *Dispatcher) Subscribe() {
 	d.bus.Subscribe(events.RetentionProtected, func(ctx context.Context, event events.Event) {
 		d.handleEvent(ctx, event.Type, event.Payload)
 	})
+	for _, eventType := range events.IncidentEvents {
+		d.bus.Subscribe(eventType, func(ctx context.Context, event events.Event) {
+			d.handleEvent(ctx, event.Type, event.Payload)
+		})
+	}
 }
 
 func (d *Dispatcher) handleEvent(_ context.Context, eventType events.Type, rawPayload any) {
@@ -787,6 +792,12 @@ func buildDispatchPayload(eventType events.Type, rawPayload any) Payload {
 		payload.Body = fmt.Sprintf(
 			"%s now carries package coordinates upstream that differ from the ones triaged here. "+
 				"Neither has been retired — someone should decide which is right.", cveID)
+	case events.IncidentOpened, events.IncidentDueSoon, events.IncidentOverdue, events.IncidentDeliveryFailed,
+		events.IncidentReopened, events.IncidentClosed, events.IncidentMirrorLagging, events.ExploitationObserved:
+		// The incident service writes the sentence; the dispatcher only
+		// carries it.
+		payload.Title = stringValue(data, "title", string(eventType))
+		payload.Body = stringValue(data, "message", payload.Title)
 	default:
 		payload.Title = string(eventType)
 		payload.Body = stringValue(data, "message", string(eventType))

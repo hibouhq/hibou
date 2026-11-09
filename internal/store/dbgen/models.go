@@ -314,14 +314,66 @@ func (ns NullFindingPresence) Value() (driver.Value, error) {
 	return string(ns.FindingPresence), nil
 }
 
+type IncidentState string
+
+const (
+	IncidentStateSignal        IncidentState = "signal"
+	IncidentStateAssessing     IncidentState = "assessing"
+	IncidentStateReportable    IncidentState = "reportable"
+	IncidentStateNotReportable IncidentState = "not_reportable"
+	IncidentStateConfirmed     IncidentState = "confirmed"
+	IncidentStateDismissed     IncidentState = "dismissed"
+	IncidentStateClosed        IncidentState = "closed"
+	IncidentStateWithdrawn     IncidentState = "withdrawn"
+)
+
+func (e *IncidentState) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = IncidentState(s)
+	case string:
+		*e = IncidentState(s)
+	default:
+		return fmt.Errorf("unsupported scan type for IncidentState: %T", src)
+	}
+	return nil
+}
+
+type NullIncidentState struct {
+	IncidentState IncidentState `json:"incident_state"`
+	Valid         bool          `json:"valid"` // Valid is true if IncidentState is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullIncidentState) Scan(value interface{}) error {
+	if value == nil {
+		ns.IncidentState, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.IncidentState.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullIncidentState) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.IncidentState), nil
+}
+
 type IntegrationType string
 
 const (
-	IntegrationTypeSlack   IntegrationType = "slack"
-	IntegrationTypeTeams   IntegrationType = "teams"
-	IntegrationTypeDiscord IntegrationType = "discord"
-	IntegrationTypeWebhook IntegrationType = "webhook"
-	IntegrationTypeEmail   IntegrationType = "email"
+	IntegrationTypeSlack          IntegrationType = "slack"
+	IntegrationTypeTeams          IntegrationType = "teams"
+	IntegrationTypeDiscord        IntegrationType = "discord"
+	IntegrationTypeWebhook        IntegrationType = "webhook"
+	IntegrationTypeEmail          IntegrationType = "email"
+	IntegrationTypeJira           IntegrationType = "jira"
+	IntegrationTypeGithubIssues   IntegrationType = "github_issues"
+	IntegrationTypeGitlabIssues   IntegrationType = "gitlab_issues"
+	IntegrationTypeTrackerWebhook IntegrationType = "tracker_webhook"
 )
 
 func (e *IntegrationType) Scan(src interface{}) error {
@@ -1240,6 +1292,20 @@ type Client struct {
 	Metadata          json.RawMessage `json:"metadata"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
+	SecurityContacts  json.RawMessage `json:"security_contacts"`
+	DeliveryConfig    json.RawMessage `json:"delivery_config"`
+}
+
+type ClientPortalToken struct {
+	ID         uuid.UUID     `json:"id"`
+	OrgID      uuid.UUID     `json:"org_id"`
+	ClientID   uuid.UUID     `json:"client_id"`
+	Name       string        `json:"name"`
+	TokenHash  string        `json:"token_hash"`
+	CreatedBy  uuid.NullUUID `json:"created_by"`
+	CreatedAt  time.Time     `json:"created_at"`
+	LastUsedAt sql.NullTime  `json:"last_used_at"`
+	RevokedAt  sql.NullTime  `json:"revoked_at"`
 }
 
 type ComparePatchCache struct {
@@ -1522,6 +1588,7 @@ type FindingAcceptance struct {
 	ReasonKind       AcceptanceReasonKind `json:"reason_kind"`
 	Labels           []string             `json:"labels"`
 	VexJustification NullVexJustification `json:"vex_justification"`
+	VexStatementID   uuid.NullUUID        `json:"vex_statement_id"`
 }
 
 type FindingAssertion struct {
@@ -1576,6 +1643,19 @@ type FindingResolution struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type FirstPartyAdvisory struct {
+	ID            uuid.UUID      `json:"id"`
+	OrgID         uuid.UUID      `json:"org_id"`
+	RepoID        uuid.UUID      `json:"repo_id"`
+	AdvisoryID    uuid.UUID      `json:"advisory_id"`
+	ProductPurl   string         `json:"product_purl"`
+	ProductCpe    sql.NullString `json:"product_cpe"`
+	AffectedRange string         `json:"affected_range"`
+	PromotedFrom  sql.NullString `json:"promoted_from"`
+	CreatedBy     uuid.NullUUID  `json:"created_by"`
+	CreatedAt     time.Time      `json:"created_at"`
+}
+
 type ForgeOrgAdmin struct {
 	ID             uuid.UUID     `json:"id"`
 	Provider       string        `json:"provider"`
@@ -1605,6 +1685,161 @@ type ForgeRepository struct {
 	RemovedAt      sql.NullTime   `json:"removed_at"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
+type Incident struct {
+	ID               uuid.UUID         `json:"id"`
+	OrgID            uuid.UUID         `json:"org_id"`
+	Number           int32             `json:"number"`
+	RepoID           uuid.NullUUID     `json:"repo_id"`
+	Kind             string            `json:"kind"`
+	Regimes          []string          `json:"regimes"`
+	SubjectType      string            `json:"subject_type"`
+	SubjectID        string            `json:"subject_id"`
+	Title            string            `json:"title"`
+	State            IncidentState     `json:"state"`
+	Priority         string            `json:"priority"`
+	SignalSource     string            `json:"signal_source"`
+	TriggerRule      sql.NullString    `json:"trigger_rule"`
+	SignalAt         time.Time         `json:"signal_at"`
+	AwareAt          sql.NullTime      `json:"aware_at"`
+	DecisionReason   sql.NullString    `json:"decision_reason"`
+	DecisionStep     sql.NullString    `json:"decision_step"`
+	DecidedBy        uuid.NullUUID     `json:"decided_by"`
+	DecidedAt        sql.NullTime      `json:"decided_at"`
+	DecidedState     NullIncidentState `json:"decided_state"`
+	ProposedDecision json.RawMessage   `json:"proposed_decision"`
+	FixAvailableAt   sql.NullTime      `json:"fix_available_at"`
+	OwnerID          uuid.NullUUID     `json:"owner_id"`
+	OwnerTeamID      uuid.NullUUID     `json:"owner_team_id"`
+	DueAt            sql.NullTime      `json:"due_at"`
+	TargetSeconds    sql.NullInt64     `json:"target_seconds"`
+	MergedInto       uuid.NullUUID     `json:"merged_into"`
+	ClosedAt         sql.NullTime      `json:"closed_at"`
+	CreatedBy        uuid.NullUUID     `json:"created_by"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	ProposedMerge    json.RawMessage   `json:"proposed_merge"`
+	ExternalRef      string            `json:"external_ref"`
+}
+
+type IncidentAction struct {
+	ID           uuid.UUID       `json:"id"`
+	IncidentID   uuid.UUID       `json:"incident_id"`
+	Kind         string          `json:"kind"`
+	SubjectType  string          `json:"subject_type"`
+	SubjectID    string          `json:"subject_id"`
+	Label        string          `json:"label"`
+	Automatic    bool            `json:"automatic"`
+	Optional     bool            `json:"optional"`
+	Obsolete     bool            `json:"obsolete"`
+	DueAt        sql.NullTime    `json:"due_at"`
+	State        string          `json:"state"`
+	AssigneeID   uuid.NullUUID   `json:"assignee_id"`
+	DoneAt       sql.NullTime    `json:"done_at"`
+	DoneBy       uuid.NullUUID   `json:"done_by"`
+	Evidence     json.RawMessage `json:"evidence"`
+	WaivedBy     uuid.NullUUID   `json:"waived_by"`
+	WaivedReason sql.NullString  `json:"waived_reason"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+type IncidentDeadline struct {
+	IncidentID uuid.UUID    `json:"incident_id"`
+	Regime     string       `json:"regime"`
+	Step       string       `json:"step"`
+	DueAt      time.Time    `json:"due_at"`
+	MetAt      sql.NullTime `json:"met_at"`
+	Reference  string       `json:"reference"`
+	Notified   string       `json:"notified"`
+}
+
+type IncidentDelivery struct {
+	ID             uuid.UUID       `json:"id"`
+	IncidentID     uuid.UUID       `json:"incident_id"`
+	ClientID       uuid.NullUUID   `json:"client_id"`
+	ActionID       uuid.NullUUID   `json:"action_id"`
+	Channel        string          `json:"channel"`
+	Recipient      string          `json:"recipient"`
+	Documents      json.RawMessage `json:"documents"`
+	ApprovedBy     uuid.NullUUID   `json:"approved_by"`
+	ApprovedAt     sql.NullTime    `json:"approved_at"`
+	Status         string          `json:"status"`
+	Error          string          `json:"error"`
+	ProviderRef    string          `json:"provider_ref"`
+	CreatedBy      uuid.NullUUID   `json:"created_by"`
+	CreatedAt      time.Time       `json:"created_at"`
+	SentAt         sql.NullTime    `json:"sent_at"`
+	AcknowledgedAt sql.NullTime    `json:"acknowledged_at"`
+	AckEvidence    json.RawMessage `json:"ack_evidence"`
+	AuditLogID     uuid.NullUUID   `json:"audit_log_id"`
+}
+
+type IncidentDocument struct {
+	Sha256      string          `json:"sha256"`
+	OrgID       uuid.UUID       `json:"org_id"`
+	Kind        string          `json:"kind"`
+	ContentType string          `json:"content_type"`
+	SizeBytes   int64           `json:"size_bytes"`
+	ObjectKey   string          `json:"object_key"`
+	Content     []byte          `json:"content"`
+	Renderer    string          `json:"renderer"`
+	Inputs      json.RawMessage `json:"inputs"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+type IncidentEvent struct {
+	ID           uuid.UUID       `json:"id"`
+	IncidentID   uuid.UUID       `json:"incident_id"`
+	At           time.Time       `json:"at"`
+	ActorID      uuid.NullUUID   `json:"actor_id"`
+	ActorType    string          `json:"actor_type"`
+	ActorDisplay string          `json:"actor_display"`
+	Kind         string          `json:"kind"`
+	Detail       json.RawMessage `json:"detail"`
+}
+
+type IncidentScope struct {
+	IncidentID     uuid.UUID      `json:"incident_id"`
+	SubjectType    string         `json:"subject_type"`
+	SubjectID      string         `json:"subject_id"`
+	Label          string         `json:"label"`
+	Status         string         `json:"status"`
+	Reason         string         `json:"reason"`
+	ComponentPurl  string         `json:"component_purl"`
+	VexStatementID uuid.NullUUID  `json:"vex_statement_id"`
+	Reachability   sql.NullString `json:"reachability"`
+	Manual         bool           `json:"manual"`
+	DecidedBy      uuid.NullUUID  `json:"decided_by"`
+	DecidedAt      sql.NullTime   `json:"decided_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
+type IncidentSetting struct {
+	OrgID                  uuid.UUID       `json:"org_id"`
+	OwnerID                uuid.NullUUID   `json:"owner_id"`
+	OwnerTeamID            uuid.NullUUID   `json:"owner_team_id"`
+	DefaultRules           json.RawMessage `json:"default_rules"`
+	LockedRules            json.RawMessage `json:"locked_rules"`
+	InternalTargets        json.RawMessage `json:"internal_targets"`
+	NationalRegimes        json.RawMessage `json:"national_regimes"`
+	RequireVexApproval     bool            `json:"require_vex_approval"`
+	RequireNoticeApproval  bool            `json:"require_notice_approval"`
+	RequireAcknowledgement bool            `json:"require_acknowledgement"`
+	FourEyes               bool            `json:"four_eyes"`
+	DueSoonLeadMinutes     int32           `json:"due_soon_lead_minutes"`
+	UpdatedBy              uuid.NullUUID   `json:"updated_by"`
+	UpdatedAt              time.Time       `json:"updated_at"`
+}
+
+type IncidentTrackerLink struct {
+	IncidentID    uuid.UUID    `json:"incident_id"`
+	IntegrationID uuid.UUID    `json:"integration_id"`
+	ExternalKey   string       `json:"external_key"`
+	ExternalUrl   string       `json:"external_url"`
+	SyncedEvents  int32        `json:"synced_events"`
+	LastSyncedAt  sql.NullTime `json:"last_synced_at"`
+	LastError     string       `json:"last_error"`
 }
 
 type InstanceSetting struct {
@@ -1764,6 +1999,16 @@ type NotificationRule struct {
 	Enabled           bool                        `json:"enabled"`
 	CreatedAt         time.Time                   `json:"created_at"`
 	UpdatedAt         time.Time                   `json:"updated_at"`
+}
+
+type OrgAutolink struct {
+	ID           uuid.UUID     `json:"id"`
+	OrgID        uuid.UUID     `json:"org_id"`
+	Prefix       string        `json:"prefix"`
+	UrlTemplate  string        `json:"url_template"`
+	Alphanumeric bool          `json:"alphanumeric"`
+	CreatedBy    uuid.NullUUID `json:"created_by"`
+	CreatedAt    time.Time     `json:"created_at"`
 }
 
 type OrgMember struct {
@@ -1955,6 +2200,12 @@ type RepoApplicability struct {
 	CreatedAt         time.Time       `json:"created_at"`
 }
 
+type RepoIncidentConfig struct {
+	RepoID   uuid.UUID       `json:"repo_id"`
+	Config   json.RawMessage `json:"config"`
+	LoadedAt time.Time       `json:"loaded_at"`
+}
+
 type RepoScannerSetting struct {
 	RepoID    uuid.UUID     `json:"repo_id"`
 	ScannerID string        `json:"scanner_id"`
@@ -2089,6 +2340,24 @@ type SearchPreset struct {
 	Query       string        `json:"query"`
 	CreatedAt   time.Time     `json:"created_at"`
 	UpdatedAt   time.Time     `json:"updated_at"`
+}
+
+type SecretAttestation struct {
+	ID            uuid.UUID     `json:"id"`
+	RepoID        uuid.UUID     `json:"repo_id"`
+	Fingerprint   string        `json:"fingerprint"`
+	Revoked       bool          `json:"revoked"`
+	RevokedWhere  string        `json:"revoked_where"`
+	RevokedBy     string        `json:"revoked_by"`
+	Reference     string        `json:"reference"`
+	Rotation      string        `json:"rotation"`
+	RotationNote  string        `json:"rotation_note"`
+	Exposure      string        `json:"exposure"`
+	ExposureNote  string        `json:"exposure_note"`
+	OwnerExternal bool          `json:"owner_external"`
+	Note          string        `json:"note"`
+	AttestedBy    uuid.NullUUID `json:"attested_by"`
+	AttestedAt    time.Time     `json:"attested_at"`
 }
 
 type SecretScanJob struct {
@@ -2282,6 +2551,13 @@ type UserRepoAccess struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
+type UserRepoVisit struct {
+	UserID        uuid.UUID `json:"user_id"`
+	RepoID        uuid.UUID `json:"repo_id"`
+	VisitCount    int32     `json:"visit_count"`
+	LastVisitedAt time.Time `json:"last_visited_at"`
+}
+
 type VexStatement struct {
 	ID                uuid.UUID            `json:"id"`
 	OrgID             uuid.UUID            `json:"org_id"`
@@ -2299,6 +2575,14 @@ type VexStatement struct {
 	ExpiresAt         sql.NullTime         `json:"expires_at"`
 	CreatedAt         time.Time            `json:"created_at"`
 	UpdatedAt         time.Time            `json:"updated_at"`
+	ReleaseID         uuid.NullUUID        `json:"release_id"`
+	VersionRange      sql.NullString       `json:"version_range"`
+	Evidence          json.RawMessage      `json:"evidence"`
+	Supersedes        uuid.NullUUID        `json:"supersedes"`
+	Withdrawn         bool                 `json:"withdrawn"`
+	ApprovedBy        uuid.NullUUID        `json:"approved_by"`
+	ApprovedAt        sql.NullTime         `json:"approved_at"`
+	SupersededAt      sql.NullTime         `json:"superseded_at"`
 }
 
 type Vulnerability struct {

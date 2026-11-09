@@ -260,6 +260,13 @@ func (s *Server) completeArtifactProcessingSnapshot(ctx context.Context, run *ar
 	}
 	s.reconcileReleasesForSnapshot(ctx, snapshotID)
 	s.refreshScanCoverageForSnapshot(ctx, snapshotID)
+	// Incident rules and scopes (ADR-053): new findings may open incidents, a
+	// new release may add scope to existing ones.
+	if snapshot, err := s.queries.GetSnapshotByID(ctx, snapshotID); err == nil && snapshot != nil {
+		if ref, err := s.queries.GetRefByID(ctx, snapshot.RefID); err == nil && ref != nil {
+			s.queueIncidentSweep(ref.RepoID)
+		}
+	}
 	// The gate must not depend on the advisory scan happening. ScanCompleted is
 	// published only by the advisory scanner, and that only runs when components
 	// were ingested — so a coverage-only or SARIF-only PR never got a gate check
@@ -307,6 +314,7 @@ func (s *Server) releaseTagPatternForRepo(ctx context.Context, repoID uuid.UUID)
 	if err != nil {
 		return nil, false
 	}
+	s.persistRepoIncidentConfig(ctx, repo.ID, configOrEmpty(cfg))
 	if cfg == nil {
 		// No .hibou.yaml (or an invalid one, which the loader ignores by
 		// contract): the platform default is the repo's configuration.

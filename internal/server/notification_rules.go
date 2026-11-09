@@ -495,6 +495,11 @@ func isValidNotificationEventType(value string) bool {
 		string(events.NotificationNew):
 		return true
 	default:
+		for _, eventType := range events.IncidentEvents {
+			if strings.TrimSpace(value) == string(eventType) {
+				return true
+			}
+		}
 		return false
 	}
 }

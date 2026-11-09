@@ -64,12 +64,23 @@
       v-if="dialog"
       :kind="dialog.kind"
       :count="1"
-      :component-backed="dialog.componentBacked"
+      :statement="triageMakesStatement(dialog.finding)"
       :exploited="dialog.exploited"
+      :live-credential="dialog.finding.type === 'secret' && dialog.finding.verified === true"
       :error="dialogError"
       :submitting="dialogSubmitting"
       @cancel="closeTriageDialog"
       @confirm="confirmTriageDialog"
+    />
+
+    <SecretRevocationDialog
+      v-if="revocation"
+      :provider="provider"
+      :slug="slug"
+      :repo-slug="revocation.repoSlug"
+      :finding="revocation.finding"
+      @cancel="revocation = null"
+      @done="onRevocationDone"
     />
 
     <div class="overflow-hidden rounded-2xl border border-surface-border-subtle">
@@ -240,7 +251,7 @@ import { Flame } from 'lucide-vue-next'
 import { computed, inject, ref, watch, type Ref } from 'vue'
 import { type LocationQueryRaw, RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type OrgDashboard, type OrgVulnerability, type VexJustification, type Vulnerability } from '@/api/client'
+import { api, type FindingCWE, type AcceptanceReasonKind, type FindingAcceptance, type OrgDashboard, type OrgVulnerability, type Vulnerability } from '@/api/client'
 import FilterBar from '@/components/FilterBar.vue'
 import SearchPresetMenu from '@/components/SearchPresetMenu.vue'
 import FindingDetailModal from '@/components/FindingDetailModal.vue'
@@ -252,18 +263,18 @@ import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import CvssCell from '@/components/finding/CvssCell.vue'
 import EpssCell from '@/components/finding/EpssCell.vue'
 import { cweFilterDefs } from '@/lib/cweFilters'
-import { riskFilterDefs } from '@/lib/riskFilters'
+import { EXPLOITED_VALUES, riskFilterDefs } from '@/lib/riskFilters'
 import { appendBarToken, withHiddenDefaults } from '@/lib/filterBarQuery'
 import TriageDialog from '@/components/TriageDialog.vue'
+import SecretRevocationDialog from '@/components/SecretRevocationDialog.vue'
 import { useToast } from '@/composables/useToast'
-import { useDialog } from '@/composables/useDialog'
-import { findingTypeBadgeClass, isComponentBacked } from '@/lib/findingDisplay'
+import { findingTypeBadgeClass } from '@/lib/findingDisplay'
 import { createExploitedPreset } from '@/lib/exploitedPreset'
+import { triageMakesStatement, type TriageConfirmPayload } from '@/lib/triage'
 import { sameFilterValues, sameListQueryState } from '@/lib/listQueryState'
 import { migrateRiskOnlyQuery, OPEN_RISK_MALWARE_QUERY } from '@/lib/openRiskPreset'
 import { barQueryText, barStateFromQuery, BUILTIN_FINDINGS_PRESETS } from '@/lib/searchPresets'
 
-const { promptDialog } = useDialog()
 const route = useRoute()
 const router = useRouter()
 const { pushToast } = useToast()
@@ -300,7 +311,7 @@ const filterDefs = computed(() => [
   { key: 'acceptance', label: 'Triage', options: ['open', 'accepted', 'risk_accepted', 'false_positive', 'disputed'] },
   { key: 'presence', label: 'Presence', options: ['reported', 'not-rechecked', 'unconfirmed'], multi: true },
   { key: 'tool', label: 'Sources', options: toolOptions.value, multi: true },
-  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly },
+  { key: 'exploited', label: 'Exploited', options: ['true', 'false'], control: 'boolean' as const, toggleIcon: Flame, tone: 'danger' as const, description: 'Known-exploited dependency findings (CISA KEV / ENISA EUVD)', onToggle: toggleExploitedOnly, ...EXPLOITED_VALUES },
   // ADR-037. No org facet endpoint: completion searches the catalog.
   ...cweFilterDefs(() => undefined),
   // ADR-038 §6: server-side comparisons on the rating and the EPSS mirror.
@@ -568,7 +579,7 @@ function navigateDrawer(delta: number) {
 // already knows — bouncing to that repository's view just to click the same
 // button again is not a workflow. Same dialog and same endpoints as the
 // repository view; only the repo slug is per row.
-const dialog = ref<{ kind: AcceptanceReasonKind; finding: Vulnerability; repoSlug: string; componentBacked: boolean; exploited?: boolean } | null>(null)
+const dialog = ref<{ kind: AcceptanceReasonKind; finding: Vulnerability; repoSlug: string; exploited?: boolean } | null>(null)
 const dialogError = ref('')
 const dialogSubmitting = ref(false)
 
@@ -577,7 +588,7 @@ function openTriageDialog(kind: AcceptanceReasonKind, finding: Vulnerability, ex
   if (!repoSlug || !finding.fingerprint) return
   dialogError.value = ''
   drawer.value = null
-  dialog.value = { kind, finding, repoSlug, componentBacked: isComponentBacked(finding.type), exploited: exploited === true }
+  dialog.value = { kind, finding, repoSlug, exploited: exploited === true }
 }
 
 function closeTriageDialog() {
@@ -586,33 +597,21 @@ function closeTriageDialog() {
   dialogSubmitting.value = false
 }
 
-async function confirmTriageDialog(payload: { reason: string; labels: string[]; vexJustification?: VexJustification; expiresAt?: string }) {
+async function confirmTriageDialog(payload: TriageConfirmPayload) {
   if (!dialog.value) return
-  const { kind, finding, repoSlug } = dialog.value
+  const { finding, repoSlug } = dialog.value
+  const kind = payload.kind
   dialogSubmitting.value = true
   dialogError.value = ''
   try {
-    if (payload.vexJustification) {
-      // A VEX justification is a statement about one component, so it goes
-      // through the per-finding endpoint; the batch one rejects the vocabulary.
-      await api.setFindingAcceptance(provider.value, slug.value, repoSlug, finding.id, {
-        status: 'accepted',
-        reason_kind: kind,
-        reason: payload.reason,
-        labels: payload.labels,
-        vex_justification: payload.vexJustification,
-        expires_at: payload.expiresAt,
-      })
-    } else {
-      await api.batchFindingAcceptance(provider.value, slug.value, repoSlug, {
-        fingerprints: [finding.fingerprint],
-        status: 'accepted',
-        reason_kind: kind,
-        reason: payload.reason || undefined,
-        labels: payload.labels,
-        expires_at: payload.expiresAt,
-      })
-    }
+    await api.setFindingAcceptance(provider.value, slug.value, repoSlug, finding.id, {
+      status: 'accepted',
+      reason_kind: kind,
+      reason: payload.reason,
+      labels: payload.labels,
+      vex_justification: payload.vexJustification,
+      expires_at: payload.expiresAt,
+    })
     patchRowAcceptance(repoSlug, finding.fingerprint, {
       reason_kind: kind,
       reason: payload.reason,
@@ -621,7 +620,7 @@ async function confirmTriageDialog(payload: { reason: string; labels: string[]; 
       expires_at: payload.expiresAt,
       created_at: new Date().toISOString(),
     })
-    pushToast({ title: kind === 'false_positive' ? 'Marked false positive' : 'Risk accepted', tone: 'success' })
+    pushToast({ title: kind === 'false_positive' ? (payload.vexJustification ? 'Marked not affected' : 'Marked false positive') : 'Risk accepted', tone: 'success' })
     closeTriageDialog()
   } catch (error) {
     // Keep the dialog open so the typed reason is not lost.
@@ -643,26 +642,27 @@ async function reopenFinding(fingerprint: string) {
   }
 }
 
-async function markSecretRevoked(finding: Vulnerability) {
+// ADR-053 §4: the revocation is a checklist, recorded against the finding's
+// own repository.
+const revocation = ref<{ finding: Vulnerability; repoSlug: string } | null>(null)
+
+function markSecretRevoked(finding: Vulnerability) {
   const repoSlug = drawer.value?.repoSlug
   if (!repoSlug) return
-  const comment = await promptDialog({
-    title: 'Attest secret revocation',
-    message: 'Recorded in the audit log.',
-    confirmLabel: 'Mark revoked',
-    input: { label: 'How was this secret revoked/rotated?' },
-  })
-  if (comment === null) return
   drawer.value = null
-  try {
-    await api.attestSecretRevocation(provider.value, slug.value, repoSlug, finding.id, comment)
+  revocation.value = { finding, repoSlug }
+}
+
+function onRevocationDone(revoked: boolean) {
+  const target = revocation.value
+  revocation.value = null
+  if (!target) return
+  if (revoked) {
     vulnerabilities.value = vulnerabilities.value.map((row) =>
-      row.id === finding.id ? { ...row, status: 'resolved' } : row,
+      row.id === target.finding.id ? { ...row, status: 'resolved' } : row,
     )
-    pushToast({ title: 'Secret marked revoked', tone: 'success' })
-  } catch (error) {
-    pushToast({ title: 'Failed to record the revocation', description: error instanceof Error ? error.message : undefined, tone: 'error' })
   }
+  pushToast({ title: revoked ? 'Secret revoked' : 'Checklist recorded', description: revoked ? undefined : 'The secret stays open until it is revoked.', tone: 'success' })
 }
 
 // Rows are keyed by repository as well as fingerprint: the same fingerprint can

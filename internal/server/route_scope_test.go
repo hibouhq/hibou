@@ -38,6 +38,12 @@ var publicRoutes = map[string]struct{}{
 	"POST /api/v1/auth/device/code":                {},
 	"POST /api/v1/auth/device/token":               {},
 	"POST /api/v1/webhooks/{provider}/":            {},
+	// ADR-053: a signed acknowledgement link, the client portal (its own
+	// client-bound token) and tracker webhooks (a shared secret).
+	"GET /api/v1/incident-ack/{deliveryID}":                      {},
+	"GET /api/v1/portal/notices":                                 {},
+	"GET /api/v1/portal/notices/{deliveryID}/documents/{sha256}": {},
+	"POST /api/v1/hooks/incident-tracker/{integrationID}":        {},
 }
 
 func newRoutedTestServer(t *testing.T) *Server {

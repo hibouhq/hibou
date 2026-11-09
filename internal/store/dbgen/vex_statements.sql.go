@@ -8,6 +8,8 @@ package dbgen
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -16,6 +18,8 @@ const countVEXStatementsByOrg = `-- name: CountVEXStatementsByOrg :one
 SELECT COUNT(*)::bigint
 FROM vex_statements
 WHERE org_id = $1
+  AND superseded_at IS NULL
+  AND NOT withdrawn
 `
 
 func (q *Queries) CountVEXStatementsByOrg(ctx context.Context, orgID uuid.UUID) (int64, error) {
@@ -30,6 +34,8 @@ SELECT COUNT(*)::bigint
 FROM vex_statements
 WHERE org_id = $1
   AND repo_id = $2
+  AND superseded_at IS NULL
+  AND NOT withdrawn
 `
 
 type CountVEXStatementsByRepoParams struct {
@@ -44,12 +50,59 @@ func (q *Queries) CountVEXStatementsByRepo(ctx context.Context, arg CountVEXStat
 	return column_1, err
 }
 
+const createFirstPartyAdvisory = `-- name: CreateFirstPartyAdvisory :one
+INSERT INTO first_party_advisories (org_id, repo_id, advisory_id, product_purl, product_cpe, affected_range, promoted_from, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, org_id, repo_id, advisory_id, product_purl, product_cpe, affected_range, promoted_from, created_by, created_at
+`
+
+type CreateFirstPartyAdvisoryParams struct {
+	OrgID         uuid.UUID      `json:"org_id"`
+	RepoID        uuid.UUID      `json:"repo_id"`
+	AdvisoryID    uuid.UUID      `json:"advisory_id"`
+	ProductPurl   string         `json:"product_purl"`
+	ProductCpe    sql.NullString `json:"product_cpe"`
+	AffectedRange string         `json:"affected_range"`
+	PromotedFrom  sql.NullString `json:"promoted_from"`
+	CreatedBy     uuid.NullUUID  `json:"created_by"`
+}
+
+func (q *Queries) CreateFirstPartyAdvisory(ctx context.Context, arg CreateFirstPartyAdvisoryParams) (FirstPartyAdvisory, error) {
+	row := q.db.QueryRowContext(ctx, createFirstPartyAdvisory,
+		arg.OrgID,
+		arg.RepoID,
+		arg.AdvisoryID,
+		arg.ProductPurl,
+		arg.ProductCpe,
+		arg.AffectedRange,
+		arg.PromotedFrom,
+		arg.CreatedBy,
+	)
+	var i FirstPartyAdvisory
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.RepoID,
+		&i.AdvisoryID,
+		&i.ProductPurl,
+		&i.ProductCpe,
+		&i.AffectedRange,
+		&i.PromotedFrom,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createVEXStatement = `-- name: CreateVEXStatement :one
+
 INSERT INTO vex_statements (
     org_id,
     advisory_id,
     repo_id,
     component_purl,
+    release_id,
+    version_range,
     status,
     justification,
     impact_statement,
@@ -57,6 +110,11 @@ INSERT INTO vex_statements (
     source,
     source_document_url,
     supplier,
+    evidence,
+    supersedes,
+    withdrawn,
+    approved_by,
+    approved_at,
     created_by,
     expires_at
 )
@@ -73,9 +131,16 @@ VALUES (
     $10,
     $11,
     $12,
-    $13
+    $13,
+    $14,
+    $15,
+    $16,
+    $17,
+    $18,
+    $19,
+    $20
 )
-RETURNING id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+RETURNING id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 `
 
 type CreateVEXStatementParams struct {
@@ -83,6 +148,8 @@ type CreateVEXStatementParams struct {
 	AdvisoryID        uuid.UUID            `json:"advisory_id"`
 	RepoID            uuid.NullUUID        `json:"repo_id"`
 	ComponentPurl     sql.NullString       `json:"component_purl"`
+	ReleaseID         uuid.NullUUID        `json:"release_id"`
+	VersionRange      sql.NullString       `json:"version_range"`
 	Status            VexStatus            `json:"status"`
 	Justification     NullVexJustification `json:"justification"`
 	ImpactStatement   string               `json:"impact_statement"`
@@ -90,16 +157,27 @@ type CreateVEXStatementParams struct {
 	Source            VexSource            `json:"source"`
 	SourceDocumentUrl string               `json:"source_document_url"`
 	Supplier          string               `json:"supplier"`
+	Evidence          json.RawMessage      `json:"evidence"`
+	Supersedes        uuid.NullUUID        `json:"supersedes"`
+	Withdrawn         bool                 `json:"withdrawn"`
+	ApprovedBy        uuid.NullUUID        `json:"approved_by"`
+	ApprovedAt        sql.NullTime         `json:"approved_at"`
 	CreatedBy         uuid.NullUUID        `json:"created_by"`
 	ExpiresAt         sql.NullTime         `json:"expires_at"`
 }
 
+// Statements are insert-only (ADR-053 §4a): a change inserts a row that
+// supersedes the current one, a withdrawal inserts a withdrawn row. Readers
+// see the current, non-withdrawn statement of each scope unless they ask for
+// history.
 func (q *Queries) CreateVEXStatement(ctx context.Context, arg CreateVEXStatementParams) (VexStatement, error) {
 	row := q.db.QueryRowContext(ctx, createVEXStatement,
 		arg.OrgID,
 		arg.AdvisoryID,
 		arg.RepoID,
 		arg.ComponentPurl,
+		arg.ReleaseID,
+		arg.VersionRange,
 		arg.Status,
 		arg.Justification,
 		arg.ImpactStatement,
@@ -107,6 +185,11 @@ func (q *Queries) CreateVEXStatement(ctx context.Context, arg CreateVEXStatement
 		arg.Source,
 		arg.SourceDocumentUrl,
 		arg.Supplier,
+		arg.Evidence,
+		arg.Supersedes,
+		arg.Withdrawn,
+		arg.ApprovedBy,
+		arg.ApprovedAt,
 		arg.CreatedBy,
 		arg.ExpiresAt,
 	)
@@ -128,33 +211,90 @@ func (q *Queries) CreateVEXStatement(ctx context.Context, arg CreateVEXStatement
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReleaseID,
+		&i.VersionRange,
+		&i.Evidence,
+		&i.Supersedes,
+		&i.Withdrawn,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
+		&i.SupersededAt,
 	)
 	return i, err
 }
 
-const deleteVEXStatement = `-- name: DeleteVEXStatement :exec
-DELETE FROM vex_statements
-WHERE id = $1
-  AND org_id = $2
+const getCurrentVEXStatementForScope = `-- name: GetCurrentVEXStatementForScope :one
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
+FROM vex_statements
+WHERE org_id = $1
+  AND advisory_id = $2
+  AND repo_id IS NOT DISTINCT FROM $3
+  AND component_purl IS NOT DISTINCT FROM $4
+  AND release_id IS NOT DISTINCT FROM $5
+  AND version_range IS NOT DISTINCT FROM $6
+  AND superseded_at IS NULL
+FOR UPDATE
 `
 
-type DeleteVEXStatementParams struct {
-	ID    uuid.UUID `json:"id"`
-	OrgID uuid.UUID `json:"org_id"`
+type GetCurrentVEXStatementForScopeParams struct {
+	OrgID         uuid.UUID      `json:"org_id"`
+	AdvisoryID    uuid.UUID      `json:"advisory_id"`
+	RepoID        uuid.NullUUID  `json:"repo_id"`
+	ComponentPurl sql.NullString `json:"component_purl"`
+	ReleaseID     uuid.NullUUID  `json:"release_id"`
+	VersionRange  sql.NullString `json:"version_range"`
 }
 
-func (q *Queries) DeleteVEXStatement(ctx context.Context, arg DeleteVEXStatementParams) error {
-	_, err := q.db.ExecContext(ctx, deleteVEXStatement, arg.ID, arg.OrgID)
-	return err
+func (q *Queries) GetCurrentVEXStatementForScope(ctx context.Context, arg GetCurrentVEXStatementForScopeParams) (VexStatement, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentVEXStatementForScope,
+		arg.OrgID,
+		arg.AdvisoryID,
+		arg.RepoID,
+		arg.ComponentPurl,
+		arg.ReleaseID,
+		arg.VersionRange,
+	)
+	var i VexStatement
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.AdvisoryID,
+		&i.RepoID,
+		&i.ComponentPurl,
+		&i.Status,
+		&i.Justification,
+		&i.ImpactStatement,
+		&i.ActionStatement,
+		&i.Source,
+		&i.SourceDocumentUrl,
+		&i.Supplier,
+		&i.CreatedBy,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ReleaseID,
+		&i.VersionRange,
+		&i.Evidence,
+		&i.Supersedes,
+		&i.Withdrawn,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
+		&i.SupersededAt,
+	)
+	return i, err
 }
 
 const getEffectiveVEXStatus = `-- name: GetEffectiveVEXStatus :one
-SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 FROM vex_statements
 WHERE org_id = $1
   AND advisory_id = $2
   AND (repo_id IS NULL OR repo_id = $3)
   AND (component_purl IS NULL OR component_purl = $4)
+  AND release_id IS NULL
+  AND version_range IS NULL
+  AND superseded_at IS NULL
+  AND NOT withdrawn
   AND (expires_at IS NULL OR expires_at >= NOW())
 ORDER BY CASE
     WHEN component_purl = $4 THEN 0
@@ -173,6 +313,9 @@ type GetEffectiveVEXStatusParams struct {
 	ComponentPurl sql.NullString `json:"component_purl"`
 }
 
+// Gates judge snapshots, not releases: only statements without a product
+// axis apply here; release- and range-scoped statements speak about shipped
+// versions (ADR-053 §4a).
 func (q *Queries) GetEffectiveVEXStatus(ctx context.Context, arg GetEffectiveVEXStatusParams) (VexStatement, error) {
 	row := q.db.QueryRowContext(ctx, getEffectiveVEXStatus,
 		arg.OrgID,
@@ -198,12 +341,47 @@ func (q *Queries) GetEffectiveVEXStatus(ctx context.Context, arg GetEffectiveVEX
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReleaseID,
+		&i.VersionRange,
+		&i.Evidence,
+		&i.Supersedes,
+		&i.Withdrawn,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
+		&i.SupersededAt,
+	)
+	return i, err
+}
+
+const getFirstPartyAdvisory = `-- name: GetFirstPartyAdvisory :one
+SELECT id, org_id, repo_id, advisory_id, product_purl, product_cpe, affected_range, promoted_from, created_by, created_at FROM first_party_advisories WHERE repo_id = $1 AND advisory_id = $2
+`
+
+type GetFirstPartyAdvisoryParams struct {
+	RepoID     uuid.UUID `json:"repo_id"`
+	AdvisoryID uuid.UUID `json:"advisory_id"`
+}
+
+func (q *Queries) GetFirstPartyAdvisory(ctx context.Context, arg GetFirstPartyAdvisoryParams) (FirstPartyAdvisory, error) {
+	row := q.db.QueryRowContext(ctx, getFirstPartyAdvisory, arg.RepoID, arg.AdvisoryID)
+	var i FirstPartyAdvisory
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.RepoID,
+		&i.AdvisoryID,
+		&i.ProductPurl,
+		&i.ProductCpe,
+		&i.AffectedRange,
+		&i.PromotedFrom,
+		&i.CreatedBy,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getVEXStatementByID = `-- name: GetVEXStatementByID :one
-SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 FROM vex_statements
 WHERE id = $1
 `
@@ -228,15 +406,25 @@ func (q *Queries) GetVEXStatementByID(ctx context.Context, id uuid.UUID) (VexSta
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReleaseID,
+		&i.VersionRange,
+		&i.Evidence,
+		&i.Supersedes,
+		&i.Withdrawn,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
+		&i.SupersededAt,
 	)
 	return i, err
 }
 
 const listExpiredVEXStatements = `-- name: ListExpiredVEXStatements :many
-SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 FROM vex_statements
 WHERE expires_at IS NOT NULL
   AND expires_at < NOW()
+  AND superseded_at IS NULL
+  AND NOT withdrawn
 ORDER BY expires_at ASC
 `
 
@@ -266,6 +454,232 @@ func (q *Queries) ListExpiredVEXStatements(ctx context.Context) ([]VexStatement,
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFirstPartyAdvisoriesByRepo = `-- name: ListFirstPartyAdvisoriesByRepo :many
+SELECT f.id, f.org_id, f.repo_id, f.advisory_id, f.product_purl, f.product_cpe, f.affected_range, f.promoted_from, f.created_by, f.created_at, a.canonical_id, a.title
+FROM first_party_advisories f
+JOIN advisories a ON a.id = f.advisory_id
+WHERE f.repo_id = $1
+ORDER BY f.created_at DESC
+`
+
+type ListFirstPartyAdvisoriesByRepoRow struct {
+	ID            uuid.UUID      `json:"id"`
+	OrgID         uuid.UUID      `json:"org_id"`
+	RepoID        uuid.UUID      `json:"repo_id"`
+	AdvisoryID    uuid.UUID      `json:"advisory_id"`
+	ProductPurl   string         `json:"product_purl"`
+	ProductCpe    sql.NullString `json:"product_cpe"`
+	AffectedRange string         `json:"affected_range"`
+	PromotedFrom  sql.NullString `json:"promoted_from"`
+	CreatedBy     uuid.NullUUID  `json:"created_by"`
+	CreatedAt     time.Time      `json:"created_at"`
+	CanonicalID   string         `json:"canonical_id"`
+	Title         string         `json:"title"`
+}
+
+func (q *Queries) ListFirstPartyAdvisoriesByRepo(ctx context.Context, repoID uuid.UUID) ([]ListFirstPartyAdvisoriesByRepoRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFirstPartyAdvisoriesByRepo, repoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFirstPartyAdvisoriesByRepoRow{}
+	for rows.Next() {
+		var i ListFirstPartyAdvisoriesByRepoRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.RepoID,
+			&i.AdvisoryID,
+			&i.ProductPurl,
+			&i.ProductCpe,
+			&i.AffectedRange,
+			&i.PromotedFrom,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.CanonicalID,
+			&i.Title,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnapprovedVEXStatementsByOrg = `-- name: ListUnapprovedVEXStatementsByOrg :many
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
+FROM vex_statements
+WHERE org_id = $1
+  AND superseded_at IS NULL
+  AND NOT withdrawn
+  AND approved_by IS NULL
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListUnapprovedVEXStatementsByOrgParams struct {
+	OrgID uuid.UUID `json:"org_id"`
+	Limit int32     `json:"limit"`
+}
+
+func (q *Queries) ListUnapprovedVEXStatementsByOrg(ctx context.Context, arg ListUnapprovedVEXStatementsByOrgParams) ([]VexStatement, error) {
+	rows, err := q.db.QueryContext(ctx, listUnapprovedVEXStatementsByOrg, arg.OrgID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VexStatement{}
+	for rows.Next() {
+		var i VexStatement
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.AdvisoryID,
+			&i.RepoID,
+			&i.ComponentPurl,
+			&i.Status,
+			&i.Justification,
+			&i.ImpactStatement,
+			&i.ActionStatement,
+			&i.Source,
+			&i.SourceDocumentUrl,
+			&i.Supplier,
+			&i.CreatedBy,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVEXStatementHistory = `-- name: ListVEXStatementHistory :many
+WITH RECURSIVE back AS (
+    SELECT vs.id, vs.org_id, vs.advisory_id, vs.repo_id, vs.component_purl, vs.status, vs.justification, vs.impact_statement, vs.action_statement, vs.source, vs.source_document_url, vs.supplier, vs.created_by, vs.expires_at, vs.created_at, vs.updated_at, vs.release_id, vs.version_range, vs.evidence, vs.supersedes, vs.withdrawn, vs.approved_by, vs.approved_at, vs.superseded_at FROM vex_statements vs WHERE vs.id = $1 AND vs.org_id = $2
+    UNION ALL
+    SELECT prev.id, prev.org_id, prev.advisory_id, prev.repo_id, prev.component_purl, prev.status, prev.justification, prev.impact_statement, prev.action_statement, prev.source, prev.source_document_url, prev.supplier, prev.created_by, prev.expires_at, prev.created_at, prev.updated_at, prev.release_id, prev.version_range, prev.evidence, prev.supersedes, prev.withdrawn, prev.approved_by, prev.approved_at, prev.superseded_at FROM vex_statements prev JOIN back ON back.supersedes = prev.id
+), fwd AS (
+    SELECT vs.id, vs.org_id, vs.advisory_id, vs.repo_id, vs.component_purl, vs.status, vs.justification, vs.impact_statement, vs.action_statement, vs.source, vs.source_document_url, vs.supplier, vs.created_by, vs.expires_at, vs.created_at, vs.updated_at, vs.release_id, vs.version_range, vs.evidence, vs.supersedes, vs.withdrawn, vs.approved_by, vs.approved_at, vs.superseded_at FROM vex_statements vs WHERE vs.id = $1 AND vs.org_id = $2
+    UNION ALL
+    SELECT nxt.id, nxt.org_id, nxt.advisory_id, nxt.repo_id, nxt.component_purl, nxt.status, nxt.justification, nxt.impact_statement, nxt.action_statement, nxt.source, nxt.source_document_url, nxt.supplier, nxt.created_by, nxt.expires_at, nxt.created_at, nxt.updated_at, nxt.release_id, nxt.version_range, nxt.evidence, nxt.supersedes, nxt.withdrawn, nxt.approved_by, nxt.approved_at, nxt.superseded_at FROM vex_statements nxt JOIN fwd ON nxt.supersedes = fwd.id
+)
+SELECT DISTINCT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at FROM (SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at FROM back UNION SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at FROM fwd) chain
+ORDER BY created_at ASC
+`
+
+type ListVEXStatementHistoryParams struct {
+	ID    uuid.UUID `json:"id"`
+	OrgID uuid.UUID `json:"org_id"`
+}
+
+type ListVEXStatementHistoryRow struct {
+	ID                uuid.UUID            `json:"id"`
+	OrgID             uuid.UUID            `json:"org_id"`
+	AdvisoryID        uuid.UUID            `json:"advisory_id"`
+	RepoID            uuid.NullUUID        `json:"repo_id"`
+	ComponentPurl     sql.NullString       `json:"component_purl"`
+	Status            VexStatus            `json:"status"`
+	Justification     NullVexJustification `json:"justification"`
+	ImpactStatement   string               `json:"impact_statement"`
+	ActionStatement   string               `json:"action_statement"`
+	Source            VexSource            `json:"source"`
+	SourceDocumentUrl string               `json:"source_document_url"`
+	Supplier          string               `json:"supplier"`
+	CreatedBy         uuid.NullUUID        `json:"created_by"`
+	ExpiresAt         sql.NullTime         `json:"expires_at"`
+	CreatedAt         time.Time            `json:"created_at"`
+	UpdatedAt         time.Time            `json:"updated_at"`
+	ReleaseID         uuid.NullUUID        `json:"release_id"`
+	VersionRange      sql.NullString       `json:"version_range"`
+	Evidence          json.RawMessage      `json:"evidence"`
+	Supersedes        uuid.NullUUID        `json:"supersedes"`
+	Withdrawn         bool                 `json:"withdrawn"`
+	ApprovedBy        uuid.NullUUID        `json:"approved_by"`
+	ApprovedAt        sql.NullTime         `json:"approved_at"`
+	SupersededAt      sql.NullTime         `json:"superseded_at"`
+}
+
+// The chain a statement belongs to, oldest first.
+func (q *Queries) ListVEXStatementHistory(ctx context.Context, arg ListVEXStatementHistoryParams) ([]ListVEXStatementHistoryRow, error) {
+	rows, err := q.db.QueryContext(ctx, listVEXStatementHistory, arg.ID, arg.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVEXStatementHistoryRow{}
+	for rows.Next() {
+		var i ListVEXStatementHistoryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.AdvisoryID,
+			&i.RepoID,
+			&i.ComponentPurl,
+			&i.Status,
+			&i.Justification,
+			&i.ImpactStatement,
+			&i.ActionStatement,
+			&i.Source,
+			&i.SourceDocumentUrl,
+			&i.Supplier,
+			&i.CreatedBy,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
 		); err != nil {
 			return nil, err
 		}
@@ -281,10 +695,12 @@ func (q *Queries) ListExpiredVEXStatements(ctx context.Context) ([]VexStatement,
 }
 
 const listVEXStatementsByAdvisory = `-- name: ListVEXStatementsByAdvisory :many
-SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 FROM vex_statements
 WHERE org_id = $1
   AND advisory_id = $2
+  AND superseded_at IS NULL
+  AND NOT withdrawn
 ORDER BY created_at DESC
 `
 
@@ -319,6 +735,14 @@ func (q *Queries) ListVEXStatementsByAdvisory(ctx context.Context, arg ListVEXSt
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
 		); err != nil {
 			return nil, err
 		}
@@ -334,9 +758,11 @@ func (q *Queries) ListVEXStatementsByAdvisory(ctx context.Context, arg ListVEXSt
 }
 
 const listVEXStatementsByOrg = `-- name: ListVEXStatementsByOrg :many
-SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 FROM vex_statements
 WHERE org_id = $1
+  AND superseded_at IS NULL
+  AND NOT withdrawn
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
 `
@@ -373,6 +799,14 @@ func (q *Queries) ListVEXStatementsByOrg(ctx context.Context, arg ListVEXStateme
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
 		); err != nil {
 			return nil, err
 		}
@@ -388,10 +822,12 @@ func (q *Queries) ListVEXStatementsByOrg(ctx context.Context, arg ListVEXStateme
 }
 
 const listVEXStatementsByRepo = `-- name: ListVEXStatementsByRepo :many
-SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
 FROM vex_statements
 WHERE org_id = $1
   AND repo_id = $2
+  AND superseded_at IS NULL
+  AND NOT withdrawn
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4
 `
@@ -434,6 +870,14 @@ func (q *Queries) ListVEXStatementsByRepo(ctx context.Context, arg ListVEXStatem
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
 		); err != nil {
 			return nil, err
 		}
@@ -448,73 +892,93 @@ func (q *Queries) ListVEXStatementsByRepo(ctx context.Context, arg ListVEXStatem
 	return items, nil
 }
 
-const updateVEXStatement = `-- name: UpdateVEXStatement :one
-UPDATE vex_statements
-SET
-    repo_id = $1,
-    component_purl = $2,
-    status = $3,
-    justification = $4,
-    impact_statement = $5,
-    action_statement = $6,
-    source = $7,
-    source_document_url = $8,
-    supplier = $9,
-    expires_at = $10,
-    updated_at = NOW()
-WHERE id = $11
-  AND org_id = $12
-RETURNING id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at
+const listVEXStatementsForAdvisoryRepo = `-- name: ListVEXStatementsForAdvisoryRepo :many
+SELECT id, org_id, advisory_id, repo_id, component_purl, status, justification, impact_statement, action_statement, source, source_document_url, supplier, created_by, expires_at, created_at, updated_at, release_id, version_range, evidence, supersedes, withdrawn, approved_by, approved_at, superseded_at
+FROM vex_statements
+WHERE org_id = $1
+  AND advisory_id = $2
+  AND (repo_id IS NULL OR repo_id = $3)
+  AND superseded_at IS NULL
+  AND NOT withdrawn
+  AND (expires_at IS NULL OR expires_at >= NOW())
+ORDER BY created_at DESC
 `
 
-type UpdateVEXStatementParams struct {
-	RepoID            uuid.NullUUID        `json:"repo_id"`
-	ComponentPurl     sql.NullString       `json:"component_purl"`
-	Status            VexStatus            `json:"status"`
-	Justification     NullVexJustification `json:"justification"`
-	ImpactStatement   string               `json:"impact_statement"`
-	ActionStatement   string               `json:"action_statement"`
-	Source            VexSource            `json:"source"`
-	SourceDocumentUrl string               `json:"source_document_url"`
-	Supplier          string               `json:"supplier"`
-	ExpiresAt         sql.NullTime         `json:"expires_at"`
-	ID                uuid.UUID            `json:"id"`
-	OrgID             uuid.UUID            `json:"org_id"`
+type ListVEXStatementsForAdvisoryRepoParams struct {
+	OrgID      uuid.UUID     `json:"org_id"`
+	AdvisoryID uuid.UUID     `json:"advisory_id"`
+	RepoID     uuid.NullUUID `json:"repo_id"`
 }
 
-func (q *Queries) UpdateVEXStatement(ctx context.Context, arg UpdateVEXStatementParams) (VexStatement, error) {
-	row := q.db.QueryRowContext(ctx, updateVEXStatement,
-		arg.RepoID,
-		arg.ComponentPurl,
-		arg.Status,
-		arg.Justification,
-		arg.ImpactStatement,
-		arg.ActionStatement,
-		arg.Source,
-		arg.SourceDocumentUrl,
-		arg.Supplier,
-		arg.ExpiresAt,
-		arg.ID,
-		arg.OrgID,
-	)
-	var i VexStatement
-	err := row.Scan(
-		&i.ID,
-		&i.OrgID,
-		&i.AdvisoryID,
-		&i.RepoID,
-		&i.ComponentPurl,
-		&i.Status,
-		&i.Justification,
-		&i.ImpactStatement,
-		&i.ActionStatement,
-		&i.Source,
-		&i.SourceDocumentUrl,
-		&i.Supplier,
-		&i.CreatedBy,
-		&i.ExpiresAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+// Every current statement an incident's scope can rely on: org-wide,
+// repository-wide, per component, per release, per version range.
+func (q *Queries) ListVEXStatementsForAdvisoryRepo(ctx context.Context, arg ListVEXStatementsForAdvisoryRepoParams) ([]VexStatement, error) {
+	rows, err := q.db.QueryContext(ctx, listVEXStatementsForAdvisoryRepo, arg.OrgID, arg.AdvisoryID, arg.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VexStatement{}
+	for rows.Next() {
+		var i VexStatement
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrgID,
+			&i.AdvisoryID,
+			&i.RepoID,
+			&i.ComponentPurl,
+			&i.Status,
+			&i.Justification,
+			&i.ImpactStatement,
+			&i.ActionStatement,
+			&i.Source,
+			&i.SourceDocumentUrl,
+			&i.Supplier,
+			&i.CreatedBy,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ReleaseID,
+			&i.VersionRange,
+			&i.Evidence,
+			&i.Supersedes,
+			&i.Withdrawn,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.SupersededAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markVEXStatementSuperseded = `-- name: MarkVEXStatementSuperseded :execrows
+UPDATE vex_statements
+SET superseded_at = NOW()
+WHERE id = $1
+  AND org_id = $2
+  AND superseded_at IS NULL
+`
+
+type MarkVEXStatementSupersededParams struct {
+	ID    uuid.UUID `json:"id"`
+	OrgID uuid.UUID `json:"org_id"`
+}
+
+// Stamps the current row of a scope before its successor is inserted; the
+// partial unique index then admits the successor. Content stays untouched.
+func (q *Queries) MarkVEXStatementSuperseded(ctx context.Context, arg MarkVEXStatementSupersededParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markVEXStatementSuperseded, arg.ID, arg.OrgID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

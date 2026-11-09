@@ -399,25 +399,27 @@ func TestListVulnerabilitiesAcceptanceFilter(t *testing.T) {
 	}
 }
 
-// The full loop of "getting rid of the problematic call fixes it": a finding
-// the call-graph analysis proved not_reachable exports as VEX not_affected /
-// vulnerable_code_not_in_execute_path — machine-verified, no human statement
-// needed. Acceptance-derived statements take precedence.
-func TestReachabilityVEXStatements(t *testing.T) {
+// The triage decision writes the VEX statement (ADR-053 §4a): a not-affected
+// decision on a dependency finding needs its justification and records a
+// statement carrying the reachability verdict as evidence; reopening
+// withdraws it; the export reads statements only, so a machine verdict alone
+// no longer exports anything.
+func TestTriageDecisionWritesTheStatement(t *testing.T) {
 	t.Parallel()
 
-	srv, org, _, _ := newDiscoveryTestServer(t)
+	srv, org, admin, _ := newDiscoveryTestServer(t)
 	repo := createUploadTestRepository(t, srv, org)
+	ctx := context.Background()
 
-	ref, err := srv.queries.CreateRef(context.Background(), repo.ID, repo.DefaultBranch, store.RefTypeBranch, nil, nil, nil)
+	ref, err := srv.queries.CreateRef(ctx, repo.ID, repo.DefaultBranch, store.RefTypeBranch, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("CreateRef: %v", err)
 	}
-	snapshot, err := srv.queries.CreateSnapshot(context.Background(), ref.ID, "reach-vex-sha", store.SnapshotStatusComplete)
+	snapshot, err := srv.queries.CreateSnapshot(ctx, ref.ID, "triage-vex-sha", store.SnapshotStatusComplete)
 	if err != nil {
 		t.Fatalf("CreateSnapshot: %v", err)
 	}
-	advisory, err := upsertRatedAdvisory(context.Background(), srv.queries, dbgen.UpsertAdvisoryParams{
+	advisory, err := upsertRatedAdvisory(ctx, srv.queries, dbgen.UpsertAdvisoryParams{
 		CanonicalID: "GO-2099-9999",
 		Title:       "unreachable fixture advisory",
 	}, dbgen.SetAdvisoryRatingParams{Severity: dbgen.SeverityLevelHigh})
@@ -425,7 +427,7 @@ func TestReachabilityVEXStatements(t *testing.T) {
 		t.Fatalf("UpsertAdvisory: %v", err)
 	}
 	purl := "pkg:golang/example.com/dep@v1.0.0"
-	if _, err := srv.queries.CreateVulnerability(context.Background(), dbgen.CreateVulnerabilityParams{
+	finding, err := srv.queries.CreateVulnerability(ctx, dbgen.CreateVulnerabilityParams{
 		Type:                   "dependency",
 		SnapshotID:             snapshot.ID,
 		Title:                  "unreachable dep vuln",
@@ -439,30 +441,76 @@ func TestReachabilityVEXStatements(t *testing.T) {
 		AdvisoryID:             uuid.NullUUID{UUID: advisory.ID, Valid: true},
 		ComponentPurl:          sql.NullString{String: purl, Valid: true},
 		Reachability:           dbgen.NullReachability{Reachability: dbgen.ReachabilityNotReachable, Valid: true},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateVulnerability: %v", err)
 	}
 
-	statements, err := srv.reachabilityVEXStatements(context.Background(), repo, nil, nil)
-	if err != nil {
-		t.Fatalf("reachabilityVEXStatements: %v", err)
+	call := func(body map[string]any) *httptest.ResponseRecorder {
+		payload, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPut, "/acceptance", bytes.NewReader(payload))
+		req = req.WithContext(internalauth.WithUser(req.Context(), admin))
+		routeCtx := chi.NewRouteContext()
+		routeCtx.URLParams.Add("provider", "github")
+		routeCtx.URLParams.Add("slug", org.Slug)
+		routeCtx.URLParams.Add("repoSlug", repo.Slug)
+		routeCtx.URLParams.Add("vulnID", finding.ID.String())
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+		recorder := httptest.NewRecorder()
+		srv.handleSetFindingAcceptance(recorder, req)
+		return recorder
 	}
-	if len(statements) != 1 {
-		t.Fatalf("statements = %d, want 1", len(statements))
-	}
-	statement := statements[0]
-	if statement.VulnerabilityID != "GO-2099-9999" || statement.Status != "not_affected" || statement.Justification != "vulnerable_code_not_in_execute_path" {
-		t.Fatalf("unexpected statement: %+v", statement)
+	statements := func() []dbgen.VexStatement {
+		rows, err := srv.queries.ListVEXStatementsForAdvisoryRepo(ctx, org.ID, advisory.ID, repo.ID)
+		if err != nil {
+			t.Fatalf("ListVEXStatementsForAdvisoryRepo: %v", err)
+		}
+		return rows
 	}
 
-	// A human decision for the same advisory silences the synthesized one.
-	already := []vex.Statement{{VulnerabilityID: "GO-2099-9999", Status: "affected"}}
-	statements, err = srv.reachabilityVEXStatements(context.Background(), repo, nil, already)
-	if err != nil {
-		t.Fatalf("reachabilityVEXStatements(covered): %v", err)
+	// A machine verdict alone is evidence, not a statement.
+	if got := statements(); len(got) != 0 {
+		t.Fatalf("statements before triage = %d, want 0", len(got))
 	}
-	if len(statements) != 0 {
-		t.Fatalf("covered advisory must not be re-synthesized, got %d", len(statements))
+	if rec := call(map[string]any{"status": "accepted", "reason_kind": "false_positive", "reason": "never called"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("not affected without justification = %d, want 400", rec.Code)
+	}
+	if rec := call(map[string]any{"status": "accepted", "reason_kind": "false_positive", "reason": "never called", "vex_justification": vex.JustCodeNotInExecutePath}); rec.Code != http.StatusOK {
+		t.Fatalf("not affected = %d: %s", rec.Code, rec.Body.String())
+	}
+	got := statements()
+	if len(got) != 1 || got[0].Status != dbgen.VexStatusNotAffected || got[0].Justification.VexJustification != dbgen.VexJustificationVulnerableCodeNotInExecutePath || got[0].ComponentPurl.String != purl {
+		t.Fatalf("statement = %+v", got)
+	}
+	var evidence map[string]any
+	_ = json.Unmarshal(got[0].Evidence, &evidence)
+	if evidence["reachability"] != "not_reachable" || evidence["source"] != "triage" {
+		t.Fatalf("evidence = %v", evidence)
+	}
+	acceptance, err := srv.queries.GetActiveFindingAcceptance(ctx, repo.ID, finding.Fingerprint)
+	if err != nil || acceptance == nil || acceptance.VEXStatementID == nil || *acceptance.VEXStatementID != got[0].ID {
+		t.Fatalf("acceptance does not link its statement: %+v (%v)", acceptance, err)
+	}
+
+	// Changing the decision supersedes the statement; the history keeps both.
+	if rec := call(map[string]any{"status": "accepted", "reason_kind": "risk_accepted", "reason": "fix next sprint"}); rec.Code != http.StatusOK {
+		t.Fatalf("risk accepted = %d: %s", rec.Code, rec.Body.String())
+	}
+	got = statements()
+	if len(got) != 1 || got[0].Status != dbgen.VexStatusAffected || got[0].ActionStatement != "Risk accepted: fix next sprint" || !got[0].Supersedes.Valid {
+		t.Fatalf("revised statement = %+v", got)
+	}
+	history, err := srv.queries.ListVEXStatementHistory(ctx, org.ID, got[0].ID)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("history = %d (%v), want 2", len(history), err)
+	}
+
+	// Reopening withdraws it.
+	if rec := call(map[string]any{"status": "open"}); rec.Code != http.StatusOK {
+		t.Fatalf("reopen = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := statements(); len(got) != 0 {
+		t.Fatalf("statements after reopen = %d, want 0", len(got))
 	}
 }
 

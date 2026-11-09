@@ -7,6 +7,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/seed"
+	"github.com/hibouhq/hibou/internal/server"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -32,7 +33,13 @@ var seedCmd = &cobra.Command{
 			return fmt.Errorf("migrating database: %w", err)
 		}
 
-		return seed.Run(cmd.Context(), db, log)
+		if err := seed.Run(cmd.Context(), db, log); err != nil {
+			return err
+		}
+		if err := server.SeedIncidents(cmd.Context(), cfg, db, log); err != nil {
+			return fmt.Errorf("seeding incidents: %w", err)
+		}
+		return nil
 	},
 }
 

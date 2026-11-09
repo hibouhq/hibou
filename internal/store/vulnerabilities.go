@@ -1200,6 +1200,7 @@ type FindingAcceptance struct {
 	VEXJustification *string    `json:"vex_justification,omitempty"`
 	AcceptedBy       *uuid.UUID `json:"accepted_by,omitempty"`
 	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	VEXStatementID   *uuid.UUID `json:"vex_statement_id,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 }
 
@@ -1228,6 +1229,10 @@ func findingAcceptanceFromRow(row dbgen.FindingAcceptance) FindingAcceptance {
 		expires := row.ExpiresAt.Time
 		out.ExpiresAt = &expires
 	}
+	if row.VexStatementID.Valid {
+		id := row.VexStatementID.UUID
+		out.VEXStatementID = &id
+	}
 	return out
 }
 
@@ -1241,6 +1246,9 @@ type AcceptFindingInput struct {
 	VEXJustification *string
 	AcceptedBy       *uuid.UUID
 	ExpiresAt        *time.Time
+	// VEXStatementID links the statement the decision wrote, for findings
+	// that carry a vulnerability identifier (ADR-053 §4a).
+	VEXStatementID *uuid.UUID
 }
 
 func (q *Queries) UpsertFindingAcceptance(ctx context.Context, input AcceptFindingInput) (FindingAcceptance, error) {
@@ -1261,6 +1269,7 @@ func (q *Queries) UpsertFindingAcceptance(ctx context.Context, input AcceptFindi
 		VexJustification: justification,
 		AcceptedBy:       nullUUIDFromPtr(input.AcceptedBy),
 		ExpiresAt:        nullTimeFromPtr(input.ExpiresAt),
+		VexStatementID:   nullUUIDFromPtr(input.VEXStatementID),
 	})
 	if err != nil {
 		return FindingAcceptance{}, err
@@ -1709,15 +1718,4 @@ func (q *Queries) ListRepoFingerprints(ctx context.Context, repoID uuid.UUID, fi
 		RepoID:  repoID,
 		Column2: fingerprints,
 	})
-}
-
-// ListAcceptedDependencyAdvisories returns acceptance decisions on
-// component-backed findings joined to their advisories, for VEX synthesis at
-// export time (ADR-023).
-func (q *Queries) ListAcceptedDependencyAdvisories(ctx context.Context, repoID uuid.UUID) ([]dbgen.ListAcceptedDependencyAdvisoriesRow, error) {
-	return q.db.ListAcceptedDependencyAdvisories(ctx, repoID)
-}
-
-func (q *Queries) ListUnreachableDependencyAdvisories(ctx context.Context, snapshotID uuid.UUID) ([]dbgen.ListUnreachableDependencyAdvisoriesRow, error) {
-	return q.db.ListUnreachableDependencyAdvisories(ctx, snapshotID)
 }

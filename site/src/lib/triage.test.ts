@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { FindingAcceptance } from '@/api/client'
-import { isAcceptanceActive, triageState } from './triage'
+import { isAcceptanceActive, reasonPresets, triageDecisionProblem, triageMakesStatement, triageState, type TriageDecisionInput } from './triage'
 
 function acceptance(overrides: Partial<FindingAcceptance> = {}): FindingAcceptance {
   return {
@@ -84,5 +84,65 @@ describe('isAcceptanceActive', () => {
     const a = acceptance({ expires_at: '2026-07-28T12:00:00Z' })
     expect(isAcceptanceActive(a, new Date('2026-07-28T11:59:00Z'))).toBe(true)
     expect(isAcceptanceActive(a, new Date('2026-07-28T12:01:00Z'))).toBe(false)
+  })
+})
+
+describe('triageMakesStatement', () => {
+  it('needs a vulnerability identifier on a component', () => {
+    expect(triageMakesStatement({ type: 'dependency', advisory_id: 'a' })).toBe(true)
+    expect(triageMakesStatement({ type: 'container', advisory_id: 'a' })).toBe(true)
+    expect(triageMakesStatement({ type: 'dependency' })).toBe(false)
+    expect(triageMakesStatement({ type: 'sast', advisory_id: 'a' })).toBe(false)
+    expect(triageMakesStatement({ type: 'secret' })).toBe(false)
+    expect(triageMakesStatement(null)).toBe(false)
+  })
+})
+
+describe('reasonPresets', () => {
+  it('offers "not exploitable" as a not-affected preset, never as accepted risk', () => {
+    expect(reasonPresets('false_positive', true)).toContain('Not exploitable in this context')
+    expect(reasonPresets('risk_accepted', true)).not.toContain('Not exploitable in this context')
+    expect(reasonPresets('risk_accepted', false)).not.toContain('Not exploitable in this context')
+    expect(reasonPresets('false_positive', false)).toContain('Scanner misidentified the pattern')
+  })
+})
+
+describe('triageDecisionProblem', () => {
+  const base: TriageDecisionInput = {
+    kind: 'false_positive',
+    statement: true,
+    justificationRequired: true,
+    justification: '',
+    reason: '',
+    expiresAt: '',
+    expiryRequired: false,
+  }
+
+  it('requires the justification of a not-affected statement, not a reason', () => {
+    expect(triageDecisionProblem({ ...base, reason: 'detail' })).not.toBe('')
+    expect(triageDecisionProblem({ ...base, justification: 'vulnerable_code_not_in_execute_path' })).toBe('')
+  })
+
+  it('lets a batch of unknown composition go with a reason alone', () => {
+    expect(triageDecisionProblem({ ...base, justificationRequired: false, reason: 'fixture' })).toBe('')
+    expect(triageDecisionProblem({ ...base, justificationRequired: false })).not.toBe('')
+  })
+
+  it('requires the action statement of an affected decision', () => {
+    const affected = { ...base, kind: 'risk_accepted' as const }
+    expect(triageDecisionProblem(affected)).toBe('The action statement is required.')
+    expect(triageDecisionProblem({ ...affected, reason: 'upgrade next sprint' })).toBe('')
+  })
+
+  it('requires an expiry where the caller says so', () => {
+    const affected = { ...base, kind: 'risk_accepted' as const, reason: 'waiver', expiryRequired: true }
+    expect(triageDecisionProblem(affected)).toBe('An expiry is required.')
+    expect(triageDecisionProblem({ ...affected, expiresAt: '2099-01-01' })).toBe('')
+  })
+
+  it('keeps the free reason for findings without an identifier', () => {
+    const code = { ...base, statement: false, justificationRequired: false }
+    expect(triageDecisionProblem(code)).toBe('A reason is required.')
+    expect(triageDecisionProblem({ ...code, reason: 'fixture' })).toBe('')
   })
 })

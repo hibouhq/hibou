@@ -73,7 +73,22 @@ const (
 	// inside Hibou), so an operator must appoint another admin. Payload:
 	// org_id, user_id.
 	ForgeAdminDeparted Type = "rbac.forge_admin.departed"
+
+	// Incident lifecycle (ADR-053 §11). Payload: org_id, incident_id, number,
+	// title, message, severity, link.
+	IncidentOpened          Type = "incident.opened"
+	IncidentDueSoon         Type = "incident.due_soon"
+	IncidentOverdue         Type = "incident.overdue"
+	IncidentDeliveryFailed  Type = "incident.delivery_failed"
+	IncidentReopened        Type = "incident.reopened"
+	IncidentClosed          Type = "incident.closed"
+	IncidentMirrorLagging   Type = "incident.mirror_lagging"
+	ExploitationObserved    Type = "advisory.exploitation_observed"
+	IncidentReconcileNeeded Type = "incident.reconcile_needed"
 )
+
+// IncidentEvents are the incident events notification rules can select.
+var IncidentEvents = []Type{IncidentOpened, IncidentDueSoon, IncidentOverdue, IncidentDeliveryFailed, IncidentReopened, IncidentClosed, IncidentMirrorLagging, ExploitationObserved}
 
 type Event struct {
 	Type      Type

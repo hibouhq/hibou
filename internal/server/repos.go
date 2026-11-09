@@ -513,6 +513,7 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.ViewerCanTriage = role == "admin" &&
 		auth.RequireCapability(r.Context(), apitoken.CapTriage, apitoken.AccessWrite, org.Slug, repo.Slug) == nil
+	s.recordRepoVisit(r, repo.ID)
 	api.JSON(w, http.StatusOK, resp)
 }
 

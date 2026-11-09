@@ -48,8 +48,8 @@ func TestExportCSAFUsesIDsForNonCVEsAndRequiredMetadata(t *testing.T) {
 		t.Fatalf("expected single revision history entry, got %#v", revisions)
 	}
 	distribution := document["distribution"].(map[string]any)
-	if distribution["tlp"].(map[string]any)["label"] != "TLP:CLEAR" {
-		t.Fatalf("expected TLP:CLEAR tlp label, got %#v", distribution)
+	if distribution["tlp"].(map[string]any)["label"] != "WHITE" {
+		t.Fatalf("expected CSAF 2.0 label WHITE for TLP:CLEAR, got %#v", distribution)
 	}
 	branches := doc["product_tree"].(map[string]any)["branches"].([]any)
 	vendor := branches[0].(map[string]any)

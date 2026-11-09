@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import FilterBar from './FilterBar.vue'
+import { riskFilterDefs } from '@/lib/riskFilters'
 
 describe('FilterBar qualifier controls', () => {
   it('shows matching results against an independent scope total', async () => {
@@ -55,5 +56,22 @@ describe('FilterBar qualifier controls', () => {
       }),
     }))
     expect(html.match(/" disabled[ >]/g)?.length).toBe(2)
+  })
+
+  it('groups the risk comparisons into one pill and counts what the bar selects', async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(FilterBar, {
+        modelValue: {},
+        advancedQuery: 'cvss:>=7 epss:>=10%',
+        filters: [
+          { key: 'type', label: 'Type', options: ['dependency'] },
+          ...riskFilterDefs(),
+        ],
+      }),
+    }))
+    expect(html).toContain('<span>Risk</span>')
+    expect(html).not.toContain('<span>CVSS</span>')
+    expect(html).not.toContain('<span>Fix</span>')
+    expect(html).toMatch(/tabular-nums"[^>]*>2</)
   })
 })

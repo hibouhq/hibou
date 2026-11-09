@@ -235,7 +235,7 @@ func (q *Queries) SearchAdvisoriesBySeverity(ctx context.Context, arg SearchAdvi
 
 const searchClients = `-- name: SearchClients :many
 
-SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at FROM clients WHERE org_id = $1 AND name ILIKE $2 ESCAPE '\' ORDER BY name ASC LIMIT $3 OFFSET $4
+SELECT id, org_id, name, slug, client_type, contact_email, contact_name, notification_prefs, labels, metadata, created_at, updated_at, security_contacts, delivery_config FROM clients WHERE org_id = $1 AND name ILIKE $2 ESCAPE '\' ORDER BY name ASC LIMIT $3 OFFSET $4
 `
 
 type SearchClientsParams struct {
@@ -276,6 +276,8 @@ func (q *Queries) SearchClients(ctx context.Context, arg SearchClientsParams) ([
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SecurityContacts,
+			&i.DeliveryConfig,
 		); err != nil {
 			return nil, err
 		}

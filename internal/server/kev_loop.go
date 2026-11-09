@@ -95,6 +95,15 @@ func (s *Server) runKEVSync(ctx context.Context, sources []kev.Source, interval 
 		}
 		health := s.loadKEVHealth(runCtx)
 		health.pruneTo(activeNames)
+		catalogMoved := false
+		// A CVE joining a catalogue is the "becoming aware" trigger (ADR-053
+		// §2): sweep the incident rules over released snapshots once the
+		// pass is done.
+		defer func() {
+			if catalogMoved && s.queries != nil {
+				go s.sweepAllIncidentRules(s.backgroundContext())
+			}
+		}()
 		health.IntervalSeconds = int(interval / time.Second)
 		// One source failing must not stop the others: CISA being down is no
 		// reason to serve a stale EUVD, and vice versa.
@@ -114,6 +123,9 @@ func (s *Server) runKEVSync(ctx context.Context, sources []kev.Source, interval 
 				continue
 			}
 			s.recordKEVEvents(runCtx, source.Name(), catalog, diff)
+			if len(diff.Added) > 0 && !diff.InitialSeed {
+				catalogMoved = true
+			}
 			// Success clears the failure fields by construction.
 			*entry = KEVSourceHealth{
 				Source:         source.Name(),

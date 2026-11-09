@@ -43,9 +43,61 @@
     "dependencies": {
       "$ref": "#/$defs/dependenciesConfig",
       "description": "Built-in dependency inventory (ADR-045) and package signals policy (ADR-048)."
+    },
+    "product": {
+      "$ref": "#/$defs/productConfig",
+      "description": "What this repository ships (ADR-053): the product identity VEX statements, advisories and client notices use for its releases."
+    },
+    "incidents": {
+      "$ref": "#/$defs/incidentsConfig",
+      "description": "When findings open incidents (ADR-053). Locked organisation rules always apply first; `rules` replaces the organisation defaults."
     }
   },
   "$defs": {
+    "productConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Display name of the product." },
+        "purl": { "type": "string", "pattern": "^pkg:[^@]+/[^@]+$", "description": "Version-less package URL, e.g. pkg:generic/<vendor>/<product>. Release versions are appended." },
+        "cpe": { "type": "string", "pattern": "^cpe:2\\.3:", "description": "Optional CPE 2.3 alias for NVD and CPE-based consumers." }
+      }
+    },
+    "incidentsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "owner": { "type": "string", "pattern": "^(user|team):[A-Za-z0-9._-]+$", "description": "Who receives signals and countdowns: user:<login> or team:<slug>." },
+        "rules": {
+          "type": "array",
+          "description": "First matching rule wins. Writing this list replaces the organisation defaults; an empty list turns unlocked rules off.",
+          "items": { "$ref": "#/$defs/incidentRule" }
+        }
+      }
+    },
+    "incidentRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["match"],
+      "properties": {
+        "match": { "type": "string", "minLength": 1, "description": "A filter expression in the search grammar, e.g. exploited:true, type:secret verified:true, epss:>=0.5." },
+        "kind": { "type": "string", "enum": ["exploited_vulnerability", "severe_incident", "secret_leak", "malware", "policy_breach"], "description": "Overrides the kind derived from what matched." },
+        "refs": {
+          "description": "Where the finding must be seen: default, all, released, or branch globs such as release/*. Default: all for secrets and malware, released otherwise.",
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+          ]
+        },
+        "regimes": {
+          "type": "array",
+          "description": "External obligations: cra-article-14, nis2-article-23, national:<code>, internal (default).",
+          "items": { "type": "string", "pattern": "^(cra-article-14|nis2-article-23|internal|national:[a-z0-9][a-z0-9_-]{0,31})$" }
+        },
+        "priority": { "type": "string", "enum": ["P1", "P2", "P3"], "description": "The team's triage order; default P2." },
+        "due": { "type": "string", "pattern": "^[0-9]+(h|d)$", "description": "Internal deadline for policy breaches, e.g. 7d or 48h." }
+      }
+    },
     "dependenciesConfig": {
       "type": "object",
       "additionalProperties": false,
