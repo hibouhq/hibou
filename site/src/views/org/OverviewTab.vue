@@ -125,46 +125,46 @@
         </div>
         <div
           v-else
-          class="overflow-x-auto"
+          class="min-w-0"
         >
-          <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
-            <caption class="border-b border-surface-border-subtle px-4 py-2 text-left text-xs leading-relaxed text-gray-500">
+          <table class="block w-full divide-y divide-surface-border-subtle text-sm lg:table">
+            <caption class="block border-b border-surface-border-subtle px-4 py-2 text-left text-xs leading-relaxed text-gray-500 lg:table-caption">
               Counts reflect the latest available analysis, not necessarily the current commit or complete shipped inventory.
               Inventory source describes provenance; Last analysis shows freshness.
             </caption>
-            <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.16em] text-gray-500">
+            <thead class="hidden bg-surface-overlay text-left text-[11px] uppercase tracking-[0.12em] text-gray-500 lg:table-header-group">
               <tr>
-                <th class="min-w-44 px-4 py-2.5 font-medium">
+                <th class="w-52 px-3 py-2.5 font-medium">
                   Repository
                 </th>
-                <th class="w-24 px-3 py-2.5 font-medium">
+                <th class="hidden w-24 px-3 py-2.5 font-medium xl:table-cell">
                   Status
                 </th>
-                <th class="px-3 py-2.5 font-medium">
+                <th class="hidden px-3 py-2.5 font-medium xl:table-cell">
                   Inventory
                 </th>
-                <th class="min-w-[34rem] px-4 py-2.5 font-medium">
+                <th class="w-[45%] px-3 py-2.5 font-medium">
                   Vulnerabilities
                 </th>
-                <th class="w-24 px-3 py-2.5 font-medium">
+                <th class="w-20 px-2 py-2.5 font-medium">
                   Components
                 </th>
-                <th class="w-32 whitespace-nowrap px-3 py-2.5 font-medium">
+                <th class="w-24 px-2 py-2.5 font-medium">
                   Last analysis
                 </th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-surface-border-subtle">
+            <tbody class="block divide-y divide-surface-border-subtle lg:table-row-group">
               <tr
                 v-for="entry in sortedRepos"
                 :key="repoEntryKey(entry)"
-                class="transition hover:bg-white/5"
+                class="grid grid-cols-2 transition hover:bg-white/5 lg:table-row"
               >
-                <td class="min-w-44 px-4 py-3">
+                <td class="col-span-2 block px-3 py-3 lg:table-cell">
                   <component
                     :is="entry.enrolled && entry.repo_slug ? 'RouterLink' : 'div'"
                     :to="entry.enrolled && entry.repo_slug ? `/orgs/${provider}/${slug}/repos/${entry.repo_slug}` : undefined"
-                    class="flex items-center gap-2.5"
+                    class="flex min-w-0 items-center gap-2.5"
                     :class="entry.enrolled && entry.repo_slug ? 'text-white transition hover:text-accent' : 'text-white'"
                   >
                     <ForgeIcon
@@ -172,23 +172,53 @@
                       size="sm"
                       class="text-gray-400"
                     />
-                    <div>
-                      <div class="whitespace-nowrap font-medium">
+                    <div class="min-w-0 max-w-full lg:max-w-52">
+                      <div
+                        class="truncate font-medium"
+                        :title="entry.repo_name"
+                      >
                         {{ entry.repo_name }}
                       </div>
-                      <div class="text-[11px] text-gray-500">
+                      <div
+                        class="truncate text-[11px] text-gray-500"
+                        :title="entry.full_name || entry.provider_id"
+                      >
                         {{ entry.full_name || entry.provider_id }}
                       </div>
                     </div>
                   </component>
+                  <div class="mt-2 space-y-2 lg:max-w-52 xl:hidden">
+                    <span
+                      class="rounded-full border px-2 py-0.5 text-xs font-medium capitalize"
+                      :class="statusClass(entry.status)"
+                    >{{ entry.status }}</span>
+                    <ScaStatus
+                      compact
+                      :sca="entry.sca"
+                      :enrolled="entry.enrolled"
+                      :can-manage="canManage"
+                      :components="entry.components_total"
+                      :findings="sumCounts(entry.vulnerabilities)"
+                    />
+                    <button
+                      v-if="canManage && entryAction(entry)"
+                      type="button"
+                      class="rounded-lg border border-accent/40 px-2.5 py-1.5 text-xs text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="!canEnableSca(entry.status, entry.sca) || scaBusy.length > 0"
+                      :title="entry.status === 'archived' ? 'Archived repositories cannot enable SCA' : 'Read default-branch manifests and lockfiles and match advisories; no workflow, upload, write permission or secret scan'"
+                      @click="enableSca(entry)"
+                    >
+                      {{ scaBusy.includes(entry.provider_id) ? 'Requesting…' : entryAction(entry) }}
+                    </button>
+                  </div>
                 </td>
-                <td class="whitespace-nowrap px-3 py-3">
+                <td class="hidden whitespace-nowrap px-3 py-3 xl:table-cell">
                   <span
                     class="rounded-full border px-2 py-0.5 text-xs font-medium capitalize"
                     :class="statusClass(entry.status)"
                   >{{ entry.status }}</span>
                 </td>
-                <td class="px-3 py-3">
+                <td class="hidden px-3 py-3 xl:table-cell">
                   <ScaStatus
                     compact
                     :sca="entry.sca"
@@ -208,9 +238,12 @@
                     {{ scaBusy.includes(entry.provider_id) ? 'Requesting…' : entryAction(entry) }}
                   </button>
                 </td>
-                <td class="min-w-[34rem] px-4 py-3">
+                <td class="col-span-2 block px-3 py-3 lg:table-cell">
+                  <p class="mb-1.5 text-[10px] uppercase tracking-[0.12em] text-gray-500 lg:hidden">
+                    Vulnerabilities
+                  </p>
                   <div
-                    class="flex flex-nowrap items-center gap-1.5 whitespace-nowrap [&>*]:shrink-0"
+                    class="flex flex-wrap items-center gap-1 whitespace-nowrap sm:flex-nowrap [&>*]:shrink-0"
                     data-testid="repository-vulnerability-badges"
                   >
                     <!-- Malware first: it outranks every other chip in the row. -->
@@ -248,10 +281,12 @@
                     >{{ scaAssessed(entry.sca) ? entry.sca?.state === 'partial' ? '0 known · partial' : '0 known' : entry.sca ? 'Not assessed' : 'Not reported' }}</span>
                   </div>
                 </td>
-                <td class="whitespace-nowrap px-3 py-3 text-gray-300">
+                <td class="block px-2 py-3 text-xs text-gray-300 lg:table-cell lg:whitespace-nowrap">
+                  <span class="mb-1 block text-[10px] uppercase tracking-[0.12em] text-gray-500 lg:hidden">Components</span>
                   {{ hasInventory(entry.sca, entry.components_total) ? entry.components_total : 'Not reported' }}
                 </td>
-                <td class="whitespace-nowrap px-3 py-3 text-gray-400">
+                <td class="block px-2 py-3 text-right text-xs text-gray-400 lg:table-cell lg:whitespace-nowrap lg:text-left">
+                  <span class="mb-1 block text-[10px] uppercase tracking-[0.12em] text-gray-500 lg:hidden">Last analysis</span>
                   <div>{{ formatDate(entry.sca?.last_assessed || entry.last_scanned) }}</div>
                   <div
                     v-if="entry.sca?.state === 'outdated' || (entry.sca?.previous_results && entry.sca.has_inventory === false) || entry.outdated"

@@ -1,12 +1,12 @@
 <template>
-  <div :class="compact ? 'inline-flex items-center gap-2 whitespace-nowrap text-xs' : 'space-y-2 text-xs'">
+  <div :class="compact ? 'flex min-w-0 max-w-full items-center gap-2 text-xs' : 'space-y-2 text-xs'">
     <div
-      class="flex flex-wrap items-center gap-2"
+      class="flex min-w-0 flex-wrap items-center gap-2"
       :title="tooltip"
     >
-      <span class="inline-flex items-center gap-1.5 font-medium text-gray-300">
+      <span class="inline-flex min-w-0 items-center gap-1.5 font-medium text-gray-300">
         <Package
-          class="h-3.5 w-3.5 text-gray-500"
+          class="h-3.5 w-3.5 shrink-0 text-gray-500"
           aria-hidden="true"
         />
         {{ inventorySource(sca, components) }}

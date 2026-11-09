@@ -107,13 +107,17 @@ describe('SCA overview coverage and actions', () => {
     expect(html).not.toContain('SBOM</span>')
   })
 
-  it('reserves a wide, non-wrapping findings lane so Low stays to the right', async () => {
+  it('keeps findings together without forcing horizontal scrolling', async () => {
     const html = await render({ state: 'reported', enabled: true, on_push: true }, { components: 7, severities: { critical: 1, high: 12, medium: 234, low: 5, unknown: 6, info: 7 } })
-    expect(html).toContain('min-w-[34rem]')
+    expect(html).not.toContain('min-w-[34rem]')
     expect(html).toContain('data-testid="repository-vulnerability-badges"')
     expect(html).toContain('flex-nowrap')
     expect(html).toContain('shrink-0 whitespace-nowrap')
-    expect(html).toContain('overflow-x-auto')
+    expect(html).not.toContain('overflow-x-auto')
+    expect(html).toContain('block w-full divide-y')
+    expect(html).toContain('lg:table-row')
+    expect(html).toContain('xl:hidden')
+    expect(html).toContain('truncate font-medium')
     const lane = html.slice(html.indexOf('data-testid="repository-vulnerability-badges"'))
     expect(lane.indexOf('5 low')).toBeGreaterThan(lane.indexOf('1 critical'))
     expect(lane.indexOf('5 low')).toBeGreaterThan(lane.indexOf('234 medium'))

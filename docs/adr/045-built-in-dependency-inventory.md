@@ -545,9 +545,11 @@ enable/update/retry actions.
   static, resolved or artifact-based; an external SBOM can also be partial.
   Mixed inventories expose their concrete source categories together (for
   example **Repository files + SBOM**) rather than selecting a single winner.
-  The table reserves space for the vulnerability badges and keeps their
-  severity order on one line; narrow views scroll the table, not individual
-  badges onto another row.
+  The table gives vulnerability badges the available width without a fixed
+  minimum that forces horizontal scrolling. Desktop/tablet badges retain
+  their inline severity order; narrower views move status and inventory
+  beside the repository details and reflow rows instead of clipping the
+  final analysis column.
 - A frontend talking to an older server must treat missing coverage metadata
   as unknown capability, not missing inventory. Existing component/finding
   counts stay visible and extraction actions require explicit support.
