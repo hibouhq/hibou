@@ -10,7 +10,13 @@ when a validator confirms the credential dead, with the revocation
 checklist as its primary action. Supersedes the three-way triage actions in the
 vulnerabilities views; feeds [TODO-FIX-gate-triage-notifications.md](../../TODO-FIX-gate-triage-notifications.md).
 
-Implementation notes (alpha, no compat window):
+Current amendment (verified 2026-11-09): ADR-053 materializes version-scoped,
+superseding VEX statements at triage time and exports only stored statements.
+Secrets can also resolve when a validator confirms the credential dead.
+The earlier export-time synthesis and human-attestation-only resolution below
+are **superseded, not pending or parallel implementations**.
+
+Original implementation notes (2026-08; superseded where ADR-053 amends them):
 
 - Migration `00013`: `acceptance_reason_kind` enum, `reason_kind` (backfilled
   from the old `status`, then `status` **dropped** — row existence = accepted),

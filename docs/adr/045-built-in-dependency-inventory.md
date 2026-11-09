@@ -2,7 +2,18 @@
 
 ## Status
 
-Proposed (2026-10-15). First of three related ADRs:
+Implemented (increments 1-5, 2026-10-16/17; status verified 2026-11-09).
+Originally proposed 2026-10-15. The implementation notes below cover
+extraction, release backfill, provenance/shipped policy, container inventory,
+immutable inventory sets and advisory scan reuse.
+
+**Deferred, not missing from this implementation:** ADR-047's approval
+workflows. **Deliberately excluded:** server-side execution of repository
+tooling and server-side image pulls; CLI/CI paths provide those trusted
+execution surfaces. The Artifactory integration's external validation hold
+belongs to ADR-048, not an unfinished inventory extractor.
+
+First of three related ADRs:
 
 - **ADR-045 (this one)**: how Hibou builds a dependency inventory itself,
   what is shipped, how evidence is recorded and stored.

@@ -17,9 +17,18 @@ Implemented:
 - the audit entry for the onboarding pull request, the one write a user
   triggers today.
 
-Not yet (Rollout): capability detection and consent per feature, the Forge
-access page, the App manifest flow, release branch patterns, patch mode,
-audit of future write features, and the external key signer.
+Remaining-work classification (verified 2026-11-09):
+
+- **To be implemented:** capability detection and per-feature consent, the
+  Forge access page and App manifest flow (rollout step 5).
+- **Deferred/dependent:** release branch patterns and remediation-write audit
+  depend on ADR-050; patch mode and `hibou fix apply` are rollout step 6.
+  Existing onboarding-write audit is implemented.
+- **Optional/deferred:** the external key signer (rollout step 7), not a
+  missing requirement of the implemented in-process signer.
+- **Rejected alternatives, not backlog:** granting Hibou Administration
+  permission to apply its own rulesets, or replacing per-operation tokens
+  with one broad token. See Alternatives considered.
 
 Related: [ADR-018](018-forge-native-quality-gate-checks.md) (check runs),
 [ADR-050](050-guided-remediation-pull-requests.md) (remediation pull

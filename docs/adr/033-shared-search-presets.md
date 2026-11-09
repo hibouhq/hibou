@@ -4,6 +4,11 @@
 
 Proposed — deferred. Not scheduled; personal presets cover the immediate need.
 
+Status verified 2026-11-09: only user-owned preset CRUD is implemented
+(`internal/store/queries/search_presets.sql`). **Deferred, not dropped:**
+the org-shared preset API, permissions and Team menu section below.
+They are not part of the current committed implementation scope.
+
 ## Context
 
 The findings filter bar (repository and organization vulnerability lists) has

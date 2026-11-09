@@ -2,7 +2,19 @@
 
 ## Status
 
-Proposed (2026-10-15). Implementation started 2026-10-16.
+Implemented in increments, with an external validation hold (originally
+proposed 2026-10-15; implementation started 2026-10-16; status verified against
+this repository 2026-11-09).
+
+- **Implemented:** the signal mirror/client, policy evaluator, gates,
+  CLI/CI checks, install-config generation, org settings, UI, MCP and LSP
+  surfaces detailed below.
+- **Validation still required, not missing core code:** exercising the
+  reference Artifactory plugin against a real Artifactory and recording the
+  §3.1.1 measurements. The dated alpha/build notes below describe another
+  repository and are not newly verified release or deployment claims.
+- **Intentionally unavailable, not dropped work:** deps.dev enrichment in
+  offline mode, because the upstream API cannot be mirrored.
 
 **Implemented (2026-10-16, rollout steps 1–5 in part):** the deps.dev
 client with batch lookups, retries and fixtures; the `package_signals`

@@ -1,9 +1,19 @@
 # ADR-019: New-code coverage lens (forge-computed old/new classification)
 
 ## Status
-Proposed
+Implemented for forges with line-level comparisons (status verified 2026-11-09).
 
-## Context
+- **Implemented:** comparison new-code statistics and toggle, the coverage
+  tab's `since` baseline selector, annotated source lines and immutable-SHA
+  compare caching. See `internal/server/patch_coverage.go`, `coverage.go`,
+  `coverage_source.go` and the coverage views.
+- **Remaining provider limitation:** GitHub and GitLab supply line-level
+  comparisons. Forgejo supplies changed paths only, so the lens falls back to
+  classic coverage there; it is not a stub or a clean new-code result.
+- **Deferred extension:** `.hibou.yaml` baseline persistence. URL-based
+  selection is implemented; the configuration extension is not dropped.
+
+## Context (before implementation)
 
 The coverage diff answers "how did coverage move between two snapshots", but
 reviewers think in terms of **new code vs old code**: "is the code this change
@@ -74,7 +84,7 @@ absorbs GitHub's 300-file compare truncation: the truncated flag is stored and
 surfaced ("new-code stats cover the first N files"), same as ADR-018.
 
 With installation-token authentication now applied to repo-level REST calls
-(cached per owner), the compare call runs against the App rate limit
+(cached per repository and permission set, ADR-052), the compare call runs against the App rate limit
 (thousands/hour), not the anonymous 60/hour that made source fetches flaky.
 
 ## Alternatives rejected
@@ -90,9 +100,9 @@ With installation-token authentication now applied to repo-level REST calls
 
 ## Consequences
 
-- GitLab/Forgejo `ComparePatch` are still stubs; the lens degrades to the
-  classic view there until they are implemented — same degradation path as
-  ADR-018, one method to fill in per forge.
+- GitLab `ComparePatch` supplies hunks and added lines. Forgejo `ComparePatch`
+  supplies paths only (`PathsOnly`), so the lens degrades to the classic view
+  there rather than treating missing line data as zero changed lines.
 - The compare-patch cache is the first immutable-keyed cache; retention must
   delete rows when either snapshot is purged.
 - The coverage tab's baseline selector adds one query parameter and no schema

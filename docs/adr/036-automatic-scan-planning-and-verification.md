@@ -12,6 +12,16 @@ findings, the verification rules below amend the sink-file-only change/coverage
 heuristic in [ADR-034](034-absence-is-not-resolution.md); the other persistence
 and explicit-assertion policies remain unchanged.
 
+Remaining-work classification (verified 2026-11-09):
+
+- **Deferred pending measurements:** rollout steps 3-4: validated native
+  incremental adapters, verification budgets/priorities, engine-declared
+  recheck scope, safe partitioning/caching and full-scan-equivalence fixtures.
+  Whole applicable scopes are the implemented fallback, not an incremental
+  implementation.
+- **Not planned:** exploratory sampling (§5). This is outside the current
+  rollout, not an unfinished prerequisite.
+
 ## Context
 
 The sample repository's `java-opengrep` target passes one authored rules file and

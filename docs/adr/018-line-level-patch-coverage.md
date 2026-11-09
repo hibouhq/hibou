@@ -3,6 +3,11 @@
 ## Status
 Accepted
 
+Implemented (status verified 2026-11-09). GitHub and GitLab supply line-level
+comparisons; Forgejo supplies changed paths only, so patch coverage falls
+back to the file-level diff there. Per-line hits are loaded across every
+coverage report in the snapshot, not only a primary report.
+
 ## Context
 ADR-008 defined coverage ingest and a PR coverage *delta* at the file level, and ADR-016 added
 a file-level `coverage_diff` to the compare endpoint (added/removed/improved/regressed by
@@ -25,7 +30,7 @@ That is **patch coverage** (a.k.a. diff coverage) — the headline number Codeco
 ### Persist per-line hits (opt-out)
 `coverage.FileCoverage` gains `Lines []LineCoverage{Number, Hits}`, filled by all four parsers
 (deduped by line number, max-hits-wins). A new `coverage_lines(coverage_file_id, line_number,
-hits)` table (migration `00024`) stores them sparsely — only instrumented lines; `hits = 0`
+hits)` table (now in baseline migration `00001`) stores them sparsely — only instrumented lines; `hits = 0`
 means instrumented-but-uncovered, an absent line means not instrumented. Persistence is gated
 by `HIBOU_COVERAGE_STORE_LINES` (default **on**); very large monorepos can opt out. This is the
 only real storage cost and it is explicit, never silent. Rows are replaced per file on
@@ -35,14 +40,15 @@ re-upload so a shrinking report never leaves stale lines.
 `Provider.ComparePatch(owner, repo, base, head)` fetches the diff between the two snapshot
 commits. GitHub uses the compare API and parses each file's unified-diff `patch` into the
 new-side line numbers a change added or modified; it also carries the raw hunk text through
-(see "Annotated diff" below). GitLab/Forgejo are no-op stubs for now, so patch coverage simply
-degrades to the existing file-level diff. This reuses the transient installation token and adds
+(see "Annotated diff" below). GitLab also supplies hunks and added lines.
+Forgejo's comparison is paths-only, so patch coverage there degrades to the
+existing file-level diff. This reuses the transient installation token and adds
 zero CI-side work (cf. ADR-017 PR-ref resolution).
 
 ### Compute patch coverage as a pure function
 `comparison.BuildPatchCoverage(changes, headLines, exclude, truncated)` intersects the PR's
-changed lines with the head snapshot's per-line hits (primary report, mirroring
-`BuildCoverageDiff`). Only **instrumented** changed lines count — an added blank line, comment,
+changed lines with the head snapshot's per-line hits across all reports.
+Only **instrumented** changed lines count — an added blank line, comment,
 or a file with no coverage is not measurable and is excluded from the ratio, so the number
 matches what a reasoning reviewer would compute by hand. `coverage.exclude` globs are honored.
 The result is `nil` when nothing is measurable (e.g. a docs-only PR), letting the UI show "—".

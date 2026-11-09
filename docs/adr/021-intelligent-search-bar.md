@@ -4,6 +4,18 @@
 
 Accepted — implementing incrementally (client-side intelligence first).
 
+Implementation status verified 2026-11-09:
+
+- **Implemented:** the command-palette overlay, keyboard navigation, entity
+  hints, debounced search through the existing endpoint and full-results page.
+- **To be implemented:** the shared ADR-013 grammar, qualifier chips/value
+  completions and typed direct-entity navigation. `SearchPalette.vue` currently
+  extracts `type:` and `severity:`; other qualifier prefixes are stripped into
+  free text, and selecting a result opens the search page, not its entity.
+  These original requirements have not been dropped.
+- **Deferred optimization:** a dedicated `search/suggest` endpoint. The
+  existing `search?per_page=6` path is the intentional v1 implementation.
+
 ## Context
 
 The global search box is a plain substring match. The bar in

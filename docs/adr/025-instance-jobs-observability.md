@@ -2,17 +2,25 @@
 
 ## Status
 
-Proposed
+Implemented (status verified 2026-11-09).
 
-## Context
+The worker registry/heartbeat, instance-admin overview/timeline/stats
+endpoints and `InstanceJobsSettings.vue` are in use. The original three
+persisted job sources are now joined by dependency extraction (ADR-045).
+Ticker-loop run history, WebSocket push, anomaly alerting and job-control
+actions remain **deferred follow-ups**, not requirements missing from the
+implemented read-only observability scope.
+
+## Context (before implementation)
 
 Since [ADR-015](015-stateless-processing-and-worker-scaling.md), all durable background
-work is coordinated through PostgreSQL with lease-based claims. Three job sources already
-persist full timing data:
+work is coordinated through PostgreSQL with lease-based claims. The original
+three job sources persist full timing data; ADR-045 later added a fourth:
 
 | Source | Enqueue | Start | Finish | Extras |
 |---|---|---|---|---|
 | `secret_scan_jobs` | `created_at` | `started_at` | `finished_at` | `mode`, `status`, `claimed_by`, `attempts`, `last_error` |
+| `dep_extraction_jobs` (added by ADR-045) | `created_at` | `started_at` | `finished_at` | `status`, `claimed_by`, `attempts`, `last_error` |
 | `snapshots.artifact_processing_*` | `created_at` (snapshot) | `artifact_processing_started_at` | `artifact_processing_finished_at` | `status`, `claimed_by`, `attempts`, `last_error` |
 | `scans` (+ `scan_providers`) | `created_at` | `started_at` | `completed_at` | `triggered_by`, per-provider `response_time_ms` |
 
@@ -97,10 +105,10 @@ declarations in `route_scope.go`.
   wait (`percentile_cont` in SQL), plus a **baseline** = p50/p95 over the trailing
   7 days preceding the window.
 
-The three sources are normalized in one new query file
+The four sources are normalized in the query file
 (`internal/store/queries/instance_jobs.sql`) via `UNION ALL` into a common job-run
 shape; sqlc generates the rest. `kind` values: `secret_scan`, `artifact_processing`,
-`advisory_scan`.
+`advisory_scan`, `dep_extraction`.
 
 ### 3. Anomaly rule ("increase from the standard base")
 

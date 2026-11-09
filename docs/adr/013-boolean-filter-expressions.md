@@ -2,9 +2,15 @@
 
 ## Status
 
-Proposed
+Implemented (status verified 2026-11-09).
 
-## Context
+The frontend parser (`site/src/lib/filter-parser.ts`), backend parser and
+parameterized SQL builder (`internal/filterquery/filterquery.go`), and dynamic
+vulnerability listing are in use. Boolean grouping, precedence and validation
+have dedicated parser tests. Later ADRs extend the qualifier set; the list
+below is the original baseline, not the complete current grammar.
+
+## Context (before implementation)
 
 Hibou's vulnerability list currently accepts individual query parameters such as `type=sast&severity=high&status=detected`. That model works for straightforward narrowing because every filter is combined with an implicit `AND`, but it stops short of the boolean expressions users expect from issue trackers and code-hosting products.
 

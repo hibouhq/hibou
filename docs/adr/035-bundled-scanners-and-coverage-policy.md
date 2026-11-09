@@ -6,8 +6,15 @@ Accepted (2026-10-10). The CI-first scope is implemented: catalog, distribution
 policy and offline bundles, applicability detection, scan plans, `hibou scan`,
 repo settings, org requirements and exceptions, the coverage inventory and the
 PR coverage check. See [the implementation plan](034-036-implementation-plan.md)
-for what landed and what is still open (ruleset licence review, bulk
-enablement, managed runners).
+for what landed and what is still open. Status verified 2026-11-09:
+
+- **Implemented:** bulk enablement with a dry-run preview; it is not remaining
+  work.
+- **Blocked prerequisite:** approval of the OpenGrep ruleset licence; the
+  catalog's `license-review-pending` state prevents treating it as ready.
+- **Deferred:** managed isolated runners and the broader incremental
+  execution work of ADR-036. The CI-first implementation is not waiting for
+  server-managed runners to be usable.
 
 The Java POC was measured on 2026-10-10: released OpenGrep 1.30.1 has no
 interfile taint and misses the cross-file flow; the upstream

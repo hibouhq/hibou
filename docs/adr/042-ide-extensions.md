@@ -11,6 +11,18 @@ language ([ADR-013](013-boolean-filter-expressions.md)) and the forge quality
 gate ([ADR-018](018-forge-native-quality-gate-checks.md)). Login is specified
 by [ADR-043](043-cli-browser-login-device-flow.md).
 
+Remaining-work classification (verified against this repository 2026-11-09):
+
+- **Blocked, not dropped:** §7's editor MCP configuration needs an explicit
+  externally reachable MCP/authentication design first.
+- **Dropped:** running `hibou scan` from the IDE; uncommitted local work must
+  not be uploaded as a snapshot. This is not a missing phase-3 feature.
+- **Superseded implementation choices:** polling replaces WebSocket refresh;
+  triage uses `triage:write`, not the original `findings:write` sketch.
+- **External validation:** client builds and marketplace publishing belong to
+  `hibouhq/hibou-ide`. The dated client-build notes below are historical
+  evidence, not a freshly verified status of that separate repository.
+
 Implementation notes (2026-10-13):
 
 - **Language server**: `hibou lsp` (`cmd/lsp.go`, `internal/lsp`). LSP 3.18,
@@ -243,8 +255,8 @@ code leaves the machine in phases 1 and 2.
 | Phase | Features | Token needs |
 |---|---|---|
 | **1: read** | Device login; diagnostics with severity mapping; hover (rule, CWE, CVSS/EPSS, KEV flag, first seen); "Open in hibou" deep link; findings panel for the repo and file; status-bar gate verdict for the branch's PR; `.hibou.yaml` validation via the server's JSON schema; **"Suppress with native directive" code action** that inserts the scanner's own directive with a required `-- reason` (ADR-026). This is a local edit, so no write scope is needed. | read-only preset |
-| **2: triage** | Accept or dispute a finding with justification from the IDE; live refresh over `/ws`; patch-coverage gutter for changed lines (per-line hits, [ADR-018 line-level patch coverage](018-line-level-patch-coverage.md)) | the user opts in to `findings:write` in the device-approval screen |
-| **3: local checks** | Opt-in pre-commit secret check of the staged diff via `POST /secret-scan/check` (sends diff content to the server; off by default, admin-disableable); run `hibou scan` for the current commit | `secrets:read` |
+| **2: triage** | Accept or dispute a finding with justification from the IDE; polling refresh; patch-coverage gutter for changed lines (per-line hits, [ADR-018 line-level patch coverage](018-line-level-patch-coverage.md)) | the user opts in to `triage:write` in the device-approval screen |
+| **3: local checks** | Opt-in pre-commit secret check of the staged diff via `POST /secret-scan/check` (sends diff content to the server; off by default, admin-disableable). Running `hibou scan` from the IDE was dropped. | `secrets:read` |
 
 ### 6. Distribution
 
@@ -261,18 +273,18 @@ code leaves the machine in phases 1 and 2.
 
 ### 7. Agents in the IDE use MCP, not the extension
 
-Copilot, Cursor, Claude Code and JetBrains AI already talk to hibou through the
-existing MCP server with a read-only token. The extensions do not proxy MCP.
-At most they offer a "Configure hibou MCP for this workspace" command that
-writes the editor's MCP config using the same device-flow token. The two
+The existing MCP server is available to authorized in-cluster peers, not
+automatically reachable from developers' editors. The extensions do not proxy
+MCP. A "Configure hibou MCP for this workspace" command remains blocked on the
+exposure/authentication decision recorded above. The two
 integrations stay independent: the human sees diagnostics and the agent
 queries MCP, under the same scopes.
 
 ### Non-goals
 
 - **Local scanning engine in the IDE.** Hibou aggregates scanner output. It
-  does not re-run SAST on every keystroke. Phase 3 can trigger `hibou scan`,
-  but scanners stay external tools.
+  does not re-run SAST on every keystroke. Phase 3 only offers the opt-in
+  staged-diff secret check; triggering `hibou scan` was dropped.
 - **Embedding the web UI in a webview.** Deep links open the browser. A
   webview would duplicate auth and CSP handling for little gain.
 - **Other IDEs** (Visual Studio, Eclipse, Neovim, Zed, Helix). They are not

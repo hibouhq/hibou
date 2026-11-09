@@ -9,6 +9,11 @@ store, then worker/config wiring, then docs and full validation.
 > eviction must be **deterministic and idempotent**; `dry_run` produces decisions without
 > mutation.
 
+Status verified 2026-11-09: the implementation phases below landed. The
+original open-finding pin proposal remains unenforced and needs reassessment
+after ADR-045/049, rather than automatic promotion to implementation backlog.
+Design reassessment and deferred extensions are listed separately at the end.
+
 ## Phase 1 — Pure policy model & presets (`internal/retention/policy_tiered.go`)
 
 - [x] `RetentionPolicy` struct covering both mechanisms (`Storage{Budget,WarnAt,Target,EvictOrder}`,
@@ -25,7 +30,7 @@ store, then worker/config wiring, then docs and full validation.
 - [x] Recent window (`keep_all`) always kept
 - [x] Tiered representatives: bucket by daily/weekly/monthly/yearly, one rep per period for the
       most-recent `keep` periods; finer tier not double-counted by coarser
-- [x] `week_anchor` alignment (default monday; teams set friday)
+- [x] `week_anchor` alignment (implemented preset default: friday)
 - [x] Representative choice: `last` / `first` / `worst`
 - [x] Pinned / `retention_hold` / protected always kept
 - [x] Unit tests: week-anchor, sparse timelines, tie-breaks, representative variants
@@ -42,7 +47,7 @@ store, then worker/config wiring, then docs and full validation.
 
 ## Phase 4 — Schema & store
 
-- [x] Migration `00011`: `snapshots.pinned bool`, `snapshots.retention_hold bool`,
+- [x] Schema (now in baseline migration `00001`): `snapshots.pinned bool`, `snapshots.retention_hold bool`,
       `snapshots.artifact_bytes bigint`; per-repo running artifact-bytes total
 - [x] sqlc queries: timeline-scoped listing (per repo+ref) for GFS
 - [x] sqlc queries: set `pinned` / `retention_hold`, update artifact bytes, repo total
@@ -77,3 +82,21 @@ store, then worker/config wiring, then docs and full validation.
 - [x] Update `hibou-server.example.yaml` with the `retention:` block
 - [x] Update the product specification's retention section
 - [x] `rtk make generate && rtk go build ./... && rtk go vet ./... && rtk go test ./...`
+
+## Design reassessment (neither implementation nor removal decided)
+
+- [ ] Reassess `pin.referenced_by_open_findings` after
+      [ADR-045](045-built-in-dependency-inventory.md) and
+      [ADR-049](049-findings-once-per-repository.md). The option is parsed
+      but unenforced; the worker warns. Shared findings/inventories and
+      historical-detail reclamation are intentional storage tradeoffs.
+      Determine whether evidence needs protection beyond latest-per-ref,
+      tags, labels, explicit pins and holds. Do not pin every historical
+      occurrence merely because a finding is open. If additional protection
+      is unnecessary, retire the option; otherwise define its evidence scope
+      and storage cost before implementing it.
+
+## Deferred extensions (not scheduled)
+
+- Per-organization and per-repository retention overrides; the current worker
+  receives the instance-wide resolved policy.

@@ -2,7 +2,14 @@
 
 ## Status
 
-Proposed (2026-08-24). **See also [ADR-028](028-cve-subscriptions-with-manual-purl-triage.md)**,
+Proposed (2026-08-24); **deferred alternative, not scheduled**
+(status verified 2026-11-09). The CPE candidate model, NVD provider and CPE
+matching lane are not implemented. ADR-028's human-curated product-to-package
+mapping is implemented instead. This ADR is not a prerequisite for that work
+and has not been formally dropped; revisit only if the curated path proves
+insufficient.
+
+**See also [ADR-028](028-cve-subscriptions-with-manual-purl-triage.md)**,
 which addresses the same gap by curating product → package identity by hand
 instead of inferring it, and recommends being built first. Extends the canonical advisory model of
 [ADR-007](007-canonical-advisory-model.md) with a second identifier universe,

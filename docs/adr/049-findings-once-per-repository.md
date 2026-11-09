@@ -2,7 +2,13 @@
 
 ## Status
 
-Proposed (2026-10-17). Follows [ADR-045](045-built-in-dependency-inventory.md)
+Implemented (2026-10-17, rollout steps 1-5; status verified 2026-11-09).
+Migration `00068` and the store writers implement the storage split described
+in the implementation notes below. Batched writers or a rewritten per-set
+scan loop are **deferred optimizations**, not unfinished rollout requirements;
+the existing scan-reuse path already avoids repeated matching.
+
+Originally proposed 2026-10-17. Follows [ADR-045](045-built-in-dependency-inventory.md)
 (inventory sets: the same move for inventories), [ADR-034](034-absence-is-not-resolution.md)
 (presence, carry-forward, assertions) and [ADR-012](012-unified-vulnerability-model.md)
 (the unified read model and statuses). Changes nothing visible in the API

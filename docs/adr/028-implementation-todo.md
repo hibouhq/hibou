@@ -6,6 +6,12 @@ foundation first (it is a hard prerequisite and independently testable), then pu
 ingestion/projection code, then schema, then the write path, then UI, then the
 optional identity work.
 
+Status verified 2026-11-09: Phases 1-7 are implemented apart from the
+unchecked permission-sync health item. **Remaining implementation**,
+**operational ownership**, **deferred identity work**, and **dropped scope**
+are distinguished below; an unchecked operational or deferred item is not
+evidence that the core feature is unimplemented.
+
 > Conventions: nothing authored by a human reaches a quality gate until §5's queue
 > exists; `auto_apply` defaults **off**; the feed is **never** cloned (§3);
 > `advisory:triage` is an explicit grant, never inherited (§17). Every phase after
@@ -13,10 +19,12 @@ optional identity work.
 
 ## Phase 0 — Decisions required before code
 
-- [ ] **Deployment model declared**: single-organisation instance vs multi-tenant.
-      Decides whether instance-wide triage is the default or is disabled (§17).
-      Nothing in config distinguishes them today.
-- [ ] **Named owner for the triage queue** identified (§14). Without one the queue
+- [x] **Scope decision implemented:** watches and triage are instance-wide,
+      with instance-authorized writes (migration `00032`). Per-org scope,
+      a scope selector and `HSAT` were **dropped**, not left to implement;
+      no deployment-model configuration switch is needed for this design.
+- [ ] **Operational prerequisite:** named owner for the triage queue
+      identified (§14). Without one the queue
       is not worked and the ADR fails regardless of implementation quality.
 - [x] **`HSA` go/no-go** — **decided: reserve, do not build.** No editorial
       commitment needed yet; see Phase 8. Original question retained below:
@@ -32,9 +40,9 @@ optional identity work.
 > and fixed here** — see the matcher item below; it predates ADR-028 and
 > affected every org-scoped permission check in the product.
 >
-> Still open in this phase: the downgrade/suspension conflict rules and the
-> stale-sync surface, both of which need the Phase 3 schema to record a
-> suspended grant.
+> Downgrade/suspension conflict rules landed with the schema and UI below.
+> **Remaining implementation:** permission-sync stale-health visibility;
+> the CVE-feed health strip does not cover permission sync.
 
 Independently valuable and independently testable; ships before anything else.
 
@@ -186,10 +194,9 @@ Independently valuable and independently testable; ships before anything else.
 > `advisories` row, the CVE canonical, both sources recorded — so an org never
 > carries two advisories for one vulnerability.
 >
-> Still open here: `auto_apply` evaluation and divergence *detection against a
-> live upstream feed* — the diff and the staleness check exist and are tested,
-> but nothing yet runs them on a schedule. That is the worker, and it wants the
-> Phase 6 notification wiring to be useful.
+> `auto_apply` and divergence detection are wired into the scheduled sweep;
+> Phase 6 supplies the worker and notification wiring. They are no longer
+> pending implementation.
 
 - [x] Subscription matcher: normalised product key, optional vendor narrowing,
       **never** keyed on `assignerShortName` (§4)
@@ -197,7 +204,8 @@ Independently valuable and independently testable; ships before anything else.
 - [x] Subscription **preview**: which historical CVEs would have matched (§4) —
       exact once the corpus is mirrored (§13)
 - [x] Triage decision writes `affected_ranges` via the existing ingest path with
-      `source = 'hsa' | 'hsat:<org>' | 'instance'` (§7)
+      `source = 'triage'` (§7 as amended). The original `hsa` / `hsat:<org>`
+      source alternatives are not implemented scope.
 - [x] Verify alias convergence: authored data for a CVE lands on the *same*
       `advisories` row as OSV/NVD, via `preferredCanonicalID` /
       `shouldPromoteCanonicalID` — with a test, since this is the dedup guarantee
@@ -234,9 +242,9 @@ Independently valuable and independently testable; ships before anything else.
 > **Watches** landed as a complete vertical slice (originally `watched-software`
 > under an org; renamed and moved under `/instance/advisories/watches` once the scope question
 > resolved — see the ADR's §17): four handlers
-> (`internal/server/watched_software.go`) with API-token scopes declared,
-> `WatchedSoftwareTab.vue`, `WatchProductDialog.vue`, client types, route and
-> org tab. Built against the app's own tokens rather than a new aesthetic — a
+> (`internal/server/watches.go`) with route scopes declared,
+> `WatchesSettings.vue`, client types and an instance-settings route.
+> Built against the app's own tokens rather than a new aesthetic — a
 > new page that does not look native is a defect, not a design choice.
 >
 > The two decisions worth keeping: the list is a **coverage** view, not an
@@ -251,8 +259,8 @@ Independently valuable and independently testable; ships before anything else.
 > could create a watch governing every org from a URL scoped to their own).
 > Collapsing to instance-wide made both unrepresentable rather than guarded.
 >
-> Remaining Phase 5 screens — triage queue, activity, timeline, members rework,
-> instance-wide members view — are not built.
+> The triage queue, activity, timeline, members rework and instance-wide
+> members view also landed; their completed items are listed below.
 
 The triage queue is where this ADR lives or dies: if one CVE takes longer than a
 minute, the queue will not be worked (§15).
@@ -336,9 +344,9 @@ minute, the queue will not be worked (§15).
 > The sweeper that these notify *about* has landed:
 > `internal/cvetriage/sweeper.go` + `internal/server/cve_feed_loop.go`, always
 > on, leader-locked so replicas do not race the cursor, on a 15-minute tick.
-> No switch and no path to configure: the clone directory is derived, because
-> the resume point lives in the database and the clone is a disposable ~10 MB
-> cache. Nothing to set in a Helm chart, and no volume needed.
+> The clone directory is derived from `TMPDIR`: the resume point lives in
+> the database and the clone is a disposable cache. The chart provides the
+> bounded scratch volume; no user-supplied clone path is required.
 >
 > One bug the tests caught and fixed: the first version advanced the feed cursor
 > even when records had failed to store, which silently skips those advisories
@@ -346,7 +354,7 @@ minute, the queue will not be worked (§15).
 > now holds until a clean pass, and re-reading is free because storing and
 > queueing are idempotent.
 
-- [x] `subscription.match` and `advisory.diverged` event types through
+- [x] `triage.queued` and `advisory.diverged` event types through
       `internal/notify`'s existing dispatchers (Slack/Teams/Discord/email/webhook)
 - [x] **Digest by default**, not per-CVE — ~1,300 records/day across the feed
       means a well-targeted subscription can still burst (§17)
@@ -395,7 +403,7 @@ minute, the queue will not be worked (§15).
 - [x] Deliberately **no** CVE browser UI — mirror as infrastructure, not a feature
       (§13's product-surface warning)
 
-## Phase 8 — Identity: reserve now, build later
+## Phase 8 — Deferred identity work (not scheduled)
 
 > **Decided:** prepare for `HSA-*` without implementing it. The namespace is
 > reserved defensively; curation, the distribution channel and publication stay

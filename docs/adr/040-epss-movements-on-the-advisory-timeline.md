@@ -2,7 +2,14 @@
 
 ## Status
 
-Proposed (2026-10-10). Builds on the EPSS mirror of
+Proposed (2026-10-10); **to be implemented if adopted, not scheduled**
+(status verified 2026-11-09). The daily EPSS mirror is implemented, but
+`ReplaceEPSS` only replaces current scores: no threshold comparison,
+`epss_rose` / `epss_fell` events or timeline rendering exists. This proposal
+has not been dropped. Notifications and EPSS gates are separate deferred
+extensions, not part of this proposal's initial implementation.
+
+Builds on the EPSS mirror of
 [ADR-038](038-cvss-and-epss-risk-metrics.md) §4 and the advisory timeline
 (`advisory_events`, [ADR-028](028-cve-subscriptions-with-manual-purl-triage.md))
 that already carries KEV listings ([ADR-032](032-kev-catalog-and-exploited-gate.md)).

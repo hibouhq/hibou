@@ -13,6 +13,26 @@ work, and each item lands through its own ADR. Builds on the CRA automation
 [ADR-036](036-automatic-scan-planning-and-verification.md)) and reproducible
 builds ([ADR-011](011-reproducible-builds.md)).
 
+Implementation classification (verified 2026-11-09):
+
+- **Partially implemented roadmap, not a completed platform claim:** scanner
+  plans/provenance metadata, offline dependency matching, an existing local
+  auditor role and ISO 27001 exports provide foundations. ADR-053 also
+  implements incident/VEX approval paths; that does not complete every
+  separation-of-duties requirement below.
+- **To be implemented if adopted:** the broader framework-as-data model,
+  application policy history, remediation SLAs, recomputable signed reports,
+  CI-signed scan evidence verification, externally anchored audit hash chains,
+  enterprise identity and the remaining authorization/reproduction features.
+  The original 0-3 / 3-9 / 9-24 month bands are sequencing guidance from the
+  proposal, not current delivery commitments.
+- **Deferred/conditional:** notary operations, vendor-operated single tenancy,
+  certifications and government channels require demand, staffing and
+  independent assessment; they are not ordinary unfinished code tasks.
+- **Deliberately excluded, not backlog:** a shared SaaS scanning service,
+  FedRAMP authorization for the self-hosted product, and any claim that an
+  instance signature proves an honest scan.
+
 ## Key points (read this first)
 
 This section is the contract for anyone, person or agent, implementing an item

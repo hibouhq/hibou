@@ -4,7 +4,15 @@
 
 Accepted (2026-10-10). Rollout steps 1–4 are implemented; see
 [the implementation plan](034-036-implementation-plan.md) for what landed and
-the remaining gaps (Forgejo compare, MCP write tool).
+the remaining follow-ups. Status verified 2026-11-09:
+
+- **Implemented:** GitLab line-level compare and Forgejo paths-only compare;
+  Forgejo's lack of hunks limits patch coverage, not file-change evidence.
+- **Deferred:** the MCP `reassert_finding` write tool; agents can already use
+  the authorized HTTP reassert endpoint. The tool is not dropped.
+- **Superseded storage detail:** [ADR-049](049-findings-once-per-repository.md)
+  stores presence on `snapshot_findings`, exposed through the
+  `vulnerabilities` view, rather than copying the full finding per snapshot.
 
 ## Context
 

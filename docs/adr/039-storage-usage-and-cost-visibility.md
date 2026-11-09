@@ -2,8 +2,15 @@
 
 ## Status
 
-Proposed. Implemented: the sampler and exporters (§2–§5) and the admin page
-(§6). The cost join and dashboards are follow-ups (§7). Builds on the worker
+Implemented core scope (status verified 2026-11-09): the sampler and exporters
+(§2–§5) and the admin page (§6).
+
+**Deferred/out of scope, not missing core implementation:** external
+dashboards and alert rules, in-app growth history and operator-side cost joins
+(§7). Hibou intentionally measures usage, not prices; billing integration is
+not a promised unfinished server feature.
+
+Builds on the worker
 registry and the jobs page ([ADR-025](025-instance-jobs-observability.md)) and
 on stateless replicas with leader-locked loops ([ADR-015](015-stateless-processing-and-worker-scaling.md)).
 

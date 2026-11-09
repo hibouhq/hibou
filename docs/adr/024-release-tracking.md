@@ -5,6 +5,18 @@
 Accepted — implemented (2026-08-18), except the Deployments phase (§8), which
 is design-only.
 
+Status verified 2026-11-09:
+
+- **Implemented:** tag-derived releases, client assignments, pipeline/API
+  deployment recording, release scans and advisory freshness.
+- **To be implemented:** §8's GitOps, cluster-observed and client-self-reported
+  sources, provenance reconciliation and the full Deployments page. The
+  current page is a placeholder, not a missing deployment-recording API.
+- **Dropped, not pending implementation:** manual release creation/deletion
+  and `hibou release create`; lifecycle derives from tags and forge events.
+- **Deferred alternative:** event-driven advisory refresh; the periodic,
+  cache-shaped scan is the implemented choice.
+
 Implementation notes:
 
 - Migration `00023_release_tracking`: `html_url`, `source` (`tag|forge`),

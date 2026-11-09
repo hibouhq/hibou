@@ -10,6 +10,12 @@ ADR-045 or ADR-046 to ship; it is adopted when an org, a customer audit or an
 incident asks for it. The schema of ADR-045 leaves room for it, so adoption
 is additive.
 
+Status verified 2026-11-09: **deferred, not dropped and not scheduled**.
+The request/approve flows and extractor-upgrade review queue below are not
+implemented. ADR-045/046's existing admin-only, additive-evidence and
+audit rules are implemented; ADR-053's incident/VEX approvals do not
+implement this separate inventory-governance proposal.
+
 ## Context
 
 ADR-045 already guarantees:

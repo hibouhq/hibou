@@ -2,9 +2,27 @@
 
 ## Status
 
-Proposed
+Implemented; the original open-finding pin rule needs reassessment after
+the storage redesign (status verified 2026-11-09).
 
-## Context
+- **Implemented:** policy presets and configuration, GFS selection, repository
+  storage envelopes, worker integration, upload nudges, notifications and audit.
+  See [the implementation checklist](014-implementation-todo.md).
+- **Safety default:** `auto_purge: false` disables destructive reclaim;
+  configuring a budget alone does not enforce a hard ceiling.
+- **Needs reassessment, not mandatory implementation:**
+  `pin.referenced_by_open_findings` is parsed but unenforced; the worker logs
+  a warning. [ADR-045](045-built-in-dependency-inventory.md) and
+  [ADR-049](049-findings-once-per-repository.md) deliberately deduplicate
+  inventory/findings and accept historical-detail tradeoffs. An open finding
+  does not require every historical occurrence or its artifacts to survive.
+  Decide whether evidence needs protection beyond existing pins, holds, tags,
+  labels and latest-per-ref rules before adding automatic pinning. If not,
+  retire the option. Neither enforcement nor removal has been decided.
+- **Deferred extension:** per-organization and per-repository policy overrides;
+  the resolved policy is currently instance-wide.
+
+## Context (before implementation)
 
 A snapshot is the unit of build history in Hibou: each one aggregates the SBOM, SARIF,
 coverage, and VEX artifacts uploaded for a single CI run, plus the derived findings and
@@ -161,7 +179,7 @@ rotation can reason about it immediately.
 
 ### Week anchor (maps to a team's review cadence)
 
-The weekly tier honors a configurable `week_anchor` (default `monday`, ISO-8601). The weekly
+The weekly tier honors a configurable `week_anchor` (default `friday`). The weekly
 representative is the snapshot on, or the last one before, the anchor day within each week.
 
 A team that performs its security write-up every **Friday** sets `week_anchor: friday`; the
@@ -195,15 +213,20 @@ heavy artifacts only for representatives inside their retention horizon.
 
 ### Protection rules (`pin`)
 
-Snapshots matching any protection rule are never thinned or evicted, by either mechanism:
+Snapshots matching an enforced protection rule are never thinned or evicted,
+by either mechanism:
 
 - `tags: true` — release/tag snapshots are permanent history.
 - `latest_per_ref: true` — the current gate state of each ref is always retained at full
   fidelity.
 - `labels: [...]` — snapshots carrying a configured label (for example `baseline`, `audit`)
   are pinned, supporting compliance baselines.
-- `referenced_by_open_findings: true` — a snapshot still backing an open/unresolved finding is
-  retained so the evidence chain is intact.
+- `referenced_by_open_findings: true` — original proposal, **unenforced and
+  pending reassessment**, not a promised retention guarantee. Do not equate
+  an open finding or last-seen reference with pinning every historical
+  snapshot/artifact: that could defeat the storage gains of ADR-045/049.
+  Use explicit pins/holds for evidence that must survive retention while
+  the need for any additional automatic protection is decided.
 - A per-snapshot `pinned` flag and a `retention_hold` flag (legal/audit hold) always win over
   any age- or tier-based rule.
 
