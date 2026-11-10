@@ -67,6 +67,11 @@ describe('SCA coverage', () => {
 })
 
 describe('SCA actions', () => {
+  it('updates monitoring enrollment without discarding an existing CI integration', () => {
+    const result = { provider_id: 'example/app', status: 'accepted' as const, job_id: 'job' }
+    expect(scaResultCoverage(result, { ...coverage('not_monitored'), integration: 'not_monitored' })?.integration).toBe('monitored')
+    expect(scaResultCoverage(result, { ...coverage('complete'), integration: 'ci_integrated' })?.integration).toBe('ci_integrated')
+  })
   it('uses enrollment rather than lifecycle to choose enable/extract/retry', () => {
     expect(scaAction(false)).toBeNull()
     expect(scaAction(false, coverage('not_monitored'))).toBe('Enable SCA')

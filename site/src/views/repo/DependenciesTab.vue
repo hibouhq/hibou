@@ -4,6 +4,7 @@
       <div class="flex flex-wrap items-start justify-between gap-3">
         <ScaStatus
           :sca="extraction?.sca"
+          :integration="repo?.sca?.integration"
           :can-manage="canManage"
           :components="components.length"
           :findings="components.reduce((total, component) => total + component.vuln_count, 0)"

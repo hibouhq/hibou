@@ -155,10 +155,21 @@ func (s *Server) processForgeReconciliation(parent context.Context, job *store.F
 			s.log.Error().Err(err).Str("provider", job.Provider).Msg("persist shared forge API backoff")
 		}
 	}
+	var committed *forgePostCommitError
+	if errors.As(err, &committed) {
+		return
+	}
 	if finishErr := s.queries.FinishForgeReconciliation(finishCtx, job, job.State, due, truncateSecretScanError(err)); finishErr != nil {
 		s.log.Error().Err(finishErr).Str("job", job.ID.String()).Msg("record forge reconciliation failure")
 	}
 }
+
+// A forge write after the observation transaction cannot finish the already
+// released lease again. The error is logged and the next PR poll retries it.
+type forgePostCommitError struct{ err error }
+
+func (e *forgePostCommitError) Error() string { return e.err.Error() }
+func (e *forgePostCommitError) Unwrap() error { return e.err }
 
 func (s *Server) reconcileForgeScope(ctx context.Context, job *store.ForgeReconciliation) error {
 	ctx = context.WithValue(ctx, forgeObservationSourceKey{}, "poll")
@@ -443,7 +454,23 @@ func (s *Server) reconcileForgeScope(ctx context.Context, job *store.ForgeReconc
 			invalidator.InvalidateInstallationCredentials()
 		}
 	}
-	if next.GatePending && repo != nil && s.gatePublisher != nil {
+	if (next.GatePending || job.Kind == "pull_requests") && repo != nil && s.gatePublisher != nil {
+		reporting, err := s.gatePublisher.RepositoryReportingEnabled(ctx, repo.ID)
+		if err != nil {
+			return &forgePostCommitError{err}
+		}
+		if !reporting {
+			if err := s.gatePublisher.RetireUnintegratedChecks(ctx, repo.ID); err != nil {
+				return &forgePostCommitError{err}
+			}
+			if next.GatePending {
+				return s.clearForgeGatePending(ctx, job.ID)
+			}
+			return nil
+		}
+		if !next.GatePending {
+			return nil
+		}
 		started := time.Now().UTC()
 		refs, err := s.allReconciliationRefs(ctx, repo.ID)
 		if err != nil {

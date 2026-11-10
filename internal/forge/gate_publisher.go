@@ -77,6 +77,7 @@ func (a *GatePublisher) SetAdvisoryScanEnabled(enabled bool) {
 const securityStatusContext = "hibou/security"
 
 type GatePublisherStore interface {
+	HasGateIntegration(ctx context.Context, repoID uuid.UUID) (bool, error)
 	GetRepoByID(ctx context.Context, id uuid.UUID) (dbgen.Repository, error)
 	GetSnapshotByID(ctx context.Context, id uuid.UUID) (dbgen.Snapshot, error)
 	GetRefByID(ctx context.Context, id uuid.UUID) (dbgen.Ref, error)
@@ -190,7 +191,7 @@ func (a *GatePublisher) publishForSnapshotID(ctx context.Context, snapshotID uui
 			// Only analyzed snapshots may be gate input — a pending/failed one
 			// evaluates as empty ("0 findings — passed"). Show the waiting
 			// state on the current head instead.
-			a.publishGateWaitingForUpload(ctx, ref)
+			a.publishGateWaitingForAnalysis(ctx, ref)
 			return
 		}
 		if head, stale := snapshotBehindHead(snapshot, ref); stale {
@@ -272,7 +273,7 @@ func (a *GatePublisher) publishGateWaitingForHead(ctx context.Context, snapshot 
 	status.description = "Waiting for scan of " + shortCommit(headSHA)
 	status.title = "Quality gate — waiting for scan of " + shortCommit(headSHA)
 	status.summary = fmt.Sprintf(
-		"The pull request head moved to %s but its scan has not been uploaded yet. The last evaluated commit was %s; this check updates automatically when the new head's upload arrives.",
+		"The pull request head moved to %s but has not been analyzed yet. The last evaluated commit was %s; this check updates automatically when analysis of the new head finishes.",
 		shortCommit(headSHA), shortCommit(snapshot.CommitSha))
 	a.publishGateStatusOnly(ctx, annotation, status)
 }
@@ -375,7 +376,7 @@ func (a *GatePublisher) recomputeOpenPRsForRepo(ctx context.Context, repoID uuid
 // PublishGateForRef re-evaluates and re-publishes the gate check for a PR ref's
 // current head snapshot. Safe to call from any gate-affecting code path; a no-op
 // for non-PR refs. A PR head with no analyzed snapshot gets the in-progress
-// "waiting for upload" check — same context, so branch protection blocks the
+// "waiting for analysis" check — same context, so branch protection blocks the
 // merge until the real verdict replaces it.
 func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) {
 	if a == nil || a.store == nil || a.delta == nil || refID == uuid.Nil {
@@ -394,7 +395,7 @@ func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) 
 		// No analyzed head snapshot yet (PR opened / pushed, CI not uploaded):
 		// post the pending check on the webhook-tracked head so the PR is
 		// blocked-and-informative instead of blank.
-		a.publishGateWaitingForUpload(ctx, ref)
+		a.publishGateWaitingForAnalysis(ctx, ref)
 		return
 	}
 	if snapshot.Status != dbgen.SnapshotStatusComplete && snapshot.Status != dbgen.SnapshotStatusActive {
@@ -402,7 +403,7 @@ func (a *GatePublisher) PublishGateForRef(ctx context.Context, refID uuid.UUID) 
 		// path evaluated a webhook-created pending placeholder — zero findings
 		// against the full base — and published "passed" on a PR that
 		// introduced a known-exploited dependency (dogfood, PR #11 retest).
-		a.publishGateWaitingForUpload(ctx, ref)
+		a.publishGateWaitingForAnalysis(ctx, ref)
 		return
 	}
 	if head, stale := snapshotBehindHead(snapshot, ref); stale {
@@ -497,17 +498,17 @@ func (a *GatePublisher) publishGateScanPending(ctx context.Context, snapshot dbg
 		status.description = "Advisory scan in progress for " + shortCommit(headSHA)
 		status.title = "Quality gate — advisory scan in progress"
 		status.summary = fmt.Sprintf(
-			"The analysis upload for commit %s arrived and its components are being matched against advisory databases. Publishing a verdict before that finishes would miss dependency findings entirely, so this check waits and updates automatically.",
+			"Inventory for commit %s is available and its components are being matched against advisory databases. Publishing a verdict before that finishes would miss dependency findings entirely, so this check waits and updates automatically.",
 			shortCommit(headSHA))
 	}
 	a.publishGateStatusOnly(ctx, annotation, status)
 }
 
-// publishGateWaitingForUpload posts the in-progress check for a PR whose
+// publishGateWaitingForAnalysis posts the in-progress check for a PR whose
 // current head has NO analyzed snapshot at all. Same check context as the
 // verdict ("hibou/security") — forges cannot delete checks, so the pending
 // state is later updated in place rather than removed.
-func (a *GatePublisher) publishGateWaitingForUpload(ctx context.Context, ref dbgen.Ref) {
+func (a *GatePublisher) publishGateWaitingForAnalysis(ctx context.Context, ref dbgen.Ref) {
 	head := ""
 	if ref.LatestCommitSha.Valid {
 		head = strings.TrimSpace(ref.LatestCommitSha.String)
@@ -534,10 +535,10 @@ func (a *GatePublisher) publishGateWaitingForUpload(ctx context.Context, ref dbg
 		orgSlug:  orgSlug,
 	}
 	status := gatePendingStatus()
-	status.description = "Waiting for upload for " + shortCommit(head)
-	status.title = "Quality gate — waiting for upload"
+	status.description = "Waiting for analysis of " + shortCommit(head)
+	status.title = "Quality gate — waiting for analysis"
 	status.summary = fmt.Sprintf(
-		"Hibou has not received an analysis upload (SBOM/SARIF/coverage) for commit %s yet. CI's upload publishes the real verdict here; if branch protection requires this check, the merge stays blocked until then.",
+		"Hibou has no completed analysis for commit %s yet. Repository dependency analysis or a configured CI upload must finish before a quality-gate verdict can be published.",
 		shortCommit(head))
 	a.publishGateStatusOnly(ctx, annotation, status)
 }
@@ -1110,6 +1111,23 @@ func (a *GatePublisher) loadPRTargetContext(ctx context.Context, ref dbgen.Ref) 
 }
 
 func (a *GatePublisher) loadGateRepository(ctx context.Context, ref dbgen.Ref) (dbgen.Repository, Provider, string, string, bool) {
+	repo, provider, owner, name, ok := a.loadGateRepositoryIdentity(ctx, ref)
+	if !ok {
+		return repo, provider, owner, name, false
+	}
+	enabled, err := a.repositoryReportingEnabled(ctx, repo)
+	if err != nil {
+		a.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("check PR reporting integration")
+		return dbgen.Repository{}, nil, "", "", false
+	}
+	if !enabled {
+		a.log.Debug().Str("repo_id", repo.ID.String()).Msg("skip PR reporting without an integration")
+		return dbgen.Repository{}, nil, "", "", false
+	}
+	return repo, provider, owner, name, true
+}
+
+func (a *GatePublisher) loadGateRepositoryIdentity(ctx context.Context, ref dbgen.Ref) (dbgen.Repository, Provider, string, string, bool) {
 	repo, err := a.store.GetRepoByID(ctx, ref.RepoID)
 	if err != nil {
 		a.log.Error().Err(err).Str("repo_id", ref.RepoID.String()).Msg("load repository for gatePublisher")

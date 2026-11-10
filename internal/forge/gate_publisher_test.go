@@ -116,6 +116,8 @@ func (m *mockRepoConfigLoader) LoadEnforcement(_ context.Context, _, _, _, _, _ 
 }
 
 type gatePublisherStore struct {
+	integrated           bool
+	integrationErr       error
 	resolvedFingerprints []string
 	*deltaTestStore
 	repos          map[uuid.UUID]dbgen.Repository
@@ -137,6 +139,7 @@ type deltaTestStore struct {
 
 func newGatePublisherStore() *gatePublisherStore {
 	return &gatePublisherStore{
+		integrated: true,
 		deltaTestStore: &deltaTestStore{
 			vulnsBySnapshot: map[uuid.UUID][]storepkg.Vulnerability{},
 			repoGates:       map[uuid.UUID][]dbgen.QualityGate{},
@@ -150,6 +153,10 @@ func newGatePublisherStore() *gatePublisherStore {
 		openPRRefs:     map[uuid.UUID][]dbgen.Ref{},
 		repoIDsByOrg:   map[uuid.UUID][]uuid.UUID{},
 	}
+}
+
+func (m *gatePublisherStore) HasGateIntegration(context.Context, uuid.UUID) (bool, error) {
+	return m.integrated, m.integrationErr
 }
 
 func (m *deltaTestStore) ListAllVulnerabilitiesBySnapshot(_ context.Context, snapshotID uuid.UUID) ([]storepkg.Vulnerability, error) {
@@ -590,7 +597,7 @@ func TestGatePublisherStaleSnapshotPostsWaitingOnHead(t *testing.T) {
 // CI upload not arrived) must still show a check: the in-progress
 // "waiting for upload" state on the webhook-tracked head. Same context as the
 // verdict, so branch protection blocks the merge until the upload lands.
-func TestGatePublisherNoSnapshotPostsWaitingForUpload(t *testing.T) {
+func TestGatePublisherNoSnapshotPostsWaitingForAnalysis(t *testing.T) {
 	store := newGatePublisherStore()
 	forgeProvider := &mockForgeProvider{}
 	orgID := uuid.New()
@@ -622,7 +629,7 @@ func TestGatePublisherNoSnapshotPostsWaitingForUpload(t *testing.T) {
 	if posted.status.State != "pending" {
 		t.Fatalf("waiting-for-upload must post pending, got %q", posted.status.State)
 	}
-	if !strings.Contains(posted.status.Description, "Waiting for upload") {
+	if !strings.Contains(posted.status.Description, "Waiting for analysis") {
 		t.Fatalf("description must say what is awaited, got %q", posted.status.Description)
 	}
 	if len(store.prChecks) != 0 {

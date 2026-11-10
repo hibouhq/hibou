@@ -21,6 +21,7 @@ import (
 )
 
 type scaCoverage struct {
+	Integration        string     `json:"integration"`
 	State              string     `json:"state"`
 	HasInventory       bool       `json:"has_inventory"`
 	Detail             string     `json:"detail,omitempty"`
@@ -40,13 +41,19 @@ type scaCoverage struct {
 func (s *Server) scaCoverage(enrolled bool, o store.SCAObservation) scaCoverage {
 	currentSnapshot := o.HeadCommit == "" || o.CommitSHA == o.HeadCommit
 	c := scaCoverage{
-		State: "not_assessed", Enabled: s.cfg.DepInventory.Enabled, OnPush: s.cfg.DepInventory.OnPush,
+		Integration: "monitored",
+		State:       "not_assessed", Enabled: s.cfg.DepInventory.Enabled, OnPush: s.cfg.DepInventory.OnPush,
 		HasInventory: currentSnapshot && (o.HasInventory || o.HasComponents),
 		CommitSHA:    o.CommitSHA, LastAssessed: o.LastAssessed, LastAttempt: o.LastAttempt, JobID: o.JobID,
 		InventorySource: o.InventorySource, InventoryCommitSHA: o.InventoryCommit, HeadCommitSHA: o.HeadCommit,
 		InventorySources: o.InventorySources,
 		PreviousResults: o.PreviousInventory && (!currentSnapshot || !o.HasInventory && !o.HasComponents) ||
 			!currentSnapshot && (o.HasInventory || o.HasComponents),
+	}
+	if o.HasUploads {
+		c.Integration = "ci_integrated"
+	} else if !enrolled {
+		c.Integration = "not_monitored"
 	}
 	if c.InventorySource == "" {
 		c.InventorySource = "none"

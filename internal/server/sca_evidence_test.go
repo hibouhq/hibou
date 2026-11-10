@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -73,6 +74,32 @@ func TestSCAReportedResultsAndCurrentCommitAreSeparate(t *testing.T) {
 	if err != nil || coverage.State != "outdated" || coverage.HasInventory || !coverage.PreviousResults ||
 		coverage.InventoryCommitSHA != snapshot.CommitSHA || coverage.HeadCommitSHA != newHead {
 		t.Fatalf("prior results and current coverage were conflated: %+v err=%v", coverage, err)
+	}
+}
+
+func TestSCAIntegrationRequiresUploadsNotServerInventory(t *testing.T) {
+	s, repo, snapshot, doc := scaEvidenceFixture(t)
+	ctx := context.Background()
+	if _, err := s.queries.IngestInventorySource(ctx, snapshot.ID, "sbom:hibou-depinventory.cdx.json", nil, nil, doc); err != nil {
+		t.Fatal(err)
+	}
+	coverage, err := s.dependencyCoverageForRepo(ctx, repo, "main")
+	if err != nil || coverage.Integration != "monitored" {
+		t.Fatalf("server inventory implied CI integration: %+v err=%v", coverage, err)
+	}
+	publisher := forge.NewGatePublisher(nil, nil, nil, forge.NewGatePublisherStoreAdapter(s.queries), nil, nil, "", s.log)
+	if enabled, err := publisher.RepositoryReportingEnabled(ctx, repo.ID); enabled || err != nil {
+		t.Fatalf("SCA enrollment enabled PR reporting: %v %v", enabled, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE snapshots SET received_uploads=1 WHERE id=$1`, snapshot.ID); err != nil {
+		t.Fatal(err)
+	}
+	coverage, err = s.dependencyCoverageForRepo(ctx, repo, "main")
+	if err != nil || coverage.Integration != "ci_integrated" || coverage.InventorySource != "repository" {
+		t.Fatalf("CI integration and inventory provenance conflated: %+v err=%v", coverage, err)
+	}
+	if enabled, err := publisher.RepositoryReportingEnabled(ctx, repo.ID); !enabled || err != nil {
+		t.Fatalf("existing upload integration lost PR reporting: %v %v", enabled, err)
 	}
 }
 

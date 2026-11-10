@@ -543,6 +543,11 @@ enable/update/retry actions.
   as the inventory view. Long coverage explanations and producer identifiers
   remain available in expandable details instead of truncating scanner names
   or filling the summary with repeated per-module warnings.
+  The separate `integration` field distinguishes `monitored` repositories from
+  `ci_integrated` repositories with recorded analysis uploads, and from
+  `not_monitored` discovery entries. UI badges display "Monitored" and
+  "CI integrated"; neither lifecycle "Active" nor a server-generated inventory
+  establishes a CI integration. Upload history is not a CI-health assertion.
 - Sources retain the **Hibou scan** origin, paths, extractor version and
   module completeness. CI/uploaded SBOM evidence remains additive under §5;
   enabling SCA neither replaces it nor implies build-accurate transitive
@@ -631,8 +636,7 @@ Hibou analyses every onboarded repository without CI changes, the same way it
 already does secret scanning.
 
 - **Trigger**: a push to an *eager* branch (§4.1.1), a tag matching the
-  release tag pattern, or a pull request whose diff touches a recognized
-  lockfile or manifest (§4.1.2).
+  release tag pattern, or an observed pull request head (§4.1.2).
 - **Skip when nothing changed**: the inventory is a pure function of the
   matched files plus the extractor version. Hibou stores an *input digest*
   (sorted path + blob SHA list + extractor version), computed from the tree
@@ -687,13 +691,13 @@ repositories. Both can adopt the same eager/lazy split later.
 
 ##### 4.1.2 Pull requests: report what the PR changes in dependencies
 
-Most pull requests do not touch dependencies, so reporting on those that do
-is cheap and rarely noisy.
+Most pull requests do not touch dependencies; digest and inventory-set reuse
+keep their head analysis cheap without leaving an unfinished placeholder.
 
-- **When**: on PR open and each push to its head, if the PR's diff (base…head)
-  touches a recognized lockfile or manifest. The diff file list comes from
-  the forge's compare data already used for patch coverage. Otherwise
-  nothing runs and nothing is posted.
+- **When**: on PR open and each push to its head, enqueue an extraction even
+  when the diff contains no dependency files. Each head needs a completed
+  analysis snapshot; unchanged inventory and advisory matches are reused.
+  A pending or failed placeholder must never be treated as a passing gate.
 - **What**: the head inventory is extracted (digest reuse applies) and
   compared with the base's, extracting the base on the fly if it is lazy.
   The delta lists added components and version changes, each with its
@@ -703,7 +707,9 @@ is cheap and rarely noisy.
   changes first, then the indirect ones they pulled in.
 - **Where**: a "Dependencies" section in Hibou's existing PR comment and
   check (`internal/forge/gate_publisher.go`, ADR-018), updated in place on
-  each push, not a second comment.
+  each push, not a second comment. SCA-only enrollment does not enable these
+  forge writes: reporting requires an existing upload integration or explicit
+  repository quality gates.
 - **Blocking vs informational**: every newly vulnerable dependency is
   **printed**, including not-shipped ones. Only those matching the gate rules
   block (§6). The others are marked "informational: not shipped".

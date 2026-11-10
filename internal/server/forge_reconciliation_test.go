@@ -20,13 +20,20 @@ import (
 
 type reconciliationTestForge struct {
 	discoveryTestForgeProvider
-	refs     []forge.RefObservation
-	prs      []forge.PullRequestEvent
-	releases []forge.ReleaseObservation
-	run      forge.WorkflowRun
-	readErr  error
-	admin    *store.User
-	checks   []forge.CommitStatus
+	refs      []forge.RefObservation
+	prs       []forge.PullRequestEvent
+	releases  []forge.ReleaseObservation
+	run       forge.WorkflowRun
+	readErr   error
+	admin     *store.User
+	checks    []forge.CommitStatus
+	retired   []string
+	retireErr error
+}
+
+func (f *reconciliationTestForge) RetirePendingGate(_ context.Context, _, _, head, name string) error {
+	f.retired = append(f.retired, head+"/"+name)
+	return f.retireErr
 }
 
 func (f *reconciliationTestForge) CreateCommitStatus(_ context.Context, _, _, _ string, status forge.CommitStatus) error {
@@ -123,6 +130,10 @@ func reconcileTestScope(t *testing.T, srv *Server, repo *store.Repository, kind 
 	}
 	err = srv.reconcileForgeScope(ctx, job)
 	if err != nil {
+		var committed *forgePostCommitError
+		if errors.As(err, &committed) {
+			return err
+		}
 		if finishErr := srv.queries.FinishForgeReconciliation(ctx, job, job.State, time.Now(), err.Error()); finishErr != nil {
 			t.Fatal(finishErr)
 		}

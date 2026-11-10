@@ -19,6 +19,7 @@
       <div class="min-w-0 space-y-4 lg:order-1">
         <ScaStatus
           :sca="sca"
+          :integration="repo?.sca?.integration"
           :components="summary?.components_total"
           :findings="vulnerabilitiesTotal"
         />

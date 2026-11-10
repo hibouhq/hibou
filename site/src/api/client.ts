@@ -161,6 +161,7 @@ export interface OnboardableAccount {
 export type RepoLifecycleStatus = 'discovered' | 'active' | 'archived' | 'deleted'
 
 export interface ScaCoverage {
+  integration?: 'monitored' | 'ci_integrated' | 'not_monitored'
   has_inventory?: boolean
   inventory_source?: 'repository' | 'cli' | 'sbom' | 'mixed' | 'unknown' | 'none'
   inventory_sources?: Array<'repository' | 'cli' | 'sbom' | 'unknown'>

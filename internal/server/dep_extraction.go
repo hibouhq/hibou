@@ -1043,29 +1043,11 @@ func (s *Server) ingestInventoryNow(ctx context.Context, snapshot *store.Snapsho
 	return nil
 }
 
-// maybeEnqueuePRDepExtraction records a job for a pull request head when
-// its diff touches a lockfile or manifest (ADR-045 §4.1.2). When the
-// comparison is unavailable the extraction runs anyway: a sparse checkout
-// is cheaper than a wrong "nothing changed".
+// maybeEnqueuePRDepExtraction inventories every observed PR head. Even when
+// dependency files are unchanged, the head needs its own completed snapshot;
+// input-digest and inventory-set reuse avoid repeating unchanged work.
 func (s *Server) maybeEnqueuePRDepExtraction(ctx context.Context, repo *store.Repository, ref *store.Ref, headSHA string) error {
 	if !s.cfg.DepInventory.Enabled || !s.cfg.DepInventory.OnPush || repo == nil || ref == nil {
-		return nil
-	}
-	touchesManifest := true
-	if ref.MergeTargetRefID != nil {
-		if target, err := s.queries.GetRefByID(ctx, *ref.MergeTargetRefID); err == nil && target != nil && target.LatestCommitSHA != nil && *target.LatestCommitSHA != "" {
-			if index, err := s.presenceComparison(ctx, repo, *target.LatestCommitSHA, headSHA, true); err == nil && !index.unsupported && !index.truncated {
-				touchesManifest = false
-				for path := range index.files {
-					if depinventory.IsExtractionPath(path) {
-						touchesManifest = true
-						break
-					}
-				}
-			}
-		}
-	}
-	if !touchesManifest {
 		return nil
 	}
 	if err := s.queries.EnqueueObservedExtraction(ctx, store.EnqueueDepExtractionJobParams{

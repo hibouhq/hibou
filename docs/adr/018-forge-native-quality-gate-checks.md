@@ -46,6 +46,31 @@ GitHub Check Run is a presentation upgrade, not a requirement.
 
 ## Decision
 
+### 0. Monitoring enrollment is not PR-reporting consent
+
+Discovery, dependency extraction and advisory matching do not themselves enable
+PR checks or comments. Reporting requires at least one CI upload already recorded
+for the repository, an enabled repository-scoped quality gate, or explicit
+`quality_gates` in the default branch's `.hibou.yaml`. Organization-wide gate
+defaults alone do not opt a newly monitored repository into forge writes.
+
+The eligibility check applies to webhook, reconciliation, scan-completion and
+gate-recompute paths. Lookup errors are logged and do not authorize a write.
+For repositories with reporting enabled, unfinished head snapshots remain pending
+until real analysis finishes; a missing CI upload is not assumed to be the only
+possible producer.
+
+Normal PR reconciliation retires pre-existing pending GitHub checks on
+unintegrated repositories without creating new checks. Native checks belonging
+to this App become `neutral` with an explicit "not configured" explanation;
+completed verdicts and other Apps' checks are untouched. Commit-status-only
+GitHub has no neutral state, so an existing pending status becomes non-blocking
+`success` with "Not evaluated: PR reporting is not configured". Cleanup errors
+are surfaced for retry. A read-only tier cannot retire old checks; cleanup
+requires report permissions. Other forges must implement pending-check
+retirement or the reconciliation error explicitly identifies the unsupported
+cleanup operation.
+
 ### 1. Hibou never breaks the build; enforcement is the forge's + admin's choice
 The CLI never influences the CI exit code by default. The forge check is the signal;
 whether it blocks a merge is decided by the repo admin via branch protection /

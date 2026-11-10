@@ -188,6 +188,7 @@
                     </div>
                   </component>
                   <div class="mt-2 space-y-2 lg:max-w-52 xl:hidden">
+                    <RepositoryIntegration :mode="entry.sca?.integration" />
                     <span
                       class="rounded-full border px-2 py-0.5 text-xs font-medium capitalize"
                       :class="statusClass(entry.status)"
@@ -213,10 +214,13 @@
                   </div>
                 </td>
                 <td class="hidden whitespace-nowrap px-3 py-3 xl:table-cell">
-                  <span
-                    class="rounded-full border px-2 py-0.5 text-xs font-medium capitalize"
-                    :class="statusClass(entry.status)"
-                  >{{ entry.status }}</span>
+                  <div class="flex flex-col items-start gap-1.5">
+                    <RepositoryIntegration :mode="entry.sca?.integration" />
+                    <span
+                      class="rounded-full border px-2 py-0.5 text-xs font-medium capitalize"
+                      :class="statusClass(entry.status)"
+                    >{{ entry.status }}</span>
+                  </div>
                 </td>
                 <td class="hidden px-3 py-3 xl:table-cell">
                   <ScaStatus
@@ -315,6 +319,7 @@ import ScaStatus from '@/components/ScaStatus.vue'
 import ScaActionResults from '@/components/ScaActionResults.vue'
 import { useScaActions, useScaPolling } from '@/composables/useScaActions'
 import { canEnableSca, hasInventory, hasReportedFindings, scaAction, scaAssessed, scaErrorMessage, scaPending, scaResultCoverage } from '@/lib/sca'
+import RepositoryIntegration from '@/components/RepositoryIntegration.vue'
 import { severityBadgeClass } from '@/lib/findingDisplay'
 import { OPEN_RISK_KEV_QUERY, OPEN_RISK_MALWARE_QUERY, openRiskSeverityQuery } from '@/lib/openRiskPreset'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'

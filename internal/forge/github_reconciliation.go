@@ -16,7 +16,7 @@ import (
 const (
 	reconciliationPageLimit = 100
 	// Bump when a reader needs additional projected fields on a cached 304.
-	reconciliationCacheVersion  = 1
+	reconciliationCacheVersion  = 2
 	reconciliationPageBytes     = 16 << 20
 	reconciliationTransferBytes = 64 << 20
 	reconciliationRetainedBytes = 16 << 20
@@ -134,24 +134,54 @@ func (g *GitHub) installationInventoryToken(ctx context.Context, installationID 
 }
 
 func (g *GitHub) observationNextPage(response *http.Response, request *http.Request) (string, error) {
-	next := nextPagePath(response)
-	if next == "" {
-		return "", nil
-	}
-	parsed, err := url.Parse(next)
-	if err != nil {
-		return "", err
-	}
-	if parsed.Path != request.URL.Path {
-		return "", errors.New("github pagination changed resource path")
-	}
 	base, err := url.Parse(g.apiURL)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimPrefix(next, strings.TrimRight(base.Path, "/")), nil
+	for _, link := range strings.Split(response.Header.Get("Link"), ",") {
+		if !strings.Contains(link, `rel="next"`) {
+			continue
+		}
+		start, end := strings.Index(link, "<"), strings.Index(link, ">")
+		if start < 0 || end <= start {
+			return "", errors.New("invalid github pagination link")
+		}
+		next, err := url.Parse(link[start+1 : end])
+		if err != nil {
+			return "", fmt.Errorf("parse github pagination link: %w", err)
+		}
+		next = request.URL.ResolveReference(next)
+		if next.Scheme != base.Scheme || next.Host != base.Host || next.User != nil || next.Fragment != "" {
+			return "", errors.New("github pagination changed API origin")
+		}
+		prefix := strings.TrimRight(base.Path, "/")
+		requestPath := strings.TrimPrefix(request.URL.Path, prefix)
+		nextPath := strings.TrimPrefix(next.Path, prefix)
+		if prefix != "" && !strings.HasPrefix(next.Path, prefix+"/") {
+			return "", errors.New("github pagination changed API base path")
+		}
+		if nextPath != requestPath && !githubRepositoryPageAlias(requestPath, nextPath) {
+			return "", errors.New("github pagination changed resource path")
+		}
+		// Follow the original named endpoint, not the numeric alias: token
+		// scoping stays bound to the repository requested by the caller.
+		if next.RawQuery != "" {
+			requestPath += "?" + next.RawQuery
+		}
+		return requestPath, nil
+	}
+	return "", nil
 }
 
+func githubRepositoryPageAlias(requestPath, nextPath string) bool {
+	request := strings.SplitN(requestPath, "/", 5)
+	next := strings.SplitN(nextPath, "/", 4)
+	if len(request) != 5 || request[1] != "repos" || len(next) != 4 || next[1] != "repositories" || request[4] != next[3] {
+		return false
+	}
+	id, err := strconv.ParseUint(next[2], 10, 64)
+	return err == nil && id > 0 && strconv.FormatUint(id, 10) == next[2]
+}
 func readGitHubPages[T any](ctx context.Context, g *GitHub, owner, path string) ([]T, error) {
 	var all []T
 	seen := map[string]bool{}

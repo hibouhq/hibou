@@ -20,6 +20,7 @@ import (
 	"github.com/hibouhq/hibou/internal/advisory"
 	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/cache"
+	"github.com/hibouhq/hibou/internal/delta"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
 	"github.com/hibouhq/hibou/internal/provider"
@@ -233,6 +234,27 @@ type scaContentForge struct {
 	repository forge.Repository
 }
 
+type scaPRContentForge struct {
+	*scaContentForge
+	statuses []forge.CommitStatus
+}
+
+func (p *scaPRContentForge) ComparePatch(context.Context, string, string, string, string) (*forge.PatchDiff, error) {
+	return &forge.PatchDiff{Files: []forge.PatchFile{{Path: "README.md", Status: "modified"}}}, nil
+}
+
+func (p *scaPRContentForge) GetFileContent(_ context.Context, _, _, path, _ string) ([]byte, error) {
+	if path == repoconfig.RepoConfigPath {
+		return []byte("version: 1\nquality_gates:\n  - branches: ['*']\n    code:\n      max_critical: 0\n"), nil
+	}
+	return nil, forge.ErrFileNotFound
+}
+
+func (p *scaPRContentForge) CreateCommitStatus(_ context.Context, _, _, _ string, status forge.CommitStatus) error {
+	p.statuses = append(p.statuses, status)
+	return nil
+}
+
 func (p *scaContentForge) GetRepository(context.Context, string, string) (*forge.Repository, error) {
 	return &p.repository, nil
 }
@@ -352,6 +374,64 @@ func TestSCAWithoutUploadExtractsAndMatches(t *testing.T) {
 	if uploaded, err := s.queries.RepoHasUploadActivity(ctx, repo.ID); err != nil || uploaded {
 		t.Fatalf("test must not depend on any upload: uploaded=%v err=%v", uploaded, err)
 	}
+	t.Run("documentation-only PR gets a completed head inventory", func(t *testing.T) {
+		prProvider := &scaPRContentForge{scaContentForge: s.forges[org.Provider].(*scaContentForge)}
+		s.forges[org.Provider] = prProvider
+		if _, err := s.queries.UpsertRef(ctx, repo.ID, "main", store.RefTypeBranch, store.UpsertRefOptions{LatestCommitSHA: &snapshot.CommitSHA}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("Synthetic documentation change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git("add", "README.md")
+		git("commit", "-qm", "documentation only")
+		command := exec.Command("git", "rev-parse", "HEAD")
+		command.Dir = origin
+		output, err := command.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		head := strings.TrimSpace(string(output))
+		ref, err := s.queries.UpsertRef(ctx, repo.ID, "refs/pull/1", store.RefTypePullRequest, store.UpsertRefOptions{
+			LatestCommitSHA: &head, MergeTargetRefID: &snapshot.RefID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.queries.CreatePlaceholderSnapshot(ctx, ref.ID, head); err != nil {
+			t.Fatal(err)
+		}
+		deltaStore := delta.NewStoreAdapter(s.queries)
+		publisher := forge.NewGatePublisher(s.forges, delta.NewService(deltaStore, s.log, deltaStore), s.bus,
+			forge.NewGatePublisherStoreAdapter(s.queries), repoConfigGateLoader{loader: s.repoConfigLoader}, nil, "", s.log)
+		publisher.SetAdvisoryScanEnabled(true)
+		publisher.PublishGateForRef(ctx, ref.ID)
+		if len(prProvider.statuses) != 1 || prProvider.statuses[0].State != "pending" {
+			t.Fatalf("pending head guard lost: %+v", prProvider.statuses)
+		}
+		if err := s.maybeEnqueuePRDepExtraction(ctx, repo, ref, head); err != nil {
+			t.Fatal(err)
+		}
+		job, err := s.queries.GetLatestDepExtractionJobForRef(ctx, repo.ID, ref.Name)
+		if err != nil || job == nil || job.Reason != store.DepExtractionReasonPullRequest {
+			t.Fatalf("documentation-only PR not queued: job=%+v err=%v", job, err)
+		}
+		id, err := s.executeDepExtractionJob(ctx, job)
+		if err != nil || id == nil {
+			t.Fatalf("PR inventory failed: id=%v err=%v", id, err)
+		}
+		completed, err := s.queries.GetSnapshotByID(ctx, *id)
+		if err != nil || completed == nil || completed.Status != store.SnapshotStatusComplete || completed.CommitSHA != head {
+			t.Fatalf("PR head still awaits upload: snapshot=%+v err=%v", completed, err)
+		}
+		if _, err := service.RunScan(ctx, *id, []string{"sca-fixture"}, "system"); err != nil {
+			t.Fatal(err)
+		}
+		publisher.PublishGateForRef(ctx, ref.ID)
+		if len(prProvider.statuses) != 2 || prProvider.statuses[1].State != "success" {
+			t.Fatalf("documentation-only PR gate did not complete: %+v", prProvider.statuses)
+		}
+	})
 }
 func TestSCAEnqueueRollback(t *testing.T) {
 	s, org, _, _, inv := newSCAFixture(t)

@@ -9,6 +9,14 @@ function render(sca?: ScaCoverage, compact = false, components = 0) {
 }
 
 describe('inventory source and status', () => {
+  it('keeps repository integration independent of selected snapshot coverage', async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(ScaStatus, { integration: 'ci_integrated', components: 3 }),
+    }))
+    expect(html).toContain('CI integrated')
+    expect(html).toContain('Source unknown')
+    expect(html).not.toContain('Advisories checked')
+  })
   it('keeps long partial-analysis explanations in expandable, wrapped details', async () => {
     const html = await render({
       state: 'partial', inventory_source: 'repository', enabled: true, on_push: true,

@@ -13,6 +13,7 @@ import (
 
 // SCAObservation batches the evidence needed by repository coverage views.
 type SCAObservation struct {
+	HasUploads          bool
 	RepoID              uuid.UUID
 	HeadCommit          string
 	SnapshotID          *uuid.UUID
@@ -81,7 +82,9 @@ func (q *Queries) ListSCAObservations(ctx context.Context, orgID, repoID uuid.UU
 			ELSE 'none' END,
 		CASE WHEN s.has_inventory OR COALESCE(s.has_components,false) THEN COALESCE(s.commit_sha,'')
 			ELSE COALESCE(previous.commit_sha,'') END,
-		COALESCE(provenance.kinds,ARRAY[]::text[])
+		COALESCE(provenance.kinds,ARRAY[]::text[]),
+		EXISTS(SELECT 1 FROM snapshots uploaded JOIN refs upload_ref ON upload_ref.id=uploaded.ref_id
+			WHERE upload_ref.repo_id=repo.id AND uploaded.received_uploads>0)
 	FROM repositories repo
 	LEFT JOIN refs r ON r.repo_id=repo.id AND r.name=CASE WHEN $2='' THEN repo.default_branch ELSE $2 END
 		AND r.ref_type=$4::ref_type
@@ -146,7 +149,7 @@ func (q *Queries) ListSCAObservations(ctx context.Context, orgID, repoID uuid.UU
 			&o.JobStatus, &o.JobError, &o.JobCommit, &attempt, &o.ScanStatus,
 			&o.ScanError, &o.ProviderFailed, &assessed, &o.HasReportedFindings,
 			&o.PreviousInventory, &o.PreviousCommit, &previousAssessed, &o.InventorySource, &o.InventoryCommit,
-			pq.Array(&o.InventorySources)); err != nil {
+			pq.Array(&o.InventorySources), &o.HasUploads); err != nil {
 			return nil, err
 		}
 		o.SnapshotID = uuidPtrFromNull(snapshotID)

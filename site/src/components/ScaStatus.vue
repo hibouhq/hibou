@@ -1,5 +1,9 @@
 <template>
   <div :class="compact ? 'flex min-w-0 max-w-full items-center gap-2 text-xs' : 'space-y-2 text-xs'">
+    <RepositoryIntegration
+      v-if="!compact"
+      :mode="integration ?? sca?.integration"
+    />
     <div
       class="flex min-w-0 flex-wrap items-center gap-2"
       :title="tooltip"
@@ -74,12 +78,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Package } from 'lucide-vue-next'
+import RepositoryIntegration from './RepositoryIntegration.vue'
 import type { ScaCoverage } from '@/api/client'
 import { hasInventory, inventorySource, inventorySourceTitle, scaLabel, scaPending } from '@/lib/sca'
 
 const props = withDefaults(defineProps<{
-  sca?: ScaCoverage; enrolled?: boolean; canManage?: boolean; compact?: boolean; components?: number; findings?: number
-}>(), { sca: undefined, enrolled: true, canManage: false, compact: false, components: 0, findings: 0 })
+  sca?: ScaCoverage; integration?: ScaCoverage['integration']; enrolled?: boolean; canManage?: boolean; compact?: boolean; components?: number; findings?: number
+}>(), { sca: undefined, integration: undefined, enrolled: true, canManage: false, compact: false, components: 0, findings: 0 })
 const detailItems = computed(() => props.sca?.detail?.split(';').map(detail => detail.trim()).filter(Boolean) ?? [])
 const inventoryCommit = computed(() => props.sca?.inventory_commit_sha
   || (props.sca?.has_inventory === true || (props.sca?.has_inventory === undefined && hasInventory(props.sca, props.components)) ? props.sca?.commit_sha : undefined))

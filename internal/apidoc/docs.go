@@ -15896,6 +15896,9 @@ const docTemplate = `{
                 "head_commit_sha": {
                     "type": "string"
                 },
+                "integration": {
+                    "type": "string"
+                },
                 "inventory_commit_sha": {
                     "type": "string"
                 },

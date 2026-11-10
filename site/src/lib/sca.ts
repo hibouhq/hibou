@@ -141,5 +141,5 @@ export function scaSelectionValid(ids: string[]): boolean {
 export function scaResultCoverage(result: ScaEnableResult, previous?: ScaCoverage): ScaCoverage | undefined {
   if (result.status === 'failed') return previous
   if (!result.job_id) return previous
-  return { ...previous, enabled: true, on_push: previous?.on_push ?? false, state: 'queued', job_id: result.job_id }
+  return { ...previous, integration: previous?.integration === 'ci_integrated' ? 'ci_integrated' : 'monitored', enabled: true, on_push: previous?.on_push ?? false, state: 'queued', job_id: result.job_id }
 }

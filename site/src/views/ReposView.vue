@@ -151,6 +151,7 @@
                     >
                       {{ statusLabel(repo.status) }}
                     </span>
+                    <RepositoryIntegration :mode="repo.sca?.integration" />
                     <span class="rounded-full border border-surface-border-subtle bg-surface-overlay px-2.5 py-1 text-xs font-medium text-gray-400">
                       {{ repo.private ? 'Private' : 'Public' }}
                     </span>
@@ -222,6 +223,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { api, type Organization, type RepoLifecycleStatus, type Repository, type SyncReposResponse } from '@/api/client'
 import ForgeIcon from '@/components/ForgeIcon.vue'
 import ScaStatus from '@/components/ScaStatus.vue'
+import RepositoryIntegration from '@/components/RepositoryIntegration.vue'
 import ScaActionResults from '@/components/ScaActionResults.vue'
 import { useScaActions, useScaPolling } from '@/composables/useScaActions'
 import { MAX_SCA_SELECTION, canEnableSca, hasInventory, hasReportedFindings, scaAction, scaErrorMessage, scaPending, scaResultCoverage, scaSelectionValid } from '@/lib/sca'

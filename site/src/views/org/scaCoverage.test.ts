@@ -38,6 +38,14 @@ async function render(sca?: ScaCoverage, options?: { enrolled?: boolean; admin?:
 }
 
 describe('SCA overview coverage and actions', () => {
+  it('distinguishes CI integration from server-only scanning independently of lifecycle', async () => {
+    const scan = await render({ state: 'complete', enabled: true, on_push: true, integration: 'monitored', has_inventory: true }, { components: 3 })
+    expect(scan).toContain('Monitored')
+    expect(scan).not.toContain('CI integrated')
+    const ci = await render({ state: 'complete', enabled: true, on_push: true, integration: 'ci_integrated', has_inventory: true }, { components: 3 })
+    expect(ci).toContain('CI integrated')
+    expect(ci).not.toContain('Monitored')
+  })
   it('renders unknown legacy capability neutrally rather than absent or clean', async () => {
     const html = await render()
     expect(html).toContain('Not reported')
