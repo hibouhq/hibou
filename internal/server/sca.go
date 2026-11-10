@@ -129,6 +129,11 @@ func (s *Server) scaCoverage(enrolled bool, o store.SCAObservation) scaCoverage 
 	default:
 		c.State = "inventory_ready"
 		c.Detail = "Inventory is available. No completed Hibou advisory refresh is recorded for this snapshot."
+		if !o.HasComponents && o.ProducerOutcome == string(store.ProducerOutcomeCompleted) {
+			c.State, c.Detail = "complete", "Dependency extraction completed with no components to match against advisories."
+		} else if !o.HasComponents && o.ProducerOutcome == string(store.ProducerOutcomePartial) {
+			c.State, c.Detail = "partial", o.Detail
+		}
 		if o.HasReportedFindings {
 			c.State = "reported"
 			c.Detail = "Dependency findings were reported for this snapshot. No completed Hibou advisory refresh is recorded."

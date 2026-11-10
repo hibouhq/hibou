@@ -24,10 +24,15 @@
       >
         Ask an organization admin to extract dependencies or retry.
       </p>
-      <p class="mt-2 text-xs text-gray-500">
-        Supported manifests and lockfiles provide inventory, not build-accurate transitive coverage.
-        No workflow, SBOM upload or write permission is needed. Extraction does not start a secret scan.
-      </p>
+      <details class="mt-2 text-xs text-gray-500">
+        <summary class="cursor-pointer hover:text-gray-300">
+          About dependency inventory
+        </summary>
+        <p class="mt-2 max-w-3xl leading-relaxed">
+          Supported manifests and lockfiles provide inventory, not build-accurate transitive coverage.
+          No workflow, SBOM upload or write permission is needed. Extraction does not start a secret scan.
+        </p>
+      </details>
       <p
         v-if="extractionError || extractionMessage"
         class="mt-2 text-xs"

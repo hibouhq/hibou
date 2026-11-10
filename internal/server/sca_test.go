@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/advisory"
+	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/cache"
 	"github.com/hibouhq/hibou/internal/events"
 	"github.com/hibouhq/hibou/internal/forge"
@@ -45,6 +47,9 @@ func TestSCACoverage(t *testing.T) {
 		{"no files", true, store.SCAObservation{Detail: "no lockfile or manifest recognised at this commit", ProducerOutcome: "partial"}, "unsupported"},
 		{"all excluded", true, store.SCAObservation{Detail: "all recognized dependency files were excluded", ProducerOutcome: "partial"}, "partial"},
 		{"no advisory scan", true, store.SCAObservation{HasInventory: true, HasComponents: true}, "inventory_ready"},
+		{"completed empty extraction", true, store.SCAObservation{HasInventory: true, ProducerOutcome: "completed"}, "complete"},
+		{"partial empty extraction", true, store.SCAObservation{HasInventory: true, ProducerOutcome: "partial", Detail: "Some files could not be read"}, "partial"},
+		{"empty upload without producer evidence", true, store.SCAObservation{HasInventory: true}, "inventory_ready"},
 		{"imported dependency results", true, store.SCAObservation{HasInventory: true, HasReportedFindings: true}, "reported"},
 		{"matching", true, store.SCAObservation{HasInventory: true, ScanStatus: "running"}, "matching"},
 		{"advisory failure", true, store.SCAObservation{HasInventory: true, ScanStatus: "failed"}, "failed"},
@@ -426,6 +431,71 @@ func TestSCABootstrapAndCoverageQueries(t *testing.T) {
 	if _, err := s.queries.BootstrapSCA(ctx, org.ID, 100); err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("empty extraction source", func(t *testing.T) {
+		s, org, admin, _, inv := newSCAFixture(t)
+		ctx := context.Background()
+		repo, err := s.queries.CreateRepository(ctx, org.ID, nil, inv.Name, "empty-app", org.Provider, inv.ProviderKey, "main", "enrolled")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, err := s.queries.UpsertRef(ctx, repo.ID, "main", store.RefTypeBranch, store.UpsertRefOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit := strings.Repeat("a", 40)
+		snapshot, err := s.queries.CreatePlaceholderSnapshot(ctx, ref.ID, commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := s.queries.InsertDepExtractionRun(ctx, store.InsertDepExtractionRunParams{
+			RepoID: repo.ID, SnapshotID: snapshot.ID, CommitSHA: commit,
+			InputDigest: strings.Repeat("b", 64), ExtractorVersion: "test",
+			SHA256: strings.Repeat("c", 64), SizeBytes: 100, ComponentCount: 0,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.queries.AttachInventorySource(ctx, snapshot.ID, "sbom:"+depInventoryArtifactFilename, nil, nil, &run.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.queries.UpsertSnapshotProducerRun(ctx, snapshot.ID, store.ProducerRunInput{
+			Producer: depInventoryProducer, Scope: store.ProducerScopeFull, ScopeDeclared: true, Outcome: store.ProducerOutcomeCompleted,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		observations, err := s.queries.ListSCAObservations(ctx, org.ID, repo.ID, "", store.RefTypeBranch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := observations[repo.ID]
+		if !o.HasInventory || o.HasComponents || o.InventorySource != "repository" || o.InventoryCommit != commit {
+			t.Fatalf("empty extraction evidence lost: %+v", o)
+		}
+		if got := s.scaCoverage(true, o); got.State != "complete" || !got.HasInventory {
+			t.Fatalf("completed empty extraction coverage=%+v", got)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		route := chi.NewRouteContext()
+		route.URLParams.Add("provider", org.Provider)
+		route.URLParams.Add("slug", org.Slug)
+		route.URLParams.Add("repoSlug", repo.Slug)
+		request = request.WithContext(context.WithValue(auth.WithUser(request.Context(), admin), chi.RouteCtxKey, route))
+		recorder := httptest.NewRecorder()
+		s.handleGetRepo(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("repository detail status=%d body=%s", recorder.Code, recorder.Body)
+		}
+		var response struct {
+			Data repoVisibilityResponse `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Data.SCA == nil || response.Data.SCA.InventorySource != "repository" || response.Data.SCA.State != "complete" {
+			t.Fatalf("repository detail omitted inventory provenance: %+v", response.Data.SCA)
+		}
+	})
 	if repo, _ := s.queries.GetRepositoryByProviderID(ctx, org.ID, org.Provider, inv.ProviderKey); repo != nil {
 		t.Fatal("bootstrap must not enroll discovered repositories")
 	}

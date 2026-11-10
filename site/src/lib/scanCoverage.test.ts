@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ProducerCoverage } from '@/api/client'
-import { bundleFreshness, detailLine, dotClass, stateLabel } from './scanCoverage'
+import { bundleFreshness, detailLine, dotClass, producerLabel, stateLabel } from './scanCoverage'
 
 function producer(overrides: Partial<ProducerCoverage>): ProducerCoverage {
   return {
@@ -11,10 +11,15 @@ function producer(overrides: Partial<ProducerCoverage>): ProducerCoverage {
 }
 
 describe('scanCoverage', () => {
+  it('uses readable activity names without guessing the identity of other scanners', () => {
+    expect(producerLabel('dependency-inventory:hibou')).toBe('Dependency extraction')
+    expect(producerLabel('sbom-matching')).toBe('Advisory matching')
+    expect(producerLabel('custom-scanner')).toBe('custom-scanner')
+  })
   it('flags a missing producer and a partial run as warnings', () => {
     expect(stateLabel(producer({ status: 'missing', outcome: undefined }))).toBe('Missing')
-    expect(dotClass(producer({ status: 'missing', outcome: undefined }))).toBe('bg-warning')
-    expect(dotClass(producer({ outcome: 'partial' }))).toBe('bg-warning')
+    expect(dotClass(producer({ status: 'missing', outcome: undefined }))).toBe('bg-warn')
+    expect(dotClass(producer({ outcome: 'partial' }))).toBe('bg-warn')
     expect(dotClass(producer({ outcome: 'failed' }))).toBe('bg-danger')
     expect(stateLabel(producer({ status: 'new', outcome: 'partial' }))).toBe('Partial · new')
   })

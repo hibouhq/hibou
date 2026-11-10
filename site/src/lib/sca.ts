@@ -73,8 +73,8 @@ export function inventorySourceTitle(sca?: ScaCoverage, components = 0): string 
   return descriptions[key] ?? descriptions.unknown
 }
 
-export function scaKnownCount(count: number, sca?: ScaCoverage): number | 'Not assessed' | 'Not reported' {
-  return count > 0 || scaAssessed(sca) ? count : sca ? 'Not assessed' : 'Not reported'
+export function scaKnownCount(count: number, sca?: ScaCoverage, reportedFindings = 0): number | 'Not assessed' | 'Not reported' {
+  return count > 0 || reportedFindings > 0 || scaAssessed(sca) ? count : sca ? 'Not assessed' : 'Not reported'
 }
 
 export function scaLabel(sca?: ScaCoverage, enrolled = true, components = 0, findings = 0): string {
@@ -83,6 +83,7 @@ export function scaLabel(sca?: ScaCoverage, enrolled = true, components = 0, fin
     if (hasReportedFindings(sca, findings)) return 'Findings reported'
   }
   if (!sca) return 'Status unavailable'
+  if (sca.state === 'complete' && sca.has_inventory === true && components === 0 && findings === 0) return 'No dependencies found'
   if (!enrolled && sca.state === 'not_assessed') return 'Not monitored'
   const labels: Record<ScaCoverage['state'], string> = {
     not_monitored: 'Not monitored',

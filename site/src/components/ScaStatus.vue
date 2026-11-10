@@ -21,17 +21,31 @@
     </div>
     <template v-if="!compact">
       <p
-        v-if="sca?.detail"
-        class="max-w-3xl leading-relaxed text-gray-400"
-      >
-        {{ sca.detail }}
-      </p>
-      <p
         v-if="sca?.state === 'partial'"
         class="text-gray-400"
       >
         Known results only; dependency coverage or version evidence is incomplete.
       </p>
+      <details
+        v-if="sca?.detail"
+        class="max-w-3xl rounded-lg border border-surface-border-subtle px-3 py-2"
+      >
+        <summary class="cursor-pointer font-medium text-gray-300 hover:text-white">
+          Analysis details<span
+            v-if="detailItems.length > 1"
+            class="ml-1 text-gray-500"
+          >({{ detailItems.length }})</span>
+        </summary>
+        <ul class="mt-2 max-h-60 space-y-2 overflow-y-auto text-gray-400">
+          <li
+            v-for="(detail, index) in detailItems"
+            :key="index"
+            class="break-words leading-relaxed [overflow-wrap:anywhere]"
+          >
+            {{ detail }}
+          </li>
+        </ul>
+      </details>
       <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500">
         <span
           v-if="inventoryCommit"
@@ -66,6 +80,7 @@ import { hasInventory, inventorySource, inventorySourceTitle, scaLabel, scaPendi
 const props = withDefaults(defineProps<{
   sca?: ScaCoverage; enrolled?: boolean; canManage?: boolean; compact?: boolean; components?: number; findings?: number
 }>(), { sca: undefined, enrolled: true, canManage: false, compact: false, components: 0, findings: 0 })
+const detailItems = computed(() => props.sca?.detail?.split(';').map(detail => detail.trim()).filter(Boolean) ?? [])
 const inventoryCommit = computed(() => props.sca?.inventory_commit_sha
   || (props.sca?.has_inventory === true || (props.sca?.has_inventory === undefined && hasInventory(props.sca, props.components)) ? props.sca?.commit_sha : undefined))
 const tooltip = computed(() => [

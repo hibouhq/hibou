@@ -510,6 +510,13 @@ func (s *Server) handleGetRepo(w http.ResponseWriter, r *http.Request) {
 	// core repositories table, so join it onto the detail response. Without this
 	// the frontend never receives `private` and renders every repo as Public.
 	resp := s.repoDetailResponse(r.Context(), repo)
+	coverage, err := s.dependencyCoverageForRepo(r.Context(), repo, repo.DefaultBranch)
+	if err != nil {
+		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("load repository dependency coverage")
+		api.JSONError(w, http.StatusInternalServerError, "failed to load repository dependency coverage")
+		return
+	}
+	resp.SCA = &coverage
 	// Tell the UI whether the viewer may open the repo-scoped audit log (org
 	// admin or admin of the owning team); the endpoint enforces it regardless.
 	if canAudit, auditErr := s.canViewRepoAudit(r, role, repo); auditErr == nil {
@@ -538,7 +545,8 @@ type repoVisibilityResponse struct {
 	// or dispute this repo's findings, with the checks those endpoints run:
 	// org admin role (after any login-token cap) and, for a token,
 	// triage:write. The IDEs hide triage actions that would be refused.
-	ViewerCanTriage bool `json:"viewer_can_triage"`
+	ViewerCanTriage bool         `json:"viewer_can_triage"`
+	SCA             *scaCoverage `json:"sca,omitempty"`
 }
 
 func (s *Server) repoDetailResponse(ctx context.Context, repo *store.Repository) repoVisibilityResponse {

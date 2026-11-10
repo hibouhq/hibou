@@ -533,6 +533,16 @@ enable/update/retry actions.
 - An empty result distinguishes no recognized files from parse failures and
   exclusions. A snapshot alone does not establish SCA coverage. Organization
   totals distinguish assessed repositories from discovered/unassessed ones.
+  A recorded extraction source remains inventory evidence even with zero
+  components and no inventory set. A completed empty extraction has no
+  components to match; a partial empty extraction retains its coverage warning.
+  Neither outcome should offer extraction again as if it had never run.
+  Within an existing finding breakdown, empty severity buckets display zero
+  known findings, without implying a completed advisory scan.
+  Repository detail responses include the same default-branch SCA metadata
+  as the inventory view. Long coverage explanations and producer identifiers
+  remain available in expandable details instead of truncating scanner names
+  or filling the summary with repeated per-module warnings.
 - Sources retain the **Hibou scan** origin, paths, extractor version and
   module completeness. CI/uploaded SBOM evidence remains additive under §5;
   enabling SCA neither replaces it nor implies build-accurate transitive

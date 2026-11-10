@@ -64,7 +64,7 @@ func (q *Queries) LockSCAInventory(ctx context.Context, orgID uuid.UUID, provide
 func (q *Queries) ListSCAObservations(ctx context.Context, orgID, repoID uuid.UUID, refName string, refType RefType) (map[uuid.UUID]SCAObservation, error) {
 	rows, err := q.rawDB().QueryContext(ctx, `
 	SELECT repo.id, COALESCE(r.latest_commit_sha,''), s.id,
-		COALESCE(s.commit_sha,''), COALESCE(s.inventory_set_id IS NOT NULL,false),
+		COALESCE(s.commit_sha,''), COALESCE(s.has_inventory,false),
 		COALESCE(s.has_components,false),
 		COALESCE(pr.outcome::text,''), COALESCE(pr.detail,''),
 		j.id, COALESCE(j.status,''), COALESCE(j.last_error,''), COALESCE(j.commit_sha,''),
@@ -77,16 +77,21 @@ func (q *Queries) ListSCAObservations(ctx context.Context, orgID, repoID uuid.UU
 		(SELECT max(done.completed_at) FROM scans done WHERE done.snapshot_id=previous.id AND done.status='complete'),
 		CASE WHEN cardinality(provenance.kinds)>1 THEN 'mixed'
 			WHEN cardinality(provenance.kinds)=1 THEN provenance.kinds[1]
-			WHEN s.inventory_set_id IS NOT NULL OR COALESCE(s.has_components,false) OR previous.id IS NOT NULL THEN 'unknown'
+			WHEN s.has_inventory OR COALESCE(s.has_components,false) OR previous.id IS NOT NULL THEN 'unknown'
 			ELSE 'none' END,
-		CASE WHEN s.inventory_set_id IS NOT NULL OR COALESCE(s.has_components,false) THEN COALESCE(s.commit_sha,'')
+		CASE WHEN s.has_inventory OR COALESCE(s.has_components,false) THEN COALESCE(s.commit_sha,'')
 			ELSE COALESCE(previous.commit_sha,'') END,
 		COALESCE(provenance.kinds,ARRAY[]::text[])
 	FROM repositories repo
 	LEFT JOIN refs r ON r.repo_id=repo.id AND r.name=CASE WHEN $2='' THEN repo.default_branch ELSE $2 END
 		AND r.ref_type=$4::ref_type
 	LEFT JOIN LATERAL (
-		SELECT sn.id,sn.commit_sha,sn.inventory_set_id,
+		SELECT sn.id,sn.commit_sha,
+			(sn.inventory_set_id IS NOT NULL OR EXISTS(
+				SELECT 1 FROM inventory_sources src LEFT JOIN snapshot_artifacts a ON a.id=src.artifact_id
+				WHERE src.snapshot_id=sn.id AND src.extraction_run_id IS NOT NULL
+				AND (a.id IS NULL OR a.revoked_at IS NULL)
+			)) AS has_inventory,
 			EXISTS(SELECT 1 FROM snapshot_components c WHERE c.snapshot_id=sn.id) AS has_components
 		FROM snapshots sn WHERE sn.ref_id=r.id AND sn.status<>'purged'
 			AND (COALESCE(r.latest_commit_sha,'')='' OR sn.commit_sha=r.latest_commit_sha)
@@ -95,7 +100,10 @@ func (q *Queries) ListSCAObservations(ctx context.Context, orgID, repoID uuid.UU
 	LEFT JOIN LATERAL (
 		SELECT sn.id,sn.commit_sha FROM snapshots sn
 		WHERE sn.ref_id=r.id AND sn.status IN('complete','active')
-			AND (sn.inventory_set_id IS NOT NULL OR EXISTS(SELECT 1 FROM snapshot_components c WHERE c.snapshot_id=sn.id))
+			AND (sn.inventory_set_id IS NOT NULL OR EXISTS(SELECT 1 FROM snapshot_components c WHERE c.snapshot_id=sn.id)
+				OR EXISTS(SELECT 1 FROM inventory_sources src LEFT JOIN snapshot_artifacts a ON a.id=src.artifact_id
+					WHERE src.snapshot_id=sn.id AND src.extraction_run_id IS NOT NULL
+					AND (a.id IS NULL OR a.revoked_at IS NULL)))
 		ORDER BY sn.created_at DESC,sn.id DESC LIMIT 1
 	) previous ON true
 	LEFT JOIN LATERAL (
@@ -106,7 +114,7 @@ func (q *Queries) ListSCAObservations(ctx context.Context, orgID, repoID uuid.UU
 			WHEN a.kind='sbom' THEN 'sbom'
 			ELSE 'unknown' END) AS kinds
 		FROM inventory_sources src LEFT JOIN snapshot_artifacts a ON a.id=src.artifact_id
-		WHERE src.snapshot_id=CASE WHEN s.inventory_set_id IS NOT NULL OR COALESCE(s.has_components,false) THEN s.id ELSE previous.id END
+		WHERE src.snapshot_id=CASE WHEN s.has_inventory OR COALESCE(s.has_components,false) THEN s.id ELSE previous.id END
 			AND (a.id IS NULL OR a.revoked_at IS NULL)
 	) provenance ON true
 	LEFT JOIN LATERAL (

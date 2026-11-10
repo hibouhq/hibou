@@ -119,7 +119,7 @@
                     class="text-lg font-semibold"
                     :class="item.valueClass"
                   >
-                    {{ scaKnownCount(item.value, sca) }}
+                    {{ scaKnownCount(item.value, sca, vulnerabilitiesTotal) }}
                   </div>
                   <div class="text-[10px] uppercase tracking-[0.14em] text-gray-500">
                     {{ item.label }}

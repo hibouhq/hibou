@@ -31,6 +31,23 @@ describe('SCA coverage', () => {
     expect(canEnableSca('active', coverage(state))).toBe(false)
   })
 
+  it('shows zero severity buckets within reported findings without claiming scan completion', () => {
+    expect(scaKnownCount(0, undefined, 12)).toBe(0)
+    expect(scaKnownCount(0, coverage('reported'), 12)).toBe(0)
+    expect(scaKnownCount(0, coverage('failed'), 12)).toBe(0)
+    expect(scaAssessed(coverage('reported'))).toBe(false)
+    expect(scaKnownCount(0)).toBe('Not reported')
+    expect(scaKnownCount(0, coverage('not_assessed'))).toBe('Not assessed')
+  })
+
+  it('treats a completed empty extraction as known inventory, not a request to extract again', () => {
+    const empty = { ...coverage('complete'), has_inventory: true, inventory_source: 'repository' as const }
+    expect(scaLabel(empty, true, 0, 0)).toBe('No dependencies found')
+    expect(inventoryKnownCount(0, empty)).toBe(0)
+    expect(scaAction(true, empty)).toBeNull()
+    expect(scaLabel(empty, true, 3, 0)).toBe('Advisories checked')
+  })
+
   it.each(['not_monitored', 'not_assessed', 'complete', 'partial', 'unsupported', 'failed', 'disabled'] as const)('does not poll terminal %s', state => {
     expect(scaPending(coverage(state))).toBe(false)
   })

@@ -9,6 +9,19 @@ function render(sca?: ScaCoverage, compact = false, components = 0) {
 }
 
 describe('inventory source and status', () => {
+  it('keeps long partial-analysis explanations in expandable, wrapped details', async () => {
+    const html = await render({
+      state: 'partial', inventory_source: 'repository', enabled: true, on_push: true,
+      detail: 'module-one: no lockfile; module-two: indirect dependencies unknown',
+    })
+    expect(html).toContain('<details')
+    expect(html).not.toContain('<details open')
+    expect(html).toContain('Analysis details')
+    expect(html).toContain('(2)')
+    expect(html).toContain('module-one: no lockfile')
+    expect(html).toContain('module-two: indirect dependencies unknown')
+    expect(html).toContain('[overflow-wrap:anywhere]')
+  })
   it('does not turn a supplied SBOM into a completed advisory assessment', async () => {
     const html = await render({ state: 'inventory_ready', inventory_source: 'sbom', enabled: true, on_push: true, has_inventory: true })
     expect(html).toContain('SBOM')

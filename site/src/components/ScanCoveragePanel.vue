@@ -20,6 +20,13 @@
       Loading coverage…
     </p>
     <p
+      v-else-if="error"
+      class="mt-3 text-xs text-red-200"
+      role="alert"
+    >
+      {{ error }}
+    </p>
+    <p
       v-else-if="!coverage || coverage.producers.length === 0"
       class="mt-3 text-xs text-gray-500"
     >
@@ -27,44 +34,61 @@
     </p>
     <ul
       v-else
-      class="mt-3 space-y-1.5"
+      class="mt-3 divide-y divide-surface-border-subtle"
     >
       <li
         v-for="producer in coverage.producers"
         :key="producer.producer"
-        class="rounded-lg border px-2.5 py-2"
-        :class="producer.status === 'missing' ? 'border-amber-500/30 bg-amber-500/[0.06]' : 'border-surface-border-subtle bg-surface-overlay/40'"
+        class="min-w-0 py-3 first:pt-0 last:pb-0"
       >
-        <div class="flex items-center gap-2">
+        <div class="space-y-2">
+          <div class="flex items-start gap-2">
+            <span
+              class="mt-1 h-2 w-2 shrink-0 rounded-full"
+              :class="dotClass(producer)"
+              aria-hidden="true"
+            />
+            <h3 class="min-w-0 break-words text-xs font-medium leading-relaxed text-gray-200 [overflow-wrap:anywhere]">
+              {{ producerLabel(producer.producer) }}
+            </h3>
+          </div>
           <span
-            class="h-2 w-2 shrink-0 rounded-full"
-            :class="dotClass(producer)"
-          />
-          <span class="min-w-0 flex-1 truncate font-mono text-xs text-gray-200">{{ producer.producer }}</span>
-          <span
-            class="shrink-0 text-[11px]"
-            :class="producer.status === 'missing' || producer.outcome === 'failed' ? 'text-amber-300' : 'text-gray-500'"
+            class="ml-4 inline-flex rounded border px-1.5 py-0.5 text-[11px]"
+            :class="producer.status === 'missing' || producer.outcome === 'partial'
+              ? 'border-amber-500/25 bg-amber-500/5 text-amber-200'
+              : producer.outcome === 'failed'
+                ? 'border-danger/25 bg-danger/5 text-red-200'
+                : 'border-surface-border-subtle text-gray-400'"
           >{{ stateLabel(producer) }}</span>
         </div>
         <p
           v-if="producer.status === 'missing'"
-          class="mt-1 text-[11px] text-amber-200/80"
+          class="mt-2 text-xs leading-relaxed text-amber-200/80"
         >
           Ran on <span class="font-mono">{{ shortSha(coverage.previous_commit_sha) }}</span>, not on this snapshot. Its findings were not re-checked.
         </p>
-        <p
-          v-else
-          class="mt-1 text-[11px] text-gray-500"
-        >
-          {{ detailLine(producer) }}
-        </p>
-        <p
-          v-if="producer.detail"
-          class="mt-1 truncate text-[11px] text-gray-500"
-          :title="producer.detail"
-        >
-          {{ producer.detail }}
-        </p>
+        <details class="mt-2 text-xs">
+          <summary class="cursor-pointer text-gray-400 hover:text-gray-200">
+            Run details
+          </summary>
+          <div class="mt-2 space-y-2 break-words leading-relaxed text-gray-400 [overflow-wrap:anywhere]">
+            <p class="font-mono text-[11px]">
+              {{ producer.producer }}
+            </p>
+            <p>{{ detailLine(producer) }}</p>
+            <ul
+              v-if="producer.detail"
+              class="max-h-60 space-y-2 overflow-y-auto"
+            >
+              <li
+                v-for="(detail, index) in producer.detail.split(';').map(value => value.trim()).filter(Boolean)"
+                :key="index"
+              >
+                {{ detail }}
+              </li>
+            </ul>
+          </div>
+        </details>
         <details
           v-if="producer.skipped_files.length > 0"
           class="mt-1 text-[11px]"
@@ -79,8 +103,7 @@
               class="flex gap-2"
             >
               <span
-                class="min-w-0 flex-1 truncate font-mono text-gray-300"
-                :title="skipped.path"
+                class="min-w-0 flex-1 break-words font-mono text-gray-300 [overflow-wrap:anywhere]"
               >{{ skipped.path }}</span>
               <span class="shrink-0 text-gray-500">{{ reasonLabel(skipped.reason) }}</span>
             </li>
@@ -95,7 +118,7 @@
 import { ref, watch } from 'vue'
 
 import { api, type SnapshotProducerRuns } from '@/api/client'
-import { dotClass, detailLine, reasonLabel, shortSha, stateLabel } from '@/lib/scanCoverage'
+import { dotClass, detailLine, producerLabel, reasonLabel, shortSha, stateLabel } from '@/lib/scanCoverage'
 
 const props = defineProps<{
   provider: string
@@ -106,6 +129,8 @@ const props = defineProps<{
 
 const coverage = ref<SnapshotProducerRuns | null>(null)
 const loading = ref(false)
+const error = ref('')
+let generation = 0
 
 watch(
   () => [props.provider, props.slug, props.repoSlug, props.snapshotId],
@@ -116,18 +141,21 @@ watch(
 )
 
 async function load() {
+  const request = ++generation
+  coverage.value = null
+  error.value = ''
   if (!props.provider || !props.slug || !props.repoSlug || !props.snapshotId) {
-    coverage.value = null
+    loading.value = false
     return
   }
   loading.value = true
   try {
     const response = await api.getSnapshotProducerRuns(props.provider, props.slug, props.repoSlug, props.snapshotId)
-    coverage.value = response.data
+    if (request === generation) coverage.value = response.data
   } catch {
-    coverage.value = null
+    if (request === generation) error.value = 'Could not load scan coverage. Refresh to try again.'
   } finally {
-    loading.value = false
+    if (request === generation) loading.value = false
   }
 }
 

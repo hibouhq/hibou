@@ -2,13 +2,21 @@ import type { OfflineBundleStatus, ProducerCoverage } from '@/api/client'
 
 // Display helpers for the scan coverage panel (ADR-034 §2).
 
+export function producerLabel(producer: string) {
+  const labels: Record<string, string> = {
+    'dependency-inventory:hibou': 'Dependency extraction',
+    'sbom-matching': 'Advisory matching',
+  }
+  return labels[producer] ?? producer
+}
+
 export function shortSha(sha?: string) {
   return sha ? sha.slice(0, 7) : '—'
 }
 
 export function dotClass(producer: ProducerCoverage) {
   if (producer.status === 'missing' || producer.outcome === 'partial') {
-    return 'bg-warning'
+    return 'bg-warn'
   }
   if (producer.outcome === 'failed') {
     return 'bg-danger'
