@@ -7,7 +7,88 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
+
+func TestWithLeaderLockDiscardsUncertainSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		acquireErr  bool
+		unlockError bool
+		unlockFalse bool
+	}{
+		{name: "acquisition response lost", acquireErr: true},
+		{name: "unlock fails", unlockError: true},
+		{name: "ownership lost", unlockFalse: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			key := "hibou:test:" + t.Name()
+			failure := errors.New("connection response lost")
+			acquire := mock.ExpectQuery("SELECT pg_try_advisory_lock($1)").WithArgs(advisoryLockID(key))
+			if tc.acquireErr {
+				acquire.WillReturnError(failure)
+			} else {
+				acquire.WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+				unlock := mock.ExpectQuery("SELECT pg_advisory_unlock($1)").WithArgs(advisoryLockID(key))
+				if tc.unlockError {
+					unlock.WillReturnError(failure)
+				} else {
+					unlock.WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(false))
+				}
+			}
+			mock.ExpectClose()
+			workError := errors.New("work failed")
+			ran, err := WithLeaderLock(context.Background(), db, key, func(context.Context) error { return workError })
+			if ran == tc.acquireErr || err == nil {
+				t.Fatalf("ran=%v err=%v", ran, err)
+			}
+			if !tc.acquireErr && !errors.Is(err, workError) {
+				t.Fatalf("cleanup hid the work failure: %v", err)
+			}
+			if !tc.unlockFalse && !errors.Is(err, failure) {
+				t.Fatalf("lock error was not surfaced: %v", err)
+			}
+			if db.Stats().OpenConnections != 0 {
+				t.Fatal("uncertain lock connection was returned to the pool")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestWithLeaderLockBoundsCleanupEvenWithoutParentDeadline(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	key := "hibou:test:" + t.Name()
+	mock.ExpectQuery("SELECT pg_try_advisory_lock($1)").WithArgs(advisoryLockID(key)).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectQuery("SELECT pg_advisory_unlock($1)").WithArgs(advisoryLockID(key)).
+		WillDelayFor(AdvisoryLockCleanupTimeout + 5*time.Second).
+		WillReturnRows(sqlmock.NewRows([]string{"released"}).AddRow(true))
+	mock.ExpectClose()
+	started := time.Now()
+	ran, err := WithLeaderLock(context.Background(), db, key, func(context.Context) error { return nil })
+	if !ran || err == nil || time.Since(started) > AdvisoryLockCleanupTimeout+2*time.Second {
+		t.Fatalf("cleanup was not bounded: ran=%v err=%v elapsed=%s", ran, err, time.Since(started))
+	}
+	if db.Stats().OpenConnections != 0 {
+		t.Fatal("timed-out unlock returned its connection to the pool")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func openLockTestDB(t *testing.T) *sql.DB {
 	t.Helper()

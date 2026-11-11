@@ -64,18 +64,19 @@ type advisoryResponse struct {
 }
 
 type componentWithVulnsResponse struct {
-	ID              uuid.UUID          `json:"id"`
-	Name            string             `json:"name"`
-	Version         string             `json:"version"`
-	Ecosystem       string             `json:"ecosystem"`
-	Purl            string             `json:"purl"`
-	VulnCount       int                `json:"vuln_count"`
-	HighestSeverity *string            `json:"highest_severity,omitempty"`
-	Advisories      []advisoryResponse `json:"advisories,omitempty"`
-	Sources         []string           `json:"sources,omitempty"`
-	FixedVersions   []string           `json:"fixed_versions,omitempty"`
-	UsagePaths      [][]string         `json:"usage_paths,omitempty"`
-	Licenses        []string           `json:"licenses,omitempty"`
+	ID                 uuid.UUID                    `json:"id"`
+	Name               string                       `json:"name"`
+	Version            string                       `json:"version"`
+	Ecosystem          string                       `json:"ecosystem"`
+	Purl               string                       `json:"purl"`
+	VulnCount          int                          `json:"vuln_count"`
+	HighestSeverity    *string                      `json:"highest_severity,omitempty"`
+	Advisories         []advisoryResponse           `json:"advisories,omitempty"`
+	Sources            []string                     `json:"sources,omitempty"`
+	FixedVersions      []string                     `json:"fixed_versions,omitempty"`
+	UsagePaths         [][]string                   `json:"usage_paths,omitempty"`
+	Licenses           []string                     `json:"licenses,omitempty"`
+	InventoryProducers []componentInventoryProducer `json:"inventory_producers,omitempty"`
 	// Signals are the deps.dev package signals for this version (ADR-048):
 	// absent when the provider is off or the version was not looked up,
 	// which the UI shows as "not evaluated", never as clean.
@@ -690,6 +691,13 @@ func (s *Server) handleGetRefComponents(w http.ResponseWriter, r *http.Request) 
 		api.JSONError(w, http.StatusInternalServerError, "failed to load advisories")
 		return
 	}
+	sources, err := s.queries.ListInventorySourceEvidence(r.Context(), snapshot.ID)
+	if err != nil {
+		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("load component inventory producers")
+		api.JSONError(w, http.StatusInternalServerError, "failed to load component inventory producers")
+		return
+	}
+	attachComponentInventoryProducers(responses, sources)
 
 	api.JSON(w, http.StatusOK, responses)
 }

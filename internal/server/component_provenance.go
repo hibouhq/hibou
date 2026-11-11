@@ -6,6 +6,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/provenance"
 	"github.com/hibouhq/hibou/internal/sbom"
+	"github.com/hibouhq/hibou/internal/store"
 )
 
 // Component provenance (ADR-045 §5) lives in internal/provenance so the
@@ -13,6 +14,37 @@ import (
 // names the handlers use.
 
 type componentProvenance = provenance.Provenance
+
+type componentInventoryProducer struct {
+	Source  string `json:"source"`
+	Name    string `json:"name"`
+	Engine  string `json:"engine,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+func attachComponentInventoryProducers(components []componentWithVulnsResponse, sources []store.InventorySourceEvidence) {
+	bySource := make(map[string]componentInventoryProducer, len(sources))
+	for _, source := range sources {
+		producer := componentInventoryProducer{Source: strings.TrimPrefix(source.Label, "sbom:"), Name: source.ToolName}
+		if source.Extracted {
+			producer.Name = "Hibou dependency extraction"
+			producer.Version = source.ExtractorVersion
+			if strings.HasPrefix(source.ExtractorVersion, "osv-scalibr-") {
+				producer.Engine = "OSV-SCALIBR + Hibou rules"
+			}
+		}
+		if producer.Name != "" {
+			bySource[producer.Source] = producer
+		}
+	}
+	for i := range components {
+		for _, source := range components[i].InventorySources {
+			if producer, ok := bySource[source]; ok {
+				components[i].InventoryProducers = append(components[i].InventoryProducers, producer)
+			}
+		}
+	}
+}
 
 func provenanceFromLabels(raw json.RawMessage) componentProvenance {
 	return provenance.FromLabels(raw)

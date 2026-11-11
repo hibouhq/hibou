@@ -1441,6 +1441,13 @@ export interface Advisory {
   source?: string
 }
 
+export interface ComponentInventoryProducer {
+  source: string
+  name: string
+  engine?: string
+  version?: string
+}
+
 export interface ComponentWithVulns {
   id: string
   name: string
@@ -1465,6 +1472,8 @@ export interface ComponentWithVulns {
   registry?: 'public' | 'private'
   /** Artifacts that reported the component: uploaded SBOM file names, or the extractor's document. */
   inventory_sources?: string[]
+  /** Recorded producers of these inventory documents, not inferred from filenames. */
+  inventory_producers?: ComponentInventoryProducer[]
   /** Repository files the component was read from: the lockfile or manifest that declares it. */
   paths?: string[]
   /** Whether the component reaches clients (ADR-045 §6); false stays listed, never hidden. */

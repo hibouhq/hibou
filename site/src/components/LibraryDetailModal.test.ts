@@ -45,9 +45,53 @@ describe('LibraryDetailModal', () => {
         const html = context.teleports?.body ?? ''
         expect(html).toContain('Where it comes from')
         expect(html).toContain('web/package-lock.json')
-        expect(html).toContain('recorded in a lockfile')
+        expect(html).toContain('exact version recorded in source')
         expect(html).toContain('express')
         expect(html).not.toContain('TODO-BACKEND')
+    })
+
+    it('separates the extraction producer from its generated document', async () => {
+        const context: { teleports?: Record<string, string> } = {}
+        await renderToString(createSSRApp({
+            render: () => h(LibraryDetailModal, {
+                component: {
+                    id: 'example', name: 'example', version: '1.0.0', ecosystem: 'npm',
+                    purl: 'pkg:npm/example@1.0.0', vuln_count: 0,
+                    inventory_sources: ['generated.cdx.json'],
+                    inventory_producers: [{
+                        source: 'generated.cdx.json', name: 'Hibou dependency extraction',
+                        engine: 'OSV-SCALIBR + Hibou rules', version: 'osv-scalibr-v0.5.3+hibou-1',
+                    }],
+                },
+            }),
+        }), context)
+        const html = context.teleports?.body ?? ''
+        expect(html).toContain('Inventory producer')
+        expect(html).toContain('Hibou dependency extraction (OSV-SCALIBR + Hibou rules)')
+        expect(html).toContain('osv-scalibr-v0.5.3+hibou-1')
+        expect(html).toContain('Inventory document')
+        expect(html).toContain('generated.cdx.json')
+        expect(html).not.toContain('Reported by')
+    })
+
+    it('does not infer an extractor from an artifact filename or a lockfile from an exact version', async () => {
+        const context: { teleports?: Record<string, string> } = {}
+        await renderToString(createSSRApp({
+            render: () => h(LibraryDetailModal, {
+                component: {
+                    id: 'image', name: 'image', version: 'sha256:' + 'a'.repeat(64), ecosystem: 'oci',
+                    purl: 'pkg:oci/image', vuln_count: 0, paths: ['Dockerfile'], resolution: 'recorded',
+                    inventory_sources: ['hibou-depinventory.cdx.json'],
+                },
+            }),
+        }), context)
+        const html = context.teleports?.body ?? ''
+        expect(html).toContain('Inventory document')
+        expect(html).not.toContain('Inventory producer')
+        expect(html).not.toContain('OSV-SCALIBR')
+        expect(html).not.toContain('recorded in a lockfile')
+        expect(html).toContain('exact version recorded in source')
+        expect(html).toContain('break-all')
     })
 
     it('lays the advisory table out without horizontal scrolling', async () => {

@@ -8,11 +8,11 @@
         <!-- Header -->
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <h2 class="text-lg font-bold text-gray-100">
+            <h2 class="break-words text-lg font-bold text-gray-100 [overflow-wrap:anywhere]">
               {{ component.name }}
             </h2>
             <div class="mt-1 flex flex-wrap items-center gap-2">
-              <span class="font-mono text-sm text-gray-400">{{ component.version }}</span>
+              <span class="min-w-0 break-all font-mono text-sm text-gray-400">{{ component.version }}</span>
               <span
                 class="eco-badge"
                 :class="`eco-${ecoKey}`"
@@ -57,7 +57,7 @@
           </div>
           <button
             type="button"
-            class="-mr-1 -mt-1 rounded-lg p-1 text-gray-500 transition hover:text-gray-200"
+            class="-mr-1 -mt-1 shrink-0 rounded-lg p-1 text-gray-500 transition hover:text-gray-200"
             title="Close"
             aria-label="Close"
             @click="$emit('close')"
@@ -276,9 +276,28 @@
                 {{ modules.map(moduleLabel).join(', ') }}
               </dd>
             </template>
+            <template v-if="inventoryProducers.length">
+              <dt class="text-gray-500">
+                Inventory producer
+              </dt>
+              <dd class="min-w-0 space-y-2 break-words text-gray-200 [overflow-wrap:anywhere]">
+                <div
+                  v-for="producer in inventoryProducers"
+                  :key="producer.source"
+                >
+                  <p>{{ inventoryProducerLabel(producer) }}</p>
+                  <p
+                    v-if="producer.version"
+                    class="mt-0.5 break-all font-mono text-[11px] text-gray-500"
+                  >
+                    {{ producer.version }}
+                  </p>
+                </div>
+              </dd>
+            </template>
             <template v-if="inventorySources.length">
               <dt class="text-gray-500">
-                Reported by
+                {{ inventorySources.length === 1 ? 'Inventory document' : 'Inventory documents' }}
               </dt>
               <dd class="break-all font-mono text-gray-200">
                 {{ inventorySources.join(', ') }}
@@ -365,6 +384,7 @@ import CweChips from '@/components/finding/CweChips.vue'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import { advisoryUrl } from '@/lib/findingDisplay'
 import { ecosystemKey, sourceKey } from '@/lib/purl'
+import { inventoryProducerLabel } from '@/lib/componentProvenance'
 
 const props = defineProps<{
   component: ComponentWithVulns
@@ -389,6 +409,7 @@ const usagePaths = computed(() => props.component.usage_paths ?? [])
 const paths = computed(() => props.component.paths ?? [])
 const modules = computed(() => props.component.modules ?? [])
 const inventorySources = computed(() => props.component.inventory_sources ?? [])
+const inventoryProducers = computed(() => props.component.inventory_producers ?? [])
 
 const relationshipText = computed(() => {
   switch (props.component.relationship) {
@@ -402,14 +423,14 @@ const relationshipText = computed(() => {
 const resolutionText = computed(() => {
   if (props.component.constraint) return `unresolved: only the range ${props.component.constraint} is declared`
   switch (props.component.resolution) {
-    case 'recorded': return 'recorded in a lockfile'
+    case 'recorded': return 'exact version recorded in source'
     case 'declared': return 'pinned in a manifest'
     default: return ''
   }
 })
 
 const hasProvenance = computed(() => Boolean(
-  paths.value.length || modules.value.length || inventorySources.value.length
+  paths.value.length || modules.value.length || inventorySources.value.length || inventoryProducers.value.length
     || relationshipText.value || resolutionText.value || props.component.layer !== undefined,
 ))
 

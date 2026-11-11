@@ -366,52 +366,59 @@
         </div>
         <div
           v-else
-          class="overflow-x-auto"
+          class="min-w-0"
         >
-          <table class="min-w-full divide-y divide-surface-border-subtle text-sm">
-            <thead class="bg-surface-overlay text-left text-xs uppercase tracking-[0.16em] text-gray-500">
+          <table
+            data-testid="dependency-table"
+            class="block w-full table-fixed divide-y divide-surface-border-subtle text-sm lg:table"
+          >
+            <thead class="hidden bg-surface-overlay text-left text-xs uppercase tracking-[0.16em] text-gray-500 lg:table-header-group">
               <tr>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[8%] px-3 py-2 font-medium">
                   Sources
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[10%] px-3 py-2 font-medium">
                   Ecosystem
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[30%] px-3 py-2 font-medium">
                   Library
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[14%] px-3 py-2 font-medium">
                   Version
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[12%] px-3 py-2 font-medium">
                   License
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[10%] px-3 py-2 font-medium">
                   Fixed
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[7%] px-3 py-2 font-medium">
                   Vulns
                 </th>
-                <th class="px-3 py-2 font-medium">
+                <th class="w-[9%] px-3 py-2 font-medium">
                   Severity
                 </th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-surface-border-subtle">
+            <tbody class="block divide-y divide-surface-border-subtle lg:table-row-group">
               <tr
                 v-for="component in filteredComponents"
                 :key="component.id"
-                class="cursor-pointer transition hover:bg-white/5"
+                class="grid grid-cols-2 cursor-pointer transition hover:bg-white/5 lg:table-row"
                 :class="component.vuln_count > 0 ? 'border-l-2 border-l-danger/70' : 'border-l-2 border-l-transparent'"
                 @click="openComponent(component)"
               >
-                <td class="px-3 py-2.5">
+                <td class="min-w-0 overflow-hidden px-3 py-2.5">
+                  <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    Sources
+                  </p>
                   <div class="flex flex-wrap gap-1">
                     <span
                       v-for="source in (component.sources ?? [])"
                       :key="source"
-                      class="source-badge"
+                      class="source-badge max-w-full truncate"
                       :class="`source-${sourceKey(source)}`"
+                      :title="source"
                     >{{ source }}</span>
                     <span
                       v-if="!(component.sources ?? []).length"
@@ -419,16 +426,23 @@
                     >—</span>
                   </div>
                 </td>
-                <td class="px-3 py-2.5">
+                <td class="min-w-0 overflow-hidden px-3 py-2.5">
+                  <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    Ecosystem
+                  </p>
                   <span
-                    class="eco-badge"
+                    class="eco-badge max-w-full truncate"
                     :class="`eco-${ecosystemKey(component.ecosystem)}`"
+                    :title="component.ecosystem || 'unknown'"
                   >{{ component.ecosystem || 'unknown' }}</span>
                 </td>
-                <td class="px-3 py-2.5">
+                <td class="order-first col-span-2 min-w-0 overflow-hidden px-3 py-2.5">
                   <div class="flex items-start justify-between gap-2">
-                    <div class="min-w-0">
-                      <div class="font-medium text-gray-200">
+                    <div class="min-w-0 flex-1">
+                      <div
+                        class="truncate font-medium text-gray-200"
+                        :title="component.name"
+                      >
                         {{ component.name }}
                       </div>
                       <!-- Provenance (ADR-045 §5): relationship and declared
@@ -436,7 +450,7 @@
                            shown when no inventory source said. -->
                       <div
                         v-if="provenanceLine(component)"
-                        class="text-[11px] text-gray-500"
+                        class="truncate text-[11px] text-gray-500"
                         :title="provenanceTitle(component)"
                       >
                         {{ provenanceLine(component) }}
@@ -450,7 +464,7 @@
                     </div>
                     <button
                       type="button"
-                      class="rounded-md p-1 text-gray-500 transition hover:bg-white/5 hover:text-accent"
+                      class="shrink-0 rounded-md p-1 text-gray-500 transition hover:bg-white/5 hover:text-accent"
                       :aria-label="`Locate ${component.name} in graph`"
                       :title="`Locate ${component.name} in graph`"
                       @click.stop="locateComponent(component)"
@@ -459,9 +473,15 @@
                     </button>
                   </div>
                 </td>
-                <td class="px-3 py-2.5 text-xs text-gray-300">
-                  <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
-                    <span class="font-mono">{{ component.version }}</span>
+                <td class="min-w-0 overflow-hidden px-3 py-2.5 text-xs text-gray-300">
+                  <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    Version
+                  </p>
+                  <span class="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span
+                      class="min-w-0 break-all font-mono"
+                      :title="component.version"
+                    >{{ component.version }}</span>
                     <!-- deps.dev signals (ADR-048): attributes of the version,
                          not vulnerabilities. Icons only: the table is already
                          wide. No icon means not evaluated. -->
@@ -487,7 +507,10 @@
                     />
                   </span>
                 </td>
-                <td class="px-3 py-2.5">
+                <td class="min-w-0 overflow-hidden px-3 py-2.5">
+                  <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    License
+                  </p>
                   <div
                     v-if="component.licenses?.length"
                     class="flex flex-wrap gap-1"
@@ -495,7 +518,8 @@
                     <span
                       v-for="licenseId in component.licenses.slice(0, 2)"
                       :key="licenseId"
-                      class="rounded-full border border-surface-border px-2 py-0.5 font-mono text-[11px] text-gray-300"
+                      class="max-w-full truncate rounded-full border border-surface-border px-2 py-0.5 font-mono text-[11px] text-gray-300"
+                      :title="licenseId"
                     >{{ licenseId }}</span>
                     <span
                       v-if="component.licenses.length > 2"
@@ -511,27 +535,37 @@
                     title="No license metadata — fails the gate when deny_unknown is on"
                   >unknown</span>
                 </td>
-                <td class="px-3 py-2.5 font-mono text-xs">
+                <td class="min-w-0 overflow-hidden break-all px-3 py-2.5 font-mono text-xs">
+                  <p class="mb-1 font-sans text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    Fixed
+                  </p>
                   <span :class="component.fixed_versions?.length ? 'text-ok' : 'text-gray-600'">
                     {{ component.fixed_versions?.join(', ') || '—' }}
                   </span>
                 </td>
-                <td class="px-3 py-2.5">
+                <td class="min-w-0 overflow-hidden px-3 py-2.5">
+                  <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    Vulns
+                  </p>
                   <span
                     class="inline-flex min-w-[1.5rem] items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium"
                     :class="component.vuln_count > 0 ? 'vuln-count' : 'text-gray-500'"
                   >{{ isScannableEcosystem(component.ecosystem) ? component.vuln_count : '—' }}</span>
                 </td>
-                <td class="px-3 py-2.5">
-                  <span class="inline-flex items-center gap-1.5">
+                <td class="min-w-0 overflow-hidden px-3 py-2.5">
+                  <p class="mb-1 text-[10px] uppercase tracking-wide text-gray-500 lg:hidden">
+                    Severity
+                  </p>
+                  <span class="inline-flex max-w-full items-center gap-1.5">
                     <MalwareIcon
                       v-if="isMalwareComponent(component)"
                       size="sm"
                     />
                     <span
                       v-if="component.highest_severity"
-                      class="rounded-full px-2 py-0.5 text-xs font-medium"
+                      class="min-w-0 truncate rounded-full px-2 py-0.5 text-xs font-medium"
                       :class="`sev-${sevKey(component.highest_severity)}`"
+                      :title="component.highest_severity"
                     >{{ component.highest_severity }}</span>
                     <span
                       v-else
@@ -564,6 +598,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { api, type ComponentGraph, type ComponentGraphNode, type ComponentWithVulns, type DepExtractionStatus, type Repository, type ShippingInfo } from '@/api/client'
 import ScaStatus from '@/components/ScaStatus.vue'
+import { inventoryProvenanceTitle } from '@/lib/componentProvenance'
 import { canEnableSca, hasInventory, inventoryKnownCount, needsDependencyExtraction, scaAction, scaAssessed, scaErrorMessage, scaKnownCount, scaLabel, scaPending, scaResultCoverage } from '@/lib/sca'
 import { useOrgStore } from '@/stores/org'
 import { isMalwareComponent } from '@/lib/findingDisplay'
@@ -830,10 +865,10 @@ async function removeNotShipped(entryID: string) {
 
 function provenanceTitle(component: ComponentWithVulns): string {
   const lines: string[] = []
-  if (component.relationship === 'indirect') lines.push('Indirect: resolved by this repository\'s own build from its lockfile. A library used by other projects has its clients resolve their own versions.')
+  if (component.relationship === 'indirect') lines.push('Indirect: recorded as a transitive dependency by the inventory source. Static extraction does not execute the repository build.')
   if (component.relationship === 'unknown') lines.push('Unknown: no inventory source could tell whether this is a direct dependency.')
   if (component.resolution === 'declared') lines.push('Declared only: the version comes from a manifest, not a lockfile.')
-  if (component.inventory_sources?.length) lines.push(`Reported by ${component.inventory_sources.join(', ')}`)
+  lines.push(...inventoryProvenanceTitle(component))
   if (component.layer !== undefined) {
     lines.push(component.base_image
       ? `Introduced by image layer ${component.layer}, part of the base image: a base image update fixes it, not an application change.`

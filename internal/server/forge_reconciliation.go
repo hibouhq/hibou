@@ -40,6 +40,8 @@ type forgeCheckpoint struct {
 
 type forgeObservationSourceKey struct{}
 
+const forgeDeliveryLockTimeout = 5 * time.Second
+
 func (s *Server) forgeEventConfig(id string) config.ForgeConfig {
 	for _, fc := range s.cfg.Forges {
 		if fc.ID == id {
@@ -53,28 +55,38 @@ func (s *Server) lockForgeDelivery(ctx context.Context, provider string, try boo
 	if s.db == nil || !s.forgeEventConfig(provider).PollingEnabled() {
 		return func() {}, nil
 	}
-	conn, err := s.db.Conn(ctx)
+	acquire, cancel := context.WithTimeout(ctx, forgeDeliveryLockTimeout)
+	defer cancel()
+	conn, err := s.db.Conn(acquire)
 	if err != nil {
 		return nil, err
 	}
 	key := "forge-delivery:" + provider
 	if try {
 		var locked bool
-		err = conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, key).Scan(&locked)
+		err = conn.QueryRowContext(acquire, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, key).Scan(&locked)
 		if err == nil && !locked {
-			err = errors.New("another replica is processing this forge")
+			_ = conn.Close()
+			return nil, errors.New("another replica is processing this forge")
 		}
 	} else {
-		_, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, key)
+		_, err = conn.ExecContext(acquire, `SELECT pg_advisory_lock(hashtextextended($1,0))`, key)
 	}
 	if err != nil {
-		conn.Close()
-		return nil, err
+		// A cancelled query may already have acquired the session lock.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		_ = conn.Close()
+		return nil, fmt.Errorf("acquire forge delivery lock: %w", errors.Join(err, acquire.Err()))
 	}
 	return func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), store.AdvisoryLockCleanupTimeout)
 		defer cancel()
-		if _, err := conn.ExecContext(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, key); err != nil {
+		var released bool
+		err := conn.QueryRowContext(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, key).Scan(&released)
+		if err == nil && !released {
+			err = errors.New("connection no longer owns forge delivery lock")
+		}
+		if err != nil {
 			s.log.Error().Err(err).Str("provider", provider).Msg("release forge delivery lock")
 			// A connection with a session lock must never return to the pool.
 			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
@@ -133,7 +145,7 @@ func (s *Server) runForgeReconciliationLoop(ctx context.Context) {
 func (s *Server) processForgeReconciliation(parent context.Context, job *store.ForgeReconciliation) {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
-	unlock, err := s.lockForgeDelivery(ctx, job.Provider, false)
+	unlock, err := s.lockForgeDelivery(ctx, job.Provider, true)
 	if err == nil {
 		defer unlock()
 		err = s.reconcileForgeScope(ctx, job)

@@ -3,9 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"time"
 )
+
+const AdvisoryLockCleanupTimeout = 5 * time.Second
 
 // Advisory-lock keys for singleton background loops. Each value must stay
 // stable across releases — changing one lets two replicas run the same loop.
@@ -51,8 +56,9 @@ func AdvisoryLockID(key string) int64 {
 // pg_try_advisory_lock never blocks: a replica that loses simply skips this
 // tick and tries again on the next one. The lock is held on one dedicated
 // connection and released in every path, including panic, so a crashed process
-// drops it when its backend dies.
-func WithLeaderLock(ctx context.Context, db *sql.DB, key string, fn func(context.Context) error) (bool, error) {
+// drops it when its backend dies. TCP keepalives configured by New also bound
+// dead-client detection when a pod disappears without closing its sockets.
+func WithLeaderLock(ctx context.Context, db *sql.DB, key string, fn func(context.Context) error) (ran bool, err error) {
 	if db == nil {
 		// No database: run unguarded rather than silently skipping the work.
 		return true, fn(ctx)
@@ -69,16 +75,25 @@ func WithLeaderLock(ctx context.Context, db *sql.DB, key string, fn func(context
 	lockID := advisoryLockID(key)
 	var acquired bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, lockID).Scan(&acquired); err != nil {
+		// Cancellation may race successful acquisition on the server.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		return false, fmt.Errorf("try advisory lock %s: %w", key, err)
 	}
 	if !acquired {
 		return false, nil
 	}
 	defer func() {
-		// context.WithoutCancel: the unlock must still run when the caller's
-		// context was cancelled mid-pass, otherwise the lock lingers until the
-		// connection is reaped.
-		_, _ = conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, lockID)
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), AdvisoryLockCleanupTimeout)
+		defer cancel()
+		var released bool
+		unlockErr := conn.QueryRowContext(cleanup, `SELECT pg_advisory_unlock($1)`, lockID).Scan(&released)
+		if unlockErr == nil && !released {
+			unlockErr = errors.New("connection no longer owns advisory lock")
+		}
+		if unlockErr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			err = errors.Join(err, fmt.Errorf("release advisory lock %s: %w", key, unlockErr))
+		}
 	}()
 
 	return true, fn(ctx)

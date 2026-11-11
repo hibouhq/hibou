@@ -548,6 +548,22 @@ enable/update/retry actions.
   `not_monitored` discovery entries. UI badges display "Monitored" and
   "CI integrated"; neither lifecycle "Active" nor a server-generated inventory
   establishes a CI integration. Upload history is not a CI-health assertion.
+  Component provenance distinguishes the inventory producer from its document:
+  linked extraction-run evidence identifies Hibou dependency extraction and
+  its recorded engine/version; uploaded artifacts retain their recorded tool.
+  A filename alone never establishes an extractor. Component details and table
+  tooltips label document names as inventory documents, not as the reporter.
+  Exact version evidence is not described as a lockfile when the source may
+  instead be a Dockerfile or another pinned declaration.
+  Hibou's own CI produces the Go SBOM from the built release binaries and the
+  frontend SBOM from its package manifest/lockfile, in isolated scan inputs.
+  A checkout-wide dependency scan would also ingest the intentionally vulnerable
+  extractor corpus and dependency-owned fixtures, falsely making them product
+  dependencies. Dependency SARIF uses the same bounded inputs; source secret
+  scanning remains a separate whole-checkout report, uploaded alongside it.
+  This is scope correction at the producer, not vulnerability suppression or
+  an ecosystem-wide exclusion. Existing contaminated snapshots need corrected
+  inventory/new analysis; changing the workflow does not rewrite history.
 - Sources retain the **Hibou scan** origin, paths, extractor version and
   module completeness. CI/uploaded SBOM evidence remains additive under §5;
   enabling SCA neither replaces it nor implies build-accurate transitive

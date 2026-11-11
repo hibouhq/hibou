@@ -27,6 +27,10 @@ var migrationsFS embed.FS
 const (
 	DefaultStatementTimeout         = 60 * time.Second
 	DefaultIdleInTransactionTimeout = 60 * time.Second
+	DefaultTCPKeepalivesIdle        = 30 * time.Second
+	DefaultTCPKeepalivesInterval    = 10 * time.Second
+	DefaultTCPKeepalivesCount       = 3
+	DefaultTCPUserTimeout           = 60 * time.Second
 )
 
 // PoolConfig bounds the connection pool. Zero fields keep the defaults.
@@ -79,18 +83,22 @@ func connectorWithSessionDefaults(databaseURL string) (*pq.Connector, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime := make(map[string]string, len(cfg.Runtime)+2)
+	runtime := make(map[string]string, len(cfg.Runtime)+6)
 	for key, value := range cfg.Runtime {
 		runtime[key] = value
 	}
-	setDefault := func(key string, value time.Duration) {
+	setDefault := func(key, value string) {
 		if _, ok := runtime[key]; ok || strings.Contains(cfg.Options, key) {
 			return
 		}
-		runtime[key] = strconv.FormatInt(value.Milliseconds(), 10)
+		runtime[key] = value
 	}
-	setDefault("statement_timeout", DefaultStatementTimeout)
-	setDefault("idle_in_transaction_session_timeout", DefaultIdleInTransactionTimeout)
+	setDefault("statement_timeout", strconv.FormatInt(DefaultStatementTimeout.Milliseconds(), 10))
+	setDefault("idle_in_transaction_session_timeout", strconv.FormatInt(DefaultIdleInTransactionTimeout.Milliseconds(), 10))
+	setDefault("tcp_keepalives_idle", strconv.FormatInt(int64(DefaultTCPKeepalivesIdle/time.Second), 10))
+	setDefault("tcp_keepalives_interval", strconv.FormatInt(int64(DefaultTCPKeepalivesInterval/time.Second), 10))
+	setDefault("tcp_keepalives_count", strconv.Itoa(DefaultTCPKeepalivesCount))
+	setDefault("tcp_user_timeout", strconv.FormatInt(DefaultTCPUserTimeout.Milliseconds(), 10))
 	cfg.Runtime = runtime
 	return pq.NewConnectorConfig(cfg)
 }

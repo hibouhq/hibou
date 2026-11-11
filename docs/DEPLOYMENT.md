@@ -35,6 +35,44 @@
 - GitHub-hosted runners (`ubuntu-latest`) upload directly to the public Hibou URL with an API token
 - UI can stay private via VPN, `kubectl port-forward`, or internal DNS while webhook traffic remains public
 
+## Database connection health and interrupted pods
+
+Hibou applies these PostgreSQL session defaults to each new pooled connection:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `statement_timeout` | 60 seconds | Bound individual SQL statements |
+| `idle_in_transaction_session_timeout` | 60 seconds | Reap abandoned transactions |
+| `tcp_keepalives_idle` | 30 seconds | Start probing an idle TCP peer |
+| `tcp_keepalives_interval` | 10 seconds | Retry unanswered probes |
+| `tcp_keepalives_count` | 3 | Limit unanswered probes |
+| `tcp_user_timeout` | 60,000 milliseconds | Bound unacknowledged TCP traffic where supported |
+
+Keepalives let PostgreSQL detect dead clients after a pod/node disappears without
+a clean socket close. They do not expire healthy connections or long-running
+background passes. Detection is typically on the order of a minute, not a strict
+failover SLA; OS support, network topology and explicit overrides matter.
+TCP settings do not apply to Unix-domain sockets.
+
+Explicit database URL parameters and `options=-c ...` values take precedence.
+Avoid disabling or greatly increasing these settings unless another layer
+provides equivalent dead-client detection. Session advisory locks require
+session-affine database connections, not a transaction-pooling proxy.
+
+Leader locks use dedicated connections, non-blocking acquisition and a five-second
+unlock deadline. Failed or uncertain acquisition/unlock discards the connection
+instead of returning a potentially locked session to the pool. Forge polling
+also tries its provider lock without waiting and records a deferred retry when
+busy; other provider-lock callers wait at most five seconds, including pool
+acquisition. Existing lock IDs remain stable across rolling upgrades.
+
+**Recovery from older releases:** new startup settings do not retrofit orphaned
+sessions already open on PostgreSQL. Inspect their backend start time, client
+address, activity and advisory locks, and verify that the owning pod no longer
+exists before terminating individual backends. Do not terminate all Hibou
+sessions or unlock live workers. Once the verified orphan is closed, subsequent
+polls can acquire the same provider lock and resume reconciliation.
+
 ## Prerequisites
 
 - Kubernetes cluster

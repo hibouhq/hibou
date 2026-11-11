@@ -19,6 +19,14 @@ Implementation notes:
   A replica processes one scope at a time; each scope has a two-minute
   deadline and a three-minute lease. Provider-level PostgreSQL advisory locks
   serialize poll fetch/application with hybrid webhook application.
+- Provider-lock acquisition is non-blocking for polling: a busy scope is
+  recorded and deferred, not left waiting for a SQL statement timeout.
+  Other acquisition paths and unlock cleanup are bounded to five seconds.
+  Ambiguous acquisition and failed unlock discard the dedicated connection.
+  PostgreSQL TCP keepalive/user-timeout defaults bound dead-client detection
+  without expiring healthy long-running work. Existing orphaned sessions from
+  older releases still require verified one-off cleanup; see
+  [database connection health](../DEPLOYMENT.md#database-connection-health-and-interrupted-pods).
 - Scale/security hardening uses migrations `00075`/`00076`: immutable
   enrollment bindings and live inventory account IDs, indexed run sampling,
   and provider-wide API backoff shared by replicas.

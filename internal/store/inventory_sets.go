@@ -149,6 +149,36 @@ func (q *Queries) ListInventorySources(ctx context.Context, snapshotID uuid.UUID
 	return out, nil
 }
 
+type InventorySourceEvidence struct {
+	Label            string
+	ToolName         string
+	ExtractorVersion string
+	Extracted        bool
+}
+
+func (q *Queries) ListInventorySourceEvidence(ctx context.Context, snapshotID uuid.UUID) ([]InventorySourceEvidence, error) {
+	rows, err := q.rawDB().QueryContext(ctx, `
+		SELECT src.label, COALESCE(a.tool_name,''), COALESCE(run.extractor_version,''), run.id IS NOT NULL
+		FROM inventory_sources src
+		LEFT JOIN snapshot_artifacts a ON a.id=src.artifact_id
+		LEFT JOIN dep_extraction_runs run ON run.id=src.extraction_run_id
+		WHERE src.snapshot_id=$1 AND (a.id IS NULL OR a.revoked_at IS NULL)
+		ORDER BY src.label`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var sources []InventorySourceEvidence
+	for rows.Next() {
+		var source InventorySourceEvidence
+		if err := rows.Scan(&source.Label, &source.ToolName, &source.ExtractorVersion, &source.Extracted); err != nil {
+			return nil, err
+		}
+		sources = append(sources, source)
+	}
+	return sources, rows.Err()
+}
+
 // InventorySourceSet returns the set one source of a snapshot contributed,
 // nil when the source is unknown or predates inventory sets.
 func (q *Queries) InventorySourceSet(ctx context.Context, snapshotID uuid.UUID, label string) (*int64, error) {

@@ -2,9 +2,74 @@ package store
 
 import (
 	"database/sql"
+	"net/url"
 	"os"
 	"testing"
 )
+
+func TestNewAppliesTCPDeadClientDetectionDefaults(t *testing.T) {
+	db := openPoolTestDB(t, poolTestDatabaseURL())
+	var tcp bool
+	if err := db.QueryRow(`SELECT inet_client_addr() IS NOT NULL`).Scan(&tcp); err != nil {
+		t.Fatal(err)
+	}
+	if !tcp {
+		t.Skip("TCP keepalive settings require a TCP database connection")
+	}
+	for setting, want := range map[string]string{
+		"tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10",
+		"tcp_keepalives_count": "3", "tcp_user_timeout": "60000",
+	} {
+		var got string
+		if err := db.QueryRow(`SELECT setting FROM pg_settings WHERE name=$1`, setting).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s=%q want %q", setting, got, want)
+		}
+	}
+}
+
+func TestNewPreservesExplicitTCPSettings(t *testing.T) {
+	for _, options := range []bool{false, true} {
+		t.Run(map[bool]string{false: "startup parameters", true: "options"}[options], func(t *testing.T) {
+			databaseURL, err := url.Parse(poolTestDatabaseURL())
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := databaseURL.Query()
+			if options {
+				query.Set("options", "-c tcp_keepalives_idle=90 -c tcp_keepalives_interval=20 -c tcp_keepalives_count=5 -c tcp_user_timeout=120000")
+			} else {
+				query.Set("tcp_keepalives_idle", "90")
+				query.Set("tcp_keepalives_interval", "20")
+				query.Set("tcp_keepalives_count", "5")
+				query.Set("tcp_user_timeout", "120000")
+			}
+			databaseURL.RawQuery = query.Encode()
+			db := openPoolTestDB(t, databaseURL.String())
+			var tcp bool
+			if err := db.QueryRow(`SELECT inet_client_addr() IS NOT NULL`).Scan(&tcp); err != nil {
+				t.Fatal(err)
+			}
+			if !tcp {
+				t.Skip("TCP keepalive settings require a TCP database connection")
+			}
+			for setting, want := range map[string]string{
+				"tcp_keepalives_idle": "90", "tcp_keepalives_interval": "20",
+				"tcp_keepalives_count": "5", "tcp_user_timeout": "120000",
+			} {
+				var got string
+				if err := db.QueryRow(`SELECT setting FROM pg_settings WHERE name=$1`, setting).Scan(&got); err != nil {
+					t.Fatal(err)
+				}
+				if got != want {
+					t.Errorf("%s=%q want %q", setting, got, want)
+				}
+			}
+		})
+	}
+}
 
 func openPoolTestDB(t *testing.T, databaseURL string) *sql.DB {
 	t.Helper()

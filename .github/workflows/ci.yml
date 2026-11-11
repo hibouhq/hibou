@@ -135,12 +135,10 @@ jobs:
             with:
               run-cmd: |
                 set -euo pipefail
-                node --test scripts/sbom-license.test.mjs
+                node --test scripts/sbom-license.test.mjs scripts/security-scan.test.mjs
                 gosec -track-suppressions -exclude-generated -fmt sarif -out gosec.sarif ./... || true
-                trivy fs --format sarif --output trivy-fs.sarif .
-                trivy fs --skip-db-update --format cyclonedx --output go-sbom.cdx.json .
+                node scripts/security-scan.mjs
                 node scripts/sbom-license.mjs go-sbom.cdx.json go "${GITHUB_SHA}"
-                trivy fs --skip-db-update --format cyclonedx --output frontend-sbom.cdx.json site/
                 node scripts/sbom-license.mjs frontend-sbom.cdx.json frontend "${GITHUB_SHA}"
 
       # --- Publishing (push to main, or a published release; never a PR) ---
@@ -233,6 +231,8 @@ jobs:
           path: |
             gosec.sarif
             trivy-fs.sarif
+            trivy-frontend.sarif
+            trivy-secrets.sarif
             go-sbom.cdx.json
             frontend-sbom.cdx.json
           retention-days: 30
@@ -463,6 +463,8 @@ jobs:
             site/junit-front.xml
             gosec.sarif
             trivy-fs.sarif
+            trivy-frontend.sarif
+            trivy-secrets.sarif
             go-sbom.cdx.json
             frontend-sbom.cdx.json
 
