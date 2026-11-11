@@ -4,30 +4,52 @@
          picker dropdowns (z-50 inside) are trapped at this block's level: it
          must sit above the z-20 snapshot row or they render underneath it. -->
     <div class="compare-rise relative z-30">
-      <p class="mb-1 flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-gray-500">
-        <span class="compare-beacon" />
-        <span class="compare-display">Compare</span>
-      </p>
+      <div class="mb-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs uppercase text-gray-500">
+        <p class="flex items-center gap-2">
+          <span class="compare-beacon" />
+          <span class="compare-display tracking-[0.24em]">Compare</span>
+          <span
+            aria-hidden="true"
+            class="text-gray-600"
+          >/</span>
+          <span
+            tabindex="0"
+            class="cursor-help rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            :title="comparisonRoleDescriptions.base"
+          >Base</span>
+        </p>
+        <span
+          aria-hidden="true"
+          class="w-9"
+        />
+        <p>
+          <span
+            tabindex="0"
+            class="cursor-help rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            :title="comparisonRoleDescriptions.head"
+          >Head</span>
+        </p>
+      </div>
       <!-- The title IS the control: click either side to change head/base. -->
       <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
         <div class="flex min-w-0 items-center gap-1.5">
           <BranchPRSelector
             :refs="refs"
-            :selected-ref-name="headRef"
+            :selected-ref-name="baseRef"
             :default-branch="repo?.default_branch"
             :loading="loadingRefs"
             :repo-html-url="repo?.html_url"
             :provider="repo?.provider"
             hero
-            @select="selectHead"
+            @select="selectBase"
           />
           <a
-            v-if="headForgeUrl"
-            :href="headForgeUrl"
+            v-if="baseForgeUrl"
+            :href="baseForgeUrl"
             target="_blank"
             rel="noopener noreferrer"
             class="shrink-0 text-gray-500 transition hover:text-accent"
-            :title="`Open ${headLabel} on ${forgeName}`"
+            :title="`Open ${baseLabel} on ${forgeName}`"
           >
             <ExternalLink class="h-3.5 w-3.5" />
           </a>
@@ -45,22 +67,22 @@
         <div class="flex min-w-0 items-center gap-1.5">
           <BranchPRSelector
             :refs="refs"
-            :selected-ref-name="baseRef"
+            :selected-ref-name="headRef"
             :default-branch="repo?.default_branch"
             :loading="loadingRefs"
             :repo-html-url="repo?.html_url"
             :provider="repo?.provider"
             hero
             align="right"
-            @select="selectBase"
+            @select="selectHead"
           />
           <a
-            v-if="baseForgeUrl"
-            :href="baseForgeUrl"
+            v-if="headForgeUrl"
+            :href="headForgeUrl"
             target="_blank"
             rel="noopener noreferrer"
             class="shrink-0 text-gray-500 transition hover:text-accent"
-            :title="`Open ${baseLabel} on ${forgeName}`"
+            :title="`Open ${headLabel} on ${forgeName}`"
           >
             <ExternalLink class="h-3.5 w-3.5" />
           </a>
@@ -81,157 +103,31 @@
     </div>
 
     <div
-      class="compare-rise relative z-20 mt-4 border-b border-surface-border pb-3"
+      class="compare-rise relative z-20 mt-3 border-b border-surface-border pb-3"
     >
       <div class="compare-comparator grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
-        <div class="min-w-0 flex-1 space-y-2">
-          <div
-            v-if="headSnapshots.length > 0"
-            class="flex items-center gap-2"
-          >
-            <button
-              v-if="headSnapshotId"
-              type="button"
-              class="inline-flex shrink-0 items-center rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-gray-300 transition hover:border-accent/50 hover:text-white"
-              @click="headSnapshotId = ''"
-            >
-              Snapshot
-            </button>
-            <div class="relative min-w-0 flex-1">
-              <button
-                type="button"
-                class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
-                aria-label="Head snapshot"
-                @click.stop="headSnapshotOpen = !headSnapshotOpen"
-              >
-                <span
-                  v-if="selectedHeadSnapshot"
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="snapshotDotClass(selectedHeadSnapshot)"
-                />
-                <span class="flex-1 truncate">{{ selectedHeadSnapshot ? snapshotOptionLabel(selectedHeadSnapshot) : 'Snapshot' }}</span>
-                <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
-              </button>
-              <div
-                v-if="headSnapshotOpen"
-                class="absolute left-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
-              >
-                <button
-                  v-for="snapshot in headSnapshots"
-                  :key="snapshot.id"
-                  type="button"
-                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                  :class="headSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
-                  @click="headSnapshotId = snapshot.id; headSnapshotOpen = false"
-                >
-                  <span
-                    class="inline-block h-2 w-2 shrink-0 rounded-full"
-                    :class="snapshotDotClass(snapshot)"
-                  />
-                  <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
-                  <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
-                  <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
-                  <span
-                    v-if="snapshot.run_number"
-                    class="text-gray-500"
-                  >#{{ snapshot.run_number }}</span>
-                  <span
-                    v-if="snapshot.tag"
-                    class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
-                  >{{ snapshot.tag }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div
-            v-if="selectedHeadSnapshot"
-            class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
-          >
-            <span
-              class="rounded-full px-2 py-0.5 font-medium"
-              :class="snapshotBadgeClass(selectedHeadSnapshot)"
-            >
-              {{ snapshotStatusLabel(selectedHeadSnapshot) }}
-            </span>
-            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedHeadSnapshot) }}</span>
-            <span>{{ snapshotSecondaryLine(selectedHeadSnapshot) }}</span>
-          </div>
+        <div class="min-w-0 flex-1">
+          <SnapshotSelector
+            v-model="baseSnapshotId"
+            label="Base snapshot"
+            :snapshots="baseSnapshots"
+            :loading="baseSnapshotsLoading"
+            :error="baseSnapshotsError"
+            allow-latest
+            @retry="baseSnapshotsRetry++"
+          />
         </div>
 
-        <div class="min-w-0 flex-1 space-y-2">
-          <div
-            v-if="baseSnapshots.length > 0"
-            class="flex items-center gap-2"
-          >
-            <div class="relative min-w-0 flex-1">
-              <button
-                type="button"
-                class="compare-snap-select flex w-full items-center gap-2 rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-left text-xs text-gray-300 transition hover:border-accent/50"
-                aria-label="Base snapshot"
-                @click.stop="baseSnapshotOpen = !baseSnapshotOpen"
-              >
-                <span
-                  v-if="selectedBaseSnapshot"
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="snapshotDotClass(selectedBaseSnapshot)"
-                />
-                <span class="flex-1 truncate">{{ selectedBaseSnapshot ? snapshotOptionLabel(selectedBaseSnapshot) : 'Snapshot' }}</span>
-                <ChevronDown class="h-3 w-3 shrink-0 text-gray-500" />
-              </button>
-              <div
-                v-if="baseSnapshotOpen"
-                class="absolute right-0 top-[calc(100%+4px)] z-50 max-h-60 w-full overflow-y-auto rounded-lg border border-surface-border bg-surface-overlay py-1 shadow-2xl"
-              >
-                <button
-                  v-for="snapshot in baseSnapshots"
-                  :key="snapshot.id"
-                  type="button"
-                  class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition hover:bg-white/5"
-                  :class="baseSnapshotId === snapshot.id ? 'text-accent font-medium' : 'text-gray-300'"
-                  @click="baseSnapshotId = snapshot.id; baseSnapshotOpen = false"
-                >
-                  <span
-                    class="inline-block h-2 w-2 shrink-0 rounded-full"
-                    :class="snapshotDotClass(snapshot)"
-                  />
-                  <span class="font-mono">{{ snapshot.commit_sha.slice(0, 7) }}</span>
-                  <span :class="snapshotStatusTextClass(snapshot)">{{ snapshotStatusLabel(snapshot) }}</span>
-                  <span class="text-gray-500">{{ formatDateTime(snapshot.created_at) }}</span>
-                  <span
-                    v-if="snapshot.run_number"
-                    class="text-gray-500"
-                  >#{{ snapshot.run_number }}</span>
-                  <span
-                    v-if="snapshot.tag"
-                    class="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300"
-                  >{{ snapshot.tag }}</span>
-                </button>
-              </div>
-            </div>
-            <button
-              v-if="baseSnapshotId"
-              type="button"
-              class="inline-flex shrink-0 items-center rounded-lg border border-surface-border bg-surface-overlay px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-gray-300 transition hover:border-accent/50 hover:text-white"
-              @click="baseSnapshotId = ''"
-            >
-              Snapshot
-            </button>
-          </div>
-
-          <div
-            v-if="selectedBaseSnapshot"
-            class="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 px-1 text-[11px] text-gray-500"
-          >
-            <span>{{ snapshotSecondaryLine(selectedBaseSnapshot) }}</span>
-            <span class="font-mono text-gray-300">{{ snapshotPrimaryLabel(selectedBaseSnapshot) }}</span>
-            <span
-              class="rounded-full px-2 py-0.5 font-medium"
-              :class="snapshotBadgeClass(selectedBaseSnapshot)"
-            >
-              {{ snapshotStatusLabel(selectedBaseSnapshot) }}
-            </span>
-          </div>
+        <div class="min-w-0 flex-1">
+          <SnapshotSelector
+            v-model="headSnapshotId"
+            label="Head snapshot"
+            :snapshots="headSnapshots"
+            :loading="headSnapshotsLoading"
+            :error="headSnapshotsError"
+            allow-latest
+            @retry="headSnapshotsRetry++"
+          />
         </div>
       </div>
     </div>
@@ -257,6 +153,14 @@
     >
       <span class="compare-scan" />
       Running comparison…
+    </div>
+
+    <div
+      v-else-if="sameSnapshot"
+      role="status"
+      class="mt-4 rounded-xl border border-surface-border bg-surface-overlay px-4 py-3 text-sm text-gray-300"
+    >
+      Both sides use the same snapshot. Choose a different run for Base or Head to see changes.
     </div>
 
     <div
@@ -1397,12 +1301,14 @@
 
 <script setup lang="ts">
 import { safeHref } from '@/lib/safeUrl'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowLeftRight, ArrowRight, ArrowDownRight, ArrowUpRight, Check, ChevronDown, ExternalLink, FlaskConical, GaugeCircle, GitPullRequest, LayoutDashboard, Minus, Package, ShieldAlert } from 'lucide-vue-next'
 import { useRoute, useRouter } from 'vue-router'
 
 import { api, type AcceptanceReasonKind, type CompareResult, type ComponentEntry, type CoverageFileDelta, type CoverageReport, type EnhancedRef, type PatchFileCoverage, type Repository, type Snapshot, type TestCaseDelta, type Vulnerability } from '@/api/client'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import SnapshotSelector from '@/components/SnapshotSelector.vue'
+import { comparisonRoleDescriptions, latestComparableSnapshot, preferredComparisonBase } from '@/lib/compareSnapshots'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
 import TriageDialog from '@/components/TriageDialog.vue'
 import CoverageSourceModal from '@/components/CoverageSourceModal.vue'
@@ -1534,8 +1440,12 @@ const baseSnapshots = ref<Snapshot[]>([])
 const headSnapshots = ref<Snapshot[]>([])
 const baseSnapshotId = ref('')
 const headSnapshotId = ref('')
-const baseSnapshotOpen = ref(false)
-const headSnapshotOpen = ref(false)
+const baseSnapshotsLoading = ref(false)
+const headSnapshotsLoading = ref(false)
+const baseSnapshotsError = ref('')
+const headSnapshotsError = ref('')
+const baseSnapshotsRetry = ref(0)
+const headSnapshotsRetry = ref(0)
 const activeTab = ref<TabId>('overview')
 const expandedPatchFiles = ref<Set<string>>(new Set())
 // Uncovered-line chips shown inline per file row; the rest collapses to "+N"
@@ -1558,13 +1468,6 @@ function togglePatchFile(path: string) {
   else next.add(path)
   expandedPatchFiles.value = next
 }
-
-function closeSnapshotDropdowns() {
-  baseSnapshotOpen.value = false
-  headSnapshotOpen.value = false
-}
-onMounted(() => document.addEventListener('click', closeSnapshotDropdowns))
-onUnmounted(() => document.removeEventListener('click', closeSnapshotDropdowns))
 
 const provider = computed(() => route.params.provider as string)
 const slug = computed(() => route.params.slug as string)
@@ -1595,6 +1498,7 @@ function forgeFileLink(filePath: string): string | null {
 }
 const selectedBaseSnapshot = computed(() => resolveSelectedSnapshot(baseSnapshots.value, baseSnapshotId.value))
 const selectedHeadSnapshot = computed(() => resolveSelectedSnapshot(headSnapshots.value, headSnapshotId.value))
+const sameSnapshot = computed(() => !!selectedBaseSnapshot.value && selectedBaseSnapshot.value.id === selectedHeadSnapshot.value?.id)
 
 const coverageDiff = computed(() => comparison.value?.coverage_diff ?? null)
 const patchCoverage = computed(() => comparison.value?.patch_coverage ?? null)
@@ -1971,12 +1875,14 @@ watch([baseRef, headRef, baseSnapshotId, headSnapshotId], ([base, head, baseSn, 
 
 // ─── User actions ─────────────────────────────────────────────────────────────
 function selectBase(name: string) {
+  if (baseRef.value === name) return
   baseRef.value = name
   baseSnapshotId.value = ''
   baseSnapshots.value = []
 }
 
 function selectHead(name: string) {
+  if (headRef.value === name) return
   headRef.value = name
   headSnapshotId.value = ''
   headSnapshots.value = []
@@ -2019,7 +1925,7 @@ watch(
 
       // Set defaults if URL has no base/head
       if (!baseRef.value || !headRef.value) {
-        const defaultBase = refsRes.data.find((ref) => ref.name === repoRes.data.default_branch)?.name || refsRes.data[0]?.name || ''
+        const defaultBase = preferredComparisonBase(refsRes.data, repoRes.data.default_branch, headRef.value)
         const defaultHead = refsRes.data.find((ref) => ref.name !== defaultBase)?.name || defaultBase
         if (!baseRef.value) baseRef.value = defaultBase
         if (!headRef.value) headRef.value = defaultHead
@@ -2038,20 +1944,28 @@ watch(
 
 // Load base snapshots
 watch(
-  () => [baseRef.value, loadingRefs.value, provider.value, slug.value, repoSlug.value] as const,
+  () => [baseRef.value, loadingRefs.value, provider.value, slug.value, repoSlug.value, baseSnapshotsRetry.value] as const,
   async ([refName, refsLoading, p, s, r], _, onCleanup) => {
     let cancelled = false
     onCleanup(() => { cancelled = true })
+    baseSnapshotsError.value = ''
+    baseSnapshotsLoading.value = false
 
     if (refsLoading || !refName || !p || !s || !r) {
       baseSnapshots.value = []
       return
     }
+    baseSnapshotsLoading.value = true
     try {
       const res = await api.listSnapshots(p, s, r, { ref: refName, per_page: 50 })
       if (!cancelled) baseSnapshots.value = res.data
-    } catch {
-      if (!cancelled) baseSnapshots.value = []
+    } catch (error) {
+      if (!cancelled) {
+        baseSnapshots.value = []
+        baseSnapshotsError.value = error instanceof Error ? error.message : 'Failed to load base snapshots.'
+      }
+    } finally {
+      if (!cancelled) baseSnapshotsLoading.value = false
     }
   },
   { immediate: true },
@@ -2059,20 +1973,28 @@ watch(
 
 // Load head snapshots
 watch(
-  () => [headRef.value, loadingRefs.value, provider.value, slug.value, repoSlug.value] as const,
+  () => [headRef.value, loadingRefs.value, provider.value, slug.value, repoSlug.value, headSnapshotsRetry.value] as const,
   async ([refName, refsLoading, p, s, r], _, onCleanup) => {
     let cancelled = false
     onCleanup(() => { cancelled = true })
+    headSnapshotsError.value = ''
+    headSnapshotsLoading.value = false
 
     if (refsLoading || !refName || !p || !s || !r) {
       headSnapshots.value = []
       return
     }
+    headSnapshotsLoading.value = true
     try {
       const res = await api.listSnapshots(p, s, r, { ref: refName, per_page: 50 })
       if (!cancelled) headSnapshots.value = res.data
-    } catch {
-      if (!cancelled) headSnapshots.value = []
+    } catch (error) {
+      if (!cancelled) {
+        headSnapshots.value = []
+        headSnapshotsError.value = error instanceof Error ? error.message : 'Failed to load target snapshots.'
+      }
+    } finally {
+      if (!cancelled) headSnapshotsLoading.value = false
     }
   },
   { immediate: true },
@@ -2085,9 +2007,10 @@ watch(
     let cancelled = false
     onCleanup(() => { cancelled = true })
 
-    if (refsLoading || !p || !s || !r || !base || !head) {
+    if (refsLoading || !p || !s || !r || !base || !head || !baseSn || !headSn || baseSn === headSn) {
       comparison.value = null
       loading.value = false
+      error.value = ''
       return
     }
 
@@ -2112,87 +2035,12 @@ watch(
 )
 
 // ─── Snapshot helpers ─────────────────────────────────────────────────────────
-function snapshotOptionLabel(snapshot: Snapshot) {
-  const parts: string[] = []
-
-  // Status prefix for non-complete snapshots
-  if (snapshot.status === 'failed') parts.push('✗')
-  else if (snapshot.status === 'pending') parts.push('⏳')
-
-  // Commit SHA (always)
-  parts.push(snapshot.commit_sha.slice(0, 7))
-
-  // Tag if present
-  if (snapshot.tag) parts.push(`[${snapshot.tag}]`)
-
-  // Status label
-  parts.push(snapshotStatusLabel(snapshot))
-
-  // Date
-  parts.push(formatDateTime(snapshot.created_at))
-
-  // PR info
-  if (snapshot.pr_number) parts.push(`PR #${snapshot.pr_number}`)
-
-  // Run number
-  if (snapshot.run_number) parts.push(`#${snapshot.run_number}`)
-
-  return parts.join(' · ')
-}
-
-function snapshotPrimaryLabel(snapshot: Snapshot) {
-  return snapshot.tag || snapshot.commit_sha.slice(0, 7)
-}
-
-function snapshotStatusLabel(snapshot: Snapshot) {
-  if (snapshot.status === 'failed') return 'Build failed'
-  if (snapshot.status === 'pending') return 'Build running'
-  if (snapshot.status === 'processing') return 'Processing'
-  if (snapshot.status === 'active') return 'Build active'
-  return 'Build passed'
-}
-
-function snapshotBadgeClass(snapshot: Snapshot) {
-  if (snapshot.status === 'failed') return 'bg-danger/15 text-danger'
-  if (snapshot.status === 'pending' || snapshot.status === 'processing') return 'bg-amber-500/15 text-amber-300'
-  if (snapshot.tag) return 'bg-sky-500/15 text-sky-300'
-  return 'bg-emerald-500/15 text-emerald-300'
-}
-
-function snapshotDotClass(snapshot: Snapshot) {
-  if (snapshot.status === 'failed') return 'bg-danger'
-  if (snapshot.status === 'pending' || snapshot.status === 'processing') return 'bg-amber-400 animate-pulse'
-  return 'bg-emerald-400'
-}
-
-function snapshotStatusTextClass(snapshot: Snapshot) {
-  if (snapshot.status === 'failed') return 'text-danger'
-  if (snapshot.status === 'pending' || snapshot.status === 'processing') return 'text-amber-300'
-  return 'text-emerald-300'
-}
-
-function snapshotSecondaryLine(snapshot: Snapshot) {
-  const details = [`Commit ${snapshot.commit_sha.slice(0, 12)}`, formatDateTime(snapshot.created_at)]
-  // PLAN §2: what CI actually built — a PR build tests an ephemeral merge
-  // commit onto a base, not the head itself.
-  if (snapshot.merge_commit_sha) details.push(`tested as merge ${snapshot.merge_commit_sha.slice(0, 12)}`)
-  if (snapshot.base_commit_sha) details.push(`onto base ${snapshot.base_commit_sha.slice(0, 12)}`)
-  if (snapshot.tag) details.push(`Tag ${snapshot.tag}`)
-  if (snapshot.run_number) details.push(`Run #${snapshot.run_number}`)
-  else if (snapshot.run_id) details.push(`Run ${snapshot.run_id}`)
-  if (snapshot.pr_number) {
-    const suffix = snapshot.pr_target_branch ? ` -> ${snapshot.pr_target_branch}` : ''
-    details.push(`PR #${snapshot.pr_number}${suffix}`)
-  }
-  return details.join(' · ')
-}
-
 function resolveSelectedSnapshot(snapshots: Snapshot[], id: string) {
   if (id) {
     const found = snapshots.find((s) => s.id === id)
     if (found) return found
   }
-  return snapshots.find((s) => s.status === 'complete' || s.status === 'active') ?? snapshots[0] ?? null
+  return latestComparableSnapshot(snapshots) ?? null
 }
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
@@ -2247,10 +2095,6 @@ function vulnerabilityLocation(vuln: Vulnerability) {
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
-function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-}
-
 function formatRate(rate: number | null) {
   if (rate === null || rate === undefined) return 'n/a'
   return `${(rate * 100).toFixed(1)}%`
