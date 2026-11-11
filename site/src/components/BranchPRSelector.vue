@@ -3,8 +3,10 @@
     ref="rootRef"
     class="relative flex min-w-0 max-w-full flex-wrap items-center gap-3"
     :class="block ? 'w-full' : ''"
+    @keydown.esc="handleEscape"
   >
     <button
+      ref="triggerRef"
       class="inline-flex items-center transition"
       :class="[
         hero
@@ -13,7 +15,8 @@
         block && !hero ? 'min-w-0 flex-1 justify-between' : '',
       ]"
       type="button"
-      :title="hero ? `${selectedLabel} — change ${align === 'right' ? 'base' : 'head'}` : undefined"
+      :aria-expanded="isOpen"
+      :title="hero ? `${selectedLabel} — change ${align === 'right' ? 'head' : 'base'}` : undefined"
       @click.stop="isOpen = !isOpen"
     >
       <component
@@ -251,6 +254,7 @@ const emit = defineEmits<{
 }>()
 
 const rootRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
 const isOpen = ref(false)
 const search = ref('')
 const activeTab = ref<'all' | 'branch' | 'pull_request' | 'tag'>('all')
@@ -367,6 +371,14 @@ function handleDocumentClick(event: MouseEvent) {
 function selectRef(name: string) {
   isOpen.value = false
   emit('select', name)
+  triggerRef.value?.focus()
+}
+
+function handleEscape(event: KeyboardEvent) {
+  if (!isOpen.value) return
+  event.stopPropagation()
+  isOpen.value = false
+  triggerRef.value?.focus()
 }
 
 // Open the switcher, optionally jumping to a specific tab. Exposed so ref/PR

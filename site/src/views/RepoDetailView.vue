@@ -103,13 +103,17 @@
         />
         <div class="ml-auto flex flex-wrap items-center gap-2">
           <div
-            v-if="compareRefOptions.length > 0"
+            v-if="refs.length > 0"
             ref="compareMenuRef"
             class="relative"
           >
             <button
+              ref="compareTriggerRef"
               class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
               type="button"
+              aria-haspopup="dialog"
+              aria-controls="repository-compare-panel"
+              :aria-expanded="compareMenuOpen"
               @click.stop="toggleCompareMenu"
             >
               <GitCompareArrows class="h-3.5 w-3.5" />
@@ -117,12 +121,30 @@
             </button>
             <div
               v-if="compareMenuOpen"
-              class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface-overlay p-3 shadow-2xl"
+              id="repository-compare-panel"
+              ref="comparePanelRef"
+              role="dialog"
+              aria-label="Compare snapshots"
+              tabindex="-1"
+              class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[26rem] max-w-[calc(100vw-2rem)] rounded-xl border border-surface-border bg-surface-overlay p-4 shadow-2xl"
+              @keydown.esc.stop="closeCompareMenu"
             >
+              <div class="mb-4">
+                <h2 class="text-sm font-semibold text-gray-100">
+                  Compare snapshots
+                </h2>
+                <p class="mt-1 text-xs text-gray-400">
+                  Compare refs, or choose two commits on the same branch.
+                </p>
+              </div>
               <div class="space-y-3">
                 <div>
                   <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Base
+                    <span
+                      tabindex="0"
+                      class="cursor-help rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      :title="comparisonRoleDescriptions.base"
+                    >Base</span>
                   </p>
                   <BranchPRSelector
                     :refs="refs"
@@ -134,19 +156,27 @@
                     block
                     @select="selectCompareBase"
                   />
-                  <p
-                    v-if="selectedSnapshotId && sameComparableRef(compareBaseRefName, selectedRefName)"
-                    class="mt-1 text-[11px] text-gray-500"
-                  >
-                    Uses the snapshot currently selected on this page.
-                  </p>
+                  <div class="mt-2">
+                    <SnapshotSelector
+                      v-model="compareBaseSnapshotId"
+                      label="Base snapshot"
+                      :snapshots="compareBaseSnapshots"
+                      :loading="compareBaseSnapshotsLoading"
+                      :error="compareBaseSnapshotsError"
+                      @retry="retryCompareBaseSnapshots"
+                    />
+                  </div>
                 </div>
                 <div>
                   <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Target
+                    <span
+                      tabindex="0"
+                      class="cursor-help rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      :title="comparisonRoleDescriptions.head"
+                    >Head</span>
                   </p>
                   <BranchPRSelector
-                    :refs="compareTargetOptions"
+                    :refs="refs"
                     :selected-ref-name="compareTargetRefName"
                     :default-branch="repo.default_branch"
                     :repo-html-url="repo.html_url"
@@ -155,12 +185,29 @@
                     block
                     @select="selectCompareTarget"
                   />
+                  <div class="mt-2">
+                    <SnapshotSelector
+                      v-model="compareTargetSnapshotId"
+                      label="Head snapshot"
+                      :snapshots="compareTargetSnapshots"
+                      :loading="compareTargetSnapshotsLoading"
+                      :error="compareTargetSnapshotsError"
+                      @retry="retryCompareTargetSnapshots"
+                    />
+                  </div>
                 </div>
+                <p
+                  v-if="!compareSnapshotsLoading && !compareSnapshotsError && compareBaseSnapshotId && compareBaseSnapshotId === compareTargetSnapshotId"
+                  class="text-xs text-warning"
+                  role="status"
+                >
+                  Choose two different snapshots to see changes.
+                </p>
                 <div class="flex items-center justify-end gap-2 pt-1">
                   <button
                     class="rounded-md border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-400 transition hover:text-white"
                     type="button"
-                    @click="compareMenuOpen = false"
+                    @click="closeCompareMenu"
                   >
                     Cancel
                   </button>
@@ -179,7 +226,7 @@
           <RouterLink
             v-if="selectedPRNumber"
             class="inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface-overlay px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent/50 hover:text-white"
-            :to="{ name: 'repo-compare', params: route.params, query: { base: selectedRef?.merge_target_ref_name || repo?.default_branch || 'main', head: selectedRefName } }"
+            :to="{ name: 'repo-compare', params: route.params, query: { base: preferredComparisonBase(refs, repo.default_branch || 'main', selectedRefName), head: selectedRefName, ...(selectedSnapshotId ? { head_snapshot: selectedSnapshotId } : {}) } }"
           >
             <GitPullRequest class="h-3.5 w-3.5" />
             PR Review
@@ -254,13 +301,16 @@ import {
   ShieldAlert,
   Siren,
 } from 'lucide-vue-next'
-import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { api, type EnhancedRef, type RefSummary, type Repository, type Snapshot } from '@/api/client'
 import { incidentsApi } from '@/api/incidents'
 import BranchPRSelector from '@/components/BranchPRSelector.vue'
+import SnapshotSelector from '@/components/SnapshotSelector.vue'
+import { useSnapshotSelection } from '@/composables/useSnapshotSelection'
 import MalwareIcon from '@/components/finding/MalwareIcon.vue'
+import { comparisonRoleDescriptions, preferredComparisonBase, previousCommitSnapshot } from '@/lib/compareSnapshots'
 import { relativeTime } from '@/lib/datetime'
 import { visibleRepoTabCount } from '@/lib/repoTabs'
 import { useOrgStore } from '@/stores/org'
@@ -351,12 +401,36 @@ const selectedPRNumber = computed(() => {
   return extractPullRequestNumber(selectedRef.value.name)
 })
 const compareMenuRef = ref<HTMLElement | null>(null)
+const compareTriggerRef = ref<HTMLButtonElement | null>(null)
+const comparePanelRef = ref<HTMLElement | null>(null)
 const compareMenuOpen = ref(false)
 const moreMenuRef = ref<HTMLElement | null>(null)
 const moreMenuOpen = ref(false)
 const viewportWidth = ref(typeof window === 'undefined' ? 1100 : window.innerWidth)
 const compareBaseRefName = ref('')
 const compareTargetRefName = ref('')
+const compareBaseSnapshotId = ref('')
+const compareTargetSnapshotId = ref('')
+const {
+  snapshots: compareBaseSnapshots,
+  loading: compareBaseSnapshotsLoading,
+  error: compareBaseSnapshotsError,
+  retry: retryCompareBaseSnapshots,
+} = useSnapshotSelection(
+  () => [compareMenuOpen.value, compareBaseRefName.value, provider.value, orgSlug.value, repoSlug.value],
+  compareBaseSnapshotId,
+)
+const {
+  snapshots: compareTargetSnapshots,
+  loading: compareTargetSnapshotsLoading,
+  error: compareTargetSnapshotsError,
+  retry: retryCompareTargetSnapshots,
+} = useSnapshotSelection(
+  () => [compareMenuOpen.value, compareTargetRefName.value, provider.value, orgSlug.value, repoSlug.value],
+  compareTargetSnapshotId,
+)
+const compareSnapshotsLoading = computed(() => compareBaseSnapshotsLoading.value || compareTargetSnapshotsLoading.value)
+const compareSnapshotsError = computed(() => compareBaseSnapshotsError.value || compareTargetSnapshotsError.value)
 
 function canonicalComparableRefName(name: string) {
   const trimmed = name.trim()
@@ -378,27 +452,20 @@ function sameComparableRef(left: string, right: string) {
   return leftName === rightName || canonicalComparableRefName(leftName) === canonicalComparableRefName(rightName)
 }
 
-const compareRefOptions = computed(() => {
-  const current = selectedRefName.value
-  if (!current || current === 'No refs available') {
-    return []
-  }
-
-  return refs.value.filter((item) => !sameComparableRef(item.name, current))
-})
-
-const compareTargetOptions = computed(() => refs.value.filter((item) => !sameComparableRef(item.name, compareBaseRefName.value)))
-
 const canRunCompare = computed(() => {
   return compareBaseRefName.value.length > 0
     && compareTargetRefName.value.length > 0
-    && !sameComparableRef(compareBaseRefName.value, compareTargetRefName.value)
+    && !!compareBaseSnapshotId.value
+    && !!compareTargetSnapshotId.value
+    && compareBaseSnapshotId.value !== compareTargetSnapshotId.value
+    && !compareSnapshotsLoading.value
+    && !compareSnapshotsError.value
 })
 
 function preferredCompareTarget(source: string) {
   const candidates = refs.value.filter((item) => !sameComparableRef(item.name, source))
   if (candidates.length === 0) {
-    return ''
+    return source
   }
 
   const defaultBranch = repo.value?.default_branch || ''
@@ -415,28 +482,57 @@ function preferredCompareTarget(source: string) {
 
 function syncCompareSelection() {
   const current = selectedRefName.value
+  if (selectedRef.value?.ref_type === 'pull_request') {
+    compareBaseRefName.value = preferredComparisonBase(refs.value, repo.value?.default_branch || 'main', current)
+    compareBaseSnapshotId.value = ''
+    compareTargetRefName.value = current
+    compareTargetSnapshotId.value = selectedSnapshotId.value
+    return
+  }
   compareBaseRefName.value = current === 'No refs available' ? '' : current
-  if (!compareTargetOptions.value.some((item) => item.name === compareTargetRefName.value)) {
+  compareBaseSnapshotId.value = selectedSnapshotId.value
+  compareTargetSnapshotId.value = ''
+  if (!refs.value.some((item) => item.name === compareTargetRefName.value)) {
     compareTargetRefName.value = preferredCompareTarget(compareBaseRefName.value)
   }
 }
 
 function selectCompareBase(name: string) {
+  if (compareBaseRefName.value === name) return
   compareBaseRefName.value = name
-  if (sameComparableRef(compareBaseRefName.value, compareTargetRefName.value) || !compareTargetOptions.value.some((item) => item.name === compareTargetRefName.value)) {
-    compareTargetRefName.value = preferredCompareTarget(compareBaseRefName.value)
-  }
+  compareBaseSnapshotId.value = ''
 }
 
 function selectCompareTarget(name: string) {
+  if (compareTargetRefName.value === name) return
   compareTargetRefName.value = name
+  compareTargetSnapshotId.value = ''
 }
 
-function toggleCompareMenu() {
+watch(
+  () => [compareBaseSnapshots.value, compareTargetSnapshots.value, compareSnapshotsLoading.value] as const,
+  () => {
+    if (!compareMenuOpen.value || compareSnapshotsLoading.value || compareSnapshotsError.value) return
+    if (sameComparableRef(compareBaseRefName.value, compareTargetRefName.value) && compareBaseSnapshotId.value === compareTargetSnapshotId.value) {
+      compareBaseSnapshotId.value = previousCommitSnapshot(compareBaseSnapshots.value, compareTargetSnapshotId.value)?.id || compareBaseSnapshotId.value
+    }
+  },
+)
+
+function closeCompareMenu() {
+  compareMenuOpen.value = false
+  compareTriggerRef.value?.focus()
+}
+
+async function toggleCompareMenu() {
   if (!compareMenuOpen.value) {
     syncCompareSelection()
   }
   compareMenuOpen.value = !compareMenuOpen.value
+  if (compareMenuOpen.value) {
+    await nextTick()
+    comparePanelRef.value?.focus()
+  }
 }
 
 function runCompare() {
@@ -447,15 +543,8 @@ function runCompare() {
   const query: Record<string, string> = {
     base: compareBaseRefName.value,
     head: compareTargetRefName.value,
-  }
-
-  if (selectedSnapshotId.value) {
-    if (sameComparableRef(compareBaseRefName.value, selectedRefName.value)) {
-      query.base_snapshot = selectedSnapshotId.value
-    }
-    if (sameComparableRef(compareTargetRefName.value, selectedRefName.value)) {
-      query.head_snapshot = selectedSnapshotId.value
-    }
+    base_snapshot: compareBaseSnapshotId.value,
+    head_snapshot: compareTargetSnapshotId.value,
   }
 
   compareMenuOpen.value = false
@@ -464,7 +553,8 @@ function runCompare() {
 
 function handleCompareMenuDocumentClick(event: MouseEvent) {
   const target = event.target as Node | null
-  if (target && compareMenuRef.value && !compareMenuRef.value.contains(target)) {
+  // Ref selection removes its dropdown before this event reaches document.
+  if (compareMenuRef.value && !event.composedPath().includes(compareMenuRef.value)) {
     compareMenuOpen.value = false
   }
   if (target && moreMenuRef.value && !moreMenuRef.value.contains(target)) {

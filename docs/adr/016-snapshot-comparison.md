@@ -37,6 +37,50 @@ gains two optional objects:
 Both are `null` when neither snapshot has the relevant data, so the UI can hide empty
 sections.
 
+### Selecting refs and commits
+The repository's **Compare with** panel keeps the base and target selections open
+while users choose refs and snapshots. Each side has an explicit snapshot selector,
+showing the commit SHA, date, status, and CI run number when available. Selecting a
+ref closes only that ref picker, not the surrounding comparison panel.
+Each side loads and retries independently: changing the target does not reload,
+hide, or disable the base snapshot selector, and vice versa.
+The panel and comparison page share the same styled picker, with status indicators,
+selected-run checkmarks, and keyboard navigation. Commit, status, date, and CI-run
+details appear together rather than being repeated beneath the control.
+The trigger and snapshot rows use a compact single line: commit, build status,
+then date/time and CI run. Long details truncate rather than expanding the header,
+with the complete value available on hover.
+
+On the comparison page, a compact **Use latest** action in the picker header clears
+a pinned snapshot ID and restores the default latest-successful selection. It is
+hidden whenever the latest snapshot is already selected, whether pinned or default.
+A **Latest** badge distinguishes the default from a fixed historical run. This
+replaces the ambiguous standalone **Snapshot** reset button; choosing a listed run
+pins it in the URL. The effective selection is checked in the list in both modes.
+The comparison page places **Base** on the left and **Head** on
+the right, with labels above their respective branch names, sharing
+the existing Compare heading row so no branch-name width or extra row is needed.
+Hovering or keyboard-focusing **Base** explains that it is the reference snapshot
+(usually the target branch for a PR); **Head** explains that results describe
+changes from Base to the snapshot being evaluated. The popup uses the same
+wording and order. Selecting the current run again is a no-op. If both sides
+resolve to the same snapshot, the page asks for different runs instead of issuing
+a comparison request or showing misleading zero-change results.
+For pull requests, **Base** is the PR target-branch baseline and **Head** is
+the PR analysis (which may have tested an ephemeral merge commit). These labels
+describe comparison direction, not scan timestamp order or a completed merge.
+PR entry points use `merge_target_ref_name`, falling back to the repository default
+only when target metadata is unavailable. Opening from a selected PR snapshot keeps
+that snapshot on the Head side. An explicitly supplied baseline is not overwritten.
+
+Base and target may use the same branch, including repositories with only one ref.
+When both sides initially resolve to the same snapshot, the base defaults to the
+previous successful snapshot of a distinct commit, with the target kept at the
+current snapshot. Reruns of the same commit are skipped for this default, but remain
+manually selectable. If no earlier commit is available, users must choose two
+different snapshots before opening the comparison. The navigation URL pins both
+snapshot IDs so the comparison remains reproducible.
+
 ### Pure diff logic in `internal/comparison`
 Diff computation lives in a new `internal/comparison` package as pure functions
 (`BuildCoverageDiff`, `BuildTestDiff`) operating on plain inputs, with no database access.
