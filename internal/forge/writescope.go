@@ -7,7 +7,7 @@ import (
 )
 
 // WriteBranchPrefix is the only branch namespace Hibou writes to (ADR-052
-// §1): onboarding uses hibou/configure, remediation hibou/fix/... A write to
+// §1): onboarding uses hibou/configure, remediation hibou/fix-... A write to
 // any other branch is refused before the forge is called, so a bug or a
 // confused-deputy path cannot touch a default, release or feature branch,
 // and the forge's rulesets can confine the App to this one prefix.

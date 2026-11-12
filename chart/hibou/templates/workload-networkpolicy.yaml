@@ -1,0 +1,134 @@
+{{- if .Values.workload.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.workloadServiceAccount" . }}-deny
+  namespace: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.workloadServiceAccount" . }}-broker
+  namespace: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      workload.hibou.dev/class: remediation
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- include "hibou.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: workload-controller
+      ports:
+        - protocol: TCP
+          port: 8443
+    {{- if .Values.workload.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.workload.dns.namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.workload.dns.podSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.workloadController" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: workload-controller
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "hibou.workloadNamespace" . | quote }}
+          podSelector:
+            matchLabels:
+              workload.hibou.dev/class: remediation
+      ports:
+        - protocol: TCP
+          port: 8443
+{{- /* Controller egress is operator-managed: DB, forge, mirror and Kubernetes
+       access are deployment-specific. This policy does not claim to restrict it. */}}
+{{- if or (and .Values.postgresql.enabled .Values.postgresql.networkPolicy.enabled) (and .Values.cnpg.cluster.enabled .Values.cnpg.cluster.networkPolicy.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.workloadController" . }}-database
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- if .Values.cnpg.cluster.enabled }}
+      cnpg.io/cluster: {{ include "hibou.fullname" . }}-pg
+      {{- else }}
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+      {{- end }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "hibou.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: workload-controller
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}
+{{- if .Values.seaweedfs.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hibou.workloadController" . }}-artifacts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: seaweedfs
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "hibou.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: workload-controller
+      ports:
+        - protocol: TCP
+          port: s3
+{{- end }}
+{{- end }}

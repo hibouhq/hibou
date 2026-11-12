@@ -1,16 +1,15 @@
 package lsp
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/hibouhq/hibou/internal/gitexec"
 )
 
 // maxShowBytes bounds `git show <sha>:<file>`. Larger files get identity line
@@ -25,20 +24,11 @@ type git struct {
 }
 
 func (g git) run(ctx context.Context, args ...string) ([]byte, error) {
-	full := append([]string{"--no-optional-locks", "-C", g.root}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...) // #nosec G204 -- fixed git subcommands; arguments are commit SHAs and repo-relative paths, passed as argv, never through a shell.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return stdout.Bytes(), fmt.Errorf("git %s: exit %d: %s", args[0], exitErr.ExitCode(), strings.TrimSpace(stderr.String()))
-		}
-		return nil, fmt.Errorf("git %s: %w", args[0], err)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
 	}
-	return stdout.Bytes(), nil
+	return gitexec.Run(ctx, gitexec.Config{Dir: g.root, Home: home, LocalOnly: true, UserConfig: true}, nil, args...)
 }
 
 func (g git) output(ctx context.Context, args ...string) (string, error) {

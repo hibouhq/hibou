@@ -1,0 +1,54 @@
+{{- if .Values.workload.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "hibou.workloadController" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "hibou.workloadServiceAccount" . }}
+  namespace: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+{{- with .Values.workload.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "hibou.workloadController" . }}
+  namespace: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "hibou.workloadController" . }}
+  namespace: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hibou.workloadController" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "hibou.workloadController" . }}
+{{- end }}

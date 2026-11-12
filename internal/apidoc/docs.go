@@ -7943,6 +7943,1267 @@ const docTemplate = `{
                 }
             }
         },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/capabilities": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Reports opt-in Kubernetes execution readiness for the exact configured image/toolchain/mirror profile and caller permissions. Historical runtime-controller heartbeats cannot enable it. No dependency tools run in the API process.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Get managed remediation capabilities",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedRemediationCapabilitiesResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/consent": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Organization-wide admin authorization and admin:write are required; a token restricted to one repository cannot grant organization consent. This consent alone does not grant caller/App write permissions or bypass operator maintenance allowlists.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Set organization managed remediation consent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository authorization context",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Explicit consent state",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ManagedRemediationConsent"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedRemediationConsent"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/maintenance-settings": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns organization-owned tag patterns/target templates, current configuration authority, branch/PR consent and creation availability/reason. Requires repository visibility and vulnerabilities:read or admin:read. These mappings are distinct from dependency branch-inventory policy.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Get maintenance-target mapping settings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository authorization context",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedMaintenanceSettingsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires organization-wide admin authorization and admin:write; repository-scoped admin tokens are insufficient. Saves at most 50 explicit tag globs and safe target templates using major/minor/patch/tag placeholders. allow_creation requires separate organization branch/PR consent, an operator allowlist and caller/App permissions; saving settings never creates a branch. Response contains settings, can_configure and branch_pr_consent.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Configure explicit release-line maintenance mappings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository authorization context",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Organization maintenance policy, separate from dependencies.branches",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.managedMaintenanceSettings"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedMaintenanceSettingsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/maintenance-targets": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Matches explicit organization tag patterns against the exact release snapshot/tag binding. Suggestions include live tag confirmation, existing branch head and tag-to-target ancestry evidence, with creation availability/reasons. Does not guess writes or create branches. Arbitrary manual existing-branch selection remains available.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Suggest mapped maintenance targets for a shipped release",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Release UUID with an exact shipped snapshot",
+                        "name": "release_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedMaintenanceSuggestionsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires admin authorization, vulnerabilities:write, both organization consents, GitHub App propose/contents-write permission, and an operator creation allowlist (empty disables creation). Confirms the current mapping, release/snapshot/source tag/full SHA and live immutable repository/tag. Creates only a missing ref at the exact confirmed SHA; never updates, deletes, force-pushes or repoints an existing branch. Audited retries reconcile only the same source SHA with a prior durable intent. Does not generate a patch or publish a PR.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Create a mapped maintenance target at a confirmed release SHA",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Confirmed mapped target and exact shipped source",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ManagedMaintenanceCreateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/forge.MaintenanceCreated"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/prepare": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires an enabled matching Kubernetes controller, repository write authorization and vulnerabilities:write. Returns 503 without enqueue when execution is unavailable. Pins the workload profile and target branch or exact shipped snapshot. maintenance_target=true requires an explicit existing branch. Optional expected_head_sha must be a full 40- or 64-character hexadecimal branch-source SHA; it is not supported for exact shipped-release sources. No local patch/artifact upload is supported.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Prepare a managed dependency remediation draft",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Immutable source and optional advisory selection",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ManagedRemediationPrepareRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedRemediationJobResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Poll for preparation/generation phases, normalized modules, unavailable reasons and verified artifact summaries. Only state=ready permits download/publication; artifact presence alone is insufficient. Patch bytes, complete publication files, storage keys and leases are not exposed. Expired drafts return 410.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Get a managed remediation draft",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Managed draft UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedRemediationJobResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires write authorization and vulnerabilities:write. Revokes the job lease, fences active workloads and schedules private cleanup. The Kubernetes controller reconciles cleanup/expiry. Serialized publication finishes before cancellation takes effect; previously published branches/PRs are not deleted. No request body is required.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Cancel a managed remediation draft",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Managed draft UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedRemediationCancelResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/generate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Requires an enabled matching Kubernetes controller, write authorization and vulnerabilities:write. Returns 503 without enqueue when execution is unavailable. Select server-discovered unit IDs, patch/minor/major ceilings and optional exact/cached-Gossip targets. Paths, hashes, source identity and profile remain server-owned; changed profiles require new preparation. Verification/relock failure never produces a ready artifact.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Generate and verify selected remediation units",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Prepared managed draft UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Current revision and selected normalized units",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ManagedRemediationGenerateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.ManagedRemediationJobResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/patch": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns raw UTF-8 unified diff bytes as an attachment, not a JSON/base64 envelope. Requires current repository read authorization and vulnerabilities:read, ready state, unexpired storage and complete verification/digest checks. Errors use the standard JSON error envelope.",
+                "produces": [
+                    "text/x-diff",
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Download a verified dependency patch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Ready managed draft UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Raw verified UTF-8 unified dependency patch",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "headers": {
+                            "Cache-Control": {
+                                "type": "string",
+                                "description": "private, no-store"
+                            },
+                            "Content-Disposition": {
+                                "type": "string",
+                                "description": "attachment; filename=hibou-remediation.patch"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/publish": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Publishes only a ready, verified managed artifact at the reviewed revision; local-artifact upload is unsupported. Requires current admin authorization, vulnerabilities:write, organization consent, GitHub App propose tier and installation contents/PR write permissions. Rechecks immutable repository identity and pinned target head. Uses a complete Git tree/commit and deterministic hibou/ ref without force updates, then creates/reuses a PR with durable auditing. No merge, tag or release is performed.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "remediation"
+                ],
+                "summary": "Publish a managed remediation pull request",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Ready managed draft UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reviewed current draft revision",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ManagedRemediationRevisionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/forge.PullRequest"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/orgs/{provider}/{slug}/repos/{repoSlug}/scan-coverage": {
             "get": {
                 "security": [
@@ -11176,6 +12437,30 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "advisorydb.Range": {
+            "type": "object",
+            "properties": {
+                "ecosystem": {
+                    "type": "string"
+                },
+                "fixed": {
+                    "type": "string"
+                },
+                "introduced": {
+                    "type": "string"
+                },
+                "last_affected": {
+                    "type": "string"
+                },
+                "package": {
+                    "type": "string"
+                },
+                "release": {
+                    "description": "Release scopes a distribution range (ADR-038); empty for language\necosystems.",
+                    "type": "string"
+                }
+            }
+        },
         "api.Error": {
             "type": "object",
             "properties": {
@@ -12089,6 +13374,69 @@ const docTemplate = `{
                 "ConfinementError"
             ]
         },
+        "forge.MaintenanceCreated": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "boolean"
+                },
+                "reconciled": {
+                    "type": "boolean"
+                },
+                "source_sha": {
+                    "type": "string"
+                },
+                "source_tag": {
+                    "type": "string"
+                },
+                "target_branch": {
+                    "type": "string"
+                }
+            }
+        },
+        "forge.MaintenanceEvidence": {
+            "type": "object",
+            "properties": {
+                "exists": {
+                    "type": "boolean"
+                },
+                "head_sha": {
+                    "type": "string"
+                },
+                "source_ancestor": {
+                    "type": "boolean"
+                },
+                "source_sha": {
+                    "type": "string"
+                },
+                "source_tag": {
+                    "type": "string"
+                },
+                "tag_confirmed": {
+                    "type": "boolean"
+                },
+                "tag_sha": {
+                    "type": "string"
+                },
+                "target_branch": {
+                    "type": "string"
+                }
+            }
+        },
+        "forge.PullRequest": {
+            "type": "object",
+            "properties": {
+                "html_url": {
+                    "type": "string"
+                },
+                "number": {
+                    "type": "integer"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
         "incident.Regime": {
             "type": "object",
             "properties": {
@@ -12151,6 +13499,180 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "remediation.Change": {
+            "type": "object",
+            "properties": {
+                "after_sha256": {
+                    "type": "string"
+                },
+                "before_sha256": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "remediation.DirectPackage": {
+            "type": "object",
+            "properties": {
+                "can_select_version": {
+                    "type": "boolean"
+                },
+                "declared": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "recommendation_fetched_at": {
+                    "type": "string"
+                },
+                "recommended_version": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "remediation.ManagedModule": {
+            "type": "object",
+            "properties": {
+                "manifest": {
+                    "type": "string"
+                },
+                "unavailable": {
+                    "type": "string"
+                },
+                "unit": {
+                    "$ref": "#/definitions/remediation.Unit"
+                }
+            }
+        },
+        "remediation.Unit": {
+            "type": "object",
+            "properties": {
+                "direct_packages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.DirectPackage"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "input_sha256": {
+                    "description": "InputSHA256 binds discovery to the committed file set, including files\nwhose absence influences manager detection.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "lockfile": {
+                    "type": "string"
+                },
+                "manager": {
+                    "type": "string"
+                },
+                "manifest": {
+                    "type": "string"
+                },
+                "required_files": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "upgrade_level": {
+                    "type": "string"
+                },
+                "version_targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.VersionTarget"
+                    }
+                },
+                "vulns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "writable_files": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "remediation.UnitResult": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "requested_targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.VersionTarget"
+                    }
+                },
+                "updates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.Update"
+                    }
+                }
+            }
+        },
+        "remediation.Update": {
+            "type": "object",
+            "properties": {
+                "from": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "remediation.Verification": {
+            "type": "object",
+            "properties": {
+                "dependency_files_consistent": {
+                    "description": "All three are mandatory. Build/test execution is deliberately separate.",
+                    "type": "boolean"
+                },
+                "no_introduced_vulns": {
+                    "type": "boolean"
+                },
+                "selected_vulns_addressed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "remediation.VersionTarget": {
+            "type": "object",
+            "properties": {
+                "allow_prerelease": {
+                    "type": "boolean"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "version": {
                     "type": "string"
                 }
             }
@@ -12607,6 +14129,279 @@ const docTemplate = `{
                 }
             }
         },
+        "server.ManagedMaintenanceCreateRequest": {
+            "type": "object",
+            "properties": {
+                "mapping_id": {
+                    "type": "string"
+                },
+                "release_id": {
+                    "type": "string"
+                },
+                "source_sha": {
+                    "type": "string"
+                },
+                "source_tag": {
+                    "type": "string"
+                },
+                "target_branch": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.ManagedMaintenanceSettingsResponse": {
+            "type": "object",
+            "properties": {
+                "branch_pr_consent": {
+                    "type": "boolean"
+                },
+                "can_configure": {
+                    "type": "boolean"
+                },
+                "creation_available": {
+                    "type": "boolean"
+                },
+                "creation_reason": {
+                    "type": "string"
+                },
+                "settings": {
+                    "$ref": "#/definitions/server.managedMaintenanceSettings"
+                }
+            }
+        },
+        "server.ManagedMaintenanceSuggestionsResponse": {
+            "type": "object",
+            "properties": {
+                "creation_reason": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/server.managedReleaseSource"
+                },
+                "suggestions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.managedMaintenanceSuggestion"
+                    }
+                }
+            }
+        },
+        "server.ManagedRemediationArtifactResponse": {
+            "type": "object",
+            "properties": {
+                "base_sha": {
+                    "type": "string"
+                },
+                "changes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.Change"
+                    }
+                },
+                "patch": {
+                    "description": "Patch is always null in a job response. Download the raw UTF-8 unified\ndiff from GET /remediation/{jobID}/patch; it is not a JSON envelope.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "units": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.UnitResult"
+                    }
+                },
+                "verification": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.Verification"
+                    }
+                }
+            }
+        },
+        "server.ManagedRemediationCancelResponse": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "cancelled"
+                    ]
+                }
+            }
+        },
+        "server.ManagedRemediationCapabilitiesResponse": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "can_consent": {
+                    "type": "boolean"
+                },
+                "can_generate": {
+                    "type": "boolean"
+                },
+                "generation_reason": {
+                    "type": "string"
+                },
+                "limits": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "maintenance_creation_available": {
+                    "type": "boolean"
+                },
+                "maintenance_creation_reason": {
+                    "type": "string"
+                },
+                "profile": {
+                    "type": "string"
+                },
+                "publication_available": {
+                    "type": "boolean"
+                },
+                "publication_reason": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "target_suggestions_reason": {
+                    "type": "string"
+                },
+                "target_suggestions_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.ManagedRemediationConsent": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.ManagedRemediationGenerateRequest": {
+            "type": "object",
+            "properties": {
+                "revision": {
+                    "type": "integer"
+                },
+                "units": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.managedSelection"
+                    }
+                }
+            }
+        },
+        "server.ManagedRemediationJobResponse": {
+            "type": "object",
+            "properties": {
+                "base_sha": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "repo_id": {
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/definitions/server.ManagedRemediationResultResponse"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "source_ref": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "queued_prepare",
+                        "preparing",
+                        "awaiting_selection",
+                        "queued_generate",
+                        "generating",
+                        "ready",
+                        "failed",
+                        "cancelled",
+                        "expired"
+                    ]
+                },
+                "target_branch": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.ManagedRemediationPrepareRequest": {
+            "type": "object",
+            "properties": {
+                "expected_head_sha": {
+                    "description": "ExpectedHeadSHA is optional for branch-source drafts, must be a full\n40- or 64-character hexadecimal SHA, and returns 409 on a stale head.\nIt is rejected for exact shipped-release sources.",
+                    "type": "string"
+                },
+                "maintenance_target": {
+                    "description": "MaintenanceTarget requires an explicit existing TargetBranch when true.",
+                    "type": "boolean"
+                },
+                "release_id": {
+                    "type": "string"
+                },
+                "target_branch": {
+                    "type": "string"
+                },
+                "vulns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "server.ManagedRemediationResultResponse": {
+            "type": "object",
+            "properties": {
+                "artifact": {
+                    "$ref": "#/definitions/server.ManagedRemediationArtifactResponse"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "modules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.ManagedModule"
+                    }
+                },
+                "unavailable": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.ManagedRemediationRevisionRequest": {
+            "type": "object",
+            "properties": {
+                "revision": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.addReleaseClientRequest": {
             "type": "object",
             "properties": {
@@ -12624,6 +14419,10 @@ const docTemplate = `{
         "server.advisoryMatchRequest": {
             "type": "object",
             "properties": {
+                "include_ranges": {
+                    "description": "Remediation needs the complete affected intervals, not a guessed target\nbased on the first fixed boundary.",
+                    "type": "boolean"
+                },
                 "purls": {
                     "type": "array",
                     "items": {
@@ -14889,9 +16688,97 @@ const docTemplate = `{
                 }
             }
         },
+        "server.managedMaintenanceMapping": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "tag_pattern": {
+                    "type": "string"
+                },
+                "target_template": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.managedMaintenanceSettings": {
+            "type": "object",
+            "properties": {
+                "allow_creation": {
+                    "type": "boolean"
+                },
+                "mappings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.managedMaintenanceMapping"
+                    }
+                }
+            }
+        },
+        "server.managedMaintenanceSuggestion": {
+            "type": "object",
+            "properties": {
+                "can_create": {
+                    "type": "boolean"
+                },
+                "evidence": {
+                    "$ref": "#/definitions/forge.MaintenanceEvidence"
+                },
+                "mapping": {
+                    "$ref": "#/definitions/server.managedMaintenanceMapping"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "target_branch": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.managedReleaseSource": {
+            "type": "object",
+            "properties": {
+                "release_id": {
+                    "type": "string"
+                },
+                "release_version": {
+                    "type": "string"
+                },
+                "sha": {
+                    "type": "string"
+                },
+                "tag": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.managedSelection": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "upgrade_level": {
+                    "type": "string"
+                },
+                "version_targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/remediation.VersionTarget"
+                    }
+                }
+            }
+        },
         "server.matchedAdvisoryResponse": {
             "type": "object",
             "properties": {
+                "affected_ranges": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/advisorydb.Range"
+                    }
+                },
                 "canonical_id": {
                     "type": "string"
                 },
@@ -15587,6 +17474,9 @@ const docTemplate = `{
                 "decision": {
                     "description": "Decision is the package policy's verdict (allow, hold, deny) with\nits reason, when the policy evaluator is configured.",
                     "type": "string"
+                },
+                "private_namespace": {
+                    "type": "boolean"
                 },
                 "purl": {
                     "type": "string"

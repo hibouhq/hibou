@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+
+# Supply an approved, digest-pinned internal image containing Git, Node and npm.
+# This recipe never downloads or bootstraps executable tools.
+ARG TOOLCHAIN_IMAGE
+FROM ${TOOLCHAIN_IMAGE}
+ARG TARGETARCH
+COPY --chmod=0555 dist/hibou-linux-${TARGETARCH} /usr/local/bin/hibou
+USER 65532:65532
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/hibou", "workload-execute"]

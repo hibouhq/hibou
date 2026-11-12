@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/hibouhq/hibou/internal/gitexec"
 )
 
 // Subprocesses (git, gitleaks, trufflehog, betterleaks) parse attacker-
@@ -20,37 +22,11 @@ import (
 
 // passthroughEnv lists the only inherited variables: what the tools need to
 // find binaries, reach the network and trust a custom CA.
-var passthroughEnv = []string{
-	"PATH",
-	"TMPDIR",
-	"SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO",
-	"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
-	"https_proxy", "http_proxy", "no_proxy",
-}
-
 // scannerEnv builds the environment for a scanner subprocess. home must be a
 // directory Hibou created (never the cloned repository). extra entries are
 // appended as-is ("KEY=value").
 func scannerEnv(home string, extra ...string) []string {
-	env := make([]string, 0, len(passthroughEnv)+8+len(extra))
-	for _, key := range passthroughEnv {
-		if value, ok := os.LookupEnv(key); ok {
-			env = append(env, key+"="+value)
-		}
-	}
-	if _, ok := os.LookupEnv("PATH"); !ok {
-		env = append(env, "PATH=/usr/local/bin:/usr/bin:/bin")
-	}
-	env = append(env,
-		"HOME="+home,
-		"LANG=C",
-		// Never prompt for credentials, and never read the host's git config:
-		// only what Hibou sets below or on the command line applies.
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL="+os.DevNull,
-	)
-	return append(env, extra...)
+	return gitexec.Environment(home, false, extra...)
 }
 
 // gitAuthEnv returns the GIT_CONFIG_* entries that send the forge token as an

@@ -23,7 +23,9 @@ Remaining-work classification (verified 2026-11-09):
   Forge access page and App manifest flow (rollout step 5).
 - **Deferred/dependent:** release branch patterns and remediation-write audit
   depend on ADR-050; patch mode and `hibou fix apply` are rollout step 6.
-  Existing onboarding-write audit is implemented.
+  ADR-050's 2026-11-11 revision proposes the shared batch-patch API for
+  releases and IDE/CLI branches, independently of Propose-tier publication.
+  Existing onboarding-write audit is implemented; patch mode is not.
 - **Optional/deferred:** the external key signer (rollout step 7), not a
   missing requirement of the implemented in-process signer.
 - **Rejected alternatives, not backlog:** granting Hibou Administration
@@ -31,8 +33,8 @@ Remaining-work classification (verified 2026-11-09):
   with one broad token. See Alternatives considered.
 
 Related: [ADR-018](018-forge-native-quality-gate-checks.md) (check runs),
-[ADR-050](050-guided-remediation-pull-requests.md) (remediation pull
-requests), the onboarding pull request (`internal/repoconfig/onboarding.go`),
+[ADR-050](050-guided-remediation-pull-requests.md) (batch-fix patches and
+optional remediation pull requests), the onboarding pull request (`internal/repoconfig/onboarding.go`),
 [ADR-010](010-secret-scanning.md) (clones for secret scanning),
 [ADR-045](045-built-in-dependency-inventory.md) (clones for extraction), and
 `docs/THREAT-MODEL.md` (I-5, E-1).
@@ -128,7 +130,7 @@ Notes on the options:
 - **Branch namespace (M4).** `CreateBranch`, `CreateOrUpdateFile` and any
   future write refuse branches outside `hibou/**`, before calling the forge.
   The prefix is a constant shared by onboarding and remediation (ADR-050
-  uses `hibou/fix/...`).
+  uses `hibou/fix-{target-slug}-{digest}`, with one slash).
 - **Release branches are the one exception** (ADR-050 §5 creates a
   maintenance branch from a release tag). By default Hibou does not create
   them itself: it shows the release manager the exact `git` or `hibou`
@@ -138,6 +140,12 @@ Notes on the options:
   must then let the App create, but not update or delete, those branches.
   Only creation from a release tag's commit is allowed, never a push of new
   commits.
+  ADR-050 distinguishes the maintenance PR target (configurable naming) from
+  the proposal branch matching `hibou/fix-*`. Its target suggestions and
+  repository naming templates do not authorize this exception: maintenance
+  target creation requires explicit user confirmation and the operator
+  allowlist. Authorized users may request proposal-branch/PR creation from
+  either the website or IDE; no repository CI workflow is required.
 - **Write features need both capability and consent.** A Propose feature
   runs only when the App's installation actually holds `contents: write`
   (read from the installation at startup and on the installation webhook)
@@ -259,10 +267,16 @@ organization keeps **Pull requests: Patch only**. The button reads **Get the
 fix** instead of **Open pull request** and shows:
 
 ```bash
-hibou fix apply 7f3c… --push     # creates hibou/fix/…, commits, pushes with your git credentials
+hibou fix apply 7f3c… --push     # creates hibou/fix-…, commits, pushes with your git credentials
 ```
 
 and the same change as a plain `git apply` patch for those who prefer it.
+For dependency remediation, ADR-050 specifies the shared SCALIBR-backed
+prepare/choose/generate API, immutable base commit, automatic/Gossip/exact
+version choices, preview, authorized patch download and shared CLI/LSP
+application checks. Generation/download never requires Propose;
+publication is a separate authorized action. This remains proposed, not
+implemented behavior.
 
 #### 3.5 Rotate the private key: 2 steps
 
@@ -387,7 +401,9 @@ and I-5 (key leakage) references M8 for key custody.
 3. Per-operation tokens (M3), with a test that fails on undeclared needs.
 4. The confinement check (§1): log, metric, instance-admin endpoint.
 5. Capability detection, the manifest flow and the Forge access page (§1, §3.1, §5, §6).
-6. Patch mode (M7) and `hibou fix apply` for onboarding first, then ADR-050.
+6. Patch mode (M7) and `hibou fix apply`: shared artifact/apply contract,
+   onboarding patches and ADR-050 dependency batches. Dependency-patch
+   generation does not wait for forge-write capability/consent UI.
 7. Optional: external signer (M8).
 
 ## Consequences

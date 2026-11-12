@@ -129,6 +129,11 @@ const router = createRouter({
               component: () => import('@/views/repo/ReleasesTab.vue'),
             },
             {
+              path: 'remediation',
+              name: 'repo-remediation',
+              component: () => import('@/views/repo/RemediationView.vue'),
+            },
+            {
               // The organization's incident list narrowed to this repository (ADR-053).
               path: 'incidents',
               name: 'repo-incidents',

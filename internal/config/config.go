@@ -776,6 +776,9 @@ func (c Config) IsDevelopment() bool {
 const MinSessionSecretBytes = 32
 
 func (c Config) ValidateStartup(log zerolog.Logger) error {
+	if _, err := ManagedExecutionFromEnv(); err != nil {
+		return err
+	}
 	if err := c.validateSessionSecret(log); err != nil {
 		return err
 	}

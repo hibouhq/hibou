@@ -32,6 +32,9 @@ var hibouRequests = []string{
 	"hibou/login/start", "hibou/login/wait", "hibou/login/cancel", "hibou/logout", "hibou/setToken",
 	"hibou/suppressionEdit", "hibou/triage", "hibou/coverage", "hibou/secretCheck",
 	"hibou/presets", "hibou/cweSets", "hibou/cweSearch",
+	"hibou/remediationApply",
+	"hibou/remediationPrepare", "hibou/remediationGenerate", "hibou/remediationRevise",
+	"hibou/remediationManagedGenerate", "hibou/remediationManagedPublish",
 }
 
 // Commands the server executes itself (advertised in executeCommandProvider).
@@ -107,7 +110,12 @@ type Server struct {
 	docs        map[string]*document  // by URI
 	cancelLoops context.CancelFunc
 
-	login *pendingLogin
+	login                     *pendingLogin
+	remediationMu             sync.Mutex
+	remediationDrafts         map[string]*localRemediationDraft
+	remediationToolInspector  localToolInspector
+	remediationBackendFactory localBackendFactory
+	managedArtifacts          map[string]*managedRemediationReady
 }
 
 type document struct {
@@ -282,6 +290,42 @@ func (s *Server) handle(ctx, sessionCtx context.Context, stop context.CancelFunc
 		}
 		_ = decode(params, &p)
 		return s.secretCheck(ctx, p.Root)
+	case "hibou/remediationApply":
+		var p remediationApplyParams
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		return s.remediationApply(ctx, p)
+	case "hibou/remediationPrepare":
+		var p remediationPrepareParams
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		return s.remediationPrepare(ctx, p)
+	case "hibou/remediationGenerate":
+		var p remediationGenerateParams
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		return s.remediationGenerate(ctx, p)
+	case "hibou/remediationRevise":
+		var p remediationGenerateParams
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		return s.remediationRevise(ctx, p)
+	case "hibou/remediationManagedGenerate":
+		var p managedRemediationParams
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		return s.remediationManagedGenerate(ctx, p)
+	case "hibou/remediationManagedPublish":
+		var p managedRemediationParams
+		if err := decode(params, &p); err != nil {
+			return nil, err
+		}
+		return s.remediationManagedPublish(ctx, p)
 	case "hibou/coverage":
 		var p struct {
 			URI string `json:"uri"`

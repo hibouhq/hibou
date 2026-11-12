@@ -9,10 +9,12 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hibouhq/hibou/internal/advisorydb"
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/packagepolicy"
+	"github.com/hibouhq/hibou/internal/provider/depsdev"
 	"github.com/hibouhq/hibou/internal/repoconfig"
 	"github.com/hibouhq/hibou/internal/shipped"
 	"github.com/hibouhq/hibou/internal/store"
@@ -29,6 +31,9 @@ const advisoryMatchMaxPurls = 5000
 
 type advisoryMatchRequest struct {
 	Purls []string `json:"purls"`
+	// Remediation needs the complete affected intervals, not a guessed target
+	// based on the first fixed boundary.
+	IncludeRanges bool `json:"include_ranges,omitempty"`
 	// Repo scopes VEX, the not-shipped lists and the package policy;
 	// Release names the context for the audit entry.
 	Repo    string `json:"repo,omitempty"`
@@ -50,12 +55,14 @@ type matchedAdvisoryResponse struct {
 	EPSS          *float64   `json:"epss,omitempty"`
 	// VEXStatus is the repository's effective VEX verdict for the pair:
 	// not_affected, affected, fixed, under_investigation, or empty.
-	VEXStatus string `json:"vex_status,omitempty"`
+	VEXStatus      string             `json:"vex_status,omitempty"`
+	AffectedRanges []advisorydb.Range `json:"affected_ranges,omitempty"`
 }
 
 type purlMatchResponse struct {
-	Purl      string `json:"purl"`
-	Supported bool   `json:"supported"`
+	Purl             string `json:"purl"`
+	Supported        bool   `json:"supported"`
+	PrivateNamespace *bool  `json:"private_namespace,omitempty"`
 	// Shipped and ShippedReason apply the repository's not-shipped lists
 	// to the purl alone (no module or SBOM evidence is known locally).
 	Shipped       bool                      `json:"shipped"`
@@ -106,6 +113,10 @@ func (s *Server) handleMatchAdvisories(w http.ResponseWriter, r *http.Request) {
 		api.JSONError(w, http.StatusBadRequest, "purls: between 1 and 5000 entries")
 		return
 	}
+	if req.IncludeRanges && strings.TrimSpace(req.Repo) == "" {
+		api.JSONError(w, http.StatusBadRequest, "repository context is required for remediation matching")
+		return
+	}
 	if s.advisoryScanner == nil {
 		api.JSONError(w, http.StatusServiceUnavailable, "advisory matching is not configured")
 		return
@@ -123,8 +134,27 @@ func (s *Server) handleMatchAdvisories(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		repo = loaded
-		if loadedCfg, _, err := s.loadBoundRepoConfig(r.Context(), repo); err == nil {
+		if req.IncludeRanges {
+			_, role, ok := s.loadOrgMembership(r, w)
+			if !ok {
+				return
+			}
+			access, err := s.principalRepoAccess(r, org.ID, role)
+			if err != nil {
+				api.JSONError(w, http.StatusInternalServerError, "failed to authorize repository")
+				return
+			}
+			if !access.allows(repo.ID) {
+				api.JSONError(w, http.StatusNotFound, "repository not found")
+				return
+			}
+		}
+		if loadedCfg, resolved, err := s.loadBoundRepoConfig(r.Context(), repo); err == nil && (!req.IncludeRanges || resolved) {
 			cfg = loadedCfg
+		} else if req.IncludeRanges {
+			s.log.Error().Err(err).Msg("load remediation repository policy")
+			api.JSONError(w, http.StatusServiceUnavailable, "repository policy is unavailable")
+			return
 		}
 	}
 
@@ -148,6 +178,18 @@ func (s *Server) handleMatchAdvisories(w http.ResponseWriter, r *http.Request) {
 	}
 	kev := make(map[uuid.UUID]bool)
 	epss := make(map[uuid.UUID]float64)
+	rangesByAdvisory := make(map[uuid.UUID][]advisorydb.Range)
+	if req.IncludeRanges && len(advisoryIDs) > 0 {
+		rows, err := s.queries.ListAffectedRangesByAdvisoryIDs(r.Context(), advisoryIDs)
+		if err != nil {
+			s.log.Error().Err(err).Msg("load remediation affected ranges")
+			api.JSONError(w, http.StatusInternalServerError, "failed to load affected ranges")
+			return
+		}
+		for _, row := range rows {
+			rangesByAdvisory[row.AdvisoryID] = append(rangesByAdvisory[row.AdvisoryID], exportedAffectedRange(row))
+		}
+	}
 	if len(advisoryIDs) > 0 {
 		if listed, err := s.queries.FilterKEVAdvisoryIDs(r.Context(), advisoryIDs); err == nil {
 			for _, id := range listed {
@@ -186,6 +228,12 @@ func (s *Server) handleMatchAdvisories(w http.ResponseWriter, r *http.Request) {
 	response.Summary.Purls = len(matches)
 	for _, match := range matches {
 		entry := purlMatchResponse{Purl: match.Purl, Supported: match.Supported, Advisories: []matchedAdvisoryResponse{}}
+		if req.IncludeRanges {
+			namespaces := append([]string(nil), s.cfg.DepsDev.PrivateNamespaces...)
+			namespaces = append(namespaces, s.policyFor(org, cfg).PrivateNamespaces...)
+			private := depsdev.IsPrivate(match.Purl, namespaces)
+			entry.PrivateNamespace = &private
+		}
 		decision := shipping.policy.Decide(shipped.Candidate{Purl: match.Purl, Ecosystem: match.Ecosystem})
 		entry.Shipped, entry.ShippedReason = decision.Shipped, decision.Reason
 		if row, ok := signals[match.Purl]; ok {
@@ -199,17 +247,18 @@ func (s *Server) handleMatchAdvisories(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, advisory := range match.Advisories {
 			matched := matchedAdvisoryResponse{
-				ID:            advisory.AdvisoryID,
-				CanonicalID:   advisory.CanonicalID,
-				Title:         advisory.Title,
-				Severity:      advisory.Severity,
-				CVSS:          advisory.CVSSScore,
-				RatedBy:       advisory.RatedBy,
-				IsMalware:     advisory.IsMalware,
-				MalwareType:   advisory.MalwareType,
-				FixedVersions: advisory.FixedVersions,
-				PublishedAt:   advisory.PublishedAt,
-				KEV:           kev[advisory.AdvisoryID],
+				ID:             advisory.AdvisoryID,
+				CanonicalID:    advisory.CanonicalID,
+				Title:          advisory.Title,
+				Severity:       advisory.Severity,
+				CVSS:           advisory.CVSSScore,
+				RatedBy:        advisory.RatedBy,
+				IsMalware:      advisory.IsMalware,
+				MalwareType:    advisory.MalwareType,
+				FixedVersions:  advisory.FixedVersions,
+				PublishedAt:    advisory.PublishedAt,
+				KEV:            kev[advisory.AdvisoryID],
+				AffectedRanges: rangesByAdvisory[advisory.AdvisoryID],
 			}
 			if score, ok := epss[advisory.AdvisoryID]; ok {
 				matched.EPSS = &score

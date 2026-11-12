@@ -30,7 +30,7 @@ func personality() string {
 }
 
 func init() {
-	rootCmd.AddCommand(completionCmd, versionCmd)
+	rootCmd.AddCommand(completionCmd, versionCmd, workloadControllerCmd, workloadExecuteCmd)
 
 	p := personality()
 	switch p {

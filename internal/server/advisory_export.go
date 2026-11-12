@@ -99,6 +99,13 @@ func writeAdvisoryExport(ctx context.Context, queries *store.Queries, w io.Write
 	return writer.Records(), writer.Flush()
 }
 
+func exportedAffectedRange(affected dbgen.AffectedRange) advisorydb.Range {
+	return advisorydb.Range{
+		Ecosystem: affected.Ecosystem, Package: affected.PackageName,
+		Introduced: affected.Introduced, Fixed: affected.Fixed, LastAffected: affected.LastAffected, Release: affected.Release,
+	}
+}
+
 func writeAdvisoryPage(ctx context.Context, queries *store.Queries, writer *advisorydb.Writer, ids []uuid.UUID) error {
 	advisories, err := queries.GetAdvisoriesByIDs(ctx, ids)
 	if err != nil {
@@ -127,11 +134,9 @@ func writeAdvisoryPage(ctx context.Context, queries *store.Queries, writer *advi
 
 	rangesBy := make(map[uuid.UUID][]advisorydb.Range, len(ids))
 	for _, affected := range ranges {
-		rangesBy[affected.AdvisoryID] = append(rangesBy[affected.AdvisoryID], advisorydb.Range{
-			Ecosystem: affected.Ecosystem, Package: affected.PackageName,
-			Introduced: affected.Introduced, Fixed: affected.Fixed, LastAffected: affected.LastAffected, Release: affected.Release,
-		})
+		rangesBy[affected.AdvisoryID] = append(rangesBy[affected.AdvisoryID], exportedAffectedRange(affected))
 	}
+
 	aliasesBy := make(map[uuid.UUID][]string, len(ids))
 	for _, alias := range aliases {
 		aliasesBy[alias.AdvisoryID] = append(aliasesBy[alias.AdvisoryID], alias.Alias)

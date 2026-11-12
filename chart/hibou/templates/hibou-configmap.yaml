@@ -5,6 +5,15 @@ metadata:
   labels:
     {{- include "hibou.labels" . | nindent 4 }}
 data:
+  HIBOU_REMEDIATION_MAINTENANCE_BRANCH_ALLOWLIST: {{ join "," .Values.managedRemediation.maintenanceBranchAllowlist | quote }}
+  HIBOU_REMEDIATION_ENABLED: {{ and .Values.workload.enabled .Values.managedRemediation.enabled | quote }}
+  HIBOU_WORKLOAD_IMAGE: {{ .Values.workload.image | quote }}
+  HIBOU_REMEDIATION_NPM_REGISTRY: {{ .Values.managedRemediation.registry.url | quote }}
+  HIBOU_REMEDIATION_NPM_PATH: {{ .Values.managedRemediation.profile.npmPath | quote }}
+  HIBOU_REMEDIATION_NPM_VERSION: {{ .Values.managedRemediation.profile.npmVersion | quote }}
+  HIBOU_REMEDIATION_NODE_PATH: {{ .Values.managedRemediation.profile.nodePath | quote }}
+  HIBOU_REMEDIATION_NODE_VERSION: {{ .Values.managedRemediation.profile.nodeVersion | quote }}
+  HIBOU_REMEDIATION_TOOL_PATH: {{ .Values.managedRemediation.profile.toolPath | quote }}
   HIBOU_HOST: "0.0.0.0"
   HIBOU_PORT: "8080"
   HIBOU_LOG_LEVEL: {{ .Values.hibou.logging.level | quote }}

@@ -1,3 +1,96 @@
+# ADR-056: disabled until operator runtime/CNI/admission qualification and
+# threat-model rollout gates are complete. No API pod receives Kubernetes RBAC.
+# workload/managedRemediation keys are schema-validated; unrelated chart roots
+# remain extensible. Runtime, image, CA and fixed tool versions are required
+# when enabling execution, with no raw security-context/environment overrides.
+workload:
+  enabled: false
+  # Fixed single controller with Recreate rollout: broker sessions are in memory.
+  # Replicas/autoscaling are intentionally not configurable; no shared-broker HA.
+  namespace:
+    # Default: <release fullname>-workloads, never the API/release namespace.
+    name: ""
+    # false adopts an existing dedicated namespace. The operator MUST apply
+    # pod-security.kubernetes.io/{enforce,audit,warn}: restricted and corresponding
+    # *-version: v1.33 labels before enabling. Admission/policies still installed.
+    create: true
+  image: ""
+  # Existing dockerconfigjson registry-auth Secrets in the EXECUTION namespace,
+  # never API-namespace references. Kubelet-only image pull authentication; these
+  # Secrets are not mounted into workloads or read by the controller.
+  imagePullSecrets: []
+  # - name: internal-oci-auth
+  # Operator-owned sandbox RuntimeClass, never created by this chart. Qualify
+  # hostUsers:false with its runtime, Linux kernel, filesystems and every node.
+  runtimeClassName: ""
+  runtimeValidated: false
+  deadlineSeconds: 600
+  # Public CA PEM for the controller broker; not a credential.
+  caBundle: ""
+  tls:
+    # Existing app-namespace Secret only mounted on the trusted controller.
+    existingSecret: ""
+    certKey: tls.crt
+    keyKey: tls.key
+  job:
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+        ephemeral-storage: 2Gi
+  controller:
+    # Uses the API's artifact backend/credentials. Filesystem storage requires
+    # artifact.filesystem.persistence.enabled and accessMode=ReadWriteMany.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+        ephemeral-storage: 2Gi
+  quota:
+    jobs: 8
+    pods: 8
+  dns:
+    # Only the named DNS pods in the named namespace, UDP/TCP 53.
+    # Disable for a broker URL using a certificate-valid static IP.
+    enabled: true
+    namespace: kube-system
+    podSelector:
+      k8s-app: kube-dns
+
+managedRemediation:
+  enabled: false
+  # Approved npm mirror. Credentials and private CA are mounted only on the
+  # controller; workloads receive neither and can use only its scoped broker.
+  registry:
+    url: ""
+    existingSecret: ""
+    tokenKey: token
+    caKey: ca.crt
+    # Select which optional keys exist in the operator-managed Secret.
+    tokenEnabled: false
+    caEnabled: false
+  # Approved, preinstalled tools in workload.image. No bootstrap/download.
+  # Exact versions must match that digest's imported profile.
+  profile:
+    npmPath: /usr/local/bin/npm
+    npmVersion: ""
+    nodePath: /usr/local/bin/node
+    nodeVersion: ""
+    toolPath: /usr/local/bin:/usr/bin:/bin
+  # Create-only exception for explicit organization release mappings. Empty
+  # disables maintenance creation. Standard path globs; never permits updates.
+  maintenanceBranchAllowlist: []
+  # Managed execution is disabled pending approval/implementation of ADR-056.
+  # This is not an execution-enablement setting.
+
 hibou:
   image:
     repository: ghcr.io/hibouhq/hibou
