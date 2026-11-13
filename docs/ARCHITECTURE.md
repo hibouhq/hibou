@@ -73,6 +73,14 @@ forge webhooks ─────────▶ refs ◀── snapshots ──▶
    ([internal/provider/osv](../internal/provider/osv/),
    [internal/provider/trivy](../internal/provider/trivy/)) with response
    caching, plus locally authored ranges (see cvetriage below).
+   Trivy-derived ranges start at the reported installed version, never at an
+   inferred zero. The upper bound is the smallest comparable fix above it;
+   without one, the range matches only that version. Unknown version ordering
+   uses exact string matching. Migration 00082 removes legacy unbounded Trivy
+   ranges and invalidates Trivy's mapped-response cache. After deployment,
+   trigger a user rescan of affected snapshots (automatic scans may reuse
+   prior matches) so stale false-positive matches are resolved. Other sources'
+   ranges remain unchanged.
 4. **Delta + gates**: [internal/delta](../internal/delta/) diffs a PR snapshot
    against its target branch (suppressions per ADR-023/026, VEX filtering per
    [ADR-009](adr/009-vex-integration.md)) and evaluates gates
