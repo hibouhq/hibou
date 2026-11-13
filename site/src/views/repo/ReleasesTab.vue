@@ -135,6 +135,15 @@
             <div class="flex items-center gap-2">
               <Tag class="h-4 w-4 shrink-0 text-gray-500" />
               <span class="truncate font-mono text-sm font-semibold text-white">{{ release.version }}</span>
+              <RouterLink
+                v-if="release.snapshot_id"
+                :to="{ name: 'repo-remediation', params: route.params, query: { release: release.id } }"
+                class="inline-flex shrink-0 rounded-full border border-accent/30 px-2 py-0.5 text-[11px] text-accent transition hover:bg-accent/10"
+                title="Prepare a verified dependency patch against this exact shipped source"
+                @click.stop
+              >
+                Remediate
+              </RouterLink>
               <span
                 v-if="release.diverged_at"
                 class="inline-flex shrink-0 items-center gap-1 rounded-full border border-warn/50 bg-warn/10 px-1.5 py-0.5 text-[11px] font-medium text-warn"

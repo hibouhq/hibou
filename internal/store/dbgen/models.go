@@ -2235,6 +2235,56 @@ type Release struct {
 	DismissedCommitSha sql.NullString  `json:"dismissed_commit_sha"`
 }
 
+type RemediationArtifactExpiry struct {
+	ArtifactKey string    `json:"artifact_key"`
+	JobID       uuid.UUID `json:"job_id"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+type RemediationController struct {
+	ID          uuid.UUID `json:"id"`
+	Profile     string    `json:"profile"`
+	HeartbeatAt time.Time `json:"heartbeat_at"`
+}
+
+type RemediationEvent struct {
+	ID        int64           `json:"id"`
+	JobID     uuid.UUID       `json:"job_id"`
+	Action    string          `json:"action"`
+	Detail    json.RawMessage `json:"detail"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type RemediationJob struct {
+	ID           uuid.UUID       `json:"id"`
+	RepoID       uuid.UUID       `json:"repo_id"`
+	CreatorID    uuid.NullUUID   `json:"creator_id"`
+	BaseSha      string          `json:"base_sha"`
+	SourceRef    string          `json:"source_ref"`
+	TargetBranch string          `json:"target_branch"`
+	Revision     int32           `json:"revision"`
+	State        string          `json:"state"`
+	Request      json.RawMessage `json:"request"`
+	Result       json.RawMessage `json:"result"`
+	Error        string          `json:"error"`
+	ArtifactKey  string          `json:"artifact_key"`
+	LeaseToken   uuid.NullUUID   `json:"lease_token"`
+	LeaseUntil   sql.NullTime    `json:"lease_until"`
+	Attempts     int32           `json:"attempts"`
+	ExpiresAt    time.Time       `json:"expires_at"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+type RemediationWorkloadAttempt struct {
+	JobID      uuid.UUID `json:"job_id"`
+	LeaseToken uuid.UUID `json:"lease_token"`
+	Attempt    string    `json:"attempt"`
+	JobUid     string    `json:"job_uid"`
+	PodUid     string    `json:"pod_uid"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type RepoApplicability struct {
 	ID                uuid.UUID       `json:"id"`
 	RepoID            uuid.UUID       `json:"repo_id"`

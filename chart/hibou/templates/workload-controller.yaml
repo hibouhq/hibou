@@ -1,0 +1,212 @@
+{{- if and .Values.workload.enabled .Values.managedRemediation.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hibou.workloadController" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workload-controller
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "hibou.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: workload-controller
+  template:
+    metadata:
+      labels:
+        {{- include "hibou.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: workload-controller
+    spec:
+      serviceAccountName: {{ include "hibou.workloadController" . }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ include "hibou.image" . | quote }}
+          imagePullPolicy: {{ .Values.hibou.image.pullPolicy }}
+          command: ["/usr/local/bin/hibou", "workload-controller"]
+          ports:
+            - name: broker
+              containerPort: 8443
+          envFrom:
+            - configMapRef:
+                name: {{ include "hibou.fullname" . }}
+            - secretRef:
+                name: {{ include "hibou.sessionSecretName" . }}
+            {{- range $i, $forge := .Values.hibou.forges }}
+            - secretRef:
+                name: {{ $forge.existingSecret | default (printf "%s-forge-%d" (include "hibou.fullname" $) $i) }}
+            {{- end }}
+          env:
+            - name: HIBOU_REMEDIATION_ENABLED
+              value: "true"
+            - name: HIBOU_REMEDIATION_NPM_REGISTRY
+              value: {{ .Values.managedRemediation.registry.url | quote }}
+            {{- if .Values.managedRemediation.registry.tokenEnabled }}
+            - name: HIBOU_REMEDIATION_REGISTRY_TOKEN_FILE
+              value: /etc/hibou/registry/token
+            {{- end }}
+            {{- if .Values.managedRemediation.registry.caEnabled }}
+            - name: HIBOU_REMEDIATION_REGISTRY_CA_FILE
+              value: /etc/hibou/registry/ca.crt
+            {{- end }}
+            - name: HIBOU_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.postgresqlSecretName" . }}
+                  key: {{ include "hibou.postgresqlSecretKey" . }}
+            {{- if eq (include "hibou.artifactBackend" .) "s3" }}
+            - name: HIBOU_ARTIFACT_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.artifactS3CredentialsSecretName" . }}
+                  key: accessKeyID
+            - name: HIBOU_ARTIFACT_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hibou.artifactS3CredentialsSecretName" . }}
+                  key: secretAccessKey
+            {{- end }}
+            - name: HIBOU_WORKLOAD_NAMESPACE
+              value: {{ include "hibou.workloadNamespace" . | quote }}
+            - name: HIBOU_WORKLOAD_CONTROLLER_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: HIBOU_WORKLOAD_IMAGE
+              value: {{ .Values.workload.image | quote }}
+            - name: HIBOU_WORKLOAD_IMAGE_PULL_SECRETS
+              value: {{ include "hibou.workloadImagePullSecretNames" . | quote }}
+            - name: HIBOU_WORKLOAD_RUNTIME_CLASS
+              value: {{ .Values.workload.runtimeClassName | quote }}
+            - name: HIBOU_WORKLOAD_RUNTIME_VALIDATED
+              value: {{ .Values.workload.runtimeValidated | quote }}
+            - name: HIBOU_WORKLOAD_SERVICE_ACCOUNT
+              value: {{ include "hibou.workloadServiceAccount" . | quote }}
+            - name: HIBOU_WORKLOAD_BROKER_URL
+              value: {{ include "hibou.workloadBrokerURL" . | quote }}
+            - name: HIBOU_WORKLOAD_CA
+              value: {{ .Values.workload.caBundle | quote }}
+            - name: HIBOU_WORKLOAD_DEADLINE_SECONDS
+              value: {{ .Values.workload.deadlineSeconds | quote }}
+            {{- range $group, $values := .Values.workload.job.resources }}
+            {{- range $resource, $value := $values }}
+            - name: {{ printf "HIBOU_WORKLOAD_%s_%s" ($resource | replace "ephemeral-storage" "storage" | upper) ($group | trimSuffix "s" | upper) }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            - name: HIBOU_WORKLOAD_TLS_CERT_FILE
+              value: /etc/hibou/workload-tls/tls.crt
+            - name: HIBOU_WORKLOAD_TLS_KEY_FILE
+              value: /etc/hibou/workload-tls/tls.key
+            {{- range $key, $value := dict "NPM_PATH" .Values.managedRemediation.profile.npmPath "NPM_VERSION" .Values.managedRemediation.profile.npmVersion "NODE_PATH" .Values.managedRemediation.profile.nodePath "NODE_VERSION" .Values.managedRemediation.profile.nodeVersion "TOOL_PATH" .Values.managedRemediation.profile.toolPath }}
+            - name: {{ printf "HIBOU_REMEDIATION_%s" $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: TMPDIR
+              value: /scratch
+          resources:
+            {{- toYaml .Values.workload.controller.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: broker
+              scheme: HTTPS
+            periodSeconds: 10
+            timeoutSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: broker
+              scheme: HTTPS
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/hibou/workload-tls
+              readOnly: true
+            - name: scratch
+              mountPath: /scratch
+            {{- if or .Values.managedRemediation.registry.tokenEnabled .Values.managedRemediation.registry.caEnabled }}
+            - name: registry
+              mountPath: /etc/hibou/registry
+              readOnly: true
+            {{- end }}
+            {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+            - name: artifact-filesystem
+              mountPath: {{ include "hibou.artifactFilesystemPath" . | quote }}
+            {{- end }}
+            {{- if .Values.hibou.instanceAdminsExistingSecret }}
+            - name: instance-admins
+              mountPath: /etc/hibou/instance-admins
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.workload.tls.existingSecret | quote }}
+            items:
+              - key: {{ .Values.workload.tls.certKey | quote }}
+                path: tls.crt
+              - key: {{ .Values.workload.tls.keyKey | quote }}
+                path: tls.key
+        - name: scratch
+          emptyDir:
+            sizeLimit: {{ index .Values.workload.controller.resources.requests "ephemeral-storage" | quote }}
+        {{- if or .Values.managedRemediation.registry.tokenEnabled .Values.managedRemediation.registry.caEnabled }}
+        - name: registry
+          secret:
+            secretName: {{ .Values.managedRemediation.registry.existingSecret | quote }}
+            items:
+              {{- if .Values.managedRemediation.registry.tokenEnabled }}
+              - key: {{ .Values.managedRemediation.registry.tokenKey | quote }}
+                path: token
+              {{- end }}
+              {{- if .Values.managedRemediation.registry.caEnabled }}
+              - key: {{ .Values.managedRemediation.registry.caKey | quote }}
+                path: ca.crt
+              {{- end }}
+        {{- end }}
+        {{- if eq (include "hibou.artifactFilesystemPersistenceEnabled" .) "true" }}
+        - name: artifact-filesystem
+          persistentVolumeClaim:
+            claimName: {{ include "hibou.artifactFilesystemPVCName" . }}
+        {{- end }}
+        {{- if .Values.hibou.instanceAdminsExistingSecret }}
+        - name: instance-admins
+          secret:
+            secretName: {{ .Values.hibou.instanceAdminsExistingSecret }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hibou.workloadController" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workload-controller
+spec:
+  selector:
+    {{- include "hibou.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: workload-controller
+  ports:
+    - name: broker
+      port: 8443
+      targetPort: broker
+{{- end }}

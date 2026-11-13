@@ -1,0 +1,220 @@
+{{- if .Values.workload.enabled }}
+{{- $root := . }}
+{{- range $kind := list "Job" "Pod" }}
+{{- $spec := "object.spec" }}
+{{- $meta := "object.metadata" }}
+{{- if eq $kind "Job" }}
+{{- $spec = "object.spec.template.spec" }}
+{{- $meta = "object.spec.template.metadata" }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "hibou.workloadController" $root }}-{{ $root.Release.Namespace }}-{{ lower $kind }}
+  labels:
+    {{- include "hibou.labels" $root | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [{{ if eq $kind "Job" }}"batch"{{ else }}""{{ end }}]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: [{{ if eq $kind "Job" }}"jobs"{{ else }}"pods", "pods/ephemeralcontainers"{{ end }}]
+  variables:
+    - name: p
+      expression: {{ $spec | quote }}
+    - name: m
+      expression: {{ $meta | quote }}
+    - name: c
+      expression: "variables.p.containers[0]"
+  validations:
+    - expression: >-
+        request.operation != 'UPDATE' || (object.spec == oldObject.spec && object.metadata.labels == oldObject.metadata.labels)
+      message: Workload specifications are immutable.
+    {{- if eq $kind "Job" }}
+    - expression: >-
+        request.operation != 'CREATE' || request.userInfo.username == {{ printf "system:serviceaccount:%s:%s" $root.Release.Namespace (include "hibou.workloadController" $root) | toJson }}
+      message: Only the dedicated controller may create workload Jobs.
+    - expression: >-
+        object.spec.backoffLimit == 0 &&
+        object.spec.activeDeadlineSeconds == {{ $root.Values.workload.deadlineSeconds }} &&
+        object.spec.ttlSecondsAfterFinished == 300 &&
+        object.spec.parallelism == 1 && object.spec.completions == 1 &&
+        (!has(object.spec.suspend) || !object.spec.suspend) &&
+        (!has(object.spec.manualSelector) || !object.spec.manualSelector) &&
+        (!has(object.spec.completionMode) || object.spec.completionMode == 'NonIndexed') &&
+        !has(object.spec.podFailurePolicy) && !has(object.spec.successPolicy) &&
+        !has(object.spec.backoffLimitPerIndex) && !has(object.spec.maxFailedIndexes) &&
+        object.metadata.name == 'hibou-' + variables.m.labels['workload.hibou.dev/attempt'] &&
+        (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0) &&
+        object.metadata.labels['workload.hibou.dev/attempt'] == variables.m.labels['workload.hibou.dev/attempt'] &&
+        object.metadata.labels['workload.hibou.dev/fence'] == variables.m.labels['workload.hibou.dev/fence']
+      message: Only bounded single-attempt remediation Jobs are permitted.
+    {{- else }}
+    - expression: >-
+        has(object.metadata.ownerReferences) && size(object.metadata.ownerReferences) == 1 &&
+        object.metadata.ownerReferences[0].apiVersion == 'batch/v1' &&
+        object.metadata.ownerReferences[0].kind == 'Job' &&
+        object.metadata.ownerReferences[0].controller &&
+        object.metadata.ownerReferences[0].name == 'hibou-' + variables.m.labels['workload.hibou.dev/attempt'] &&
+        size(object.metadata.ownerReferences[0].uid) > 0
+      message: Workload Pods require a single Job controller owner.
+    {{- end }}
+    - expression: >-
+        has(variables.m.labels) &&
+        (!has(variables.m.annotations) || size(variables.m.annotations) == 0) &&
+        variables.m.labels['workload.hibou.dev/class'] == 'remediation' &&
+        variables.m.labels['workload.hibou.dev/attempt'].matches('^[a-f0-9]{32}$') &&
+        variables.m.labels['workload.hibou.dev/fence'].matches('^[a-f0-9]{40}$') &&
+        variables.m.labels['workload.hibou.dev/controller'] == {{ printf "%s/%s/%s" $root.Release.Namespace (include "hibou.workloadNamespace" $root) (include "hibou.workloadServiceAccount" $root) | sha256sum | trunc 40 | toJson }}
+      message: Required immutable release, class, attempt and fence labels are missing.
+    - expression: >-
+        has(variables.p.hostUsers) && !variables.p.hostUsers &&
+        (!has(variables.p.hostNetwork) || !variables.p.hostNetwork) &&
+        (!has(variables.p.hostPID) || !variables.p.hostPID) &&
+        (!has(variables.p.hostIPC) || !variables.p.hostIPC) &&
+        (!has(variables.p.shareProcessNamespace) || !variables.p.shareProcessNamespace) &&
+        has(variables.p.automountServiceAccountToken) && !variables.p.automountServiceAccountToken &&
+        variables.p.serviceAccountName == {{ include "hibou.workloadServiceAccount" $root | toJson }} &&
+        (!has(variables.p.serviceAccount) || variables.p.serviceAccount == {{ include "hibou.workloadServiceAccount" $root | toJson }}) &&
+        variables.p.runtimeClassName == {{ $root.Values.workload.runtimeClassName | toJson }} &&
+        variables.p.restartPolicy == 'Never' &&
+        variables.p.activeDeadlineSeconds == {{ $root.Values.workload.deadlineSeconds }} &&
+        variables.p.terminationGracePeriodSeconds == 10 &&
+        has(variables.p.enableServiceLinks) && !variables.p.enableServiceLinks &&
+        (!has(variables.p.os) || variables.p.os.name == 'linux')
+      message: User namespaces, qualified runtime, tokenless identity and isolated host namespaces are mandatory.
+    - expression: >-
+        variables.p.securityContext.runAsNonRoot &&
+        variables.p.securityContext.runAsUser == 65532 &&
+        variables.p.securityContext.runAsGroup == 65532 &&
+        variables.p.securityContext.fsGroup == 65532 &&
+        variables.p.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        !has(variables.p.securityContext.seccompProfile.localhostProfile) &&
+        (!has(variables.p.securityContext.supplementalGroups) || size(variables.p.securityContext.supplementalGroups) == 0) &&
+        (!has(variables.p.securityContext.sysctls) || size(variables.p.securityContext.sysctls) == 0) &&
+        !has(variables.p.securityContext.seLinuxOptions) &&
+        !has(variables.p.securityContext.windowsOptions) &&
+        (!has(variables.p.securityContext.appArmorProfile) || variables.p.securityContext.appArmorProfile.type == 'RuntimeDefault')
+      message: Fixed nonroot UID/GID and RuntimeDefault seccomp are required.
+    - expression: >-
+        size(variables.p.containers) == 1 &&
+        (!has(variables.p.initContainers) || size(variables.p.initContainers) == 0) &&
+        (!has(variables.p.ephemeralContainers) || size(variables.p.ephemeralContainers) == 0) &&
+        {{- if eq (len $root.Values.workload.imagePullSecrets) 0 }}
+        (!has(variables.p.imagePullSecrets) || size(variables.p.imagePullSecrets) == 0) &&
+        {{- else }}
+        has(variables.p.imagePullSecrets) && size(variables.p.imagePullSecrets) == {{ len $root.Values.workload.imagePullSecrets }} &&
+        {{- range $index, $secret := $root.Values.workload.imagePullSecrets }}
+        variables.p.imagePullSecrets[{{ $index }}].name == {{ $secret.name | toJson }} &&
+        {{- end }}
+        {{- end }}
+        (!has(variables.p.resourceClaims) || size(variables.p.resourceClaims) == 0) &&
+        (!has(variables.p.schedulingGates) || size(variables.p.schedulingGates) == 0) &&
+        !has(variables.p.priorityClassName) &&
+        ({{ if eq $kind "Pod" }}request.operation == 'UPDATE' || {{ end }}!has(variables.p.nodeName) || variables.p.nodeName == '') &&
+        {{- if eq $kind "Job" }}
+        (!has(variables.p.nodeSelector) || size(variables.p.nodeSelector) == 0) &&
+        {{- end }}
+        !has(variables.p.affinity) && !has(variables.p.resources) &&
+        (!has(variables.p.schedulerName) || variables.p.schedulerName == 'default-scheduler') &&
+        (!has(variables.p.hostAliases) || size(variables.p.hostAliases) == 0) &&
+        !has(variables.p.dnsConfig) &&
+        (!has(variables.p.dnsPolicy) || variables.p.dnsPolicy == 'ClusterFirst') &&
+        (!has(variables.p.hostname) || variables.p.hostname == '') &&
+        (!has(variables.p.subdomain) || variables.p.subdomain == '') &&
+        {{- if eq $kind "Job" }}
+        (!has(variables.p.tolerations) || size(variables.p.tolerations) == 0)
+        {{- else }}
+        (!has(variables.p.tolerations) || size(variables.p.tolerations) <= 16)
+        {{- end }}
+      message: No sidecars, alternate credentials, node selection, custom networking or scheduling escape hatches.
+    {{- /* The operator-owned RuntimeClass admission plugin may inject node
+         selectors/tolerations into Pods. Job templates cannot select them and
+         the controller has no pods/create permission. Never weaken the Job
+         constraint to accommodate RuntimeClass-injected Pod defaults. */}}
+    - expression: >-
+        variables.c.name == 'workload' &&
+        variables.c.image == {{ $root.Values.workload.image | toJson }} &&
+        variables.c.imagePullPolicy == 'IfNotPresent' &&
+        variables.c.command == ['/usr/local/bin/hibou', 'workload-execute'] &&
+        (!has(variables.c.args) || size(variables.c.args) == 0) &&
+        variables.c.workingDir == '/scratch' &&
+        (!has(variables.c.envFrom) || size(variables.c.envFrom) == 0) &&
+        (!has(variables.c.ports) || size(variables.c.ports) == 0) &&
+        (!has(variables.c.volumeDevices) || size(variables.c.volumeDevices) == 0) &&
+        !has(variables.c.restartPolicy) &&
+        !has(variables.c.lifecycle) && !has(variables.c.livenessProbe) &&
+        !has(variables.c.readinessProbe) && !has(variables.c.startupProbe) &&
+        (!has(variables.c.stdin) || !variables.c.stdin) &&
+        (!has(variables.c.tty) || !variables.c.tty) &&
+        (!has(variables.c.resizePolicy) || size(variables.c.resizePolicy) == 0) &&
+        (!has(variables.c.resources.claims) || size(variables.c.resources.claims) == 0)
+      message: Only the pinned, shell-free remediation launcher is allowed.
+    - expression: >-
+        has(variables.c.securityContext.allowPrivilegeEscalation) && !variables.c.securityContext.allowPrivilegeEscalation &&
+        variables.c.securityContext.readOnlyRootFilesystem &&
+        (!has(variables.c.securityContext.privileged) || !variables.c.securityContext.privileged) &&
+        variables.c.securityContext.capabilities.drop == ['ALL'] &&
+        (!has(variables.c.securityContext.capabilities.add) || size(variables.c.securityContext.capabilities.add) == 0) &&
+        (!has(variables.c.securityContext.runAsNonRoot) || variables.c.securityContext.runAsNonRoot) &&
+        (!has(variables.c.securityContext.runAsUser) || variables.c.securityContext.runAsUser == 65532) &&
+        (!has(variables.c.securityContext.runAsGroup) || variables.c.securityContext.runAsGroup == 65532) &&
+        (!has(variables.c.securityContext.seccompProfile) || variables.c.securityContext.seccompProfile.type == 'RuntimeDefault') &&
+        (!has(variables.c.securityContext.procMount) || variables.c.securityContext.procMount == 'Default') &&
+        !has(variables.c.securityContext.seLinuxOptions) && !has(variables.c.securityContext.windowsOptions) &&
+        (!has(variables.c.securityContext.appArmorProfile) || variables.c.securityContext.appArmorProfile.type == 'RuntimeDefault')
+      message: No privilege escalation, capabilities, writable root or alternate identity.
+    - expression: >-
+        size(variables.p.volumes) == 1 && variables.p.volumes[0].name == 'scratch' &&
+        has(variables.p.volumes[0].emptyDir) &&
+        variables.p.volumes[0].emptyDir.sizeLimit == {{ index $root.Values.workload.job.resources.requests "ephemeral-storage" | toString | toJson }} &&
+        (!has(variables.p.volumes[0].emptyDir.medium) || variables.p.volumes[0].emptyDir.medium == '') &&
+        size(variables.c.volumeMounts) == 1 && variables.c.volumeMounts[0].name == 'scratch' &&
+        variables.c.volumeMounts[0].mountPath == '/scratch' &&
+        (!has(variables.c.volumeMounts[0].subPath) || variables.c.volumeMounts[0].subPath == '') &&
+        (!has(variables.c.volumeMounts[0].subPathExpr) || variables.c.volumeMounts[0].subPathExpr == '') &&
+        (!has(variables.c.volumeMounts[0].mountPropagation) || variables.c.volumeMounts[0].mountPropagation == 'None')
+      message: Only private bounded emptyDir scratch is allowed; no host paths, PVCs, Secrets or sockets.
+    - expression: >-
+        size(variables.c.env) == 4 &&
+        variables.c.env[0].name == 'HIBOU_WORKLOAD_URL' &&
+        !has(variables.c.env[0].valueFrom) &&
+        variables.c.env[0].value == {{ printf "%s/v1/workloads/" (include "hibou.workloadBrokerURL" $root) | toJson }} + variables.m.labels['workload.hibou.dev/attempt'] &&
+        variables.c.env[1].name == 'HIBOU_WORKLOAD_TOKEN' &&
+        !has(variables.c.env[1].valueFrom) && variables.c.env[1].value.matches('^[a-f0-9]{64}$') &&
+        variables.c.env[2].name == 'HIBOU_WORKLOAD_CA' &&
+        !has(variables.c.env[2].valueFrom) && variables.c.env[2].value == {{ $root.Values.workload.caBundle | toJson }} &&
+        variables.c.env[3].name == 'HIBOU_WORKLOAD_POD_UID' &&
+        (!has(variables.c.env[3].value) || variables.c.env[3].value == '') &&
+        has(variables.c.env[3].valueFrom.fieldRef) &&
+        variables.c.env[3].valueFrom.fieldRef.fieldPath == 'metadata.uid' &&
+        (!has(variables.c.env[3].valueFrom.fieldRef.apiVersion) || variables.c.env[3].valueFrom.fieldRef.apiVersion == 'v1')
+      message: Only attempt-scoped broker bootstrap and downward Pod UID environment are allowed.
+    - expression: >-
+        size(variables.c.resources.requests) == 3 && size(variables.c.resources.limits) == 3 &&
+        variables.c.resources.requests['cpu'] == {{ $root.Values.workload.job.resources.requests.cpu | toString | toJson }} &&
+        variables.c.resources.requests['memory'] == {{ $root.Values.workload.job.resources.requests.memory | toString | toJson }} &&
+        variables.c.resources.requests['ephemeral-storage'] == {{ index $root.Values.workload.job.resources.requests "ephemeral-storage" | toString | toJson }} &&
+        variables.c.resources.limits['cpu'] == {{ $root.Values.workload.job.resources.limits.cpu | toString | toJson }} &&
+        variables.c.resources.limits['memory'] == {{ $root.Values.workload.job.resources.limits.memory | toString | toJson }} &&
+        variables.c.resources.limits['ephemeral-storage'] == {{ index $root.Values.workload.job.resources.limits "ephemeral-storage" | toString | toJson }}
+      message: Exact operator-approved CPU, memory and ephemeral storage requests/limits are mandatory.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "hibou.workloadController" $root }}-{{ $root.Release.Namespace }}-{{ lower $kind }}
+  labels:
+    {{- include "hibou.labels" $root | nindent 4 }}
+spec:
+  policyName: {{ include "hibou.workloadController" $root }}-{{ $root.Release.Namespace }}-{{ lower $kind }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ include "hibou.workloadNamespace" $root | quote }}
+{{- end }}
+{{- end }}

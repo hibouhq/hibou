@@ -1,5 +1,23 @@
 basePath: /api/v1
 definitions:
+  advisorydb.Range:
+    properties:
+      ecosystem:
+        type: string
+      fixed:
+        type: string
+      introduced:
+        type: string
+      last_affected:
+        type: string
+      package:
+        type: string
+      release:
+        description: |-
+          Release scopes a distribution range (ADR-038); empty for language
+          ecosystems.
+        type: string
+    type: object
   api.Error:
     properties:
       code:
@@ -616,6 +634,47 @@ definitions:
     - ConfinementInfo
     - ConfinementWarning
     - ConfinementError
+  forge.MaintenanceCreated:
+    properties:
+      created:
+        type: boolean
+      reconciled:
+        type: boolean
+      source_sha:
+        type: string
+      source_tag:
+        type: string
+      target_branch:
+        type: string
+    type: object
+  forge.MaintenanceEvidence:
+    properties:
+      exists:
+        type: boolean
+      head_sha:
+        type: string
+      source_ancestor:
+        type: boolean
+      source_sha:
+        type: string
+      source_tag:
+        type: string
+      tag_confirmed:
+        type: boolean
+      tag_sha:
+        type: string
+      target_branch:
+        type: string
+    type: object
+  forge.PullRequest:
+    properties:
+      html_url:
+        type: string
+      number:
+        type: integer
+      title:
+        type: string
+    type: object
   incident.Regime:
     properties:
       label:
@@ -660,6 +719,123 @@ definitions:
       slug:
         type: string
       status:
+        type: string
+    type: object
+  remediation.Change:
+    properties:
+      after_sha256:
+        type: string
+      before_sha256:
+        type: string
+      path:
+        type: string
+    type: object
+  remediation.DirectPackage:
+    properties:
+      can_select_version:
+        type: boolean
+      declared:
+        type: string
+      name:
+        type: string
+      recommendation_fetched_at:
+        type: string
+      recommended_version:
+        type: string
+      version:
+        type: string
+    type: object
+  remediation.ManagedModule:
+    properties:
+      manifest:
+        type: string
+      unavailable:
+        type: string
+      unit:
+        $ref: '#/definitions/remediation.Unit'
+    type: object
+  remediation.Unit:
+    properties:
+      direct_packages:
+        items:
+          $ref: '#/definitions/remediation.DirectPackage'
+        type: array
+      id:
+        type: string
+      input_sha256:
+        additionalProperties:
+          type: string
+        description: |-
+          InputSHA256 binds discovery to the committed file set, including files
+          whose absence influences manager detection.
+        type: object
+      lockfile:
+        type: string
+      manager:
+        type: string
+      manifest:
+        type: string
+      required_files:
+        items:
+          type: string
+        type: array
+      upgrade_level:
+        type: string
+      version_targets:
+        items:
+          $ref: '#/definitions/remediation.VersionTarget'
+        type: array
+      vulns:
+        items:
+          type: string
+        type: array
+      writable_files:
+        items:
+          type: string
+        type: array
+    type: object
+  remediation.UnitResult:
+    properties:
+      id:
+        type: string
+      requested_targets:
+        items:
+          $ref: '#/definitions/remediation.VersionTarget'
+        type: array
+      updates:
+        items:
+          $ref: '#/definitions/remediation.Update'
+        type: array
+    type: object
+  remediation.Update:
+    properties:
+      from:
+        type: string
+      name:
+        type: string
+      to:
+        type: string
+    type: object
+  remediation.Verification:
+    properties:
+      dependency_files_consistent:
+        description: All three are mandatory. Build/test execution is deliberately
+          separate.
+        type: boolean
+      no_introduced_vulns:
+        type: boolean
+      selected_vulns_addressed:
+        type: boolean
+    type: object
+  remediation.VersionTarget:
+    properties:
+      allow_prerelease:
+        type: boolean
+      mode:
+        type: string
+      name:
+        type: string
+      version:
         type: string
     type: object
   sbom.ComponentDelta:
@@ -962,6 +1138,194 @@ definitions:
       state:
         type: string
     type: object
+  server.ManagedMaintenanceCreateRequest:
+    properties:
+      mapping_id:
+        type: string
+      release_id:
+        type: string
+      source_sha:
+        type: string
+      source_tag:
+        type: string
+      target_branch:
+        type: string
+    type: object
+  server.ManagedMaintenanceSettingsResponse:
+    properties:
+      branch_pr_consent:
+        type: boolean
+      can_configure:
+        type: boolean
+      creation_available:
+        type: boolean
+      creation_reason:
+        type: string
+      settings:
+        $ref: '#/definitions/server.managedMaintenanceSettings'
+    type: object
+  server.ManagedMaintenanceSuggestionsResponse:
+    properties:
+      creation_reason:
+        type: string
+      reason:
+        type: string
+      source:
+        $ref: '#/definitions/server.managedReleaseSource'
+      suggestions:
+        items:
+          $ref: '#/definitions/server.managedMaintenanceSuggestion'
+        type: array
+    type: object
+  server.ManagedRemediationArtifactResponse:
+    properties:
+      base_sha:
+        type: string
+      changes:
+        items:
+          $ref: '#/definitions/remediation.Change'
+        type: array
+      patch:
+        description: |-
+          Patch is always null in a job response. Download the raw UTF-8 unified
+          diff from GET /remediation/{jobID}/patch; it is not a JSON envelope.
+        type: string
+        x-nullable: true
+      sha256:
+        type: string
+      units:
+        items:
+          $ref: '#/definitions/remediation.UnitResult'
+        type: array
+      verification:
+        items:
+          $ref: '#/definitions/remediation.Verification'
+        type: array
+    type: object
+  server.ManagedRemediationCancelResponse:
+    properties:
+      state:
+        enum:
+        - cancelled
+        type: string
+    type: object
+  server.ManagedRemediationCapabilitiesResponse:
+    properties:
+      available:
+        type: boolean
+      can_consent:
+        type: boolean
+      can_generate:
+        type: boolean
+      generation_reason:
+        type: string
+      limits:
+        items:
+          type: string
+        type: array
+      maintenance_creation_available:
+        type: boolean
+      maintenance_creation_reason:
+        type: string
+      profile:
+        type: string
+      publication_available:
+        type: boolean
+      publication_reason:
+        type: string
+      reason:
+        type: string
+      target_suggestions_reason:
+        type: string
+      target_suggestions_url:
+        type: string
+    type: object
+  server.ManagedRemediationConsent:
+    properties:
+      enabled:
+        type: boolean
+    type: object
+  server.ManagedRemediationGenerateRequest:
+    properties:
+      revision:
+        type: integer
+      units:
+        items:
+          $ref: '#/definitions/server.managedSelection'
+        type: array
+    type: object
+  server.ManagedRemediationJobResponse:
+    properties:
+      base_sha:
+        type: string
+      error:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      repo_id:
+        type: string
+      result:
+        $ref: '#/definitions/server.ManagedRemediationResultResponse'
+      revision:
+        type: integer
+      source_ref:
+        type: string
+      state:
+        enum:
+        - queued_prepare
+        - preparing
+        - awaiting_selection
+        - queued_generate
+        - generating
+        - ready
+        - failed
+        - cancelled
+        - expired
+        type: string
+      target_branch:
+        type: string
+    type: object
+  server.ManagedRemediationPrepareRequest:
+    properties:
+      expected_head_sha:
+        description: |-
+          ExpectedHeadSHA is optional for branch-source drafts, must be a full
+          40- or 64-character hexadecimal SHA, and returns 409 on a stale head.
+          It is rejected for exact shipped-release sources.
+        type: string
+      maintenance_target:
+        description: MaintenanceTarget requires an explicit existing TargetBranch
+          when true.
+        type: boolean
+      release_id:
+        type: string
+      target_branch:
+        type: string
+      vulns:
+        items:
+          type: string
+        type: array
+    type: object
+  server.ManagedRemediationResultResponse:
+    properties:
+      artifact:
+        $ref: '#/definitions/server.ManagedRemediationArtifactResponse'
+      error:
+        type: string
+      modules:
+        items:
+          $ref: '#/definitions/remediation.ManagedModule'
+        type: array
+      unavailable:
+        type: string
+    type: object
+  server.ManagedRemediationRevisionRequest:
+    properties:
+      revision:
+        type: integer
+    type: object
   server.addReleaseClientRequest:
     properties:
       client_slug:
@@ -973,6 +1337,11 @@ definitions:
     type: object
   server.advisoryMatchRequest:
     properties:
+      include_ranges:
+        description: |-
+          Remediation needs the complete affected intervals, not a guessed target
+          based on the first fixed boundary.
+        type: boolean
       purls:
         items:
           type: string
@@ -2575,8 +2944,65 @@ definitions:
         - $ref: '#/definitions/storageusage.Sample'
         description: Sample is null until the sampler's first pass has completed.
     type: object
+  server.managedMaintenanceMapping:
+    properties:
+      id:
+        type: string
+      tag_pattern:
+        type: string
+      target_template:
+        type: string
+    type: object
+  server.managedMaintenanceSettings:
+    properties:
+      allow_creation:
+        type: boolean
+      mappings:
+        items:
+          $ref: '#/definitions/server.managedMaintenanceMapping'
+        type: array
+    type: object
+  server.managedMaintenanceSuggestion:
+    properties:
+      can_create:
+        type: boolean
+      evidence:
+        $ref: '#/definitions/forge.MaintenanceEvidence'
+      mapping:
+        $ref: '#/definitions/server.managedMaintenanceMapping'
+      reason:
+        type: string
+      target_branch:
+        type: string
+    type: object
+  server.managedReleaseSource:
+    properties:
+      release_id:
+        type: string
+      release_version:
+        type: string
+      sha:
+        type: string
+      tag:
+        type: string
+    type: object
+  server.managedSelection:
+    properties:
+      id:
+        type: string
+      upgrade_level:
+        type: string
+      version_targets:
+        items:
+          $ref: '#/definitions/remediation.VersionTarget'
+        type: array
+    type: object
   server.matchedAdvisoryResponse:
     properties:
+      affected_ranges:
+        items:
+          $ref: '#/definitions/advisorydb.Range'
+        type: array
       canonical_id:
         type: string
       cvss:
@@ -3080,6 +3506,8 @@ definitions:
           Decision is the package policy's verdict (allow, hold, deny) with
           its reason, when the policy evaluator is configured.
         type: string
+      private_namespace:
+        type: boolean
       purl:
         type: string
       reason:
@@ -10062,6 +10490,855 @@ paths:
       summary: Resolve release divergence
       tags:
       - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}:
+    get:
+      description: Poll for preparation/generation phases, normalized modules, unavailable
+        reasons and verified artifact summaries. Only state=ready permits download/publication;
+        artifact presence alone is insufficient. Patch bytes, complete publication
+        files, storage keys and leases are not exposed. Expired drafts return 410.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Managed draft UUID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedRemediationJobResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get a managed remediation draft
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/cancel:
+    post:
+      description: Requires write authorization and vulnerabilities:write. Revokes
+        the job lease, fences active workloads and schedules private cleanup. The
+        Kubernetes controller reconciles cleanup/expiry. Serialized publication finishes
+        before cancellation takes effect; previously published branches/PRs are not
+        deleted. No request body is required.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Managed draft UUID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedRemediationCancelResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Cancel a managed remediation draft
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/generate:
+    post:
+      consumes:
+      - application/json
+      description: Requires an enabled matching Kubernetes controller, write authorization
+        and vulnerabilities:write. Returns 503 without enqueue when execution is unavailable.
+        Select server-discovered unit IDs, patch/minor/major ceilings and optional
+        exact/cached-Gossip targets. Paths, hashes, source identity and profile remain
+        server-owned; changed profiles require new preparation. Verification/relock
+        failure never produces a ready artifact.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Prepared managed draft UUID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      - description: Current revision and selected normalized units
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.ManagedRemediationGenerateRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedRemediationJobResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Generate and verify selected remediation units
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/patch:
+    get:
+      description: Returns raw UTF-8 unified diff bytes as an attachment, not a JSON/base64
+        envelope. Requires current repository read authorization and vulnerabilities:read,
+        ready state, unexpired storage and complete verification/digest checks. Errors
+        use the standard JSON error envelope.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Ready managed draft UUID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - text/x-diff
+      - application/json
+      responses:
+        "200":
+          description: Raw verified UTF-8 unified dependency patch
+          headers:
+            Cache-Control:
+              description: private, no-store
+              type: string
+            Content-Disposition:
+              description: attachment; filename=hibou-remediation.patch
+              type: string
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Download a verified dependency patch
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/{jobID}/publish:
+    post:
+      consumes:
+      - application/json
+      description: Publishes only a ready, verified managed artifact at the reviewed
+        revision; local-artifact upload is unsupported. Requires current admin authorization,
+        vulnerabilities:write, organization consent, GitHub App propose tier and installation
+        contents/PR write permissions. Rechecks immutable repository identity and
+        pinned target head. Uses a complete Git tree/commit and deterministic hibou/
+        ref without force updates, then creates/reuses a PR with durable auditing.
+        No merge, tag or release is performed.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Ready managed draft UUID
+        in: path
+        name: jobID
+        required: true
+        type: string
+      - description: Reviewed current draft revision
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.ManagedRemediationRevisionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/forge.PullRequest'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Publish a managed remediation pull request
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/capabilities:
+    get:
+      description: Reports opt-in Kubernetes execution readiness for the exact configured
+        image/toolchain/mirror profile and caller permissions. Historical runtime-controller
+        heartbeats cannot enable it. No dependency tools run in the API process.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedRemediationCapabilitiesResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get managed remediation capabilities
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/consent:
+    put:
+      consumes:
+      - application/json
+      description: Organization-wide admin authorization and admin:write are required;
+        a token restricted to one repository cannot grant organization consent. This
+        consent alone does not grant caller/App write permissions or bypass operator
+        maintenance allowlists.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository authorization context
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Explicit consent state
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.ManagedRemediationConsent'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedRemediationConsent'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Set organization managed remediation consent
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/maintenance-settings:
+    get:
+      description: Returns organization-owned tag patterns/target templates, current
+        configuration authority, branch/PR consent and creation availability/reason.
+        Requires repository visibility and vulnerabilities:read or admin:read. These
+        mappings are distinct from dependency branch-inventory policy.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository authorization context
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedMaintenanceSettingsResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Get maintenance-target mapping settings
+      tags:
+      - remediation
+    put:
+      consumes:
+      - application/json
+      description: Requires organization-wide admin authorization and admin:write;
+        repository-scoped admin tokens are insufficient. Saves at most 50 explicit
+        tag globs and safe target templates using major/minor/patch/tag placeholders.
+        allow_creation requires separate organization branch/PR consent, an operator
+        allowlist and caller/App permissions; saving settings never creates a branch.
+        Response contains settings, can_configure and branch_pr_consent.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository authorization context
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Organization maintenance policy, separate from dependencies.branches
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.managedMaintenanceSettings'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedMaintenanceSettingsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Configure explicit release-line maintenance mappings
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/maintenance-targets:
+    get:
+      description: Matches explicit organization tag patterns against the exact release
+        snapshot/tag binding. Suggestions include live tag confirmation, existing
+        branch head and tag-to-target ancestry evidence, with creation availability/reasons.
+        Does not guess writes or create branches. Arbitrary manual existing-branch
+        selection remains available.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Release UUID with an exact shipped snapshot
+        in: query
+        name: release_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedMaintenanceSuggestionsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Suggest mapped maintenance targets for a shipped release
+      tags:
+      - remediation
+    post:
+      consumes:
+      - application/json
+      description: Requires admin authorization, vulnerabilities:write, both organization
+        consents, GitHub App propose/contents-write permission, and an operator creation
+        allowlist (empty disables creation). Confirms the current mapping, release/snapshot/source
+        tag/full SHA and live immutable repository/tag. Creates only a missing ref
+        at the exact confirmed SHA; never updates, deletes, force-pushes or repoints
+        an existing branch. Audited retries reconcile only the same source SHA with
+        a prior durable intent. Does not generate a patch or publish a PR.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Confirmed mapped target and exact shipped source
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.ManagedMaintenanceCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/forge.MaintenanceCreated'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Create a mapped maintenance target at a confirmed release SHA
+      tags:
+      - remediation
+  /orgs/{provider}/{slug}/repos/{repoSlug}/remediation/prepare:
+    post:
+      consumes:
+      - application/json
+      description: Requires an enabled matching Kubernetes controller, repository
+        write authorization and vulnerabilities:write. Returns 503 without enqueue
+        when execution is unavailable. Pins the workload profile and target branch
+        or exact shipped snapshot. maintenance_target=true requires an explicit existing
+        branch. Optional expected_head_sha must be a full 40- or 64-character hexadecimal
+        branch-source SHA; it is not supported for exact shipped-release sources.
+        No local patch/artifact upload is supported.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      - description: Immutable source and optional advisory selection
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/server.ManagedRemediationPrepareRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.ManagedRemediationJobResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Prepare a managed dependency remediation draft
+      tags:
+      - remediation
   /orgs/{provider}/{slug}/repos/{repoSlug}/scan-coverage:
     get:
       description: 'Per scanner: what the policy asks (configured) and what actually

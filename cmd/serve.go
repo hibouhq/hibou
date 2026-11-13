@@ -16,7 +16,6 @@ import (
 	"github.com/hibouhq/hibou/internal/auth"
 	"github.com/hibouhq/hibou/internal/config"
 	"github.com/hibouhq/hibou/internal/delta"
-	"github.com/hibouhq/hibou/internal/forge"
 	hiboumcp "github.com/hibouhq/hibou/internal/mcp"
 	"github.com/hibouhq/hibou/internal/rbac"
 	"github.com/hibouhq/hibou/internal/server"
@@ -73,38 +72,9 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("creating rbac enforcer: %w", err)
 		}
 
-		forges := make(map[string]forge.Provider)
-		for _, fc := range cfg.Forges {
-			if fc.ClientID == "" {
-				// ValidateStartup refuses this outside development.
-				log.Warn().Str("id", fc.ID).Msg("forge has no OAuth client id, skipping (development only)")
-				continue
-			}
-			switch fc.Type {
-			case "github":
-				var opts []forge.GitHubOption
-				if fc.AppID > 0 && fc.PrivateKey != "" {
-					opts = append(opts, forge.WithAppCredentials(fc.AppID, []byte(fc.PrivateKey)))
-				}
-				tier, err := forge.ParseTier(fc.Tier)
-				if err != nil {
-					return fmt.Errorf("forge %q: %w", fc.ID, err)
-				}
-				opts = append(opts, forge.WithTier(tier))
-				if len(cfg.Auth.AllowedOrgs) > 0 {
-					// Only takes effect without App credentials (OAuth App
-					// login): App mode checks membership with the
-					// installation token instead.
-					opts = append(opts, forge.WithOrgMembershipScope())
-				}
-				forges[fc.ID] = forge.NewGitHub(fc.ClientID, fc.ClientSecret, fc.WebhookSecret, opts...)
-			case "forgejo", "gitea":
-				forges[fc.ID] = forge.NewForgejo(fc.URL, fc.ClientID, fc.ClientSecret, fc.WebhookSecret, fc.Token)
-			case "gitlab":
-				forges[fc.ID] = forge.NewGitLab(fc.URL, fc.ClientID, fc.ClientSecret, fc.WebhookSecret)
-			default:
-				log.Warn().Str("type", fc.Type).Str("id", fc.ID).Msg("unknown forge type, skipping")
-			}
+		forges, err := configuredForges(cfg, log)
+		if err != nil {
+			return err
 		}
 
 		queries := store.NewQueries(db)

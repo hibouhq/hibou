@@ -1,8 +1,8 @@
 # Hibou Threat Model
 
-Last updated: October 2026
-Version: 1.1
-Scope: This document covers Hibou's production and development attack surface as implemented in the Go API server, embedded SPA, PostgreSQL data store, forge integrations, webhook ingestion, upload pipeline, notification system, MCP endpoint, and supported deployment patterns described in the repository as of October 2026. Version 1.1 records the residual risks closed since 1.0 (see "Mitigated since version 1.0"), the CLI and CI trust model, and release verification.
+Last updated: November 2026
+Version: 1.2
+Scope: This document covers Hibou's production and development attack surface as implemented in the Go API server, embedded SPA, PostgreSQL data store, forge integrations, webhook ingestion, upload pipeline, notification system, MCP endpoint, and supported deployment patterns. Version 1.2 adds the opt-in managed Kubernetes workload boundary in ADR-056. The remaining baseline reflects the October 2026 review; this update does not claim a fresh audit of unrelated components.
 
 ## Executive Summary
 
@@ -426,6 +426,83 @@ The CI job is a single job: the devcontainer runs dependency installs, tests and
 - `bake-metadata.json` and `chart-ref.txt`, written in the container, are read as data and must match a digest-reference pattern before anything is signed.
 - Residual risk: the devcontainer is privileged (docker-in-docker for the image build), and the runner user has passwordless sudo. Code that runs in the container, such as a compromised npm or Go dependency, can escape to the runner, alter the local actions, and read the job's OIDC request token, so it could obtain a signature or attestation under this workflow's identity for an artifact of its choosing. The checks above stop tampering through the workspace only. Verifying by digest (above) limits the damage to artifacts that an attacker actually got published; removing it requires building images without a privileged container, or moving signing to a separate job that never shares a runner with untrusted code.
 - The CLI uploaded to Hibou is built from this commit, so its own code runs on the host with the Hibou token and, in principle, the OIDC request token. It runs after signing, so it cannot change what was signed, but the same identity caveat applies.
+
+## Managed Kubernetes Workloads (ADR-056)
+
+The initial integration runs dependency generation and a fresh independent
+verification workload. It is disabled by default; managed SAST/dynamic testing
+are not enabled by this implementation. The API authorizes typed, immutable
+intent but has no Kubernetes Job authority and never executes package managers.
+Cluster admission/CNI/runtime enforcement requires live operator qualification;
+unit tests, rendered manifests and successful API dry runs do not prove node
+isolation or blocked network traffic.
+
+### Assets and boundaries
+
+- **TB-8, controller to Kubernetes:** a separate trusted controller holds narrow
+  namespaced Job/pod lifecycle authority. Execution uses a dedicated namespace,
+  Helm-managed by default or an operator-supplied existing namespace. There is
+  no namespace per repository. Admission rules independently constrain the Pod
+  spec because RBAC permission to create Jobs does not constrain their contents.
+- **TB-9, untrusted workload to broker:** the entire pod, its source, candidate
+  result and attempt credential may be compromised. HTTPS capabilities are
+  attempt-scoped, bounded and fenced, with live Job/Pod UID checks. They grant
+  only input acquisition, matching/registry operations and candidate upload,
+  never database access, forge tokens/writes or another tenant's inputs.
+- **TB-10, candidate to trusted result:** candidate flags and Job exit status
+  cannot authorize publication. The controller checks immutable source/file
+  hashes, reconstructs the patch and repeats graph/version/advisory/policy
+  checks; a fresh verification pod performs native lockfile consistency checks.
+  Download/publication retain separate caller, repository, revision and expiry
+  authorization. Publication does not run from the workload.
+- **TB-11, acquisition:** the trusted broker sends canonical npm identities to
+  one approved HTTPS mirror. Registry credentials stay on the controller and
+  are restricted to that origin; internal CA trust is explicit. Metadata archive
+  URLs are normalized only within approved identity/origin rules. Redirects,
+  foreign archives, missing packages and stale/missing required policy evidence
+  fail closed. Mirror-only still requires internal networking and a preloaded
+  toolchain image; it is not a zero-network execution claim.
+
+The added assets are source snapshots, per-attempt capabilities, Job/Pod UIDs,
+image/toolchain/mirror profiles, candidate/private verified artifacts, registry
+credentials and the integrity/availability of node and cluster policy.
+
+### STRIDE considerations
+
+| Category | Threat | Implemented controls / required deployment boundary | Residual risk |
+| --- | --- | --- | --- |
+| Spoofing | A stale pod or copied labels impersonate another attempt | Random attempt capability, TLS, immutable UID binding, lease fencing and exact-profile readiness | Theft of a current capability permits that attempt's narrow operations; it is not workload attestation |
+| Tampering | A workload forges verification, source identity or patch paths | Committed input hashes, bounded data-only transport, independent patch reconstruction, graph/policy recheck and a fresh native verification pod | A native-tool/runtime exploit can compromise a verification pod; separate execution reduces shared-state exposure but is not a mathematical proof of package-manager correctness |
+| Repudiation | Controller restart or retry obscures who ran or published work | Durable revisions/leases, Job/Pod UID and profile events, separate publication intent/outcome | Audit data remains subject to existing database/administrator integrity risks |
+| Information disclosure | Workload steals source, forge/registry credentials or cross-job results | Dedicated execution namespace, no application Secrets/runtime sockets/host paths/API role, read-only rootfs, scoped broker, default-deny network and bounded private artifacts | A compromised trusted controller retains its configured DB/forge/storage authority; node operators and cluster administrators remain trusted |
+| Denial of service | Repository/tool exhausts CPU, PIDs, disk, requests, queue or cleanup | Deadlines, bounded I/O, class resources, namespace quotas, per-attempt budgets, cancellation and UID-preconditioned cleanup | Cluster CNI, node PID/runtime settings, image caches and storage eviction must be configured/qualified by operators; shared-node contention remains possible |
+| Elevation of privilege | Job creator selects a stronger Pod spec or escapes via host UID/capabilities | Independent admission, restricted PSA, mandatory `hostUsers: false`, non-root UID, no escalation, all capabilities dropped, seccomp and qualified RuntimeClass | User namespaces mitigate host UID/capability exposure but do not prevent every kernel/runtime escape; namespace boundaries alone are not sandboxes |
+
+### Operational requirements and limitations
+
+Use the execution namespace only for this installation's qualified jobs; do not
+co-locate trusted services or arbitrary tenant workloads there. Existing namespaces
+need restricted PSA labels and equivalent independent admission/network controls.
+The controller cannot administer those policies. Kubernetes 1.33+ API support
+does not establish that the node kernel, CRI/OCI runtime, RuntimeClass and volume
+filesystems support user namespaces; reject unsupported profiles without a
+`hostUsers: true`, root, privileged or broader-network fallback.
+
+Qualify negative admission/RBAC, CNI egress and cross-tenant tests, cancellation/
+late results, resource exhaustion, TLS/auth and missing-cache tests on the actual
+cluster before enabling production execution. Maintain kernel/runtime/image
+patching and trusted registry import/signature/SBOM policy. OCI images must be
+available internally by digest. Artifactory/Nexus must be populated/cache-only
+or prevented from reaching the public Internet for a truly disconnected
+installation; selecting an internal mirror URL alone does not enforce that.
+
+Stored advisory and package-policy data remain an operator-maintained evidence
+source. Import complete, current evidence before disconnected operation; required
+package signals are checked for freshness, and absent approvals must not become
+an allowed upgrade. Fully network-disconnected execution, private npm namespaces,
+other remediation ecosystems and managed SAST need separately qualified profiles.
+Kubernetes deletion/TTL is not secure erasure; monitor failed artifact/scratch
+cleanup, node caches and retention/storage quotas.
 
 ## Residual Risks & Recommendations
 

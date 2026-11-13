@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+
+	"github.com/hibouhq/hibou/internal/gitexec"
 )
 
 type GitleaksProvider struct {
@@ -175,10 +177,7 @@ func scanHome(repoDir string) string {
 
 // gitCommand builds a git invocation with the minimal scanner environment.
 func gitCommand(ctx context.Context, home string, extraEnv []string, args ...string) *exec.Cmd {
-	// #nosec G204 -- fixed binary; arguments are built by Hibou, with "--" before untrusted positionals.
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = scannerEnv(home, extraEnv...)
-	return cmd
+	return gitexec.Command(ctx, gitexec.Config{Home: home, Env: extraEnv}, args...)
 }
 
 // ErrBaseCommitUnreachable marks an incremental scan whose diff base no

@@ -2,6 +2,102 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "hibou.workloadNamespace" -}}
+{{- default (printf "%s-workloads" (include "hibou.fullname" . | trunc 53 | trimSuffix "-")) .Values.workload.namespace.name -}}
+{{- end -}}
+
+{{- define "hibou.workloadController" -}}
+{{- printf "%s-workload-controller" (include "hibou.fullname" . | trunc 43 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "hibou.workloadServiceAccount" -}}
+{{- printf "%s-remediation" (include "hibou.fullname" . | trunc 51 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "hibou.workloadBrokerURL" -}}
+{{- printf "https://%s.%s.svc:8443" (include "hibou.workloadController" .) .Release.Namespace -}}
+{{- end -}}
+
+{{- define "hibou.workloadImagePullSecretNames" -}}
+{{- $names := list -}}
+{{- range .Values.workload.imagePullSecrets -}}
+{{- $names = append $names .name -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{- define "hibou.validateWorkload" -}}
+{{- if .Values.workload.enabled -}}
+{{- if not (semverCompare ">=1.33.0-0 <1.37.0-0" .Capabilities.KubeVersion.Version) -}}
+{{- fail "workload supports Kubernetes 1.33-1.36 only; hostUsers:false support must be operator-qualified" -}}
+{{- end -}}
+{{- $ns := include "hibou.workloadNamespace" . -}}
+{{- if or (eq $ns .Release.Namespace) (gt (len $ns) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $ns)) -}}
+{{- fail "workload.namespace.name must be a dedicated DNS-label namespace different from the API namespace" -}}
+{{- end -}}
+{{- if not .Values.workload.namespace.create -}}
+{{- $existing := lookup "v1" "Namespace" "" $ns -}}
+{{- if $existing -}}
+{{- $labels := default dict $existing.metadata.labels -}}
+{{- if or (ne (index $labels "pod-security.kubernetes.io/enforce") "restricted") (not (has (index $labels "pod-security.kubernetes.io/enforce-version") (list "v1.33" "v1.34" "v1.35" "v1.36" "latest"))) -}}
+{{- fail "existing execution namespace must enforce PSA restricted at v1.33 or later before enabling workload execution" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$" .Values.workload.image) -}}
+{{- fail "workload.image must be an offline-ready image pinned by sha256 digest" -}}
+{{- end -}}
+{{- if or (not .Values.workload.runtimeValidated) (not .Values.workload.runtimeClassName) -}}
+{{- fail "workload.runtimeClassName and workload.runtimeValidated=true require operator sandbox/user namespace qualification" -}}
+{{- end -}}
+{{- if and .Values.managedRemediation.enabled (or (not .Values.managedRemediation.profile.npmVersion) (not .Values.managedRemediation.profile.nodeVersion) (not .Values.managedRemediation.profile.npmPath) (not .Values.managedRemediation.profile.nodePath) (not .Values.managedRemediation.profile.toolPath)) -}}
+{{- fail "managedRemediation.profile.npmVersion and nodeVersion must identify the exact preinstalled workload image profile" -}}
+{{- end -}}
+{{- if and .Values.managedRemediation.enabled (not (regexMatch "^https://[^/@?#[:space:]]+(/[^?#[:space:]]*)?$" .Values.managedRemediation.registry.url)) -}}
+{{- fail "managedRemediation.registry.url must identify the approved HTTPS npm mirror" -}}
+{{- end -}}
+{{- if and .Values.managedRemediation.enabled (eq (include "hibou.artifactBackend" .) "filesystem") (ne (include "hibou.artifactFilesystemPersistenceIsRWX" .) "true") -}}
+{{- fail "managed workloads require shared artifact storage: use bundled/external S3 or artifact.filesystem.persistence.enabled=true with accessMode=ReadWriteMany; controller-local filesystem and RWO are unsupported" -}}
+{{- end -}}
+{{- if and .Values.managedRemediation.enabled (eq (include "hibou.artifactBackend" .) "filesystem") -}}
+{{- $artifactPath := include "hibou.artifactFilesystemPath" . -}}
+{{- if or (not (hasPrefix "/" $artifactPath)) (eq $artifactPath "/") (eq $artifactPath "/scratch") (hasPrefix "/etc/hibou" $artifactPath) (contains "/../" $artifactPath) (hasSuffix "/.." $artifactPath) -}}
+{{- fail "shared artifact filesystem path must be an absolute non-root directory that does not shadow controller scratch/TLS/credential mounts" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (or .Values.managedRemediation.registry.tokenEnabled .Values.managedRemediation.registry.caEnabled) (not .Values.managedRemediation.registry.existingSecret) -}}
+{{- fail "managedRemediation.registry.existingSecret is required for token/CA file mounts" -}}
+{{- end -}}
+{{- if or (and .Values.managedRemediation.registry.tokenEnabled (not .Values.managedRemediation.registry.tokenKey)) (and .Values.managedRemediation.registry.caEnabled (not .Values.managedRemediation.registry.caKey)) -}}
+{{- fail "enabled registry token/CA mounts require nonempty tokenKey/caKey" -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .Values.workload.runtimeClassName) -}}
+{{- fail "workload.runtimeClassName must be a DNS label" -}}
+{{- end -}}
+{{- if or (not .Values.workload.tls.existingSecret) (not (contains "-----BEGIN CERTIFICATE-----" .Values.workload.caBundle)) -}}
+{{- fail "workload.tls.existingSecret and workload.caBundle public PEM are required" -}}
+{{- end -}}
+{{- if or (not .Values.workload.tls.certKey) (not .Values.workload.tls.keyKey) -}}
+{{- fail "workload.tls.certKey and keyKey are required" -}}
+{{- end -}}
+{{- if or (lt (int .Values.workload.deadlineSeconds) 1) (gt (int .Values.workload.deadlineSeconds) 1800) -}}
+{{- fail "workload.deadlineSeconds must be between 1 and 1800" -}}
+{{- end -}}
+{{- range $group := list .Values.workload.job.resources.requests .Values.workload.job.resources.limits .Values.workload.controller.resources.requests .Values.workload.controller.resources.limits -}}
+{{- if ne (len $group) 3 -}}{{- fail "workload job/controller resources must specify exactly cpu, memory, ephemeral-storage requests and limits" -}}{{- end -}}
+{{- range $resource := list "cpu" "memory" "ephemeral-storage" -}}
+{{- if not (regexMatch "^[1-9][0-9]*(m|Ki|Mi|Gi)?$" (toString (index $group $resource))) -}}{{- fail "workload job/controller resources require positive bounded quantities" -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if or (lt (int .Values.workload.quota.jobs) 1) (gt (int .Values.workload.quota.jobs) 100) (lt (int .Values.workload.quota.pods) 1) (gt (int .Values.workload.quota.pods) 100) -}}
+{{- fail "workload quota jobs/pods must be between 1 and 100" -}}
+{{- end -}}
+{{- if and .Values.workload.dns.enabled (or (not .Values.workload.dns.namespace) (not .Values.workload.dns.podSelector)) -}}
+{{- fail "workload DNS requires both namespace and nonempty podSelector" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "hibou.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}

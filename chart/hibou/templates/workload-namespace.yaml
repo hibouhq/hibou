@@ -1,0 +1,35 @@
+{{- include "hibou.validateWorkload" . -}}
+{{- if .Values.workload.enabled }}
+{{- if .Values.workload.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+---
+{{- end }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "hibou.workloadServiceAccount" . }}
+  namespace: {{ include "hibou.workloadNamespace" . }}
+  labels:
+    {{- include "hibou.labels" . | nindent 4 }}
+spec:
+  hard:
+    count/jobs.batch: {{ .Values.workload.quota.jobs | quote }}
+    pods: {{ .Values.workload.quota.pods | quote }}
+    requests.cpu: {{ mul (int .Values.workload.quota.pods) 64 | quote }}
+    limits.cpu: {{ mul (int .Values.workload.quota.pods) 64 | quote }}
+    requests.memory: {{ printf "%dGi" (mul (int .Values.workload.quota.pods) 64) | quote }}
+    limits.memory: {{ printf "%dGi" (mul (int .Values.workload.quota.pods) 64) | quote }}
+    requests.ephemeral-storage: {{ printf "%dGi" (mul (int .Values.workload.quota.pods) 64) | quote }}
+    limits.ephemeral-storage: {{ printf "%dGi" (mul (int .Values.workload.quota.pods) 64) | quote }}
+{{- end }}

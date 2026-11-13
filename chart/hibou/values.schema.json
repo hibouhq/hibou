@@ -1,0 +1,240 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "namespace", "image", "imagePullSecrets", "runtimeClassName", "runtimeValidated", "deadlineSeconds", "caBundle", "tls", "job", "controller", "quota", "dns"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "create"],
+          "properties": {
+            "name": {"$ref": "#/definitions/optionalDNSLabel"},
+            "create": {"type": "boolean"}
+          }
+        },
+        "image": {"anyOf": [{"const": ""}, {"$ref": "#/definitions/digestImage"}]},
+        "imagePullSecrets": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253,
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+              }
+            }
+          }
+        },
+        "runtimeClassName": {"$ref": "#/definitions/optionalDNSLabel"},
+        "runtimeValidated": {"type": "boolean"},
+        "deadlineSeconds": {"type": "integer", "minimum": 1, "maximum": 1800},
+        "caBundle": {"type": "string", "maxLength": 65536},
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingSecret", "certKey", "keyKey"],
+          "properties": {
+            "existingSecret": {"$ref": "#/definitions/optionalSecretName"},
+            "certKey": {"$ref": "#/definitions/secretKey"},
+            "keyKey": {"$ref": "#/definitions/secretKey"}
+          }
+        },
+        "job": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resources"],
+          "properties": {"resources": {"$ref": "#/definitions/resources"}}
+        },
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resources"],
+          "properties": {"resources": {"$ref": "#/definitions/resources"}}
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["jobs", "pods"],
+          "properties": {
+            "jobs": {"type": "integer", "minimum": 1, "maximum": 100},
+            "pods": {"type": "integer", "minimum": 1, "maximum": 100}
+          }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "namespace", "podSelector"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "namespace": {"$ref": "#/definitions/optionalDNSLabel"},
+            "podSelector": {
+              "type": "object",
+              "additionalProperties": {"type": "string", "minLength": 1}
+            }
+          },
+          "if": {"properties": {"enabled": {"const": true}}},
+          "then": {
+            "properties": {
+              "namespace": {"minLength": 1},
+              "podSelector": {"minProperties": 1}
+            }
+          }
+        }
+      },
+      "if": {"properties": {"enabled": {"const": true}}},
+      "then": {
+        "properties": {
+          "image": {"$ref": "#/definitions/digestImage"},
+          "runtimeClassName": {"minLength": 1},
+          "runtimeValidated": {"const": true},
+          "caBundle": {"pattern": "-----BEGIN CERTIFICATE-----[\\s\\S]+-----END CERTIFICATE-----"},
+          "tls": {"properties": {"existingSecret": {"minLength": 1}}}
+        }
+      }
+    },
+    "managedRemediation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "registry", "profile", "maintenanceBranchAllowlist"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "maintenanceBranchAllowlist": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "registry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "existingSecret", "tokenKey", "caKey", "tokenEnabled", "caEnabled"],
+          "properties": {
+            "url": {"anyOf": [{"const": ""}, {"$ref": "#/definitions/httpsURL"}]},
+            "existingSecret": {"$ref": "#/definitions/optionalSecretName"},
+            "tokenKey": {"$ref": "#/definitions/secretKey"},
+            "caKey": {"$ref": "#/definitions/secretKey"},
+            "tokenEnabled": {"type": "boolean"},
+            "caEnabled": {"type": "boolean"}
+          },
+          "if": {
+            "anyOf": [
+              {"properties": {"tokenEnabled": {"const": true}}},
+              {"properties": {"caEnabled": {"const": true}}}
+            ]
+          },
+          "then": {"properties": {"existingSecret": {"minLength": 1}}}
+        },
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["npmPath", "npmVersion", "nodePath", "nodeVersion", "toolPath"],
+          "properties": {
+            "npmPath": {"type": "string", "pattern": "^/[^\\s:]+$", "maxLength": 1024},
+            "npmVersion": {"$ref": "#/definitions/pinnedVersion"},
+            "nodePath": {"type": "string", "pattern": "^/[^\\s:]+$", "maxLength": 1024},
+            "nodeVersion": {"$ref": "#/definitions/pinnedVersion"},
+            "toolPath": {"type": "string", "pattern": "^/[^\\s:]+(:/[^\\s:]+)*$", "maxLength": 4096}
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["workload", "managedRemediation"],
+        "properties": {
+          "workload": {"properties": {"enabled": {"const": true}}},
+          "managedRemediation": {"properties": {"enabled": {"const": true}}}
+        }
+      },
+      "then": {
+        "properties": {
+          "managedRemediation": {
+            "properties": {
+              "registry": {"properties": {"url": {"$ref": "#/definitions/httpsURL"}}},
+              "profile": {
+                "properties": {
+                  "npmVersion": {"minLength": 1, "pattern": "^[^\\s]+$"},
+                  "nodeVersion": {"minLength": 1, "pattern": "^[^\\s]+$"}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "optionalDNSLabel": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "optionalSecretName": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+    },
+    "secretKey": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "digestImage": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$"
+    },
+    "httpsURL": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https://[^/@?#\\s]+(/[^?#\\s]*)?$"
+    },
+    "cpu": {
+      "anyOf": [
+        {"type": "integer", "minimum": 1, "maximum": 64},
+        {"type": "string", "pattern": "^[1-9][0-9]*m?$", "maxLength": 16}
+      ]
+    },
+    "pinnedVersion": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^$|^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "storage": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(Ki|Mi|Gi)?$",
+      "maxLength": 16
+    },
+    "resourceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory", "ephemeral-storage"],
+      "properties": {
+        "cpu": {"$ref": "#/definitions/cpu"},
+        "memory": {"$ref": "#/definitions/storage"},
+        "ephemeral-storage": {"$ref": "#/definitions/storage"}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"$ref": "#/definitions/resourceList"},
+        "limits": {"$ref": "#/definitions/resourceList"}
+      }
+    }
+  }
+}

@@ -25,6 +25,12 @@ bytecode.
 [ADR-036](036-automatic-scan-planning-and-verification.md) specifies automatic
 scope discovery, scan modes, and flow-aware finding verification.
 
+[ADR-056](056-secure-kubernetes-workload-execution.md) defines the common secure
+Kubernetes execution boundary, implemented first for opt-in managed remediation
+through internal mirrors. Managed scanners/builds remain future adapters. The
+threat model records the new boundary; live cluster qualification is required
+before production activation.
+
 ## Context
 
 Hibou ingests scanner reports but repository owners must currently assemble most

@@ -199,6 +199,16 @@ package names that squatters register ("slopsquatting"), which is what
 | `REMEDIATION` | Stored raw, not interpreted | Undocumented |
 | `risk` | Stored, not mapped to Hibou severity | Hibou severity is for vulnerabilities (ADR-038). Signals have their own vocabulary |
 
+Proposed remediation use (2026-11-11):
+[ADR-050](050-guided-remediation-pull-requests.md) lets the user explicitly
+choose **Suggested by deps.dev** alongside Automatic or an exact version in
+a dependency-fix draft. This is not implemented by the signal display above.
+The suggestion must pass Hibou advisory matching, the shared package-policy
+evaluator and combined dependency-graph resolution. A stored
+`recommended_version` is not a safety/compatibility verdict; missing or
+unevaluated evidence is shown explicitly. No automatic application or
+automatic replacement of the user's chosen version is introduced.
+
 ### 2. Signals are component attributes, not vulnerabilities
 
 A deprecation or a cooldown is a fact about a package version, not a weakness
