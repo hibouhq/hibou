@@ -326,6 +326,77 @@ func TestRunScanBasicFlow(t *testing.T) {
 	}
 }
 
+func TestRunScanMixedSourceRangesExcludeUnaffectedVersions(t *testing.T) {
+	store := newMockScannerStore()
+	cache := newMockCache()
+	ingester := newMockIngester()
+	advisoryID := uuid.New()
+	snapshotID := uuid.New()
+	affectedComponentID := uuid.New()
+
+	for _, version := range []string{"1.9.0", "2.10.0", "2.10.1", "3.5.0", "3.4.0"} {
+		id := uuid.New()
+		if version == "3.4.0" {
+			id = affectedComponentID
+		}
+		store.components = append(store.components, dbgen.Component{
+			ID: id, Name: "example", Version: version, Ecosystem: "npm",
+		})
+	}
+	store.affectedRanges[packageKey("npm", "example")] = []dbgen.AffectedRange{
+		{ID: uuid.New(), AdvisoryID: advisoryID, Ecosystem: "npm", PackageName: "example", Source: "trivy", Introduced: "3.4.0", Fixed: "3.4.2"},
+		{ID: uuid.New(), AdvisoryID: advisoryID, Ecosystem: "npm", PackageName: "example", Source: "osv", Introduced: "2.5.0", Fixed: "2.9.1"},
+		{ID: uuid.New(), AdvisoryID: advisoryID, Ecosystem: "npm", PackageName: "example", Source: "osv", Introduced: "3.0.0", Fixed: "3.4.2"},
+	}
+	store.advisories[advisoryID] = dbgen.Advisory{ID: advisoryID, CanonicalID: "TEST-1", Severity: dbgen.SeverityLevelHigh}
+	cache.results["osv"] = []provider.AdvisoryResult{{ProviderID: "TEST-1"}}
+	ingester.results["osv"] = map[string]uuid.UUID{"TEST-1": advisoryID}
+
+	service := New(store, cache, ingester, &mockBus{}, map[string]provider.AdvisoryProvider{"osv": mockProvider{name: "osv"}}, zerolog.Nop())
+	if _, err := service.RunScan(context.Background(), snapshotID, []string{"osv"}, "user"); err != nil {
+		t.Fatalf("RunScan returned error: %v", err)
+	}
+	// Both sources match the affected component; the database deduplicates
+	// their shared fingerprint, while this mock records both create attempts.
+	if len(store.vulnerabilities) != 2 {
+		t.Fatalf("expected two matching ranges, got %d", len(store.vulnerabilities))
+	}
+	for _, vuln := range store.vulnerabilities {
+		if !vuln.ComponentID.Valid || vuln.ComponentID.UUID != affectedComponentID {
+			t.Fatalf("matched unaffected component: %+v", vuln)
+		}
+	}
+	if got := freshCountForType(store.markStaleCalls, "dependency"); got != len(store.createdVulnIDs) {
+		t.Fatalf("stale cleanup received %d fresh IDs, want %d", got, len(store.createdVulnIDs))
+	}
+}
+
+func TestComponentMatchesTrivyExactVersionWithoutComparator(t *testing.T) {
+	service := New(newMockScannerStore(), newMockCache(), newMockIngester(), &mockBus{}, nil, zerolog.Nop())
+	for _, tt := range []struct {
+		name       string
+		ecosystem  string
+		installed  string
+		unaffected []string
+	}{
+		{"unsupported ecosystem", "packagist", "1.0.0", []string{"0.9.0", "1.1.0"}},
+		{"invalid version", "npm", "development", []string{"other", "0.0.0", "1.0.0"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rng := dbgen.AffectedRange{
+				Source: "trivy", Ecosystem: tt.ecosystem, PackageName: "example",
+				Introduced: tt.installed, LastAffected: tt.installed,
+			}
+			for _, version := range append([]string{tt.installed}, tt.unaffected...) {
+				component := dbgen.Component{Name: "example", Ecosystem: tt.ecosystem, Version: version}
+				if got, want := service.componentMatchesAffectedRange(component, rng), version == tt.installed; got != want {
+					t.Errorf("match(%q) = %v, want %v", version, got, want)
+				}
+			}
+		})
+	}
+}
+
 // A scan whose batch mixes malware and ordinary findings must emit TWO events:
 // the generic vulnerabilities.found without the malware identifiers, and one
 // malware.detected carrying only them — malware never drowns in the batch.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hibouhq/hibou/internal/advisory"
 	"github.com/hibouhq/hibou/internal/provider"
+	"github.com/hibouhq/hibou/internal/versioncmp"
 )
 
 func newTestProvider(t *testing.T, handler http.HandlerFunc) *Provider {
@@ -93,7 +94,7 @@ func TestQueryPackagesMapsVulnerabilities(t *testing.T) {
 		t.Fatalf("expected 1 affected range, got %d", len(got.AffectedRanges))
 	}
 	rng := got.AffectedRanges[0]
-	if rng.Ecosystem != "npm" || rng.PackageName != "lodash" || rng.Fixed != "4.17.21" || rng.Introduced != "0" || rng.Source != "trivy" {
+	if rng.Ecosystem != "npm" || rng.PackageName != "lodash" || rng.Fixed != "4.17.21" || rng.Introduced != "4.17.15" || rng.Source != "trivy" {
 		t.Errorf("unexpected affected range: %+v", rng)
 	}
 	choice := advisory.Headline(got.Ratings)
@@ -183,7 +184,7 @@ func TestQueryPackagesNoFixedVersionUsesLastAffected(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	rng := results[0].AffectedRanges[0]
-	if rng.Ecosystem != "pypi" || rng.Fixed != "" || rng.LastAffected != "2.20.0" {
+	if rng.Ecosystem != "pypi" || rng.Introduced != "2.20.0" || rng.Fixed != "" || rng.LastAffected != "2.20.0" {
 		t.Errorf("unexpected range without fix: %+v", rng)
 	}
 }
@@ -234,10 +235,8 @@ func TestQueryPackagesMultiFixedVersionPicksBranchAboveInstalled(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	rng := results[0].AffectedRanges[0]
-	// 2.0.1 is the smallest fix strictly greater than the installed 2.0.0, so
-	// [0, 2.0.1) keeps the installed version inside the affected range.
-	if rng.Fixed != "2.0.1" {
-		t.Errorf("expected fixed 2.0.1 for installed 2.0.0, got %q", rng.Fixed)
+	if rng.Introduced != "2.0.0" || rng.Fixed != "2.0.1" {
+		t.Errorf("expected range [2.0.0, 2.0.1), got %+v", rng)
 	}
 }
 
@@ -339,12 +338,12 @@ func TestQueryPackagesNoFixAboveInstalledUsesLastAffected(t *testing.T) {
 	}
 	rng := results[0].AffectedRanges[0]
 	// No fix is strictly greater than 3.0.0, so bound by the installed version.
-	if rng.Fixed != "" || rng.LastAffected != "3.0.0" {
-		t.Errorf("expected LastAffected=3.0.0 with empty Fixed, got %+v", rng)
+	if rng.Introduced != "3.0.0" || rng.Fixed != "" || rng.LastAffected != "3.0.0" {
+		t.Errorf("expected exact range for 3.0.0, got %+v", rng)
 	}
 }
 
-func TestQueryPackagesUnregisteredComparatorUsesFirstFix(t *testing.T) {
+func TestQueryPackagesUnregisteredComparatorUsesExactVersion(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "Scan") {
 			writeJSON(t, w, scanResponse{Results: []scanResult{{
@@ -372,9 +371,72 @@ func TestQueryPackagesUnregisteredComparatorUsesFirstFix(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	rng := results[0].AffectedRanges[0]
-	// packagist has no versioncmp comparator, so the first listed fix is used.
-	if rng.Ecosystem != "packagist" || rng.PackageName != "vendor/pkg" || rng.Fixed != "1.0.1" {
+	if rng.Ecosystem != "packagist" || rng.PackageName != "vendor/pkg" || rng.Introduced != "1.0.0" || rng.Fixed != "" || rng.LastAffected != "1.0.0" {
 		t.Errorf("unexpected range for unregistered comparator: %+v", rng)
+	}
+}
+
+func TestBuildAffectedRangeBoundsInstalledVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		installed  string
+		fixed      string
+		wantFixed  string
+		wantLast   string
+		unaffected []string
+	}{
+		{
+			name: "multiple release branches", installed: "3.4.0",
+			fixed: "2.9.1, 3.4.2", wantFixed: "3.4.2",
+			unaffected: []string{"1.9.0", "2.10.0", "2.10.1", "3.4.2", "3.5.0"},
+		},
+		{
+			name: "no fix", installed: "3.4.0", wantLast: "3.4.0",
+			unaffected: []string{"3.3.9", "3.4.1"},
+		},
+		{
+			name: "fixes below installed", installed: "3.4.0",
+			fixed: "2.9.1, 3.0.1", wantLast: "3.4.0",
+			unaffected: []string{"3.3.9", "3.4.1"},
+		},
+		{
+			name: "invalid fix", installed: "3.4.0",
+			fixed: "unknown", wantLast: "3.4.0",
+			unaffected: []string{"3.3.9", "3.4.1"},
+		},
+		{
+			name: "invalid installed version", installed: "development",
+			fixed: "3.4.2", wantLast: "development",
+		},
+		{
+			name: "trim installed version", installed: " 3.4.0 ",
+			fixed: "3.4.2", wantFixed: "3.4.2",
+			unaffected: []string{"3.3.9", "3.4.2"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rng := buildAffectedRange("npm", "example", "", trivyVulnerability{
+				InstalledVersion: tt.installed, FixedVersion: tt.fixed,
+			})
+			installed := strings.TrimSpace(tt.installed)
+			if rng.Introduced != installed || rng.Fixed != tt.wantFixed || rng.LastAffected != tt.wantLast {
+				t.Fatalf("unexpected range: %+v", rng)
+			}
+			cmp, _ := versioncmp.Get("npm")
+			if !cmp.Valid(installed) {
+				return
+			}
+			for _, version := range append([]string{installed}, tt.unaffected...) {
+				got, err := versioncmp.InRange("npm", version, rng.Introduced, rng.Fixed, rng.LastAffected)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := version == installed; got != want {
+					t.Errorf("InRange(%q) = %v, want %v", version, got, want)
+				}
+			}
+		})
 	}
 }
 

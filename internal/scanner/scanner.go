@@ -641,6 +641,14 @@ func (s *Service) componentMatchesAffectedRange(component dbgen.Component, affec
 	if !distroRangeApplies(component, affectedRange) {
 		return false
 	}
+	if affectedRange.Source == "trivy" && affectedRange.Fixed == "" && affectedRange.Introduced == affectedRange.LastAffected {
+		cmp, ok := versioncmp.Get(component.Ecosystem)
+		if !ok || !cmp.Valid(affectedRange.Introduced) {
+			// Unknown ordering must not turn an exact Trivy observation into
+			// matches for other unparseable versions.
+			return strings.TrimSpace(component.Version) == affectedRange.Introduced
+		}
+	}
 	affected, err := versioncmp.InRange(component.Ecosystem, component.Version, affectedRange.Introduced, affectedRange.Fixed, affectedRange.LastAffected)
 	if err != nil {
 		s.log.Warn().

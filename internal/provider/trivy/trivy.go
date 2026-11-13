@@ -458,23 +458,23 @@ func mapVulnerability(resultType string, vuln trivyVulnerability, queryRefs map[
 }
 
 // buildAffectedRange synthesizes a range that matches the vulnerable version.
-// When Trivy reports fixed version(s) we use [0, fixed) where fixed is the
-// smallest fix strictly greater than the installed version (the correct upper
-// bound for the installed version's release branch); otherwise we bound the
-// range to the installed version so only that exact version is matched.
+// Trivy supplies no affected lower bound, so never extend below the installed
+// version. Use the smallest fix strictly above it when ordering is known;
+// otherwise retain only the reported version.
 func buildAffectedRange(ecosystem, packageName, release string, vuln trivyVulnerability) advisory.AffectedRange {
+	installed := strings.TrimSpace(vuln.InstalledVersion)
 	rng := advisory.AffectedRange{
 		Ecosystem:   ecosystem,
 		PackageName: packageName,
-		Introduced:  "0",
+		Introduced:  installed,
 		Source:      "trivy",
 		Release:     release,
 	}
-	if fixed := selectFixedVersion(ecosystem, vuln.InstalledVersion, vuln.FixedVersion); fixed != "" {
+	if fixed := selectFixedVersion(ecosystem, installed, vuln.FixedVersion); fixed != "" {
 		rng.Fixed = fixed
 		return rng
 	}
-	rng.LastAffected = strings.TrimSpace(vuln.InstalledVersion)
+	rng.LastAffected = installed
 	return rng
 }
 
@@ -550,9 +550,7 @@ func selectFixedVersion(ecosystem, installed, rawFixed string) string {
 	cmp, ok := versioncmp.Get(ecosystem)
 	installed = strings.TrimSpace(installed)
 	if !ok || installed == "" || !cmp.Valid(installed) {
-		// Without a usable comparator we cannot reason about ordering; use the
-		// first listed fix as a best effort.
-		return candidates[0]
+		return ""
 	}
 	best := ""
 	for _, candidate := range candidates {
