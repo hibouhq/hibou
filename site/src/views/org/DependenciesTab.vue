@@ -416,10 +416,9 @@ async function runOrgComponentScan() {
   scanMessage.value = ''
   try {
     const response = await api.triggerOrgComponentScan(provider.value, slug.value)
-    const res = await api.listOrgComponents(provider.value, slug.value)
-    components.value = res.data
-    const failed = response.data.failed?.length ? ` (${response.data.failed.length} repos failed)` : ''
-    scanMessage.value = `Scanned ${response.data.scans.length} repositories with ${response.data.providers.join(', ')}${failed}.`
+    const failed = response.data.failed?.length ? ` ${response.data.failed.length} repositories could not be queued.` : ''
+    const skipped = response.data.skipped?.length ? ` ${response.data.skipped.length} repositories already have active scans.` : ''
+    scanMessage.value = `Queued scans for ${response.data.scans.length} repositories with ${response.data.providers.join(', ')}. Reload after the scans finish to see updated findings.${failed}${skipped}`
   } catch (error) {
     scanError.value = error instanceof Error ? error.message : 'Failed to trigger component scan'
   } finally {

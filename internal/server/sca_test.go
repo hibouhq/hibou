@@ -345,7 +345,12 @@ func TestSCAWithoutUploadExtractsAndMatches(t *testing.T) {
 	service := scanner.New(s.queries, cache.New(s.queries, cache.Config{DefaultTTL: time.Hour}, s.log),
 		advisory.NewIngester(s.queries, s.log), s.bus,
 		map[string]provider.AdvisoryProvider{"sca-fixture": scaFixtureProvider{}}, s.log)
-	if _, err := service.RunScan(ctx, *snapshotID, []string{"sca-fixture"}, "system"); err != nil {
+	s.advisoryScanTasks.Wait()
+	scans, err := s.queries.ListScansBySnapshot(ctx, *snapshotID)
+	if err != nil || len(scans) != 1 {
+		t.Fatalf("queued scans=%+v err=%v", scans, err)
+	}
+	if _, err := service.RunQueuedScan(ctx, scans[0]); err != nil {
 		var detail string
 		lookupErr := s.db.QueryRow(`SELECT COALESCE(sp.error_message,'') FROM scan_providers sp JOIN scans sc ON sc.id=sp.scan_id WHERE sc.snapshot_id=$1 ORDER BY sc.created_at DESC LIMIT 1`, *snapshotID).Scan(&detail)
 		t.Fatalf("advisory matching: %v, detail=%s, lookup=%v", err, detail, lookupErr)
@@ -424,7 +429,12 @@ func TestSCAWithoutUploadExtractsAndMatches(t *testing.T) {
 		if err != nil || completed == nil || completed.Status != store.SnapshotStatusComplete || completed.CommitSHA != head {
 			t.Fatalf("PR head still awaits upload: snapshot=%+v err=%v", completed, err)
 		}
-		if _, err := service.RunScan(ctx, *id, []string{"sca-fixture"}, "system"); err != nil {
+		s.advisoryScanTasks.Wait()
+		scans, err := s.queries.ListScansBySnapshot(ctx, *id)
+		if err != nil || len(scans) != 1 {
+			t.Fatalf("queued PR scans=%+v err=%v", scans, err)
+		}
+		if _, err := service.RunQueuedScan(ctx, scans[0]); err != nil {
 			t.Fatal(err)
 		}
 		publisher.PublishGateForRef(ctx, ref.ID)

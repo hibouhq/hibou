@@ -38,11 +38,17 @@ type advisoryScanCall struct {
 }
 
 type advisoryScannerStub struct {
-	calls chan advisoryScanCall
-	err   error
+	calls       chan advisoryScanCall
+	err         error
+	runScan     func(context.Context, uuid.UUID) (uuid.UUID, error)
+	queueRescan func(context.Context, uuid.UUID, []string, audit.Entry) (dbgen.Scan, error)
+	runRescan   func(context.Context, dbgen.Scan) (uuid.UUID, error)
 }
 
-func (s *advisoryScannerStub) RunScan(_ context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error) {
+func (s *advisoryScannerStub) RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error) {
+	if s.runScan != nil {
+		return s.runScan(ctx, snapshotID)
+	}
 	if s.calls != nil {
 		s.calls <- advisoryScanCall{
 			SnapshotID: snapshotID,
@@ -65,7 +71,10 @@ func (s *advisoryScannerStub) MatchPurls(_ context.Context, purls []string) ([]s
 	return out, nil
 }
 
-func (s *advisoryScannerStub) TriggerRescan(_ context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error) {
+func (s *advisoryScannerStub) QueueRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (dbgen.Scan, error) {
+	if s.queueRescan != nil {
+		return s.queueRescan(ctx, snapshotID, providerNames, actor)
+	}
 	if s.calls != nil {
 		s.calls <- advisoryScanCall{
 			SnapshotID: snapshotID,
@@ -73,7 +82,14 @@ func (s *advisoryScannerStub) TriggerRescan(_ context.Context, snapshotID uuid.U
 			Triggered:  actor.ActorDisplay,
 		}
 	}
-	return uuid.New(), s.err
+	return dbgen.Scan{ID: uuid.New(), SnapshotID: snapshotID, ProvidersRequested: providerNames, TriggeredBy: actor.ActorDisplay}, s.err
+}
+
+func (s *advisoryScannerStub) RunRescan(ctx context.Context, queued dbgen.Scan, _ audit.Entry) (uuid.UUID, error) {
+	if s.runRescan != nil {
+		return s.runRescan(ctx, queued)
+	}
+	return queued.ID, nil
 }
 
 func (fn staleScanCheckerFunc) Start(ctx context.Context) {

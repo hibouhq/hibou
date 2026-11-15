@@ -15,7 +15,19 @@ func (q *Queries) GetGateScanReadiness(ctx context.Context, snapshotID uuid.UUID
 }
 
 func (q *Queries) FailUnfinishedScan(ctx context.Context, scanID uuid.UUID, detail string) error {
-	_, err := q.execer().ExecContext(ctx, `UPDATE scans SET status='failed',error_message=$2,completed_at=now()
-		WHERE id=$1 AND status IN ('pending','running')`, scanID, detail)
+	return q.finishUnfinishedScan(ctx, scanID, "failed", detail)
+}
+
+func (q *Queries) CancelUnfinishedScan(ctx context.Context, scanID uuid.UUID, detail string) error {
+	return q.finishUnfinishedScan(ctx, scanID, "cancelled", detail)
+}
+
+func (q *Queries) finishUnfinishedScan(ctx context.Context, scanID uuid.UUID, status, detail string) error {
+	_, err := q.execer().ExecContext(ctx, `WITH finished AS (
+		UPDATE scans SET status=$2::scan_status,error_message=$3,completed_at=now()
+		WHERE id=$1 AND status IN ('pending','running') RETURNING id
+	)
+	UPDATE scan_providers SET status=$2::scan_status,error_message=$3,completed_at=now()
+	WHERE scan_id IN (SELECT id FROM finished) AND status IN ('pending','running')`, scanID, status, detail)
 	return err
 }

@@ -1110,11 +1110,8 @@ async function runComponentScan() {
       snapshot: selectedSnapshot.value,
     })
     if (disposed || current !== generation) return
-    await loadComponents({ resetSelection: false, clearScanStatus: false })
-    if (disposed || current !== generation) return
-
     const providers = response.data.providers.join(', ')
-    scanMessage.value = providers ? `Component scan completed with ${providers}.` : 'Component scan completed.'
+    scanMessage.value = `${providers ? `Component scan queued with ${providers}.` : 'Component scan queued.'} Reload after the scan finishes to see updated findings.`
   } catch (error) {
     if (!disposed && current === generation) scanError.value = error instanceof Error ? error.message : 'Failed to trigger component scan'
   } finally {

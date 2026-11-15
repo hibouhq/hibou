@@ -124,15 +124,33 @@ off and an instance reclaims nothing until an operator opts in.
 ### What a scan costs today
 
 The advisory scan pass runs every six hours (`advisory_scan.interval`)
-over the latest snapshot of **every ref of every repository**, plus the
-release-pinned snapshots, sequentially. For a monorepo of the sizing
+over the latest component-bearing snapshot of each eligible ref, plus the
+release-pinned snapshots. Closed and merged PRs are excluded unless release-pinned.
+Default branches run first, then open PRs, pinned releases, and other refs.
+The pass, upload scans, and user rescans share the bounded pool
+(`advisory_scan.max_concurrency`); the pass has a 30-minute deadline and logs
+completed, failed, skipped-active, and total counts, with a warning on timeout.
+For a monorepo of the sizing
 case (1,000 open pull requests, 40 release branches) that is some 1,040
 scans per pass, per monorepo, each writing a `scans` row and its provider rows; with
 ADR-045's reuse the matching itself runs once per distinct inventory set
 and the rest copy, but the copies are still full rows and the pass is
-still per snapshot. Automatic scans after an upload run in a goroutine
-per snapshot, unbounded: a thousand repositories finishing CI in the same
-hour start a thousand scans.
+still per snapshot. Upload scans persist a pending row before waiting for a slot.
+
+Only one pending/running scan may exist per snapshot (migration `00083`).
+User rescan endpoints persist the scan and audit request, return `202` with scan
+IDs, and invalidate caches/match in the server lifetime context. A per-snapshot
+conflict returns `409`; an org request reports already-active repositories in
+`skipped` and queueing failures in `failed`. Findings are not updated when the
+request returns: reload after completion. Cancellation records `cancelled` using
+bounded, cancellation-independent terminal writes, including provider rows.
+
+Before upgrading, stop old scan workers. Migration `00083` cancels pending/running
+rows older than one hour and their unfinished providers. Recent duplicate active
+rows fail unique-index creation instead of silently cancelling live writers;
+resolve those rows while workers are stopped before retrying the migration.
+Unexpected process death still requires operator cleanup; scan heartbeat leases
+and cancellation controls remain follow-ups.
 
 ### What already keys on the finding, not the row
 

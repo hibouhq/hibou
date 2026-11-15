@@ -29,6 +29,7 @@ type reconciliationTestForge struct {
 	checks    []forge.CommitStatus
 	retired   []string
 	retireErr error
+	prErrs    map[int]error
 }
 
 func (f *reconciliationTestForge) RetirePendingGate(_ context.Context, _, _, head, name string) error {
@@ -48,6 +49,9 @@ func (f *reconciliationTestForge) ReadOpenPullRequests(context.Context, string, 
 	return f.prs, f.readErr
 }
 func (f *reconciliationTestForge) ReadPullRequest(_ context.Context, _, _ string, n int) (forge.PullRequestEvent, error) {
+	if err := f.prErrs[n]; err != nil {
+		return forge.PullRequestEvent{}, err
+	}
 	for _, pr := range f.prs {
 		if pr.Number == n {
 			return pr, f.readErr
@@ -240,6 +244,41 @@ func TestForgePollingPRLifecycleAndUploadCannotRegressHead(t *testing.T) {
 	ref, err = srv.queries.GetRefByID(ctx, ref.ID)
 	if err != nil || *ref.PrState != "open" || ref.PrMergedAt != nil {
 		t.Fatalf("reopened=%+v err=%v", ref, err)
+	}
+}
+
+func TestForgePollingUnreadablePRDoesNotBlockOrClose(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusGone, http.StatusTooManyRequests, http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv, repo, fake := newReconciliationFixture(t)
+			ctx := context.Background()
+			pr := forge.PullRequestEvent{Number: 7, Action: "opened", HeadSHA: strings.Repeat("a", 40), BaseSHA: strings.Repeat("b", 40), SourceBranch: "feature", TargetBranch: "main", Title: "Fixture"}
+			other := pr
+			other.Number = 8
+			fake.prs = []forge.PullRequestEvent{pr, other}
+			if err := reconcileTestScope(t, srv, repo, "pull_requests"); err != nil {
+				t.Fatal(err)
+			}
+			fake.prErrs = map[int]error{7: &forge.APIError{Status: status}}
+			closedAt := time.Date(2020, 1, 2, 12, 0, 0, 0, time.UTC)
+			other.Action, other.ClosedAt = "closed", &closedAt
+			fake.prs = []forge.PullRequestEvent{other}
+			err := reconcileTestScope(t, srv, repo, "pull_requests")
+			skip := status == http.StatusNotFound || status == http.StatusGone
+			if (err == nil) != skip {
+				t.Fatalf("status=%d err=%v", status, err)
+			}
+			ref, err := srv.queries.GetRefByRepoAndName(ctx, repo.ID, "refs/pull/7", store.RefTypePullRequest)
+			if err != nil || ref == nil || ref.PrState == nil || *ref.PrState != "open" || ref.PrClosedAt != nil {
+				t.Fatalf("unreadable PR state changed: %+v err=%v", ref, err)
+			}
+			if skip {
+				ref, err = srv.queries.GetRefByRepoAndName(ctx, repo.ID, "refs/pull/8", store.RefTypePullRequest)
+				if err != nil || ref == nil || ref.PrState == nil || *ref.PrState != "closed" {
+					t.Fatalf("other PR not reconciled: %+v err=%v", ref, err)
+				}
+			}
+		})
 	}
 }
 

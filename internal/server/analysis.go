@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"github.com/hibouhq/hibou/internal/filterquery"
 	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/repoconfig"
+	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/shipped"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
@@ -736,17 +738,25 @@ func (s *Server) handleTriggerComponentScan(w http.ResponseWriter, r *http.Reque
 		UserAgent:    userAgent,
 	}
 
-	scanID, err := s.advisoryScanner.TriggerRescan(r.Context(), snapshot.ID, s.advisoryProviders, actor)
+	queued, err := s.advisoryScanner.QueueRescan(r.Context(), snapshot.ID, s.advisoryProviders, actor)
+	if errors.Is(err, scanner.ErrScanInProgress) {
+		api.JSONError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
+		s.log.Error().Err(err).Str("snapshot_id", snapshot.ID.String()).Msg("queue component rescan")
 		api.JSONError(w, http.StatusInternalServerError, "failed to trigger component scan")
 		return
 	}
+	s.runQueuedAdvisoryScanInBackground(queued, func(ctx context.Context) (uuid.UUID, error) {
+		return s.advisoryScanner.RunRescan(ctx, queued, actor)
+	})
 
-	api.JSON(w, http.StatusOK, struct {
+	api.JSON(w, http.StatusAccepted, struct {
 		ScanID    uuid.UUID `json:"scan_id"`
 		Providers []string  `json:"providers"`
 	}{
-		ScanID:    scanID,
+		ScanID:    queued.ID,
 		Providers: append([]string(nil), s.advisoryProviders...),
 	})
 }

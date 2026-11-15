@@ -2725,6 +2725,10 @@ definitions:
         items:
           $ref: '#/definitions/server.orgRepoScanResult'
         type: array
+      skipped:
+        items:
+          type: string
+        type: array
     type: object
   server.orgLicenseCategoryStat:
     properties:
@@ -7164,8 +7168,8 @@ paths:
       - clients
   /orgs/{provider}/{slug}/components/scan:
     post:
-      description: Runs an advisory rescan against the current snapshot of every enrolled
-        repository in the organization.
+      description: Queues an advisory rescan against the current snapshot of every
+        enrolled repository in the organization.
       parameters:
       - description: Forge provider
         in: path
@@ -7180,8 +7184,8 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
-          description: OK
+        "202":
+          description: Accepted
           schema:
             allOf:
             - $ref: '#/definitions/api.Response'

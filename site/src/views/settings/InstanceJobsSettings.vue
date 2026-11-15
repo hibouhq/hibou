@@ -97,8 +97,12 @@
           <div class="text-[11px] uppercase tracking-[0.16em] text-gray-500">
             Workers online
           </div>
-          <div class="mt-2 text-2xl font-semibold text-white">
-            {{ onlineWorkers }}<span class="text-base font-normal text-gray-500">/{{ overview.workers.length }}</span>
+          <div
+            class="mt-2 text-2xl font-semibold text-white"
+            aria-label="Online worker count"
+            title="Observed from recent heartbeats, not configured replica capacity"
+          >
+            {{ onlineWorkers }}
           </div>
           <div class="mt-0.5 text-xs text-gray-500">
             heartbeat every {{ formatDuration(overview.heartbeat_interval_seconds) }}
@@ -160,60 +164,68 @@
       </div>
 
       <!-- Workers -->
-      <section class="overflow-hidden rounded-xl border border-surface-border bg-surface-raised/40">
+      <section
+        class="workers-panel min-w-0 rounded-xl border border-surface-border bg-surface-raised/40"
+        aria-label="Workers"
+      >
         <div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-4">
           <h3 class="flex items-center gap-2 text-sm font-semibold text-white">
             <Server class="h-4 w-4 text-gray-500" />
             Workers
           </h3>
+          <span
+            v-if="liveVersions.length > 1"
+            class="rounded-full border border-warn/40 px-2 py-0.5 text-[10px] font-medium text-warn"
+            :title="liveVersions.join(', ')"
+          >{{ liveVersions.length }} versions running</span>
           <span class="text-xs text-gray-500">
             resource usage is self-reported per process, not container limits
           </span>
         </div>
-        <div class="mt-3 overflow-x-auto">
-          <table class="w-full text-sm">
+        <p class="mt-2 px-4 text-xs text-gray-500">
+          Observed registrations, not configured capacity. Stale records may belong to previous replicas.
+        </p>
+        <div class="mt-3 min-w-0">
+          <table class="workers-table w-full table-fixed text-sm">
+            <colgroup>
+              <col class="w-[20%]">
+              <col class="w-[11%]">
+              <col class="w-[18%]">
+              <col class="w-[20%]">
+              <col class="w-[7%]">
+              <col class="w-[24%]">
+            </colgroup>
             <thead>
               <tr class="border-b border-surface-border text-left text-[11px] uppercase tracking-wide text-gray-500">
-                <th class="px-4 py-2 font-medium">
+                <th class="px-3 py-2 font-medium">
                   Worker
                 </th>
-                <th class="px-4 py-2 font-medium">
+                <th class="px-3 py-2 font-medium">
                   Status
                 </th>
-                <th class="px-4 py-2 font-medium">
-                  Uptime
+                <th class="px-3 py-2 font-medium">
+                  Activity
                 </th>
-                <th class="px-4 py-2 font-medium">
-                  Heartbeat
+                <th class="px-3 py-2 font-medium">
+                  Resources
                 </th>
-                <th class="px-4 py-2 text-right font-medium">
-                  CPU
-                </th>
-                <th class="px-4 py-2 text-right font-medium">
-                  RSS
-                </th>
-                <th class="px-4 py-2 text-right font-medium">
-                  Heap
-                </th>
-                <th class="px-4 py-2 text-right font-medium">
-                  Goroutines
-                </th>
-                <th class="px-4 py-2 text-right font-medium">
+                <th class="px-3 py-2 text-right font-medium">
                   Jobs
                 </th>
-                <th class="px-4 py-2 font-medium">
+                <th class="px-3 py-2 font-medium">
                   Loops
                 </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-surface-border-subtle">
               <tr
-                v-for="worker in overview.workers"
+                v-for="worker in visibleWorkers"
                 :key="worker.id"
-                class="text-gray-300"
+                class="worker-row align-top"
+                :class="worker.status === 'stopped' ? 'text-gray-500' : 'text-gray-300'"
               >
                 <td
-                  class="px-4 py-2 font-mono text-xs"
+                  class="min-w-0 break-all px-3 py-3 font-mono text-xs"
                   :title="worker.id"
                 >
                   {{ worker.hostname }}<span class="text-gray-600">:{{ worker.pid }}</span>
@@ -224,7 +236,7 @@
                     {{ worker.version }}
                   </div>
                 </td>
-                <td class="px-4 py-2">
+                <td class="worker-status px-3 py-3">
                   <span
                     class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium"
                     :class="workerStatusClass(worker.status)"
@@ -236,51 +248,109 @@
                     {{ worker.status }}
                   </span>
                 </td>
-                <td class="px-4 py-2 text-xs text-gray-400">
-                  {{ relativeTime(worker.started_at).replace(' ago', '') }}
+                <td class="min-w-0 break-words px-3 py-3 text-xs text-gray-400">
+                  <span class="worker-cell-label mb-1 text-[10px] uppercase tracking-wide text-gray-500">Activity</span>
+                  <dl class="space-y-2">
+                    <div>
+                      <dt class="text-[10px] text-gray-500">
+                        Uptime
+                      </dt>
+                      <dd>
+                        {{ worker.status === 'stopped' ? `ran ${ranFor(worker)}` : relativeTime(worker.started_at).replace(' ago', '') }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="text-[10px] text-gray-500">
+                        {{ worker.status === 'stopped' ? 'Stopped' : 'Heartbeat' }}
+                      </dt>
+                      <dd>
+                        {{ relativeTime(worker.status === 'stopped' ? worker.stopped_at ?? worker.last_heartbeat_at : worker.last_heartbeat_at) }}
+                      </dd>
+                    </div>
+                  </dl>
                 </td>
-                <td class="px-4 py-2 text-xs text-gray-400">
-                  {{ relativeTime(worker.last_heartbeat_at) }}
+                <td class="min-w-0 px-3 py-3 text-xs">
+                  <span class="worker-cell-label mb-1 text-[10px] uppercase tracking-wide text-gray-500">Resources</span>
+                  <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1">
+                    <dt class="text-gray-500">
+                      CPU
+                    </dt>
+                    <dd class="break-all text-right font-mono">
+                      {{ worker.status === 'online' && worker.cpu_percent !== undefined ? `${worker.cpu_percent.toFixed(1)}%` : '—' }}
+                    </dd>
+                    <dt class="text-gray-500">
+                      RSS
+                    </dt>
+                    <dd class="break-words text-right font-mono">
+                      {{ worker.status === 'online' && worker.memory_rss_bytes !== undefined ? formatBytes(worker.memory_rss_bytes) : '—' }}
+                    </dd>
+                    <dt class="text-gray-500">
+                      Heap
+                    </dt>
+                    <dd class="break-words text-right font-mono">
+                      {{ worker.status === 'online' && worker.heap_alloc_bytes !== undefined ? formatBytes(worker.heap_alloc_bytes) : '—' }}
+                    </dd>
+                    <dt class="text-gray-500">
+                      Goroutines
+                    </dt>
+                    <dd class="break-all text-right font-mono">
+                      {{ worker.status === 'online' ? (worker.goroutines ?? '—') : '—' }}
+                    </dd>
+                  </dl>
                 </td>
-                <td class="px-4 py-2 text-right font-mono text-xs">
-                  {{ worker.cpu_percent !== undefined ? `${worker.cpu_percent.toFixed(1)}%` : '—' }}
+                <td class="worker-jobs px-3 py-3 text-right font-mono text-xs">
+                  <span class="worker-cell-label mb-1 text-[10px] uppercase tracking-wide text-gray-500">Jobs</span>
+                  <span :title="worker.status === 'online' ? `self-reported ${worker.active_jobs}, claimed leases ${worker.running_jobs}` : 'No current worker sample'">
+                    {{ worker.status === 'online' ? Math.max(worker.active_jobs, worker.running_jobs) : '—' }}
+                  </span>
                 </td>
-                <td class="px-4 py-2 text-right font-mono text-xs">
-                  {{ worker.memory_rss_bytes !== undefined ? formatBytes(worker.memory_rss_bytes) : '—' }}
-                </td>
-                <td class="px-4 py-2 text-right font-mono text-xs">
-                  {{ worker.heap_alloc_bytes !== undefined ? formatBytes(worker.heap_alloc_bytes) : '—' }}
-                </td>
-                <td class="px-4 py-2 text-right font-mono text-xs">
-                  {{ worker.goroutines ?? '—' }}
-                </td>
-                <td class="px-4 py-2 text-right font-mono text-xs">
-                  {{ worker.running_jobs }}
-                </td>
-                <td class="px-4 py-2">
+                <td class="min-w-0 px-3 py-3">
+                  <span class="worker-cell-label mb-1 text-[10px] uppercase tracking-wide text-gray-500">Loops</span>
+                  <button
+                    v-if="worker.loops.length > 0"
+                    type="button"
+                    class="rounded border border-surface-border-subtle bg-surface-overlay px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"
+                    :aria-expanded="expandedLoops.has(worker.id)"
+                    :aria-label="`${expandedLoops.has(worker.id) ? 'Hide' : 'Show'} ${worker.loops.length} enabled loops`"
+                    @click="toggleLoops(worker.id)"
+                  >
+                    {{ worker.loops.length }} loops
+                  </button>
+                  <span
+                    v-else
+                    class="text-[10px] text-gray-600"
+                  >api only</span>
                   <div
-                    class="flex max-w-[16rem] flex-wrap gap-1"
-                    :title="worker.loops.join(', ')"
+                    v-if="expandedLoops.has(worker.id)"
+                    class="mt-2 flex min-w-0 flex-wrap gap-1"
                   >
                     <span
-                      v-for="loop in worker.loops.slice(0, 4)"
+                      v-for="loop in worker.loops"
                       :key="loop"
-                      class="rounded border border-surface-border-subtle bg-surface-overlay px-1.5 py-0.5 font-mono text-[10px] text-gray-400"
+                      class="max-w-full break-all rounded border border-surface-border-subtle bg-surface-overlay px-1.5 py-0.5 font-mono text-[10px] text-gray-400"
                     >{{ loop }}</span>
-                    <span
-                      v-if="worker.loops.length > 4"
-                      class="rounded border border-surface-border-subtle px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
-                    >+{{ worker.loops.length - 4 }}</span>
-                    <span
-                      v-if="worker.loops.length === 0"
-                      class="text-[10px] text-gray-600"
-                    >api only</span>
                   </div>
+                </td>
+              </tr>
+              <tr v-if="stoppedWorkers.length > 0">
+                <td
+                  colspan="6"
+                  class="px-4 py-2 text-xs text-gray-500"
+                >
+                  <button
+                    type="button"
+                    class="hover:text-gray-300"
+                    :aria-expanded="showStopped"
+                    @click="showStopped = !showStopped"
+                  >
+                    {{ showStopped ? 'Hide' : 'Show' }} {{ stoppedWorkers.length }} stopped
+                    {{ stoppedWorkers.length === 1 ? 'worker' : 'workers' }} (last 24h)
+                  </button>
                 </td>
               </tr>
               <tr v-if="overview.workers.length === 0">
                 <td
-                  colspan="10"
+                  colspan="6"
                   class="px-4 py-6 text-center text-sm text-gray-500"
                 >
                   No workers have registered yet. Replicas appear here after their first heartbeat.
@@ -305,7 +375,7 @@
 import { Activity, Pause, Play, Server, TrendingUp } from 'lucide-vue-next'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
-import type { InstanceJobsOverview, InstanceJobsStats, InstanceJobsTimeline, InstanceJobsWindow, InstanceJobStatsBucket } from '@/api/client'
+import type { InstanceJobsOverview, InstanceJobsStats, InstanceJobsTimeline, InstanceJobsWindow, InstanceJobStatsBucket, InstanceWorker } from '@/api/client'
 import { api } from '@/api/client'
 import JobsKindStats from '@/components/settings/JobsKindStats.vue'
 import JobsRunList from '@/components/settings/JobsRunList.vue'
@@ -416,6 +486,28 @@ const oldestQueued = computed(() => {
 
 const onlineWorkers = computed(() => (overview.value?.workers ?? []).filter(w => w.status === 'online').length)
 
+const showStopped = ref(false)
+const expandedLoops = ref(new Set<string>())
+const liveWorkers = computed(() => (overview.value?.workers ?? []).filter(w => w.status !== 'stopped'))
+const stoppedWorkers = computed(() => (overview.value?.workers ?? []).filter(w => w.status === 'stopped'))
+const visibleWorkers = computed(() => showStopped.value ? [...liveWorkers.value, ...stoppedWorkers.value] : liveWorkers.value)
+const liveVersions = computed(() => [...new Set(liveWorkers.value.filter(w => w.status === 'online').map(w => w.version).filter(Boolean))])
+
+function toggleLoops(id: string) {
+  const next = new Set(expandedLoops.value)
+  if (next.has(id)) {
+    next.delete(id)
+  } else {
+    next.add(id)
+  }
+  expandedLoops.value = next
+}
+
+function ranFor(worker: InstanceWorker) {
+  const end = new Date(worker.stopped_at ?? worker.last_heartbeat_at).getTime()
+  return formatDuration(Math.max(0, end - new Date(worker.started_at).getTime()) / 1000)
+}
+
 const statsSinceMs = computed(() => (stats.value ? new Date(stats.value.since).getTime() : nowMs.value))
 
 // Every kind the overview knows about gets a stats card, even with no runs
@@ -467,3 +559,50 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024).toFixed(0)} KiB`
 }
 </script>
+
+<style scoped>
+.workers-panel {
+  container-type: inline-size;
+}
+
+.worker-cell-label {
+  display: none;
+}
+
+@container (max-width: 900px) {
+  .workers-table,
+  .workers-table tbody,
+  .workers-table tr:not(.worker-row),
+  .workers-table td {
+    display: block;
+  }
+
+  .workers-table colgroup,
+  .workers-table thead {
+    display: none;
+  }
+
+  .workers-table .worker-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem 1rem;
+    padding: 1rem;
+  }
+
+  .worker-row td {
+    padding: 0;
+  }
+
+  .worker-status {
+    justify-self: end;
+  }
+
+  .worker-cell-label {
+    display: block;
+  }
+
+  .worker-jobs {
+    text-align: left;
+  }
+}
+</style>

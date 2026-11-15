@@ -57,14 +57,19 @@ func (s *Server) beatWorkerHeartbeat(ctx context.Context, sampler *resourceSampl
 	}
 }
 
-// activeJobCount is the replica's self-reported in-flight work: artifact
-// processing runs plus occupied secret-scan slots.
+// activeJobCount is the replica's self-reported in-flight work.
 func (s *Server) activeJobCount() int32 {
 	s.artifactStateMu.Lock()
 	count := s.activeArtifacts
 	s.artifactStateMu.Unlock()
 	if s.secretScanSlots != nil {
 		count += len(s.secretScanSlots)
+	}
+	if s.advisoryScanSlots != nil {
+		count += len(s.advisoryScanSlots)
+	}
+	if s.depExtractionSlots != nil {
+		count += len(s.depExtractionSlots)
 	}
 
 	return int32(count) // #nosec G115 -- bounded by per-replica concurrency slots

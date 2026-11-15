@@ -81,6 +81,8 @@ type Service struct {
 
 const providerNotConfiguredMessage = "provider not configured"
 
+var ErrScanInProgress = errors.New("a scan of this snapshot is already queued or running")
+
 func New(queries queryStore, cache cacheClient, ingester advisoryIngester, bus eventPublisher, providers map[string]provider.AdvisoryProvider, log zerolog.Logger) *Service {
 	if providers == nil {
 		providers = map[string]provider.AdvisoryProvider{}
@@ -125,6 +127,9 @@ func (s *Service) runScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 		})
 	}
 	if err != nil {
+		if scanRecord.ID != uuid.Nil {
+			return scanRecord.ID, s.failScan(ctx, scanRecord.ID, snapshotID, err)
+		}
 		return uuid.Nil, fmt.Errorf("create scan: %w", err)
 	}
 
@@ -186,34 +191,28 @@ func (s *Service) runScan(ctx context.Context, snapshotID uuid.UUID, providerNam
 }
 
 func (s *Service) TriggerRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error) {
-	components, err := s.queries.ListComponentsBySnapshot(ctx, snapshotID)
+	queued, err := s.QueueRescan(ctx, snapshotID, providerNames, actor)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("list components for rescan: %w", err)
+		return uuid.Nil, err
 	}
+	return s.RunRescan(ctx, queued, actor)
+}
 
-	for _, pkg := range buildPackageQueries(components) {
-		if err := s.cache.InvalidateByPackage(ctx, pkg.Ecosystem, pkg.Name); err != nil {
-			return uuid.Nil, fmt.Errorf("invalidate cache for %s/%s: %w", pkg.Ecosystem, pkg.Name, err)
-		}
-	}
-
-	// The bell only pings the human who asked for the scan (never the whole
-	// org); scheduled/webhook scans carry no user and stay silent.
-	var triggeredByUserID *uuid.UUID
-	if actor.ActorType == audit.ActorUser {
-		triggeredByUserID = actor.ActorID
-	}
-	scanID, err := s.runScan(ctx, snapshotID, providerNames, normalizeTriggeredBy(actor.ActorDisplay), triggeredByUserID, nil)
+// QueueRescan records the request and its audit entry before background work.
+func (s *Service) QueueRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (dbgen.Scan, error) {
+	queued, err := createScanRow(ctx, s.queries, dbgen.CreateScanParams{
+		SnapshotID: snapshotID, Status: "pending",
+		ProvidersRequested: s.resolveProviders(providerNames), TriggeredBy: normalizeTriggeredBy(actor.ActorDisplay),
+	})
 	if err != nil {
-		return scanID, err
+		return dbgen.Scan{}, err
 	}
-
 	contextPayload, marshalErr := json.Marshal(map[string]any{
 		"snapshot_id": snapshotID.String(),
-		"providers":   s.resolveProviders(providerNames),
+		"providers":   queued.ProvidersRequested,
 	})
 	if marshalErr != nil {
-		return scanID, fmt.Errorf("marshal audit context: %w", marshalErr)
+		return queued, s.failScan(ctx, queued.ID, snapshotID, fmt.Errorf("marshal audit context: %w", marshalErr))
 	}
 
 	if _, err := s.queries.CreateAuditLog(ctx, dbgen.CreateAuditLogParams{
@@ -222,16 +221,32 @@ func (s *Service) TriggerRescan(ctx context.Context, snapshotID uuid.UUID, provi
 		ActorDisplay: actor.ActorDisplay,
 		Action:       audit.ActionScanTrigger,
 		ResourceType: "scan",
-		ResourceID:   scanID.String(),
+		ResourceID:   queued.ID.String(),
 		OrgID:        toNullUUID(actor.OrgID),
 		Context:      contextPayload,
 		IpAddress:    actor.IPAddress,
 		UserAgent:    actor.UserAgent,
 	}); err != nil {
-		return scanID, fmt.Errorf("create audit log: %w", err)
+		return queued, s.failScan(ctx, queued.ID, snapshotID, fmt.Errorf("create audit log: %w", err))
 	}
+	return queued, nil
+}
 
-	return scanID, nil
+func (s *Service) RunRescan(ctx context.Context, queued dbgen.Scan, actor audit.Entry) (uuid.UUID, error) {
+	components, err := s.queries.ListComponentsBySnapshot(ctx, queued.SnapshotID)
+	if err != nil {
+		return queued.ID, s.failScan(ctx, queued.ID, queued.SnapshotID, fmt.Errorf("list components for rescan: %w", err))
+	}
+	for _, pkg := range buildPackageQueries(components) {
+		if err := s.cache.InvalidateByPackage(ctx, pkg.Ecosystem, pkg.Name); err != nil {
+			return queued.ID, s.failScan(ctx, queued.ID, queued.SnapshotID, fmt.Errorf("invalidate cache for %s/%s: %w", pkg.Ecosystem, pkg.Name, err))
+		}
+	}
+	var triggeredByUserID *uuid.UUID
+	if actor.ActorType == audit.ActorUser {
+		triggeredByUserID = actor.ActorID
+	}
+	return s.runScan(ctx, queued.SnapshotID, queued.ProvidersRequested, queued.TriggeredBy, triggeredByUserID, &queued)
 }
 
 func (s *Service) matchComponents(ctx context.Context, snapshotID uuid.UUID, providerName string, components []dbgen.Component, advisoryMap map[string]uuid.UUID) (map[string][]uuid.UUID, []createdFinding, error) {
@@ -290,7 +305,7 @@ type componentMatchState struct {
 }
 
 func (s *Service) startScan(ctx context.Context, snapshotID uuid.UUID, resolvedProviders []string, triggeredBy string) (dbgen.Scan, time.Time, error) {
-	scanRecord, err := s.queries.CreateScan(ctx, dbgen.CreateScanParams{
+	scanRecord, err := createScanRow(ctx, s.queries, dbgen.CreateScanParams{
 		SnapshotID:         snapshotID,
 		Status:             "pending",
 		ProvidersRequested: resolvedProviders,
@@ -405,6 +420,9 @@ func (s *Service) reuseScan(ctx context.Context, scanID, snapshotID uuid.UUID, p
 }
 
 func (s *Service) finalizeScan(ctx context.Context, completion scanCompletion) (uuid.UUID, error) {
+	if err := ctx.Err(); err != nil {
+		return completion.scanID, s.failScan(ctx, completion.scanID, completion.snapshotID, err)
+	}
 	completedAt := time.Now().UTC()
 	finalStatus := "complete"
 	errorMessage := ""
@@ -435,6 +453,11 @@ func (s *Service) finalizeScan(ctx context.Context, completion scanCompletion) (
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return completion.scanID, s.failScan(ctx, completion.scanID, completion.snapshotID, err)
+	}
+	ctx, cancel := terminalWriteContext(ctx)
+	defer cancel()
 	if _, err := s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
 		ID:           completion.scanID,
 		Status:       finalStatus,
@@ -762,12 +785,39 @@ func summarizeCreatedFinding(vulnerability *store.Vulnerability) createdFinding 
 	return summary
 }
 
+func scanTerminalStatus(err error) (status, reason string) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "cancelled", "cancelled: caller went away: " + err.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return "cancelled", "cancelled: deadline exceeded: " + err.Error()
+	default:
+		return "failed", err.Error()
+	}
+}
+
+// Final writes must survive the cancellation they record.
+func terminalWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+}
+
+func createScanRow(ctx context.Context, queries queryStore, params dbgen.CreateScanParams) (dbgen.Scan, error) {
+	scan, err := queries.CreateScan(ctx, params)
+	if errors.Is(err, sql.ErrNoRows) {
+		return dbgen.Scan{}, ErrScanInProgress
+	}
+	return scan, err
+}
+
 func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, err error) error {
 	completedAt := time.Now().UTC()
+	status, reason := scanTerminalStatus(err)
+	ctx, cancel := terminalWriteContext(ctx)
+	defer cancel()
 	if _, updateErr := s.queries.UpdateScanStatus(ctx, dbgen.UpdateScanStatusParams{
 		ID:           scanID,
-		Status:       "failed",
-		ErrorMessage: err.Error(),
+		Status:       status,
+		ErrorMessage: reason,
 		CompletedAt:  sql.NullTime{Time: completedAt, Valid: true},
 	}); updateErr != nil {
 		return fmt.Errorf("%w; update scan failure: %w", err, updateErr)
@@ -787,6 +837,11 @@ func (s *Service) failScan(ctx context.Context, scanID, snapshotID uuid.UUID, er
 func (s *Service) completeProvider(ctx context.Context, providerRecord dbgen.ScanProvider, startedAt time.Time, cacheMisses, advisoriesFound int32, status, errorMessage string) {
 	completedAt := time.Now().UTC()
 	responseTime := int32(completedAt.Sub(startedAt) / time.Millisecond) // #nosec G115 -- scan provider response times are operationally bounded.
+	if err := ctx.Err(); err != nil {
+		status, errorMessage = scanTerminalStatus(err)
+	}
+	ctx, cancel := terminalWriteContext(ctx)
+	defer cancel()
 	if _, err := s.queries.UpdateScanProvider(ctx, dbgen.UpdateScanProviderParams{
 		ID:              providerRecord.ID,
 		Status:          status,

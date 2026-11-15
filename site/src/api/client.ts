@@ -3642,7 +3642,7 @@ class ApiClient {
   }
 
   triggerOrgComponentScan(provider: string, slug: string) {
-    return this.request<ApiResponse<{ scans: Array<{ repo: string; scan_id: string }>; failed?: string[]; providers: string[] }>>(
+    return this.request<ApiResponse<{ scans: Array<{ repo: string; scan_id: string }>; failed?: string[]; skipped?: string[]; providers: string[] }>>(
       `/orgs/${provider}/${slug}/components/scan`,
       { method: 'POST' },
     )

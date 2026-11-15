@@ -3345,7 +3345,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Runs an advisory rescan against the current snapshot of every enrolled repository in the organization.",
+                "description": "Queues an advisory rescan against the current snapshot of every enrolled repository in the organization.",
                 "produces": [
                     "application/json"
                 ],
@@ -3370,8 +3370,8 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "202": {
+                        "description": "Accepted",
                         "schema": {
                             "allOf": [
                                 {
@@ -15097,6 +15097,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/server.orgRepoScanResult"
+                    }
+                },
+                "skipped": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
                     }
                 }
             }

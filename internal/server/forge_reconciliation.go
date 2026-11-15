@@ -295,6 +295,14 @@ func (s *Server) reconcileForgeScope(ctx context.Context, job *store.ForgeReconc
 				}
 				pr, e := reader.ReadPullRequest(ctx, owner, name, number)
 				if e != nil {
+					var apiErr *forge.APIError
+					if errors.As(e, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusGone) {
+						// Inaccessibility is not evidence that a PR closed.
+						s.log.Warn().Str("repo_id", repo.ID.String()).Int("number", number).Int("status", apiErr.Status).
+							Msg("pull request unreadable; preserving local state and continuing reconciliation")
+						next.Note = "Some pull requests are unreadable; their local state was preserved"
+						continue
+					}
 					return e
 				}
 				next.PRs = append(next.PRs, pr)

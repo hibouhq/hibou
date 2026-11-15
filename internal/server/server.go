@@ -94,7 +94,7 @@ type Server struct {
 	advisoryScanner   advisoryScanner
 	advisoryIngester  *advisory.Ingester
 	advisoryProviders []string
-	// advisoryScanSlots bounds the automatic scans running at once on this
+	// advisoryScanSlots bounds all advisory scans running at once on this
 	// replica (ADR-049 §4); nil means unbounded, as in tests.
 	advisoryScanSlots  chan struct{}
 	secretScanner      *secretscan.Scanner
@@ -133,6 +133,7 @@ type Server struct {
 	artifactInFlight   map[uuid.UUID]struct{}
 	activeArtifacts    int
 	advisoryScanActive atomic.Bool
+	advisoryScanTasks  sync.WaitGroup
 	// limits is cfg.Limits with defaults filled in (http_hardening.go).
 	limits       config.LimitsConfig
 	rateLimiters rateLimiters
@@ -173,7 +174,8 @@ type backgroundStarter interface {
 type advisoryScanner interface {
 	RunScan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, triggeredBy string) (uuid.UUID, error)
 	RunQueuedScan(ctx context.Context, queued dbgen.Scan) (uuid.UUID, error)
-	TriggerRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (uuid.UUID, error)
+	QueueRescan(ctx context.Context, snapshotID uuid.UUID, providerNames []string, actor audit.Entry) (dbgen.Scan, error)
+	RunRescan(ctx context.Context, queued dbgen.Scan, actor audit.Entry) (uuid.UUID, error)
 	// MatchPurls is the stateless match behind the CLI's local scans
 	// (ADR-046 §2).
 	MatchPurls(ctx context.Context, purls []string) ([]scanner.PurlMatch, error)
@@ -1267,8 +1269,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.shutdownCancel != nil {
 		s.shutdownCancel()
 	}
+	scansDone := make(chan struct{})
+	go func() {
+		s.advisoryScanTasks.Wait()
+		close(scansDone)
+	}()
+	var scansErr error
+	select {
+	case <-scansDone:
+	case <-ctx.Done():
+		scansErr = fmt.Errorf("wait for advisory scan cleanup: %w", ctx.Err())
+	}
 
-	return errors.Join(httpErr, artifactErr, releaseErr, wsErr, listenerErr)
+	return errors.Join(httpErr, artifactErr, releaseErr, wsErr, listenerErr, scansErr)
 }
 
 func (s *Server) shutdownTimeout() time.Duration {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"math"
 	"net/http"
 	"sort"
@@ -14,6 +16,7 @@ import (
 	"github.com/hibouhq/hibou/internal/apitoken"
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/filterquery"
+	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/store"
 )
 
@@ -241,12 +244,12 @@ func (s *Server) handleListOrgComponents(w http.ResponseWriter, r *http.Request)
 }
 
 // @Summary      Trigger an org-wide component scan
-// @Description  Runs an advisory rescan against the current snapshot of every enrolled repository in the organization.
+// @Description  Queues an advisory rescan against the current snapshot of every enrolled repository in the organization.
 // @Tags         organizations
 // @Produce      json
 // @Param        provider  path  string  true  "Forge provider"
 // @Param        slug      path  string  true  "Organization slug"
-// @Success      200  {object}  api.Response{data=server.orgComponentScanResponse}
+// @Success      202  {object}  api.Response{data=server.orgComponentScanResponse}
 // @Failure      401  {object}  api.Response
 // @Failure      404  {object}  api.Response
 // @Failure      409  {object}  api.Response
@@ -264,9 +267,8 @@ func (s *Server) handleTriggerOrgComponentScan(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Every repository's rescan runs inside this request and invalidates the
-	// shared advisory cache: one at a time per org, then a cooldown, so a
-	// double click or a script cannot stack them.
+	// Serialize queueing and enforce a cooldown; the database excludes scans
+	// of the same snapshot while background work is still running.
 	started, wait := s.orgComponentScanGate.tryStart(org.ID, orgComponentScanCooldown, time.Now())
 	if !started {
 		if wait <= 0 {
@@ -277,7 +279,7 @@ func (s *Server) handleTriggerOrgComponentScan(w http.ResponseWriter, r *http.Re
 		api.JSONError(w, http.StatusTooManyRequests, "an organization component scan ran recently, retry later")
 		return
 	}
-	// The cooldown starts only once scans actually ran.
+	// The cooldown starts only once scans were queued.
 	var scannedAt time.Time
 	defer func() { s.orgComponentScanGate.finish(org.ID, scannedAt) }()
 
@@ -305,20 +307,31 @@ func (s *Server) handleTriggerOrgComponentScan(w http.ResponseWriter, r *http.Re
 
 	response := orgComponentScanResponse{Providers: append([]string(nil), s.advisoryProviders...)}
 	for _, pair := range pairs {
-		scanID, err := s.advisoryScanner.TriggerRescan(r.Context(), pair.snapshot.ID, s.advisoryProviders, actor)
+		queued, err := s.advisoryScanner.QueueRescan(r.Context(), pair.snapshot.ID, s.advisoryProviders, actor)
+		if errors.Is(err, scanner.ErrScanInProgress) {
+			response.Skipped = append(response.Skipped, pair.repo.Slug)
+			continue
+		}
 		if err != nil {
 			s.log.Error().Err(err).Str("repo", pair.repo.Slug).Msg("org component scan: repo rescan failed")
 			response.Failed = append(response.Failed, pair.repo.Slug)
 			continue
 		}
-		response.Scans = append(response.Scans, orgRepoScanResult{Repo: pair.repo.Slug, ScanID: scanID})
+		s.runQueuedAdvisoryScanInBackground(queued, func(ctx context.Context) (uuid.UUID, error) {
+			return s.advisoryScanner.RunRescan(ctx, queued, actor)
+		})
+		response.Scans = append(response.Scans, orgRepoScanResult{Repo: pair.repo.Slug, ScanID: queued.ID})
 	}
-	scannedAt = time.Now()
 	if len(response.Scans) == 0 {
+		if len(response.Failed) == 0 {
+			api.JSONError(w, http.StatusConflict, "all repository snapshots already have a queued or running scan")
+			return
+		}
 		api.JSONError(w, http.StatusInternalServerError, "component scan failed for every repository")
 		return
 	}
-	api.JSON(w, http.StatusOK, response)
+	scannedAt = time.Now()
+	api.JSON(w, http.StatusAccepted, response)
 }
 
 // orgComponentScanCooldown spaces org-wide rescans: advisories change on the
@@ -333,6 +346,7 @@ type orgRepoScanResult struct {
 type orgComponentScanResponse struct {
 	Scans     []orgRepoScanResult `json:"scans"`
 	Failed    []string            `json:"failed,omitempty"`
+	Skipped   []string            `json:"skipped,omitempty"`
 	Providers []string            `json:"providers"`
 }
 

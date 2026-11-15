@@ -17,6 +17,7 @@ import (
 const createScan = `-- name: CreateScan :one
 INSERT INTO scans (snapshot_id, status, providers_requested, triggered_by)
 VALUES ($1, $2, $3, $4)
+ON CONFLICT (snapshot_id) WHERE status IN ('pending', 'running') DO NOTHING
 RETURNING id, snapshot_id, status, providers_requested, triggered_by, error_message, started_at, completed_at, created_at, reused_from_scan_id
 `
 

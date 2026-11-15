@@ -82,7 +82,18 @@ CREATE TABLE worker_instances (
   Graceful shutdown sets `stopped_at` next to the existing claim release. Rows with no
   heartbeat for 7 days are deleted opportunistically during heartbeat.
 - Because the registry key equals `claimed_by`, running jobs join to the worker that
-  holds them, and `active_jobs` cross-checks lease reality.
+  holds them, and `active_jobs` cross-checks lease reality. The self-reported count
+  includes artifact processing, secret scans, advisory scans (including periodic
+  passes and user rescans), and dependency extraction. The workers table shows
+  the larger of this count and the claimed-job count, not their sum.
+- Stopped workers are history, collapsed by default. Their duration ends at
+  `stopped_at` (or the last heartbeat if unavailable); stopped and stale workers
+  display no current resource/job sample. Multiple online versions are highlighted.
+- The workers table groups timing/resource samples and collapses enabled loops
+  behind a disclosure. Below 900px of available panel width, rows become labeled
+  cards; identifiers and expanded loop names wrap without horizontal scrolling.
+- The online stat is an observed heartbeat count, not an online/registered ratio:
+  registered rows include old replicas and cannot establish configured capacity.
 
 ### 2. Endpoints (instance admin, `sessionOnlyRoute`)
 

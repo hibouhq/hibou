@@ -2,14 +2,18 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/hibouhq/hibou/internal/api"
+	"github.com/hibouhq/hibou/internal/scanner"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
 )
@@ -40,6 +44,10 @@ func (s *Server) runAdvisoryScanPass(ctx context.Context) {
 	if s.advisoryScanner == nil || len(s.advisoryProviders) == 0 {
 		return
 	}
+	if !s.beginAdvisoryScanTask() {
+		return
+	}
+	defer s.advisoryScanTasks.Done()
 	// In-process guard: stops a slow pass overlapping its own next tick.
 	if !s.advisoryScanActive.CompareAndSwap(false, true) {
 		s.log.Warn().Msg("advisory scan pass already running; skipping overlap")
@@ -47,12 +55,14 @@ func (s *Server) runAdvisoryScanPass(ctx context.Context) {
 	}
 	defer s.advisoryScanActive.Store(false)
 
+	ctx, cancel := context.WithTimeout(ctx, advisoryScanTimeout)
+	defer cancel()
 	// Cross-replica guard: without it every replica runs the same full pass and
 	// burns N× the advisory-provider quota for one identical result. Not a
 	// correctness control — scan writes are idempotent — purely quota.
 	ran, err := store.WithLeaderLock(ctx, s.db, store.LockAdvisoryScanPass, s.advisoryScanPass)
 	if err != nil {
-		s.log.Error().Err(err).Msg("advisory scan leader lock failed")
+		s.log.Error().Err(err).Msg("advisory scan pass or leader lock failed")
 		return
 	}
 	if !ran {
@@ -66,28 +76,55 @@ func (s *Server) advisoryScanPass(ctx context.Context) error {
 		if !errors.Is(err, context.Canceled) {
 			s.log.Error().Err(err).Msg("list snapshots for advisory scan failed")
 		}
-		return nil
+		return err
 	}
 
-	succeeded := 0
-	failed := 0
+	var succeeded, failed, skipped, done atomic.Int64
 	s.log.Info().Int("snapshots", len(snapshotIDs)).Strs("providers", s.advisoryProviders).Msg("starting advisory scan pass")
+	var wg sync.WaitGroup
+scanLoop:
 	for _, snapshotID := range snapshotIDs {
-		_, err := s.advisoryScanner.RunScan(ctx, snapshotID, s.advisoryProviders, "system")
-		s.reconcileFindingPresenceLate(ctx, snapshotID)
-		if err != nil {
-			failed++
-			s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
-			continue
+		if ctx.Err() != nil {
+			break
 		}
-		succeeded++
-		// Idempotent release reconciliation (ADR-024 §5): heals derivations
-		// deferred while the forge (repo config) was unreachable at snapshot
-		// completion. Early-exits for non-tag refs before any forge call.
-		s.reconcileReleasesForSnapshot(ctx, snapshotID)
+		if s.advisoryScanSlots != nil {
+			select {
+			case s.advisoryScanSlots <- struct{}{}:
+			case <-ctx.Done():
+				break scanLoop
+			}
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if s.advisoryScanSlots != nil {
+				defer func() { <-s.advisoryScanSlots }()
+			}
+			_, err := s.advisoryScanner.RunScan(ctx, snapshotID, s.advisoryProviders, "system")
+			switch {
+			case errors.Is(err, scanner.ErrScanInProgress):
+				skipped.Add(1)
+			case err != nil:
+				failed.Add(1)
+				s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
+			default:
+				succeeded.Add(1)
+				s.reconcileFindingPresenceLate(ctx, snapshotID)
+				s.reconcileReleasesForSnapshot(ctx, snapshotID)
+			}
+			if n := done.Add(1); n%25 == 0 {
+				s.log.Info().Int64("done", n).Int("snapshots", len(snapshotIDs)).Msg("advisory scan pass progress")
+			}
+		}()
 	}
-	s.log.Info().Int("snapshots", len(snapshotIDs)).Int("succeeded", succeeded).Int("failed", failed).Msg("finished advisory scan pass")
-	return nil
+	wg.Wait()
+	event := s.log.Info()
+	if ctx.Err() != nil {
+		event = s.log.Warn().Err(ctx.Err())
+	}
+	event.Int("snapshots", len(snapshotIDs)).Int64("done", done.Load()).Int64("succeeded", succeeded.Load()).
+		Int64("failed", failed.Load()).Int64("skipped_active", skipped.Load()).Msg("finished advisory scan pass")
+	return ctx.Err()
 }
 
 func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid.UUID, error) {
@@ -96,7 +133,11 @@ func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid
 		return nil, err
 	}
 
-	snapshotIDs := make([]uuid.UUID, 0)
+	type candidate struct {
+		id       uuid.UUID
+		priority int
+	}
+	candidates := make([]candidate, 0)
 	for _, repo := range repos {
 		offset := 0
 		for {
@@ -105,12 +146,16 @@ func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid
 				return nil, err
 			}
 			for _, ref := range refs {
+				priority, scan := advisoryScanPriority(&ref, repo.DefaultBranch)
+				if !scan {
+					continue
+				}
 				snapshot, err := s.queries.GetLatestSnapshotWithComponentsByRef(ctx, ref.ID)
 				if err != nil {
 					return nil, err
 				}
 				if snapshot != nil {
-					snapshotIDs = append(snapshotIDs, snapshot.ID)
+					candidates = append(candidates, candidate{id: snapshot.ID, priority: priority})
 				}
 			}
 			offset += len(refs)
@@ -130,21 +175,47 @@ func (s *Server) listLatestSnapshotsForAdvisoryScan(ctx context.Context) ([]uuid
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[uuid.UUID]struct{}, len(snapshotIDs))
-	for _, id := range snapshotIDs {
-		seen[id] = struct{}{}
-	}
 	for _, id := range pinned {
-		if _, ok := seen[id]; !ok {
-			snapshotIDs = append(snapshotIDs, id)
-			seen[id] = struct{}{}
-		}
+		candidates = append(candidates, candidate{id: id, priority: advisoryPriorityReleasePinned})
 	}
-
-	sort.Slice(snapshotIDs, func(i, j int) bool {
-		return snapshotIDs[i].String() < snapshotIDs[j].String()
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].priority != candidates[j].priority {
+			return candidates[i].priority < candidates[j].priority
+		}
+		return candidates[i].id.String() < candidates[j].id.String()
 	})
+	snapshotIDs := make([]uuid.UUID, 0, len(candidates))
+	seen := make(map[uuid.UUID]struct{}, len(candidates))
+	for _, c := range candidates {
+		if _, ok := seen[c.id]; ok {
+			continue
+		}
+		seen[c.id] = struct{}{}
+		snapshotIDs = append(snapshotIDs, c.id)
+	}
 	return snapshotIDs, nil
+}
+
+const (
+	advisoryPriorityDefaultBranch = iota
+	advisoryPriorityOpenPR
+	advisoryPriorityReleasePinned
+	advisoryPriorityOtherRef
+)
+
+func advisoryScanPriority(ref *store.Ref, defaultBranch string) (int, bool) {
+	switch {
+	case ref.RefType == store.RefTypePullRequest:
+		if ref.PrState != nil && *ref.PrState != "open" {
+			return 0, false
+		}
+		return advisoryPriorityOpenPR, true
+	case ref.RefType == store.RefTypeBranch && defaultBranch != "" &&
+		(ref.Name == defaultBranch || ref.Name == "refs/heads/"+defaultBranch):
+		return advisoryPriorityDefaultBranch, true
+	default:
+		return advisoryPriorityOtherRef, true
+	}
 }
 
 func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
@@ -159,11 +230,35 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 	queued, err := s.queries.CreateScan(baseCtx, dbgen.CreateScanParams{
 		SnapshotID: snapshotID, Status: "pending", ProvidersRequested: providers, TriggeredBy: triggeredBy,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		s.log.Info().Str("snapshot_id", snapshotID.String()).Msg("advisory scan already queued or running")
+		return
+	}
 	if err != nil {
 		s.log.Error().Err(err).Str("snapshot_id", snapshotID.String()).Msg("persist queued advisory scan")
 		return
 	}
+	s.runQueuedAdvisoryScanInBackground(queued, func(ctx context.Context) (uuid.UUID, error) {
+		return s.advisoryScanner.RunQueuedScan(ctx, queued)
+	})
+}
+
+func (s *Server) runQueuedAdvisoryScanInBackground(queued dbgen.Scan, run func(context.Context) (uuid.UUID, error)) {
+	baseCtx := s.lifecycleCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	snapshotID := queued.SnapshotID
+	if !s.beginAdvisoryScanTask() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(baseCtx), 10*time.Second)
+		defer cancel()
+		if err := s.queries.CancelUnfinishedScan(ctx, queued.ID, "cancelled: server draining"); err != nil {
+			s.log.Error().Err(err).Str("scan_id", queued.ID.String()).Msg("cancel queued scan during drain")
+		}
+		return
+	}
 	go func() {
+		defer s.advisoryScanTasks.Done()
 		var runErr error
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -173,7 +268,13 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 			if runErr != nil {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(baseCtx), 10*time.Second)
 				defer cancel()
-				if err := s.queries.FailUnfinishedScan(cleanupCtx, queued.ID, truncateSecretScanError(runErr)); err != nil {
+				var err error
+				if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+					err = s.queries.CancelUnfinishedScan(cleanupCtx, queued.ID, truncateSecretScanError(runErr))
+				} else {
+					err = s.queries.FailUnfinishedScan(cleanupCtx, queued.ID, truncateSecretScanError(runErr))
+				}
+				if err != nil {
 					s.log.Error().Err(err).Str("scan_id", queued.ID.String()).Msg("finalize interrupted advisory scan")
 				}
 			}
@@ -191,7 +292,7 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 				return
 			}
 		}
-		_, runErr = s.advisoryScanner.RunQueuedScan(scanCtx, queued)
+		_, runErr = run(scanCtx)
 		if runErr != nil && !errors.Is(runErr, context.Canceled) {
 			s.log.Error().Err(runErr).Str("snapshot_id", snapshotID.String()).Msg("advisory scan failed")
 		}
@@ -199,4 +300,14 @@ func (s *Server) enqueueAdvisoryScan(snapshotID uuid.UUID, triggeredBy string) {
 		// carried as pending until this scan finished.
 		s.reconcileFindingPresenceLate(scanCtx, snapshotID)
 	}()
+}
+
+func (s *Server) beginAdvisoryScanTask() bool {
+	s.artifactStateMu.Lock()
+	defer s.artifactStateMu.Unlock()
+	if s.draining.Load() {
+		return false
+	}
+	s.advisoryScanTasks.Add(1)
+	return true
 }
