@@ -152,6 +152,7 @@ export interface Incident {
   org_id: string
   number: number
   repo_id: NullableUUID
+  removed_repo_name?: SqlNullString
   kind: IncidentKind
   regimes: string[]
   subject_type: string

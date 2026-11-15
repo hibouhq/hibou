@@ -297,7 +297,7 @@
                       />
                     </td>
                     <td class="px-4 py-2.5 font-mono text-xs text-gray-400">
-                      {{ nullString(incident.repo_slug) || '—' }}
+                      {{ nullString(incident.removed_repo_name) ? `${nullString(incident.removed_repo_name)} (removed)` : nullString(incident.repo_slug) || '—' }}
                     </td>
                     <td class="whitespace-nowrap px-4 py-2.5 font-mono text-xs">
                       <CountdownText :at="nullTime(incident.due_at)" />

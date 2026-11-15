@@ -348,7 +348,7 @@ INSERT INTO incidents (
     org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority,
     signal_source, trigger_rule, signal_at, owner_id, owner_team_id, due_at, created_by, target_seconds
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type CreateIncidentParams struct {
@@ -428,6 +428,7 @@ func (q *Queries) CreateIncident(ctx context.Context, arg CreateIncidentParams) 
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -633,9 +634,10 @@ func (q *Queries) FindIncidentByTrackerKey(ctx context.Context, arg FindIncident
 }
 
 const findIncidentForSubject = `-- name: FindIncidentForSubject :one
-SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref FROM incidents
+SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name FROM incidents
 WHERE org_id = $1
   AND repo_id IS NOT DISTINCT FROM $2
+  AND removed_repo_name IS NULL
   AND kind = $3
   AND subject_type = $4
   AND subject_id = $5
@@ -698,6 +700,7 @@ func (q *Queries) FindIncidentForSubject(ctx context.Context, arg FindIncidentFo
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -750,7 +753,7 @@ func (q *Queries) GetClientRow(ctx context.Context, id uuid.UUID) (Client, error
 }
 
 const getIncident = `-- name: GetIncident :one
-SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref FROM incidents WHERE id = $1
+SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name FROM incidents WHERE id = $1
 `
 
 func (q *Queries) GetIncident(ctx context.Context, id uuid.UUID) (Incident, error) {
@@ -790,6 +793,7 @@ func (q *Queries) GetIncident(ctx context.Context, id uuid.UUID) (Incident, erro
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -825,7 +829,7 @@ func (q *Queries) GetIncidentAction(ctx context.Context, id uuid.UUID) (Incident
 }
 
 const getIncidentByNumber = `-- name: GetIncidentByNumber :one
-SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref FROM incidents WHERE org_id = $1 AND number = $2
+SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name FROM incidents WHERE org_id = $1 AND number = $2
 `
 
 type GetIncidentByNumberParams struct {
@@ -870,6 +874,7 @@ func (q *Queries) GetIncidentByNumber(ctx context.Context, arg GetIncidentByNumb
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -927,6 +932,52 @@ func (q *Queries) GetIncidentDocument(ctx context.Context, arg GetIncidentDocume
 		&i.Renderer,
 		&i.Inputs,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getIncidentForUpdate = `-- name: GetIncidentForUpdate :one
+SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name FROM incidents WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetIncidentForUpdate(ctx context.Context, id uuid.UUID) (Incident, error) {
+	row := q.db.QueryRowContext(ctx, getIncidentForUpdate, id)
+	var i Incident
+	err := row.Scan(
+		&i.ID,
+		&i.OrgID,
+		&i.Number,
+		&i.RepoID,
+		&i.Kind,
+		pq.Array(&i.Regimes),
+		&i.SubjectType,
+		&i.SubjectID,
+		&i.Title,
+		&i.State,
+		&i.Priority,
+		&i.SignalSource,
+		&i.TriggerRule,
+		&i.SignalAt,
+		&i.AwareAt,
+		&i.DecisionReason,
+		&i.DecisionStep,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.DecidedState,
+		&i.ProposedDecision,
+		&i.FixAvailableAt,
+		&i.OwnerID,
+		&i.OwnerTeamID,
+		&i.DueAt,
+		&i.TargetSeconds,
+		&i.MergedInto,
+		&i.ClosedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProposedMerge,
+		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -1140,7 +1191,7 @@ func (q *Queries) ListAdvisoryMatchesInSnapshots(ctx context.Context, arg ListAd
 }
 
 const listAliasSiblingIncidents = `-- name: ListAliasSiblingIncidents :many
-SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref FROM incidents i
+SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref, i.removed_repo_name FROM incidents i
 WHERE i.repo_id = $1
   AND i.id <> $2
   AND i.kind = 'exploited_vulnerability'
@@ -1222,6 +1273,7 @@ func (q *Queries) ListAliasSiblingIncidents(ctx context.Context, arg ListAliasSi
 			&i.UpdatedAt,
 			&i.ProposedMerge,
 			&i.ExternalRef,
+			&i.RemovedRepoName,
 		); err != nil {
 			return nil, err
 		}
@@ -1954,7 +2006,7 @@ func (q *Queries) ListIncidentTrackerLinks(ctx context.Context, incidentID uuid.
 }
 
 const listIncidentsByOrg = `-- name: ListIncidentsByOrg :many
-SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref, r.slug AS repo_slug, r.name AS repo_name
+SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref, i.removed_repo_name, r.slug AS repo_slug, r.name AS repo_name
 FROM incidents i
 LEFT JOIN repositories r ON r.id = i.repo_id
 WHERE i.org_id = $1
@@ -2014,6 +2066,7 @@ type ListIncidentsByOrgRow struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 	ProposedMerge    json.RawMessage   `json:"proposed_merge"`
 	ExternalRef      string            `json:"external_ref"`
+	RemovedRepoName  sql.NullString    `json:"removed_repo_name"`
 	RepoSlug         sql.NullString    `json:"repo_slug"`
 	RepoName         sql.NullString    `json:"repo_name"`
 }
@@ -2069,6 +2122,7 @@ func (q *Queries) ListIncidentsByOrg(ctx context.Context, arg ListIncidentsByOrg
 			&i.UpdatedAt,
 			&i.ProposedMerge,
 			&i.ExternalRef,
+			&i.RemovedRepoName,
 			&i.RepoSlug,
 			&i.RepoName,
 		); err != nil {
@@ -2086,7 +2140,7 @@ func (q *Queries) ListIncidentsByOrg(ctx context.Context, arg ListIncidentsByOrg
 }
 
 const listIncidentsByRepo = `-- name: ListIncidentsByRepo :many
-SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref FROM incidents WHERE repo_id = $1 AND merged_into IS NULL ORDER BY created_at DESC LIMIT $2
+SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name FROM incidents WHERE repo_id = $1 AND merged_into IS NULL ORDER BY created_at DESC LIMIT $2
 `
 
 type ListIncidentsByRepoParams struct {
@@ -2137,6 +2191,7 @@ func (q *Queries) ListIncidentsByRepo(ctx context.Context, arg ListIncidentsByRe
 			&i.UpdatedAt,
 			&i.ProposedMerge,
 			&i.ExternalRef,
+			&i.RemovedRepoName,
 		); err != nil {
 			return nil, err
 		}
@@ -2242,10 +2297,11 @@ func (q *Queries) ListLatestSnapshotsForRepoRefs(ctx context.Context, repoID uui
 }
 
 const listMergeCandidates = `-- name: ListMergeCandidates :many
-SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref FROM incidents i
+SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref, i.removed_repo_name FROM incidents i
 WHERE i.org_id = $1
   AND i.kind = $2
   AND i.repo_id IS NOT DISTINCT FROM $3::uuid
+  AND i.removed_repo_name IS NULL
   AND i.id <> $4
   AND i.merged_into IS NULL
   AND i.state <> 'withdrawn'
@@ -2310,6 +2366,7 @@ func (q *Queries) ListMergeCandidates(ctx context.Context, arg ListMergeCandidat
 			&i.UpdatedAt,
 			&i.ProposedMerge,
 			&i.ExternalRef,
+			&i.RemovedRepoName,
 		); err != nil {
 			return nil, err
 		}
@@ -2430,7 +2487,7 @@ func (q *Queries) ListOpenIncidentIDsForRepo(ctx context.Context, repoID uuid.Nu
 }
 
 const listOpenIncidentsBySubject = `-- name: ListOpenIncidentsBySubject :many
-SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref FROM incidents
+SELECT id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name FROM incidents
 WHERE org_id = $1
   AND subject_type = $2
   AND subject_id = ANY($3::text[])
@@ -2487,6 +2544,7 @@ func (q *Queries) ListOpenIncidentsBySubject(ctx context.Context, arg ListOpenIn
 			&i.UpdatedAt,
 			&i.ProposedMerge,
 			&i.ExternalRef,
+			&i.RemovedRepoName,
 		); err != nil {
 			return nil, err
 		}
@@ -2502,7 +2560,7 @@ func (q *Queries) ListOpenIncidentsBySubject(ctx context.Context, arg ListOpenIn
 }
 
 const listOpenIncidentsForOrgs = `-- name: ListOpenIncidentsForOrgs :many
-SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref, r.slug AS repo_slug, r.name AS repo_name, o.slug AS org_slug, o.provider AS org_provider, o.name AS org_name
+SELECT i.id, i.org_id, i.number, i.repo_id, i.kind, i.regimes, i.subject_type, i.subject_id, i.title, i.state, i.priority, i.signal_source, i.trigger_rule, i.signal_at, i.aware_at, i.decision_reason, i.decision_step, i.decided_by, i.decided_at, i.decided_state, i.proposed_decision, i.fix_available_at, i.owner_id, i.owner_team_id, i.due_at, i.target_seconds, i.merged_into, i.closed_at, i.created_by, i.created_at, i.updated_at, i.proposed_merge, i.external_ref, i.removed_repo_name, r.slug AS repo_slug, r.name AS repo_name, o.slug AS org_slug, o.provider AS org_provider, o.name AS org_name
 FROM incidents i
 JOIN organizations o ON o.id = i.org_id
 LEFT JOIN repositories r ON r.id = i.repo_id
@@ -2552,6 +2610,7 @@ type ListOpenIncidentsForOrgsRow struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 	ProposedMerge    json.RawMessage   `json:"proposed_merge"`
 	ExternalRef      string            `json:"external_ref"`
+	RemovedRepoName  sql.NullString    `json:"removed_repo_name"`
 	RepoSlug         sql.NullString    `json:"repo_slug"`
 	RepoName         sql.NullString    `json:"repo_name"`
 	OrgSlug          string            `json:"org_slug"`
@@ -2602,6 +2661,7 @@ func (q *Queries) ListOpenIncidentsForOrgs(ctx context.Context, arg ListOpenInci
 			&i.UpdatedAt,
 			&i.ProposedMerge,
 			&i.ExternalRef,
+			&i.RemovedRepoName,
 			&i.RepoSlug,
 			&i.RepoName,
 			&i.OrgSlug,
@@ -3527,7 +3587,7 @@ func (q *Queries) SetIncidentDueAt(ctx context.Context, arg SetIncidentDueAtPara
 }
 
 const setIncidentFixAvailable = `-- name: SetIncidentFixAvailable :one
-UPDATE incidents SET fix_available_at = $2, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+UPDATE incidents SET fix_available_at = $2, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type SetIncidentFixAvailableParams struct {
@@ -3572,12 +3632,13 @@ func (q *Queries) SetIncidentFixAvailable(ctx context.Context, arg SetIncidentFi
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
 
 const setIncidentProposedDecision = `-- name: SetIncidentProposedDecision :one
-UPDATE incidents SET proposed_decision = $2, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+UPDATE incidents SET proposed_decision = $2, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type SetIncidentProposedDecisionParams struct {
@@ -3622,12 +3683,13 @@ func (q *Queries) SetIncidentProposedDecision(ctx context.Context, arg SetIncide
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
 
 const setIncidentProposedMerge = `-- name: SetIncidentProposedMerge :one
-UPDATE incidents SET proposed_merge = $2, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+UPDATE incidents SET proposed_merge = $2, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type SetIncidentProposedMergeParams struct {
@@ -3672,6 +3734,7 @@ func (q *Queries) SetIncidentProposedMerge(ctx context.Context, arg SetIncidentP
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -3756,7 +3819,7 @@ UPDATE incidents SET
     regimes = $6,
     updated_at = NOW()
 WHERE id = $7
-RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type UpdateIncidentDecisionParams struct {
@@ -3814,6 +3877,7 @@ func (q *Queries) UpdateIncidentDecision(ctx context.Context, arg UpdateIncident
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
@@ -3828,7 +3892,7 @@ UPDATE incidents SET
     external_ref = $6,
     updated_at = NOW()
 WHERE id = $7
-RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type UpdateIncidentFieldsParams struct {
@@ -3886,12 +3950,13 @@ func (q *Queries) UpdateIncidentFields(ctx context.Context, arg UpdateIncidentFi
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }
 
 const updateIncidentState = `-- name: UpdateIncidentState :one
-UPDATE incidents SET state = $2, closed_at = $3, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref
+UPDATE incidents SET state = $2, closed_at = $3, updated_at = NOW() WHERE id = $1 RETURNING id, org_id, number, repo_id, kind, regimes, subject_type, subject_id, title, state, priority, signal_source, trigger_rule, signal_at, aware_at, decision_reason, decision_step, decided_by, decided_at, decided_state, proposed_decision, fix_available_at, owner_id, owner_team_id, due_at, target_seconds, merged_into, closed_at, created_by, created_at, updated_at, proposed_merge, external_ref, removed_repo_name
 `
 
 type UpdateIncidentStateParams struct {
@@ -3937,6 +4002,7 @@ func (q *Queries) UpdateIncidentState(ctx context.Context, arg UpdateIncidentSta
 		&i.UpdatedAt,
 		&i.ProposedMerge,
 		&i.ExternalRef,
+		&i.RemovedRepoName,
 	)
 	return i, err
 }

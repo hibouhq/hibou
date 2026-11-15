@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/hibouhq/hibou/internal/api"
 	"github.com/hibouhq/hibou/internal/apitoken"
@@ -651,17 +652,21 @@ func (s *Server) handleUpdateRepo(w http.ResponseWriter, r *http.Request) {
 // @Param        provider  path  string  true  "Forge provider"
 // @Param        slug      path  string  true  "Organization slug"
 // @Param        repoSlug  path  string  true  "Repository slug"
+// @Param        purge_deployment_history query bool false "Explicitly purge inactive deployment history; active deployments still block removal"
 // @Success      204       "No Content"
+// @Failure      400       {object}  api.Response
 // @Failure      401       {object}  api.Response
 // @Failure      403       {object}  api.Response
 // @Failure      404       {object}  api.Response
+// @Failure      409       {object}  api.Response
 // @Failure      500       {object}  api.Response
 // @Security     BearerAuth
 // @Router       /orgs/{provider}/{slug}/repos/{repoSlug} [delete]
 // purgeObjectStoreKeys best-effort deletes artifact bytes from the object store
-// before a hard delete cascades the snapshot_artifacts metadata rows away,
-// preventing orphaned objects. A missing object is fine; other failures are
-// logged but not fatal, so a transient store error never blocks the delete (the
+// using keys captured before a hard delete cascades their metadata away.
+// Repository removal calls it only after the database deletion commits.
+// A missing object is fine; other failures are logged but not fatal, so a
+// transient store error never blocks the delete (the
 // worst case is a re-cleanable orphan, which beats an un-deletable repo/org).
 func (s *Server) purgeObjectStoreKeys(ctx context.Context, keys []string) {
 	if s.objStore == nil {
@@ -682,27 +687,84 @@ func (s *Server) handleRemoveRepo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	purgeHistory := false
+	if values, present := r.URL.Query()["purge_deployment_history"]; present {
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			api.JSONError(w, http.StatusBadRequest, "purge_deployment_history must be true or false")
+			return
+		}
+		purgeHistory = values[0] == "true"
+	}
 
-	// Hard-deleting the repository cascades the snapshot_artifacts rows away, so
-	// the object-store bytes must be purged first or they orphan forever.
+	// Capture keys before the metadata cascades away, but preserve bytes until
+	// deletion commits: a deployment or incident constraint may block it.
 	objectKeys, err := s.queries.ListSnapshotArtifactObjectKeysByRepo(r.Context(), repo.ID)
 	if err != nil {
+		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("enumerate repository artifacts before removal")
 		api.JSONError(w, http.StatusInternalServerError, "failed to enumerate repository artifacts")
+		return
+	}
+
+	var deleteErr error
+	if purgeHistory {
+		deleteErr = s.queries.DeleteRepositoryAndInactiveDeploymentHistory(r.Context(), repo.ID)
+	} else {
+		deleteErr = s.queries.DeleteRepository(r.Context(), repo.ID)
+	}
+	if deleteErr != nil {
+		var pqErr *pq.Error
+		switch {
+		case errors.Is(deleteErr, store.ErrRepositoryHasActiveDeployments):
+			s.log.Warn().Err(deleteErr).Str("repo_id", repo.ID.String()).Msg("repository removal blocked by active deployments")
+			api.JSONError(w, http.StatusConflict, "this repository has active client deployments; mark them rolled back before removing it")
+		case errors.Is(deleteErr, store.ErrRepositoryHasDeployments):
+			s.log.Warn().Err(deleteErr).Str("repo_id", repo.ID.String()).Msg("repository removal blocked by deployment history")
+			api.JSONError(w, http.StatusConflict, "this repository has inactive deployment history; explicitly confirm permanent history deletion in the repository removal dialog")
+		case errors.As(deleteErr, &pqErr) && (pqErr.Code == "23001" || pqErr.Code == "23503" || pqErr.Code == "23505"):
+			s.log.Error().Err(deleteErr).Str("repo_id", repo.ID.String()).Str("constraint", pqErr.Constraint).Msg("repository removal blocked by a constraint")
+			api.JSONError(w, http.StatusConflict, "repository removal is blocked by constraint "+pqErr.Constraint)
+		default:
+			s.log.Error().Err(deleteErr).Str("repo_id", repo.ID.String()).Msg("delete repository")
+			api.JSONError(w, http.StatusInternalServerError, "failed to delete repository")
+		}
 		return
 	}
 	s.purgeObjectStoreKeys(r.Context(), objectKeys)
 
-	if err := s.queries.DeleteRepository(r.Context(), repo.ID); err != nil {
-		api.JSONError(w, http.StatusInternalServerError, "failed to delete repository")
-		return
-	}
-
 	s.writeRepositoryAuditLog(r, user, org.ID, repo.ID, audit.ActionRepoRemoved, map[string]any{
-		"name": repo.Name,
-		"slug": repo.Slug,
+		"name":                              repo.Name,
+		"slug":                              repo.Slug,
+		"purge_inactive_deployment_history": purgeHistory,
 	})
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// @Summary      Preview repository removal
+// @Description  Count data affected by removal. Requires repository admin access. Counts are advisory; deletion rechecks deployment blockers transactionally.
+// @Tags         repositories
+// @Produce      json
+// @Param        provider path string true "Forge provider"
+// @Param        slug path string true "Organization slug"
+// @Param        repoSlug path string true "Repository slug"
+// @Success      200 {object} api.Response{data=dbgen.GetRepositoryRemovalPreviewRow}
+// @Failure      403 {object} api.Response
+// @Failure      404 {object} api.Response
+// @Failure      500 {object} api.Response
+// @Security     BearerAuth
+// @Router       /orgs/{provider}/{slug}/repos/{repoSlug}/removal-preview [get]
+func (s *Server) handleGetRepositoryRemovalPreview(w http.ResponseWriter, r *http.Request) {
+	_, repo, _, ok := s.loadAuthorizedRepoWithUser(w, r, true)
+	if !ok {
+		return
+	}
+	preview, err := s.queries.GetRepositoryRemovalPreview(r.Context(), repo.ID)
+	if err != nil {
+		s.log.Error().Err(err).Str("repo_id", repo.ID.String()).Msg("preview repository removal")
+		api.JSONError(w, http.StatusInternalServerError, "failed to preview repository removal")
+		return
+	}
+	api.JSON(w, http.StatusOK, preview)
 }
 
 // @Summary      List repository refs

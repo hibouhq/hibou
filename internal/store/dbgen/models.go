@@ -1768,6 +1768,7 @@ type Incident struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 	ProposedMerge    json.RawMessage   `json:"proposed_merge"`
 	ExternalRef      string            `json:"external_ref"`
+	RemovedRepoName  sql.NullString    `json:"removed_repo_name"`
 }
 
 type IncidentAction struct {

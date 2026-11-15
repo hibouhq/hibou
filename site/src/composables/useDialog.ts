@@ -15,6 +15,8 @@ export interface DialogOptions {
   tone?: DialogTone
   /** Type-to-confirm: the confirm button stays disabled until the user types this exact string. */
   requireText?: string
+  /** An unchecked acknowledgement the user must explicitly check to confirm. */
+  requiredAcknowledgement?: string
   /** Free-text input (window.prompt replacement). `required` keeps confirm disabled while empty. */
   input?: { label: string; placeholder?: string; required?: boolean }
 }

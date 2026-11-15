@@ -6272,11 +6272,23 @@ const docTemplate = `{
                         "name": "repoSlug",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Explicitly purge inactive deployment history; active deployments still block removal",
+                        "name": "purge_deployment_history",
+                        "in": "query"
                     }
                 ],
                 "responses": {
                     "204": {
                         "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
                     },
                     "401": {
                         "description": "Unauthorized",
@@ -6292,6 +6304,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -7930,6 +7948,84 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/orgs/{provider}/{slug}/repos/{repoSlug}/removal-preview": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Count data affected by removal. Requires repository admin access. Counts are advisory; deletion rechecks deployment blockers transactionally.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "repositories"
+                ],
+                "summary": "Preview repository removal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Forge provider",
+                        "name": "provider",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Organization slug",
+                        "name": "slug",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository slug",
+                        "name": "repoSlug",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/dbgen.GetRepositoryRemovalPreviewRow"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/api.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/api.Response"
                         }
@@ -11257,6 +11353,29 @@ const docTemplate = `{
                 }
             }
         },
+        "dbgen.GetRepositoryRemovalPreviewRow": {
+            "type": "object",
+            "properties": {
+                "active_deployments": {
+                    "type": "integer"
+                },
+                "artifacts": {
+                    "type": "integer"
+                },
+                "inactive_deployments": {
+                    "type": "integer"
+                },
+                "incidents": {
+                    "type": "integer"
+                },
+                "releases": {
+                    "type": "integer"
+                },
+                "snapshots": {
+                    "type": "integer"
+                }
+            }
+        },
         "dbgen.Incident": {
             "type": "object",
             "properties": {
@@ -11337,6 +11456,9 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "removed_repo_name": {
+                    "$ref": "#/definitions/sql.NullString"
                 },
                 "repo_id": {
                     "$ref": "#/definitions/uuid.NullUUID"
@@ -11760,6 +11882,9 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "removed_repo_name": {
+                    "$ref": "#/definitions/sql.NullString"
                 },
                 "repo_id": {
                     "$ref": "#/definitions/uuid.NullUUID"
@@ -14635,6 +14760,9 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "removed_repo_name": {
+                    "$ref": "#/definitions/sql.NullString"
                 },
                 "repo_id": {
                     "$ref": "#/definitions/uuid.NullUUID"

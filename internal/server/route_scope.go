@@ -263,12 +263,13 @@ var routeScopes = map[string]routeScope{
 	"POST " + orgRoute + "/repos/":     needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 	"POST " + orgRoute + "/repos/sync": needsOrgWide(apitoken.CapAdmin, apitoken.AccessWrite),
 
-	"GET " + repoRoute:               anyGrantRoute(),
-	"PUT " + repoRoute:               needs(apitoken.CapAdmin, apitoken.AccessWrite),
-	"DELETE " + repoRoute:            needs(apitoken.CapAdmin, apitoken.AccessWrite),
-	"GET " + repoRoute + "/onboard":  needs(apitoken.CapAdmin, apitoken.AccessRead),
-	"POST " + repoRoute + "/onboard": needs(apitoken.CapAdmin, apitoken.AccessWrite),
-	"GET " + repoRoute + "/config":   anyGrantRoute(),
+	"GET " + repoRoute:                      anyGrantRoute(),
+	"PUT " + repoRoute:                      needs(apitoken.CapAdmin, apitoken.AccessWrite),
+	"DELETE " + repoRoute:                   needs(apitoken.CapAdmin, apitoken.AccessWrite),
+	"GET " + repoRoute + "/removal-preview": needs(apitoken.CapAdmin, apitoken.AccessRead),
+	"GET " + repoRoute + "/onboard":         needs(apitoken.CapAdmin, apitoken.AccessRead),
+	"POST " + repoRoute + "/onboard":        needs(apitoken.CapAdmin, apitoken.AccessWrite),
+	"GET " + repoRoute + "/config":          anyGrantRoute(),
 	// Effective config exposes org-inherited thresholds, so it needs the admin
 	// read grant rather than the any-grant treatment the raw file gets.
 	"GET " + repoRoute + "/config/effective": needs(apitoken.CapAdmin, apitoken.AccessRead),

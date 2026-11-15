@@ -156,7 +156,17 @@ repo in the same environment marks the previous deployment `superseded`
 (rollouts move forward; explicit rollbacks stay on the client page).
 
 `DELETE .../releases/{releaseID}/clients/{deploymentID}` marks the deployment
-`rolled_back`.
+`rolled_back`; it hides the client from the active release list but retains
+the deployment record. It does not remove rollout history.
+
+Hard repository removal refuses active deployments. Inactive deployment
+history is retained by default; an administrator can explicitly purge that
+repository's rolled-back/superseded records while removing the repository,
+after reviewing the removal preview, typing its slug and checking an initially
+unchecked, irreversible-history acknowledgement. The API opt-in is
+`DELETE .../repos/{repoSlug}?purge_deployment_history=true`. Active deployments
+still block this operation. Client records and the incident register survive;
+deployment deletion and repository removal commit or roll back together.
 
 Authorization: `admin` and `release_manager` org roles (server-side; the UI
 hides the affordances on top of that, never instead of it). Both actions are

@@ -895,6 +895,7 @@ func (s *Server) routes(siteFS fs.FS) {
 						r.Get("/", s.handleListRepos)
 						r.Put("/{repoSlug}", s.handleUpdateRepo)
 						r.Delete("/{repoSlug}", s.handleRemoveRepo)
+						r.Get("/{repoSlug}/removal-preview", s.handleGetRepositoryRemovalPreview)
 						r.Get("/{repoSlug}", s.handleGetRepo)
 						r.Get("/{repoSlug}/releases", s.handleListReleases)
 						r.Post("/{repoSlug}/releases/{releaseID}/divergence", s.handleResolveReleaseDivergence)

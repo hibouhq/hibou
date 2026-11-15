@@ -285,6 +285,39 @@ func (q *Queries) GetRepositoryBySlugAndOrg(ctx context.Context, arg GetReposito
 	return i, err
 }
 
+const getRepositoryRemovalPreview = `-- name: GetRepositoryRemovalPreview :one
+SELECT
+    (SELECT count(*) FROM snapshots s JOIN refs r ON r.id=s.ref_id WHERE r.repo_id=$1) AS snapshots,
+    (SELECT count(*) FROM releases r WHERE r.repo_id=$1) AS releases,
+    (SELECT count(*) FROM snapshot_artifacts a JOIN snapshots s ON s.id=a.snapshot_id JOIN refs r ON r.id=s.ref_id WHERE r.repo_id=$1) AS artifacts,
+    (SELECT count(*) FROM incidents i WHERE i.repo_id=$1) AS incidents,
+    (SELECT count(*) FROM deployments d JOIN releases r ON r.id=d.release_id WHERE r.repo_id=$1 AND d.status='active') AS active_deployments,
+    (SELECT count(*) FROM deployments d JOIN releases r ON r.id=d.release_id WHERE r.repo_id=$1 AND d.status IN ('rolled_back','superseded')) AS inactive_deployments
+`
+
+type GetRepositoryRemovalPreviewRow struct {
+	Snapshots           int64 `json:"snapshots"`
+	Releases            int64 `json:"releases"`
+	Artifacts           int64 `json:"artifacts"`
+	Incidents           int64 `json:"incidents"`
+	ActiveDeployments   int64 `json:"active_deployments"`
+	InactiveDeployments int64 `json:"inactive_deployments"`
+}
+
+func (q *Queries) GetRepositoryRemovalPreview(ctx context.Context, repoID uuid.UUID) (GetRepositoryRemovalPreviewRow, error) {
+	row := q.db.QueryRowContext(ctx, getRepositoryRemovalPreview, repoID)
+	var i GetRepositoryRemovalPreviewRow
+	err := row.Scan(
+		&i.Snapshots,
+		&i.Releases,
+		&i.Artifacts,
+		&i.Incidents,
+		&i.ActiveDeployments,
+		&i.InactiveDeployments,
+	)
+	return i, err
+}
+
 const listRepositoriesByOrg = `-- name: ListRepositoriesByOrg :many
 SELECT id, org_id, team_id, name, slug, provider, provider_id, default_branch, sync_state, retention_artifact_bytes, created_at, updated_at
 FROM repositories

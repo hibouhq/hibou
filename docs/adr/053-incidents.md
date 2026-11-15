@@ -116,6 +116,26 @@ Implementation notes:
   finding, or on its advisory in the same repository, in any state), the
   same link the finding detail shows. Each repository has an Incidents tab:
   the organization's list narrowed to it.
+- Hard repository removal retains the incident register. Migration `00084`
+  records `removed_repo_name` while detaching `repo_id`; list/detail views show
+  the name with "(removed)" rather than a broken repository link. Retained
+  incidents keep their recorded scope and are not reconciled as org-wide
+  incidents or merged into unrelated incidents. The org's deduplication lookup
+  ignores detached incidents.
+- Repository removal runs in one transaction, deleting releases before refs
+  cascade. Active client deployments always block removal with `409`.
+  Inactive history also blocks removal unless an administrator explicitly opts
+  in to permanent deletion. An incident-subject
+  uniqueness collision also returns `409` without merging or closing anything.
+  Resolve the conflicting incident explicitly before retrying. Artifact keys
+  are captured before deletion, but bytes are purged only after a successful
+  commit, so blocked/failed deletion leaves reports intact.
+- The admin-only removal preview counts snapshots, releases, artifact reports,
+  incidents and active/inactive deployments. Confirmation explains what is
+  deleted and retained, requires the repository slug, and for history deletion
+  also requires an initially unchecked acknowledgement. The deletion
+  transaction rechecks blockers; cancelling or omitting the purge flag never
+  deletes deployment history. The repository-removal audit records the opt-in.
 - `fix:available` is true when the matched affected range names a fixed
   version, read at query time, or the producer reported a remediation.
   Ingest never sets `has_remediation` for dependency findings, so the flag

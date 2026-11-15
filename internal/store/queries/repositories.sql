@@ -94,5 +94,14 @@ ORDER BY repo.id ASC;
 -- name: DeleteRepository :exec
 DELETE FROM repositories WHERE id = $1;
 
+-- name: GetRepositoryRemovalPreview :one
+SELECT
+    (SELECT count(*) FROM snapshots s JOIN refs r ON r.id=s.ref_id WHERE r.repo_id=sqlc.arg(repo_id)) AS snapshots,
+    (SELECT count(*) FROM releases r WHERE r.repo_id=sqlc.arg(repo_id)) AS releases,
+    (SELECT count(*) FROM snapshot_artifacts a JOIN snapshots s ON s.id=a.snapshot_id JOIN refs r ON r.id=s.ref_id WHERE r.repo_id=sqlc.arg(repo_id)) AS artifacts,
+    (SELECT count(*) FROM incidents i WHERE i.repo_id=sqlc.arg(repo_id)) AS incidents,
+    (SELECT count(*) FROM deployments d JOIN releases r ON r.id=d.release_id WHERE r.repo_id=sqlc.arg(repo_id) AND d.status='active') AS active_deployments,
+    (SELECT count(*) FROM deployments d JOIN releases r ON r.id=d.release_id WHERE r.repo_id=sqlc.arg(repo_id) AND d.status IN ('rolled_back','superseded')) AS inactive_deployments;
+
 -- name: ListRepositoryIDsByOrg :many
 SELECT id FROM repositories WHERE org_id = $1;

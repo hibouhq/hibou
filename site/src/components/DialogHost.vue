@@ -7,7 +7,7 @@
     >
       <div
         :key="active.id"
-        class="w-full max-w-md overflow-hidden rounded-xl border border-surface-border bg-surface-raised shadow-2xl"
+        class="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl border border-surface-border bg-surface-raised shadow-2xl"
         role="alertdialog"
         aria-modal="true"
         :aria-label="active.title"
@@ -19,7 +19,7 @@
           </h3>
           <p
             v-if="active.message"
-            class="mt-1 whitespace-pre-line text-xs text-gray-400"
+            class="mt-1 break-words whitespace-pre-line text-xs text-gray-400"
           >
             {{ active.message }}
           </p>
@@ -34,7 +34,7 @@
             class="block"
           >
             <span class="text-[11px] uppercase tracking-wide text-gray-500">
-              Type <span class="font-mono normal-case text-gray-300">{{ active.requireText }}</span> to confirm
+              Type <span class="break-all font-mono normal-case text-gray-300">{{ active.requireText }}</span> to confirm
             </span>
             <input
               ref="fieldRef"
@@ -61,6 +61,19 @@
               :placeholder="active.input.placeholder"
               class="mt-1.5 w-full rounded-md border border-surface-border bg-surface-overlay px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600 focus:border-accent/60 focus:outline-none"
             >
+          </label>
+
+          <label
+            v-if="active.requiredAcknowledgement"
+            class="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/5 p-3 text-xs text-gray-300"
+          >
+            <input
+              ref="acknowledgementRef"
+              v-model="acknowledged"
+              type="checkbox"
+              class="mt-0.5 shrink-0 accent-red-500"
+            >
+            <span>{{ active.requiredAcknowledgement }}</span>
           </label>
 
           <div class="flex items-center justify-end gap-2 pt-1">
@@ -97,11 +110,14 @@ import { useDialog } from '@/composables/useDialog'
 const { active, settle } = useDialog()
 
 const typed = ref('')
+const acknowledged = ref(false)
+const acknowledgementRef = ref<HTMLInputElement | null>(null)
 const fieldRef = ref<HTMLInputElement | null>(null)
 const confirmRef = ref<HTMLButtonElement | null>(null)
 
 const confirmEnabled = computed(() => {
   if (!active.value) return false
+  if (active.value.requiredAcknowledgement && !acknowledged.value) return false
   if (active.value.requireText) return typed.value.trim() === active.value.requireText
   if (active.value.input?.required) return typed.value.trim() !== ''
   return true
@@ -112,10 +128,11 @@ watch(
   async (id) => {
     if (id === undefined) return
     typed.value = ''
+    acknowledged.value = false
     await nextTick()
-    // Focus the text field when one is shown, else the confirm button, so
-    // Escape/Enter work without reaching for the mouse.
+    // Focus the first required control, or confirm, for keyboard access.
     if (fieldRef.value) fieldRef.value.focus()
+    else if (acknowledgementRef.value) acknowledgementRef.value.focus()
     else confirmRef.value?.focus()
   },
 )

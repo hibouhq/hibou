@@ -91,6 +91,8 @@ func (s *Server) mergeCompatibility(ctx context.Context, survivor, merged dbgen.
 	switch {
 	case survivor.ID == merged.ID:
 		return "an incident does not merge into itself", nil
+	case survivor.RemovedRepoName.Valid || merged.RemovedRepoName.Valid:
+		return "incidents of removed repositories retain their own register", nil
 	case survivor.OrgID != merged.OrgID || survivor.Kind != merged.Kind || survivor.RepoID != merged.RepoID:
 		return "only incidents of the same kind on the same repository merge", nil
 	case survivor.State == dbgen.IncidentStateWithdrawn || survivor.MergedInto.Valid:
@@ -254,6 +256,10 @@ type mergeCandidate struct {
 func (s *Server) handleIncidentMergeCandidates(w http.ResponseWriter, r *http.Request) {
 	_, inc, ok := s.loadIncidentForRequest(w, r, true)
 	if !ok {
+		return
+	}
+	if inc.RemovedRepoName.Valid {
+		api.JSON(w, http.StatusOK, []mergeCandidate{})
 		return
 	}
 	ctx := r.Context()

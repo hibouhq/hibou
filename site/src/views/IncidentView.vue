@@ -119,6 +119,9 @@
                 class="text-accent transition hover:underline"
               >{{ incident!.repo_name || incident!.repo_slug }}</RouterLink>
             </span>
+            <span v-else-if="nullString(incident!.removed_repo_name)">
+              in {{ nullString(incident!.removed_repo_name) }} (removed)
+            </span>
             <span>owner <span class="text-gray-200">{{ ownerLabel }}</span></span>
             <span :title="nullString(incident!.trigger_rule) ? `Rule: ${nullString(incident!.trigger_rule)}` : undefined">
               {{ signalSourceLabel(incident!.signal_source) }} signal <DateTime

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -397,8 +398,90 @@ func (q *Queries) UpdateRepository(ctx context.Context, id uuid.UUID, teamID *uu
 	), nil
 }
 
+var ErrRepositoryHasDeployments = errors.New("repository has client deployments recorded against its releases")
+var ErrRepositoryHasActiveDeployments = errors.New("repository has active client deployments")
+
+// DeleteRepository retains incidents and refuses to erase rollout history.
 func (q *Queries) DeleteRepository(ctx context.Context, id uuid.UUID) error {
-	return q.db.DeleteRepository(ctx, id)
+	return q.deleteRepository(ctx, id, false)
+}
+
+func (q *Queries) DeleteRepositoryAndInactiveDeploymentHistory(ctx context.Context, id uuid.UUID) error {
+	return q.deleteRepository(ctx, id, true)
+}
+
+func (q *Queries) GetRepositoryRemovalPreview(ctx context.Context, id uuid.UUID) (dbgen.GetRepositoryRemovalPreviewRow, error) {
+	return q.db.GetRepositoryRemovalPreview(ctx, id)
+}
+
+func (q *Queries) deleteRepository(ctx context.Context, id uuid.UUID, purgeHistory bool) error {
+	if q.tx == nil {
+		tx, err := q.BeginTx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := q.WithTx(tx).deleteRepository(ctx, id, purgeHistory); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	var name string
+	if err := q.tx.QueryRowContext(ctx, `SELECT name FROM repositories WHERE id=$1 FOR UPDATE`, id).Scan(&name); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("lock repository: %w", err)
+	}
+	// Release locks serialize the deployment check with concurrent inserts.
+	rows, err := q.tx.QueryContext(ctx, `SELECT id FROM releases WHERE repo_id=$1 ORDER BY id FOR UPDATE`, id)
+	if err != nil {
+		return fmt.Errorf("lock releases: %w", err)
+	}
+	for rows.Next() {
+		var releaseID uuid.UUID
+		if err := rows.Scan(&releaseID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read locked release: %w", err)
+		}
+	}
+	readErr := rows.Err()
+	closeErr := rows.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return fmt.Errorf("lock releases: %w", err)
+	}
+	var deployed, active bool
+	if err := q.tx.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM deployments d JOIN releases r ON r.id=d.release_id WHERE r.repo_id=$1
+	), EXISTS (
+		SELECT 1 FROM deployments d JOIN releases r ON r.id=d.release_id WHERE r.repo_id=$1 AND d.status='active'
+	)`, id).Scan(&deployed, &active); err != nil {
+		return fmt.Errorf("check deployments: %w", err)
+	}
+	if active {
+		return ErrRepositoryHasActiveDeployments
+	}
+	if deployed && !purgeHistory {
+		return ErrRepositoryHasDeployments
+	}
+	if purgeHistory {
+		if _, err := q.tx.ExecContext(ctx, `DELETE FROM deployments d USING releases r
+			WHERE d.release_id=r.id AND r.repo_id=$1 AND d.status IN ('rolled_back','superseded')`, id); err != nil {
+			return fmt.Errorf("purge inactive deployment history: %w", err)
+		}
+	}
+	if _, err := q.tx.ExecContext(ctx, `UPDATE incidents SET removed_repo_name=$2, repo_id=NULL, updated_at=now() WHERE repo_id=$1`, id, name); err != nil {
+		return fmt.Errorf("detach incidents: %w", err)
+	}
+	// Both refs and releases cascade from repositories, but their lineage FK
+	// is RESTRICT: remove releases before the ref cascade can reach it.
+	if _, err := q.tx.ExecContext(ctx, `DELETE FROM releases WHERE repo_id=$1`, id); err != nil {
+		return fmt.Errorf("delete releases: %w", err)
+	}
+	if err := q.db.DeleteRepository(ctx, id); err != nil {
+		return fmt.Errorf("delete repository: %w", err)
+	}
+	return nil
 }
 
 // SyncRepositoryDefaultBranch makes every enrolled repository tracking the

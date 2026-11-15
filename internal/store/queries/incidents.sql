@@ -46,6 +46,9 @@ RETURNING *;
 -- name: GetIncident :one
 SELECT * FROM incidents WHERE id = $1;
 
+-- name: GetIncidentForUpdate :one
+SELECT * FROM incidents WHERE id = $1 FOR UPDATE;
+
 -- name: GetIncidentByNumber :one
 SELECT * FROM incidents WHERE org_id = $1 AND number = $2;
 
@@ -56,6 +59,7 @@ SELECT * FROM incidents WHERE org_id = $1 AND number = $2;
 SELECT * FROM incidents
 WHERE org_id = sqlc.arg(org_id)
   AND repo_id IS NOT DISTINCT FROM sqlc.narg(repo_id)
+  AND removed_repo_name IS NULL
   AND kind = sqlc.arg(kind)
   AND subject_type = sqlc.arg(subject_type)
   AND subject_id = sqlc.arg(subject_id)
@@ -176,6 +180,7 @@ SELECT i.* FROM incidents i
 WHERE i.org_id = sqlc.arg(org_id)
   AND i.kind = sqlc.arg(kind)
   AND i.repo_id IS NOT DISTINCT FROM sqlc.narg(repo_id)::uuid
+  AND i.removed_repo_name IS NULL
   AND i.id <> sqlc.arg(incident_id)
   AND i.merged_into IS NULL
   AND i.state <> 'withdrawn'

@@ -54,6 +54,21 @@ definitions:
       slug:
         type: string
     type: object
+  dbgen.GetRepositoryRemovalPreviewRow:
+    properties:
+      active_deployments:
+        type: integer
+      artifacts:
+        type: integer
+      inactive_deployments:
+        type: integer
+      incidents:
+        type: integer
+      releases:
+        type: integer
+      snapshots:
+        type: integer
+    type: object
   dbgen.Incident:
     properties:
       aware_at:
@@ -108,6 +123,8 @@ definitions:
         items:
           type: string
         type: array
+      removed_repo_name:
+        $ref: '#/definitions/sql.NullString'
       repo_id:
         $ref: '#/definitions/uuid.NullUUID'
       signal_at:
@@ -392,6 +409,8 @@ definitions:
         items:
           type: string
         type: array
+      removed_repo_name:
+        $ref: '#/definitions/sql.NullString'
       repo_id:
         $ref: '#/definitions/uuid.NullUUID'
       repo_name:
@@ -2403,6 +2422,8 @@ definitions:
         items:
           type: string
         type: array
+      removed_repo_name:
+        $ref: '#/definitions/sql.NullString'
       repo_id:
         $ref: '#/definitions/uuid.NullUUID'
       repo_name:
@@ -8868,11 +8889,20 @@ paths:
         name: repoSlug
         required: true
         type: string
+      - description: Explicitly purge inactive deployment history; active deployments
+          still block removal
+        in: query
+        name: purge_deployment_history
+        type: boolean
       produces:
       - application/json
       responses:
         "204":
           description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.Response'
         "401":
           description: Unauthorized
           schema:
@@ -8883,6 +8913,10 @@ paths:
             $ref: '#/definitions/api.Response'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/api.Response'
         "500":
@@ -10066,6 +10100,55 @@ paths:
       summary: Resolve release divergence
       tags:
       - releases
+  /orgs/{provider}/{slug}/repos/{repoSlug}/removal-preview:
+    get:
+      description: Count data affected by removal. Requires repository admin access.
+        Counts are advisory; deletion rechecks deployment blockers transactionally.
+      parameters:
+      - description: Forge provider
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Organization slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: Repository slug
+        in: path
+        name: repoSlug
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/dbgen.GetRepositoryRemovalPreviewRow'
+              type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.Response'
+      security:
+      - BearerAuth: []
+      summary: Preview repository removal
+      tags:
+      - repositories
   /orgs/{provider}/{slug}/repos/{repoSlug}/scan-coverage:
     get:
       description: 'Per scanner: what the policy asks (configured) and what actually

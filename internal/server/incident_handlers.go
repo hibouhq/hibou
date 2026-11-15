@@ -196,7 +196,11 @@ func (s *Server) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]incidentSummary, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, incidentSummary{Incident: incidentFromListRow(row), RepoSlug: row.RepoSlug.String, RepoName: row.RepoName.String, KindLabel: incident.KindLabel(row.Kind)})
+		repoName := row.RepoName.String
+		if row.RemovedRepoName.Valid {
+			repoName = row.RemovedRepoName.String
+		}
+		out = append(out, incidentSummary{Incident: incidentFromListRow(row), RepoSlug: row.RepoSlug.String, RepoName: repoName, KindLabel: incident.KindLabel(row.Kind)})
 	}
 	api.JSONList(w, out, pagination.Page, pagination.PerPage, int(total))
 }
@@ -204,7 +208,8 @@ func (s *Server) handleListIncidents(w http.ResponseWriter, r *http.Request) {
 func incidentFromListRow(row dbgen.ListIncidentsByOrgRow) dbgen.Incident {
 	return dbgen.Incident{
 		ID: row.ID, OrgID: row.OrgID, Number: row.Number, RepoID: row.RepoID, Kind: row.Kind, Regimes: row.Regimes,
-		SubjectType: row.SubjectType, SubjectID: row.SubjectID, Title: row.Title, State: row.State, Priority: row.Priority,
+		RemovedRepoName: row.RemovedRepoName,
+		SubjectType:     row.SubjectType, SubjectID: row.SubjectID, Title: row.Title, State: row.State, Priority: row.Priority,
 		SignalSource: row.SignalSource, TriggerRule: row.TriggerRule, SignalAt: row.SignalAt, AwareAt: row.AwareAt,
 		DecisionReason: row.DecisionReason, DecisionStep: row.DecisionStep, DecidedBy: row.DecidedBy, DecidedAt: row.DecidedAt,
 		DecidedState: row.DecidedState, ProposedDecision: row.ProposedDecision, ProposedMerge: row.ProposedMerge, FixAvailableAt: row.FixAvailableAt,
@@ -399,6 +404,9 @@ func (s *Server) incidentDetail(r *http.Request, org *store.Organization, inc db
 	ctx := r.Context()
 	db := s.queries.Incidents()
 	out := incidentDetailResponse{Incident: incidentSummary{Incident: inc, KindLabel: incident.KindLabel(inc.Kind)}, CanManage: s.canManageIncidents(r, org.ID)}
+	if inc.RemovedRepoName.Valid {
+		out.Incident.RepoName = inc.RemovedRepoName.String
+	}
 	positive, negative := incident.DecisionStates(inc.Regimes)
 	out.DecisionStates = []string{positive, negative}
 	if inc.Kind == incident.KindExploitedVulnerability {

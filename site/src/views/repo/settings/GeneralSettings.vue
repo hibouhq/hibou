@@ -124,8 +124,9 @@
             Remove this repository from Hibou
           </div>
           <div class="text-xs text-gray-500">
-            Deletes its snapshots, findings, and history from Hibou. The repository on the forge is untouched;
-            it can be enrolled again later, starting from scratch.
+            Deletes its snapshots, findings, releases and artifact reports. Incidents stay in the organization's
+            register with the removed repository's name. Inactive deployment history requires explicit consent;
+            active deployments block removal. The repository on the forge is untouched.
           </div>
         </div>
         <button
@@ -207,21 +208,37 @@ const removing = ref(false)
 const removeError = ref('')
 
 async function removeRepo() {
-  const confirmed = await confirmDialog({
-    title: 'Remove this repository from Hibou',
-    message: 'This removes the repository and all its Hibou data (snapshots, findings, history). The repository on the forge is untouched.',
-    confirmLabel: 'Remove repository',
-    tone: 'danger',
-    requireText: repoSlug.value,
-  })
-  if (!confirmed) {
-    return
-  }
+  const target = { provider: provider.value, slug: slug.value, repoSlug: repoSlug.value }
   removing.value = true
   removeError.value = ''
   try {
-    await api.removeRepo(provider.value, slug.value, repoSlug.value)
-    await router.push(`/orgs/${provider.value}/${slug.value}/repos`)
+    const { data: preview } = await api.getRepositoryRemovalPreview(target.provider, target.slug, target.repoSlug)
+    if (provider.value !== target.provider || slug.value !== target.slug || repoSlug.value !== target.repoSlug) return
+    if (preview.active_deployments > 0) {
+      removeError.value = `${preview.active_deployments} active deployment${preview.active_deployments === 1 ? '' : 's'} still use this repository. Mark them rolled back before removing it.`
+      return
+    }
+    const purgeHistory = preview.inactive_deployments > 0
+    const confirmed = await confirmDialog({
+      title: purgeHistory ? 'Delete repository and deployment history?' : 'Remove this repository from Hibou',
+      message: [
+        `Permanently remove "${target.repoSlug}" from Hibou:`,
+        `- Delete ${preview.snapshots} snapshot${preview.snapshots === 1 ? '' : 's'} and their findings and scan history.`,
+        `- Delete ${preview.releases} release${preview.releases === 1 ? '' : 's'}.`,
+        `- Delete ${preview.artifacts} stored artifact report${preview.artifacts === 1 ? '' : 's'}.`,
+        ...(purgeHistory ? [`- Permanently delete ${preview.inactive_deployments} rolled-back or superseded deployment record${preview.inactive_deployments === 1 ? '' : 's'}.`] : []),
+        `- Keep ${preview.incidents} incident${preview.incidents === 1 ? '' : 's'} in the organization's register, with the removed repository's name and recorded scope. Live repository links are detached.`,
+        '',
+        'The forge repository and client records are untouched. This cannot be undone. Counts reflect the current preview.',
+      ].join('\n'),
+      confirmLabel: purgeHistory ? 'Delete repository and history' : 'Remove repository',
+      tone: 'danger',
+      requireText: target.repoSlug,
+      requiredAcknowledgement: purgeHistory ? 'I understand that all inactive deployment history for this repository will be permanently deleted.' : undefined,
+    })
+    if (!confirmed || provider.value !== target.provider || slug.value !== target.slug || repoSlug.value !== target.repoSlug) return
+    await api.removeRepo(target.provider, target.slug, target.repoSlug, { purgeDeploymentHistory: purgeHistory })
+    await router.push(`/orgs/${target.provider}/${target.slug}/repos`)
   } catch (error) {
     removeError.value = error instanceof Error ? error.message : 'Failed to remove repository'
   } finally {

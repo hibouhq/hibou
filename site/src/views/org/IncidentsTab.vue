@@ -179,6 +179,9 @@
                 >
                   {{ incident.repo_name || incident.repo_slug }}
                 </RouterLink>
+                <span v-else-if="nullString(incident.removed_repo_name)">
+                  {{ nullString(incident.removed_repo_name) }} (removed)
+                </span>
                 <span v-else>—</span>
               </td>
               <td class="px-4 py-2.5 text-xs">
@@ -235,6 +238,7 @@ import {
   incidentsApi,
   KIND_DESCRIPTIONS,
   KIND_LABELS,
+  nullString,
   nullTime,
   STATE_LABELS,
   type IncidentSummary,

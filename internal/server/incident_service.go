@@ -239,11 +239,16 @@ func (s *Server) reconcileIncident(ctx context.Context, id uuid.UUID) (dbgen.Inc
 	)
 	err := s.incidentTx(ctx, incidentLockKey(id), func(q *store.Queries) error {
 		db := q.Incidents()
-		inc, err := db.GetIncident(ctx, id)
+		inc, err := db.GetIncidentForUpdate(ctx, id)
 		if err != nil {
 			return err
 		}
 		result = inc
+		// Removal must not turn repository incidents into org-wide incidents
+		// or erase their last recorded scope because the inventory is gone.
+		if inc.RemovedRepoName.Valid {
+			return nil
+		}
 		if inc.MergedInto.Valid || inc.State == dbgen.IncidentStateWithdrawn {
 			return nil
 		}

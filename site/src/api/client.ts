@@ -193,6 +193,15 @@ export interface Team {
   org_id: string
 }
 
+export interface RepositoryRemovalPreview {
+  snapshots: number
+  releases: number
+  artifacts: number
+  incidents: number
+  active_deployments: number
+  inactive_deployments: number
+}
+
 export interface Repository {
   components_total?: number
   id?: string
@@ -2829,8 +2838,13 @@ class ApiClient {
     return this.request<void>(`/orgs/${provider}/${slug}`, { method: 'DELETE' })
   }
 
-  removeRepo(provider: string, slug: string, repoSlug: string) {
-    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}`, { method: 'DELETE' })
+  getRepositoryRemovalPreview(provider: string, slug: string, repoSlug: string) {
+    return this.request<ApiResponse<RepositoryRemovalPreview>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/removal-preview`)
+  }
+
+  removeRepo(provider: string, slug: string, repoSlug: string, options?: { purgeDeploymentHistory?: boolean }) {
+    const query = options?.purgeDeploymentHistory ? '?purge_deployment_history=true' : ''
+    return this.request<void>(`/orgs/${provider}/${slug}/repos/${repoSlug}${query}`, { method: 'DELETE' })
   }
 
   listRepos(provider: string, slug: string) {
