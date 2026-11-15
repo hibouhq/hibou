@@ -25,7 +25,11 @@ func TestTrivyRangeLowerBoundsMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if err := tx.Rollback(); err != nil {
+			t.Errorf("rollback migration test transaction: %v", err)
+		}
+	}()
 
 	// Temporary tables shadow the real tables; no persistent data is changed.
 	if _, err := tx.ExecContext(ctx, `
