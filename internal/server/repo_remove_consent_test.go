@@ -11,9 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/hibouhq/hibou/internal/audit"
 	"github.com/hibouhq/hibou/internal/store"
 	"github.com/hibouhq/hibou/internal/store/dbgen"
+	"github.com/hibouhq/hibou/internal/ws"
 )
 
 func addRemovalDeployment(t *testing.T, f repoRemovalFixture, status store.DeploymentStatus) *store.Deployment {
@@ -67,6 +70,59 @@ func TestRepositoryRemovalPreviewCountsAndAuthorization(t *testing.T) {
 	f.srv.handleRemoveRepo(forbidden, newRepoRequest(t, f.member, http.MethodDelete, "/?purge_deployment_history=true", "github", f.org.Slug, f.repo.Slug))
 	if forbidden.Code != http.StatusForbidden {
 		t.Fatalf("member purge status=%d", forbidden.Code)
+	}
+	f.assertIntact(t)
+}
+
+func TestRepositoryRemovalPreviewThroughRegisteredRouter(t *testing.T) {
+	f := newRepoRemovalFixture(t)
+	f.srv.router = chi.NewRouter()
+	f.srv.wsHub = ws.NewHub(f.srv.log)
+	configureRouter(f.srv.router, f.srv.log)
+	f.srv.routes(nil)
+	path := "/api/v1/orgs/github/" + f.org.Slug + "/repos/" + f.repo.Slug + "/removal-preview"
+	for _, tc := range []struct {
+		user   *store.User
+		status int
+	}{
+		{f.admin, http.StatusOK},
+		{f.member, http.StatusForbidden},
+		{nil, http.StatusUnauthorized},
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		if tc.user != nil {
+			request = newAuthenticatedRequest(t, tc.user, http.MethodGet, path)
+		}
+		response := httptest.NewRecorder()
+		f.srv.router.ServeHTTP(response, request)
+		if response.Code != tc.status {
+			t.Fatalf("routed preview status=%d want %d body=%s", response.Code, tc.status, response.Body.String())
+		}
+		if response.Code == http.StatusOK {
+			var body struct {
+				Data dbgen.GetRepositoryRemovalPreviewRow `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Data.Snapshots != 1 || body.Data.Incidents != 1 || body.Data.Artifacts != 1 {
+				t.Fatalf("routed preview counts=%+v", body.Data)
+			}
+		}
+	}
+	missing := httptest.NewRecorder()
+	missingPath := "/api/v1/orgs/github/" + f.org.Slug + "/repos/fixture-missing/removal-preview"
+	f.srv.router.ServeHTTP(missing, newAuthenticatedRequest(t, f.admin, http.MethodGet, missingPath))
+	var errorBody struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(missing.Body.Bytes(), &errorBody); err != nil {
+		t.Fatal(err)
+	}
+	if missing.Code != http.StatusNotFound || errorBody.Error.Message != "repository not found" {
+		t.Fatalf("missing repository should return a structured error: status=%d body=%s", missing.Code, missing.Body.String())
 	}
 	f.assertIntact(t)
 }

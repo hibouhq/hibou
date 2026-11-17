@@ -136,6 +136,10 @@ Implementation notes:
   also requires an initially unchecked acknowledgement. The deletion
   transaction rechecks blockers; cancelling or omitting the purge flag never
   deletes deployment history. The repository-removal audit records the opt-in.
+- Removal requires the preview endpoint on the backend; a missing endpoint
+  stops the flow rather than falling back to blind deletion. Deploy the backend
+  and frontend together. Frontend hot reload alone does not register new Go
+  routes; rebuild/restart the backend and check API proxy routing on a plain 404.
 - `fix:available` is true when the matched affected range names a fixed
   version, read at query time, or the producer reported a remediation.
   Ingest never sets `has_remediation` for dependency findings, so the flag

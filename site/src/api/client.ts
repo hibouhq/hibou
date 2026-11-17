@@ -2838,8 +2838,15 @@ class ApiClient {
     return this.request<void>(`/orgs/${provider}/${slug}`, { method: 'DELETE' })
   }
 
-  getRepositoryRemovalPreview(provider: string, slug: string, repoSlug: string) {
-    return this.request<ApiResponse<RepositoryRemovalPreview>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/removal-preview`)
+  async getRepositoryRemovalPreview(provider: string, slug: string, repoSlug: string) {
+    try {
+      return await this.request<ApiResponse<RepositoryRemovalPreview>>(`/orgs/${provider}/${slug}/repos/${repoSlug}/removal-preview`)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404 && !error.structured) {
+        throw new ApiError(404, 'Removal preview endpoint unavailable. Update/restart the Hibou backend to match this frontend and check API proxy routing, then retry. No delete request was sent.')
+      }
+      throw error
+    }
   }
 
   removeRepo(provider: string, slug: string, repoSlug: string, options?: { purgeDeploymentHistory?: boolean }) {
