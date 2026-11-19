@@ -294,6 +294,18 @@ generate: ## Run code generation (sqlc, swagger)
 check-generate: generate ## Fail if generated files are not up to date
 	@git diff --exit-code || (echo "Generated files are stale. Run 'make generate' and commit the result."; exit 1)
 
+.PHONY: notices
+notices: ## Regenerate THIRD_PARTY_NOTICES.md from the Go module cache and the frontend's node_modules (ADR-051)
+	mkdir -p tmp/notices
+	go build $(GO_BUILD_FLAGS) -o tmp/notices/hibou .
+	go run . deps notices tmp/notices/hibou $(FRONTEND) --config .hibou.yaml --write THIRD_PARTY_NOTICES.md
+
+.PHONY: check-notices
+check-notices: ## Fail if THIRD_PARTY_NOTICES.md is out of date (needs the same caches as `make notices`)
+	mkdir -p tmp/notices
+	go build $(GO_BUILD_FLAGS) -o tmp/notices/hibou .
+	go run . deps notices tmp/notices/hibou $(FRONTEND) --config .hibou.yaml --check THIRD_PARTY_NOTICES.md
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(DIST)

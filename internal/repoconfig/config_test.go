@@ -356,3 +356,46 @@ func TestParseRejectsInvalidScanners(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNoticesConfig(t *testing.T) {
+	cfg, err := Parse([]byte(`version: 1
+notices:
+  dev_scopes: keep
+  include: ["NOTICES.manual.md"]
+  overrides:
+    - purl: "pkg:golang/github.com/acme/legacy@v0.3.1"
+      license: MIT
+      copyright: "Copyright (c) 2019 Acme Corp"
+      reason: "upstream has no LICENSE file"
+    - purl: "pkg:cargo/serde"
+      choose: "Apache-2.0"
+      reason: "prefer Apache-2.0"
+  exclude:
+    - purl: "pkg:npm/@internal/*"
+      reason: "our own code"
+`))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if cfg.Notices == nil || cfg.Notices.DevScopesValue() != "keep" || len(cfg.Notices.Overrides) != 2 || len(cfg.Notices.Exclude) != 1 {
+		t.Fatalf("unexpected notices config: %#v", cfg.Notices)
+	}
+	var none *NoticesConfig
+	if none.DevScopesValue() != "skip" {
+		t.Fatalf("default dev_scopes must be skip, got %q", none.DevScopesValue())
+	}
+
+	invalid := map[string]string{
+		"reason is required":         "version: 1\nnotices:\n  overrides:\n    - purl: \"pkg:npm/a\"\n      license: MIT\n",
+		"set license, copyright":     "version: 1\nnotices:\n  overrides:\n    - purl: \"pkg:npm/a\"\n      reason: r\n",
+		"must be a package URL":      "version: 1\nnotices:\n  overrides:\n    - purl: \"left-pad\"\n      license: MIT\n      reason: r\n",
+		"dev_scopes must be skip":    "version: 1\nnotices:\n  dev_scopes: maybe\n",
+		"inside the repository":      "version: 1\nnotices:\n  include: [\"../secrets.md\"]\n",
+		"notices.exclude[0]: reason": "version: 1\nnotices:\n  exclude:\n    - purl: \"pkg:npm/@a/*\"\n",
+	}
+	for want, doc := range invalid {
+		if _, err := Parse([]byte(doc)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Parse(%q) error = %v, want one containing %q", doc, err, want)
+		}
+	}
+}

@@ -51,9 +51,54 @@
     "incidents": {
       "$ref": "#/$defs/incidentsConfig",
       "description": "When findings open incidents (ADR-053). Locked organisation rules always apply first; `rules` replaces the organisation defaults."
+    },
+    "notices": {
+      "$ref": "#/$defs/noticesConfig",
+      "description": "Generated third-party notices (ADR-051): overrides for packages whose licence evidence is wrong or missing, exclusions and hand-maintained additions."
     }
   },
   "$defs": {
+    "noticesConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dev_scopes": { "type": "string", "enum": ["skip", "keep"], "description": "Components declared in a dev or test scope: skip (default) leaves them out; keep follows the not-shipped lists only. Use keep when a bundler ships devDependencies." },
+        "overrides": {
+          "type": "array",
+          "description": "Corrections to the licence evidence of a package. Each needs a reason.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["purl", "reason"],
+            "properties": {
+              "purl": { "type": "string", "pattern": "^pkg:", "description": "Package URL, with a version or without one for every version." },
+              "license": { "type": "string", "description": "SPDX identifier or expression to use." },
+              "copyright": { "type": "string", "description": "Copyright line to reproduce." },
+              "choose": { "type": "string", "description": "Alternative to use from an OR licence expression." },
+              "reason": { "type": "string", "minLength": 1, "description": "Why the override is right; shown in the document." }
+            }
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Packages left out of the notices, typically first-party ones.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["purl", "reason"],
+            "properties": {
+              "purl": { "type": "string", "minLength": 1, "description": "Purl glob (pkg:npm/@acme/*), re:<regexp>, ecosystem:<name> or repository path glob." },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "include": {
+          "type": "array",
+          "description": "Hand-maintained files appended verbatim, for vendored or ported code no inventory lists. Paths relative to .hibou.yaml.",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "productConfig": {
       "type": "object",
       "additionalProperties": false,

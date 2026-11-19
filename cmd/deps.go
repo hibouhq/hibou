@@ -28,6 +28,7 @@ var depsCmd = &cobra.Command{
   hibou deps check                    would the package policy hold anything in this tree? (CI pre-install step)
   hibou deps cooldown init            write the install-time cooldown settings (npm, pnpm, Yarn, Bun, uv, pip)
   hibou deps not-shipped ...          the repository's not-shipped list
+  hibou deps notices --write FILE     third-party notices of what ships, from the local package caches (offline)
 
 Nothing here stores anything on the server; "hibou release scan" records.`,
 }

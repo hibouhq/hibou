@@ -2,21 +2,21 @@
 
 ## Status
 
-Proposed (2026-10-17).
+Partially implemented: offline CLI (rollout step 2) and repository dogfooding
+(the generation/check portion of step 3).
 
-Implementation status verified 2026-11-09:
-
-- **To be implemented if adopted, not scheduled:** licence-evidence
-  collection/storage, classifier integration, inventory-derived notices,
-  gap/override workflows and CLI/API/UI/CI generation and checks.
-- **Existing but not this feature:** the repository's
-  [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) records attribution
-  for the ported CVSS calculator. It is not a generated inventory-wide
-  notices document.
-- **Deferred/excluded from initial scope:** container OS-package notices,
-  legal advice, automatic fulfilment of source/relinking obligations, and
-  optional third-party evidence databases.
-- The proposal has **not been dropped**.
+- `hibou deps notices [TARGET...]` generates/checks Markdown or text using
+  local Go/npm/Maven/Python/Cargo evidence, the embedded classifier, shipped
+  filtering and repository overrides. It makes no network requests and uploads
+  nothing. Scope is documented in [the CLI guide](../third-party-notices.md).
+- `make notices` generates [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)
+  from the compiled Go binary and frontend lockfile. Existing CVSS attribution
+  is retained in [NOTICES.manual.md](../../NOTICES.manual.md).
+- Regression fixtures exercise the real classifier and all five collectors;
+  broader classifier/copyright accuracy benchmarking remains rollout step 1.
+- Server evidence storage, API/UI status, registry/deliverable evidence,
+  release embedding/distribution and CI gates remain deferred. The existence
+  of a generated document does not imply all gaps or legal obligations are met.
 
 Builds on [ADR-045](045-built-in-dependency-inventory.md) (inventory, `shipped`
 attribute, provenance), [ADR-046](046-dependency-cli.md) (CLI, release
@@ -112,8 +112,8 @@ and generic texts, always flagged as gaps. S4 is not used by default.**
   It never fetches a package the lockfile resolved from a private registry
   (`registry: private`, ADR-048).
 - S4 would send dependency names to a third party and adds an availability
-  dependency for data S1/S3 already provide. An operator may enable it later
-  as one more evidence source.
+  dependency for data S1/S3 already provide. It is outside this implementation;
+  no third-party evidence-database integration is enabled.
 - A text built from S6 has no copyright line. It is never presented as
   complete: the component is listed as a gap until a real file or an override
   supplies the line.
@@ -224,6 +224,7 @@ notices:
       reason: "upstream has no LICENSE file; confirmed in issue acme/legacy#12"
     - purl: "pkg:cargo/serde"           # any version
       choose: "Apache-2.0"              # pick from "MIT OR Apache-2.0"
+      reason: "select the Apache alternative"
   exclude:
     - purl: "pkg:npm/@internal/*"       # first-party packages, no notice needed
       reason: "our own code"

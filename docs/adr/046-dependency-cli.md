@@ -40,6 +40,10 @@ layer attribution and the attached SBOMs of ADR-045 §10 are read by
 `deps scan --image` and `release scan --image` (`--no-attached-sbom` to
 skip the registry lookups).
 
+**ADR-051 offline notices:** `hibou deps notices` generates/checks Markdown
+or text from local package caches and the offline inventory. See
+[Third-party notices](../third-party-notices.md) for scope, gaps and CI setup.
+
 
 Proposed (2026-10-15). Second of three related ADRs; depends on
 [ADR-045](045-built-in-dependency-inventory.md) for the data model (sources,

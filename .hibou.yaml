@@ -56,3 +56,18 @@ dependencies:
   exclude:
     - "**/testdata/**"
     - "**/__fixtures__/**"
+
+# Third-party notices (ADR-051): `make notices` regenerates
+# THIRD_PARTY_NOTICES.md from the Go module cache and site/node_modules;
+# `make check-notices` fails when it is out of date.
+notices:
+  # Code ported into the repository, which no lockfile lists.
+  include:
+    - NOTICES.manual.md
+  exclude:
+    - purl: "pkg:golang/github.com/hibouhq/hibou*"
+      reason: "Hibou's own main module, not a third-party dependency"
+  overrides:
+    - purl: "pkg:npm/lucide-vue-next@1.0.0"
+      license: "ISC AND MIT"
+      reason: "The installed LICENSE includes ISC for Lucide and MIT for portions derived from Feather"

@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/package-url/packageurl-go"
+
 	"github.com/hibouhq/hibou/internal/cooldown"
+	"github.com/hibouhq/hibou/internal/license"
 	"github.com/hibouhq/hibou/internal/shipped"
 
 	"go.yaml.in/yaml/v3"
@@ -36,6 +39,100 @@ type RepoConfig struct {
 	Product *ProductConfig `yaml:"product,omitempty" json:"product,omitempty"`
 	// Incidents configures when findings open incidents (ADR-053 §1).
 	Incidents *IncidentsConfig `yaml:"incidents,omitempty" json:"incidents,omitempty"`
+	// Notices configures the generated third-party notices (ADR-051 §5).
+	Notices *NoticesConfig `yaml:"notices,omitempty" json:"notices,omitempty"`
+}
+
+// NoticesConfig is the `notices` section of .hibou.yaml (ADR-051 §5).
+type NoticesConfig struct {
+	// DevScopes says what to do with components declared in a dev or test
+	// scope (npm devDependencies, Maven test, Cargo dev-dependencies):
+	// "skip" (default) leaves them out, "keep" follows the not-shipped
+	// lists only. Set "keep" when a bundler ships devDependencies.
+	DevScopes string `yaml:"dev_scopes,omitempty" json:"dev_scopes,omitempty"`
+	// Overrides correct or complete the licence evidence of a package.
+	Overrides []NoticesOverride `yaml:"overrides,omitempty" json:"overrides,omitempty"`
+	// Exclude leaves packages out of the notices: first-party packages.
+	Exclude []NoticesExclude `yaml:"exclude,omitempty" json:"exclude,omitempty"`
+	// Include appends hand-maintained files verbatim, for vendored or
+	// ported code that no inventory lists. Paths relative to .hibou.yaml.
+	Include []string `yaml:"include,omitempty" json:"include,omitempty"`
+}
+
+// NoticesOverride is one `notices.overrides` entry.
+type NoticesOverride struct {
+	// Purl names the package, with a version or without one for all.
+	Purl      string `yaml:"purl" json:"purl"`
+	License   string `yaml:"license,omitempty" json:"license,omitempty"`
+	Copyright string `yaml:"copyright,omitempty" json:"copyright,omitempty"`
+	// Choose picks one alternative of an OR licence expression.
+	Choose string `yaml:"choose,omitempty" json:"choose,omitempty"`
+	Reason string `yaml:"reason" json:"reason"`
+}
+
+// NoticesExclude is one `notices.exclude` entry.
+type NoticesExclude struct {
+	// Purl is a not-shipped-style pattern: a purl glob ("pkg:npm/@acme/*"),
+	// "re:<regexp>", "ecosystem:<name>" or a repository path glob.
+	Purl   string `yaml:"purl" json:"purl"`
+	Reason string `yaml:"reason" json:"reason"`
+}
+
+// DevScopesValue returns "skip" or "keep".
+func (n *NoticesConfig) DevScopesValue() string {
+	if n == nil || strings.TrimSpace(n.DevScopes) == "" {
+		return "skip"
+	}
+	return strings.ToLower(strings.TrimSpace(n.DevScopes))
+}
+
+func validateNoticesConfig(cfg *NoticesConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	switch cfg.DevScopesValue() {
+	case "skip", "keep":
+	default:
+		return fmt.Errorf("notices.dev_scopes must be skip or keep, got %q", cfg.DevScopes)
+	}
+	for i, override := range cfg.Overrides {
+		purl, err := packageurl.FromString(strings.TrimSpace(override.Purl))
+		if err != nil || purl.Name == "" || strings.ContainsAny(override.Purl, "*\r\n") {
+			return fmt.Errorf("notices.overrides[%d].purl must be a package URL (pkg:...), got %q", i, override.Purl)
+		}
+		if strings.TrimSpace(override.Reason) == "" {
+			return fmt.Errorf("notices.overrides[%d]: reason is required", i)
+		}
+		if strings.TrimSpace(override.License) == "" && strings.TrimSpace(override.Copyright) == "" && strings.TrimSpace(override.Choose) == "" {
+			return fmt.Errorf("notices.overrides[%d]: set license, copyright or choose", i)
+		}
+		for _, expression := range []string{override.License, override.Choose} {
+			if expression != "" {
+				if _, err := license.Alternatives(expression); err != nil {
+					return fmt.Errorf("notices.overrides[%d]: %w", i, err)
+				}
+			}
+		}
+	}
+	patterns := make([]string, 0, len(cfg.Exclude))
+	for i, exclude := range cfg.Exclude {
+		if strings.TrimSpace(exclude.Purl) == "" {
+			return fmt.Errorf("notices.exclude[%d]: purl is required", i)
+		}
+		if strings.TrimSpace(exclude.Reason) == "" {
+			return fmt.Errorf("notices.exclude[%d]: reason is required", i)
+		}
+		patterns = append(patterns, exclude.Purl)
+	}
+	if _, err := shipped.Parse(patterns); err != nil {
+		return fmt.Errorf("notices.exclude: %w", err)
+	}
+	for i, path := range cfg.Include {
+		if strings.TrimSpace(path) == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") || strings.ContainsAny(path, "\\:\x00") {
+			return fmt.Errorf("notices.include[%d] must be a path inside the repository, got %q", i, path)
+		}
+	}
+	return nil
 }
 
 // DependenciesConfig is the `dependencies` section of .hibou.yaml.
@@ -497,6 +594,9 @@ func (c *RepoConfig) validate() error {
 		return err
 	}
 	if err := validateIncidentsConfig(c.Incidents); err != nil {
+		return err
+	}
+	if err := validateNoticesConfig(c.Notices); err != nil {
 		return err
 	}
 
