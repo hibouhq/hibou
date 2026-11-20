@@ -30,6 +30,16 @@ gh release create v0.1.0 --generate-notes --target main
 
    Note: CI also publishes images on every push to `main` with `sha-<short>` tags and charts with `0.0.0-sha-<short>`.
 
+   The locked apko base image is published from the devcontainer. Its exact
+   digest is validated again on the runner before the runtime image is built
+   with the runner's Docker daemon and existing GHCR login; CI image publishing
+   does not start a nested Docker daemon. Release events write version tags,
+   while only an exact push to `main` writes SHA tags and the build cache.
+
+   If a release fails because of workflow code, publish a new release targeting
+   a commit containing the fix. Rerunning the old release run still uses its
+   original workflow revision.
+
 3. Verify the release succeeded:
 
 ```bash

@@ -136,6 +136,7 @@ jobs:
               run-cmd: |
                 set -euo pipefail
                 node --test scripts/sbom-license.test.mjs scripts/security-scan.test.mjs
+                node --test scripts/ci-image.test.mjs
                 gosec -track-suppressions -exclude-generated -fmt sarif -out gosec.sarif ./... || true
                 node scripts/security-scan.mjs
                 node scripts/sbom-license.mjs go-sbom.cdx.json go "${GITHUB_SHA}"
@@ -143,20 +144,13 @@ jobs:
 
       # --- Publishing (push to main, or a published release; never a PR) ---
 
-      - name: Build and push image
+      - name: Publish base image
         if: github.event_name != 'pull_request'
         uses: ./.github/actions/devcontainer-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
           REPO: ${{ github.repository }}
-          SOURCE_DATE_EPOCH: ${{ steps.commit.outputs.epoch }}
-          GITHUB_SHA: ${{ github.sha }}
-          GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
-          GIT_TARGET_BRANCH: ${{ github.base_ref }}
-          GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          IS_RELEASE: ${{ github.event_name == 'release' && 'true' || 'false' }}
-          REF_NAME: ${{ github.event.release.tag_name || github.ref_name }}
         with:
           run-cmd: |
             set -euo pipefail
@@ -171,57 +165,69 @@ jobs:
               echo "ERROR: apko publish did not print a digest reference: '${BASE_IMAGE}'"
               exit 1
             fi
-            export BASE_IMAGE
+            printf '%s\n' "${BASE_IMAGE}" > apko-base-image.txt
 
-            # Start Docker daemon
-            if ! docker info >/dev/null 2>&1; then
-              sudo /usr/local/share/docker-init.sh
-              docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon failed to start"; exit 1; }
+      # Use the runner's already-initialized daemon and GHCR login. Building
+      # the runtime image from prebuilt binaries does not need Docker in Docker.
+      - name: Build and push image
+        if: github.event_name != 'pull_request'
+        env:
+          REPO: ${{ github.repository }}
+          SOURCE_DATE_EPOCH: ${{ steps.commit.outputs.epoch }}
+          GITHUB_SHA: ${{ github.sha }}
+          GIT_BRANCH: ${{ github.head_ref || github.ref_name }}
+          GIT_TARGET_BRANCH: ${{ github.base_ref }}
+          GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          IS_RELEASE: ${{ github.event_name == 'release' && 'true' || 'false' }}
+          REF_NAME: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          repo="${REPO,,}"
+          BASE_IMAGE="$(cat apko-base-image.txt)"
+          if [[ ! "${BASE_IMAGE}" =~ ^ghcr\.io/${repo}-cache@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::invalid apko base image digest reference: '${BASE_IMAGE}'"
+            exit 1
+          fi
+          export BASE_IMAGE
+
+          # renovate: datasource=github-releases depName=moby/buildkit packageName=moby/buildkit
+          BUILDKIT_VERSION='0.30.0'
+          docker pull --quiet "moby/buildkit:v${BUILDKIT_VERSION}"
+          docker buildx create --use --name multiarch --driver docker-container \
+            --driver-opt="image=moby/buildkit:v${BUILDKIT_VERSION}"
+
+          sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
+          # Only an exact main push writes SHA tags and the build cache.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            export SHA_TAG="sha-${GITHUB_SHA:0:7}"
+            export CACHE_PUSH=true
+          else
+            export SHA_TAG=""
+            export CACHE_PUSH=false
+          fi
+          export REPO="ghcr.io/${repo}"
+          export CACHE_REPO="ghcr.io/${repo}-cache"
+          export GIT_BRANCH="$(sanitize "${GIT_BRANCH}")"
+          export GIT_TARGET_BRANCH="$(sanitize "${GIT_TARGET_BRANCH}")"
+          export GIT_DEFAULT_BRANCH="$(sanitize "${GIT_DEFAULT_BRANCH}")"
+          if [ "${IS_RELEASE}" = "true" ]; then
+            export INCLUDE_EXTRA_CLI_BINARIES=true
+          else
+            export INCLUDE_EXTRA_CLI_BINARIES=false
+          fi
+          export PUSH=true
+
+          if [ "${IS_RELEASE}" = "true" ]; then
+            export RELEASE_VERSION="${REF_NAME#v}"
+            if [[ "${RELEASE_VERSION}" != *-* ]]; then
+              export STABLE_RELEASE=true
+              highest=$(git tag -l 'v*' --sort=-v:refname | grep -Ev -- '-' | head -1)
+              [ "${REF_NAME}" = "${highest}" ] && export LATEST=true
             fi
+          fi
 
-            echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-            # renovate: datasource=github-releases depName=moby/buildkit packageName=moby/buildkit
-            BUILDKIT_VERSION='0.30.0'
-            docker pull --quiet "moby/buildkit:v${BUILDKIT_VERSION}"
-            docker buildx create --use --name multiarch --driver docker-container \
-              --driver-opt="image=moby/buildkit:v${BUILDKIT_VERSION}"
-
-            sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._-]/-/g'; }
-            # sha-* tags (what the dogfood image updater deploys) and the
-            # build cache are pushed only for a push to exactly refs/heads/main.
-            # A release pushes its version tags and nothing else.
-            if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-              export SHA_TAG="sha-${GITHUB_SHA:0:7}"
-              export CACHE_PUSH=true
-            else
-              export SHA_TAG=""
-              export CACHE_PUSH=false
-            fi
-            export REPO="ghcr.io/${repo}"
-            export CACHE_REPO="ghcr.io/${repo}-cache"
-            export GIT_BRANCH="$(sanitize "${GIT_BRANCH}")"
-            export GIT_TARGET_BRANCH="$(sanitize "${GIT_TARGET_BRANCH}")"
-            export GIT_DEFAULT_BRANCH="$(sanitize "${GIT_DEFAULT_BRANCH}")"
-            if [ "${IS_RELEASE}" = "true" ]; then
-              export INCLUDE_EXTRA_CLI_BINARIES=true
-            else
-              export INCLUDE_EXTRA_CLI_BINARIES=false
-            fi
-            export PUSH=true
-
-            # On release, add semver tags
-            if [ "${IS_RELEASE}" = "true" ]; then
-              export RELEASE_VERSION="${REF_NAME#v}"
-              if [[ "${RELEASE_VERSION}" != *-* ]]; then
-                export STABLE_RELEASE=true
-                highest=$(git tag -l 'v*' --sort=-v:refname | grep -Ev -- '-' | head -1)
-                [ "${REF_NAME}" = "${highest}" ] && export LATEST=true
-              fi
-            fi
-
-            # The metadata file carries the pushed index digest, which the
-            # host signs and attests below.
-            docker buildx bake -f docker-bake.hcl --metadata-file bake-metadata.json
+          # The host signs and attests the pushed index digest below.
+          docker buildx bake -f docker-bake.hcl --metadata-file bake-metadata.json
 
       - name: Upload security artifacts
         if: always() && vars.UPLOAD_GITHUB_SECURITY_ARTIFACTS == 'true'
